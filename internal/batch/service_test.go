@@ -47,10 +47,7 @@ func TestServiceCommitsFullBatch(t *testing.T) {
 	if len(leaves) != 2 || leaves[0].RecordID != "tr1a" || leaves[1].RecordID != "tr1b" {
 		t.Fatalf("ListBatchTreeLeaves() = %+v", leaves)
 	}
-	nodes, err := store.ListBatchTreeNodes(context.Background(), model.BatchTreeNodeListOptions{BatchID: root.BatchID, Level: 1, Limit: 10})
-	if err != nil {
-		t.Fatalf("ListBatchTreeNodes() error = %v", err)
-	}
+	nodes := waitForBatchTreeNodes(t, store, root.BatchID, 1, 1)
 	if len(nodes) != 1 || nodes[0].Width != 2 {
 		t.Fatalf("ListBatchTreeNodes() = %+v", nodes)
 	}
@@ -491,6 +488,22 @@ func waitForBatchTreeLeaves(t *testing.T, store proofstore.LocalStore, batchID s
 	}
 	leaves, err := store.ListBatchTreeLeaves(context.Background(), model.BatchTreeLeafListOptions{BatchID: batchID, Limit: want})
 	t.Fatalf("ListBatchTreeLeaves(%q) after wait = %+v err=%v want len=%d", batchID, leaves, err, want)
+	return nil
+}
+
+func waitForBatchTreeNodes(t *testing.T, store proofstore.LocalStore, batchID string, level uint64, want int) []model.BatchTreeNode {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	opts := model.BatchTreeNodeListOptions{BatchID: batchID, Level: level, Limit: want}
+	for time.Now().Before(deadline) {
+		nodes, err := store.ListBatchTreeNodes(context.Background(), opts)
+		if err == nil && len(nodes) >= want {
+			return nodes
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	nodes, err := store.ListBatchTreeNodes(context.Background(), opts)
+	t.Fatalf("ListBatchTreeNodes(%q, level=%d) after wait = %+v err=%v want len=%d", batchID, level, nodes, err, want)
 	return nil
 }
 

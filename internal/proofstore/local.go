@@ -335,6 +335,7 @@ func (s LocalStore) PutBatchTreeArtifacts(ctx context.Context, leaves []model.Ba
 		return trusterr.New(trusterr.CodeInvalidArgument, "batch tree artifact batch_id is required")
 	}
 	now := time.Now().UTC().UnixNano()
+	normalizedLeaves := make([]model.BatchTreeLeaf, len(leaves))
 	for i := range leaves {
 		if err := ctx.Err(); err != nil {
 			return trusterr.Wrap(trusterr.CodeDeadlineExceeded, "proofstore put batch tree artifacts canceled", err)
@@ -349,10 +350,9 @@ func (s LocalStore) PutBatchTreeArtifacts(ctx context.Context, leaves []model.Ba
 		if leaf.CreatedAtUnixN == 0 {
 			leaf.CreatedAtUnixN = now
 		}
-		if err := writeCBORAtomic(s.batchTreeLeafPath(leaf.BatchID, leaf.LeafIndex), leaf); err != nil {
-			return trusterr.Wrap(trusterr.CodeDataLoss, "write batch tree leaf", err)
-		}
+		normalizedLeaves[i] = leaf
 	}
+	normalizedNodes := make([]model.BatchTreeNode, len(nodes))
 	for i := range nodes {
 		if err := ctx.Err(); err != nil {
 			return trusterr.Wrap(trusterr.CodeDeadlineExceeded, "proofstore put batch tree artifacts canceled", err)
@@ -370,8 +370,21 @@ func (s LocalStore) PutBatchTreeArtifacts(ctx context.Context, leaves []model.Ba
 		if node.CreatedAtUnixN == 0 {
 			node.CreatedAtUnixN = now
 		}
+		normalizedNodes[i] = node
+	}
+	// LocalStore cannot make this multi-file artifact fully atomic. Write
+	// internal nodes first and leaves last so a visible leaf is a better
+	// signal that the tree projection is ready for readers.
+	for i := range normalizedNodes {
+		node := normalizedNodes[i]
 		if err := writeCBORAtomic(s.batchTreeNodePath(node.BatchID, node.Level, node.StartIndex), node); err != nil {
 			return trusterr.Wrap(trusterr.CodeDataLoss, "write batch tree node", err)
+		}
+	}
+	for i := range normalizedLeaves {
+		leaf := normalizedLeaves[i]
+		if err := writeCBORAtomic(s.batchTreeLeafPath(leaf.BatchID, leaf.LeafIndex), leaf); err != nil {
+			return trusterr.Wrap(trusterr.CodeDataLoss, "write batch tree leaf", err)
 		}
 	}
 	return nil
