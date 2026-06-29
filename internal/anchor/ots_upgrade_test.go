@@ -134,6 +134,44 @@ func TestUpgradeOtsProof_UnchangedWhenServerReturnsSame(t *testing.T) {
 	}
 }
 
+func TestUpgradeOtsProofRejectsOversizedCalendarResponse(t *testing.T) {
+	t.Parallel()
+
+	digest := newTestDigest(t.Name())
+	digestHex := hex.EncodeToString(digest)
+	pending := []byte("still-pending")
+	cal := newUpgradeCalendar(t, "c1", map[string]struct {
+		Status int
+		Body   []byte
+	}{
+		digestHex: {Status: http.StatusOK, Body: []byte(strings.Repeat("x", int(maxOtsTimestampBytes)+1))},
+	})
+	defer cal.Close()
+
+	proof := &OtsAnchorProof{
+		SchemaVersion: SchemaOtsAnchorProof,
+		TreeSize:      2,
+		HashAlg:       "sha256",
+		Digest:        digest,
+		Calendars: []OtsCalendarTimestamp{
+			{URL: cal.URL, Accepted: true, RawTimestamp: pending},
+		},
+	}
+	summary, err := UpgradeOtsProof(context.Background(), proof, OtsUpgradeOptions{HTTPClient: cal.Client()})
+	if err != nil {
+		t.Fatalf("UpgradeOtsProof: %v", err)
+	}
+	if summary.Changed {
+		t.Fatal("oversized response must not mark proof changed")
+	}
+	if c := summary.Calendars[0]; !strings.Contains(c.Error, "too large") || c.Changed {
+		t.Fatalf("calendar summary = %+v, want too-large error without change", c)
+	}
+	if got := string(proof.Calendars[0].RawTimestamp); got != string(pending) {
+		t.Fatalf("raw timestamp mutated: %q", got)
+	}
+}
+
 func TestUpgradeOtsProof_Error404IsNeutral(t *testing.T) {
 	t.Parallel()
 

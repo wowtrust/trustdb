@@ -191,6 +191,24 @@ func TestOtsSink_QuorumMissedIsTransient(t *testing.T) {
 	}
 }
 
+func TestOtsSinkRejectsOversizedCalendarResponse(t *testing.T) {
+	t.Parallel()
+	huge := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(strings.Repeat("x", int(maxOtsTimestampBytes)+1)))
+	}))
+	defer huge.Close()
+
+	sink, err := NewOtsSink(OtsSinkOptions{Calendars: []string{huge.URL}})
+	if err != nil {
+		t.Fatalf("NewOtsSink: %v", err)
+	}
+	_, err = sink.Publish(context.Background(), newTestSTH(1, newTestDigest("oversized")))
+	if err == nil || !strings.Contains(err.Error(), "too large") {
+		t.Fatalf("Publish() error = %v, want too large", err)
+	}
+}
+
 // TestOtsSink_WrongDigestSizeIsPermanent: an STH root that is not a
 // 32-byte sha256 is a configuration bug the worker can't retry its
 // way out of.

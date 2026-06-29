@@ -102,9 +102,27 @@ func DecodeReaderLimit(r io.Reader, v any, maxBytes int64) error {
 	if r == nil {
 		return errors.New("cborx: nil reader")
 	}
-	limited := io.LimitReader(r, maxBytes+1)
-	if err := decMode.NewDecoder(limited).Decode(v); err != nil {
+	limited := &io.LimitedReader{R: r, N: maxBytes + 1}
+	counting := &readerCounter{r: limited}
+	decoder := decMode.NewDecoder(counting)
+	if err := decoder.Decode(v); err != nil {
+		if counting.n > maxBytes {
+			return fmt.Errorf("cborx: payload too large: %d > %d", counting.n, maxBytes)
+		}
 		return fmt.Errorf("cborx: decode: %w", err)
+	}
+	if int64(decoder.NumBytesRead()) > maxBytes {
+		return fmt.Errorf("cborx: payload too large: %d > %d", decoder.NumBytesRead(), maxBytes)
+	}
+	if ok, err := readOne(decoder.Buffered()); err != nil {
+		return fmt.Errorf("cborx: read buffered trailing data: %w", err)
+	} else if ok {
+		return errors.New("cborx: trailing data")
+	}
+	if ok, err := readOne(counting); err != nil {
+		return fmt.Errorf("cborx: read trailing data: %w", err)
+	} else if ok {
+		return errors.New("cborx: trailing data")
 	}
 	return nil
 }
@@ -117,4 +135,27 @@ func Wellformed(data []byte) error {
 		return fmt.Errorf("cborx: wellformed: %w", err)
 	}
 	return nil
+}
+
+type readerCounter struct {
+	r io.Reader
+	n int64
+}
+
+func (r *readerCounter) Read(p []byte) (int, error) {
+	n, err := r.r.Read(p)
+	r.n += int64(n)
+	return n, err
+}
+
+func readOne(r io.Reader) (bool, error) {
+	var b [1]byte
+	n, err := r.Read(b[:])
+	if n > 0 {
+		return true, nil
+	}
+	if err == io.EOF {
+		return false, nil
+	}
+	return false, err
 }

@@ -30,6 +30,8 @@ const OtsSinkName = "ots"
 // silently misinterpreting it.
 const SchemaOtsAnchorProof = "trustdb.anchor-ots-proof.v1"
 
+const maxOtsTimestampBytes int64 = 1 << 20
+
 // DefaultOtsCalendars is the public pool used when the operator does
 // not supply --anchor-ots-calendars. We pick the well-known pool
 // domains maintained by the OTS project and Eternity Wall because they
@@ -316,7 +318,7 @@ func (s *OtsSink) submitOne(ctx context.Context, calURL string, digest []byte) O
 		return OtsCalendarTimestamp{URL: calURL, Error: err.Error(), ElapsedMillis: elapsed}
 	}
 	defer resp.Body.Close()
-	body, readErr := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	body, readErr := readOtsBodyLimit(resp.Body)
 	if readErr != nil {
 		return OtsCalendarTimestamp{URL: calURL, Error: fmt.Sprintf("read body: %v", readErr), StatusCode: resp.StatusCode, ElapsedMillis: elapsed}
 	}
@@ -334,6 +336,17 @@ func (s *OtsSink) submitOne(ctx context.Context, calURL string, digest []byte) O
 		StatusCode:    resp.StatusCode,
 		ElapsedMillis: elapsed,
 	}
+}
+
+func readOtsBodyLimit(r io.Reader) ([]byte, error) {
+	body, err := io.ReadAll(io.LimitReader(r, maxOtsTimestampBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(body)) > maxOtsTimestampBytes {
+		return nil, fmt.Errorf("ots timestamp response too large: %d > %d", len(body), maxOtsTimestampBytes)
+	}
+	return body, nil
 }
 
 // DeterministicOtsAnchorID derives a stable anchor id from the STH

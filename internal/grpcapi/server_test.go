@@ -2,6 +2,7 @@ package grpcapi
 
 import (
 	"context"
+	"encoding/base64"
 	"testing"
 
 	"github.com/ryan-wong-coder/trustdb/internal/model"
@@ -20,6 +21,25 @@ func TestNewServerNormalizesTypedNilGlobalService(t *testing.T) {
 	_, err := server.GetGlobalProof(context.Background(), &GetGlobalProofRequest{BatchID: "batch-1"})
 	if status.Code(err) != codes.FailedPrecondition {
 		t.Fatalf("GetGlobalProof status = %v, want %v err=%v", status.Code(err), codes.FailedPrecondition, err)
+	}
+}
+
+func TestDecodeCursorsRejectTrailingJSONData(t *testing.T) {
+	t.Parallel()
+
+	recordRaw := base64.RawURLEncoding.EncodeToString([]byte(`{"t":1,"r":"rec-1"}{}`))
+	if _, err := decodeRecordCursor(recordRaw); err == nil {
+		t.Fatal("decodeRecordCursor() error = nil, want trailing JSON rejection")
+	}
+
+	rootRaw := base64.RawURLEncoding.EncodeToString([]byte(`{"t":1,"b":"batch-1"}{}`))
+	if _, err := decodeRootCursor(rootRaw); err == nil {
+		t.Fatal("decodeRootCursor() error = nil, want trailing JSON rejection")
+	}
+
+	uint64Raw := base64.RawURLEncoding.EncodeToString([]byte(`{"v":1}{}`))
+	if _, err := decodeUint64Cursor(uint64Raw); err == nil {
+		t.Fatal("decodeUint64Cursor() error = nil, want trailing JSON rejection")
 	}
 }
 

@@ -1,6 +1,7 @@
 package adminweb
 
 import (
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -179,6 +180,23 @@ func TestProxyGETOnly(t *testing.T) {
 	}
 }
 
+func TestDecodeJSONBodyLimitRejectsTrailingData(t *testing.T) {
+	t.Parallel()
+	var body loginBody
+	err := decodeJSONBodyLimit(strings.NewReader(`{"username":"op","password":"x"}{}`), &body, maxLoginBodyBytes)
+	if err == nil || !strings.Contains(err.Error(), "trailing json data") {
+		t.Fatalf("decodeJSONBodyLimit() error = %v, want trailing json data", err)
+	}
+}
+
+func TestReadBodyLimitRejectsOversizedBody(t *testing.T) {
+	t.Parallel()
+	_, err := readBodyLimit(strings.NewReader("abcd"), 3)
+	if !errors.Is(err, errRequestBodyTooLarge) {
+		t.Fatalf("readBodyLimit() error = %v, want errRequestBodyTooLarge", err)
+	}
+}
+
 func TestAdminMountServesSPAEntrypoints(t *testing.T) {
 	t.Parallel()
 	tmp := t.TempDir()
@@ -214,5 +232,34 @@ func TestAdminMountServesSPAEntrypoints(t *testing.T) {
 	}
 	if rec.Body.String() != "console.log('ok')" {
 		t.Fatalf("asset body = %q", rec.Body.String())
+	}
+}
+
+func TestSPAFileServerRejectsSiblingPrefixTraversal(t *testing.T) {
+	t.Parallel()
+	parent := t.TempDir()
+	root := filepath.Join(parent, "web")
+	sibling := filepath.Join(parent, "web_evil")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(sibling, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "index.html"), []byte("<!doctype html><title>admin</title>"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sibling, "secret.txt"), []byte("outside-secret"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/../web_evil/secret.txt", nil)
+	rec := httptest.NewRecorder()
+	spaFileServer(root).ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d body=%q, want 404", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "outside-secret") {
+		t.Fatalf("served file outside web root: %q", rec.Body.String())
 	}
 }

@@ -2,6 +2,7 @@ package cborx
 
 import (
 	"bytes"
+	"strings"
 	"testing"
 )
 
@@ -74,5 +75,34 @@ func TestUnmarshalLimit(t *testing.T) {
 	var got sample
 	if err := UnmarshalLimit(data, &got, len(data)-1); err == nil {
 		t.Fatal("UnmarshalLimit() error = nil, want size error")
+	}
+}
+
+func TestDecodeReaderLimitRejectsTrailingData(t *testing.T) {
+	t.Parallel()
+
+	data, err := Marshal(sample{A: "x", B: 7})
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	data = append(data, 0xf6) // valid second CBOR item (null)
+	var got sample
+	err = DecodeReaderLimit(bytes.NewReader(data), &got, int64(len(data)))
+	if err == nil || !strings.Contains(err.Error(), "trailing data") {
+		t.Fatalf("DecodeReaderLimit() error = %v, want trailing data", err)
+	}
+}
+
+func TestDecodeReaderLimitRejectsOversizedSingleItem(t *testing.T) {
+	t.Parallel()
+
+	data, err := Marshal(sample{A: "x", B: 7})
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	var got sample
+	err = DecodeReaderLimit(bytes.NewReader(data), &got, int64(len(data)-1))
+	if err == nil || !strings.Contains(err.Error(), "payload too large") {
+		t.Fatalf("DecodeReaderLimit() error = %v, want payload too large", err)
 	}
 }
