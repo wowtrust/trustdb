@@ -1,7 +1,6 @@
 package grpcapi
 
 import (
-	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/hex"
@@ -549,7 +548,7 @@ func decodeRecordCursor(raw string) (recordCursor, error) {
 		return recordCursor{}, trusterr.New(trusterr.CodeInvalidArgument, "cursor is invalid")
 	}
 	var cursor recordCursor
-	if err := json.NewDecoder(bytes.NewReader(data)).Decode(&cursor); err != nil || cursor.RecordID == "" {
+	if err := json.Unmarshal(data, &cursor); err != nil || cursor.RecordID == "" {
 		return recordCursor{}, trusterr.New(trusterr.CodeInvalidArgument, "cursor is invalid")
 	}
 	return cursor, nil
@@ -574,7 +573,7 @@ func decodeRootCursor(raw string) (rootCursor, error) {
 		return rootCursor{}, trusterr.New(trusterr.CodeInvalidArgument, "cursor is invalid")
 	}
 	var cursor rootCursor
-	if err := json.NewDecoder(bytes.NewReader(data)).Decode(&cursor); err != nil || cursor.BatchID == "" {
+	if err := json.Unmarshal(data, &cursor); err != nil || cursor.BatchID == "" {
 		return rootCursor{}, trusterr.New(trusterr.CodeInvalidArgument, "cursor is invalid")
 	}
 	return cursor, nil
@@ -598,7 +597,7 @@ func decodeUint64Cursor(raw string) (uint64Cursor, error) {
 		return uint64Cursor{}, trusterr.New(trusterr.CodeInvalidArgument, "cursor is invalid")
 	}
 	var cursor uint64Cursor
-	if err := json.NewDecoder(bytes.NewReader(data)).Decode(&cursor); err != nil {
+	if err := json.Unmarshal(data, &cursor); err != nil {
 		return uint64Cursor{}, trusterr.New(trusterr.CodeInvalidArgument, "cursor is invalid")
 	}
 	return cursor, nil

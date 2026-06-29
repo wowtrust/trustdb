@@ -3,6 +3,7 @@ package backup
 import (
 	"archive/tar"
 	"context"
+	"crypto/sha256"
 	"encoding/hex"
 	"os"
 	"path/filepath"
@@ -193,6 +194,43 @@ func TestVerifyRejectsEntryHashMismatch(t *testing.T) {
 	}
 	if _, err := Verify(context.Background(), path); err == nil {
 		t.Fatal("Verify() error = nil, want sha256 mismatch")
+	}
+}
+
+func TestVerifyRejectsTrailingJSONData(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "trailing-json.tdbackup")
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	tw := tar.NewWriter(f)
+	data := []byte(`{"schema_version":"trustdb.backup.v2"}{"schema_version":"trustdb.backup.v2"}`)
+	sum := sha256.Sum256(data)
+	if err := tw.WriteHeader(&tar.Header{
+		Name: "summary.json",
+		Mode: 0o600,
+		Size: int64(len(data)),
+		PAXRecords: map[string]string{
+			paxBackupID: "bad-backup",
+			paxOrdinal:  "1",
+			paxSHA256:   hex.EncodeToString(sum[:]),
+			paxType:     "summary",
+		},
+	}); err != nil {
+		t.Fatalf("WriteHeader: %v", err)
+	}
+	if _, err := tw.Write(data); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatalf("tar Close: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("file Close: %v", err)
+	}
+	if _, err := Verify(context.Background(), path); err == nil {
+		t.Fatal("Verify() error = nil, want trailing JSON error")
 	}
 }
 

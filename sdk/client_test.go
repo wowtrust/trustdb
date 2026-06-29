@@ -282,6 +282,28 @@ func TestClientOperationalEndpoints(t *testing.T) {
 	}
 }
 
+func TestClientMetricsRejectsOversizedResponse(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/metrics" {
+			t.Fatalf("path = %s", r.URL.Path)
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(strings.Repeat("x", 1<<20+1)))
+	}))
+	defer server.Close()
+
+	client, err := NewClient(server.URL)
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	_, err = client.MetricsRaw(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "response body too large") {
+		t.Fatalf("MetricsRaw() error = %v, want response body too large", err)
+	}
+}
+
 func TestClientExportSingleProofFallsBackToL3WhenGlobalProofUnavailable(t *testing.T) {
 	t.Parallel()
 

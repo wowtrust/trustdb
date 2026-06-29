@@ -94,9 +94,20 @@ type loginBody struct {
 	Password string `json:"password"`
 }
 
+const (
+	maxLoginBodyBytes  int64 = 1 << 20
+	maxConfigBodyBytes int64 = 4 << 20
+)
+
+var errRequestBodyTooLarge = errors.New("request body too large")
+
 func (h *handler) postSession(w http.ResponseWriter, r *http.Request) {
 	var body loginBody
-	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&body); err != nil {
+	if err := decodeJSONBodyLimit(r.Body, &body, maxLoginBodyBytes); err != nil {
+		if errors.Is(err, errRequestBodyTooLarge) {
+			writeJSON(w, http.StatusRequestEntityTooLarge, map[string]any{"ok": false, "error": "request too large"})
+			return
+		}
 		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "invalid json"})
 		return
 	}
@@ -203,8 +214,12 @@ func (h *handler) putConfig(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "no --config path; cannot write"})
 		return
 	}
-	body, err := io.ReadAll(io.LimitReader(r.Body, 4<<20))
+	body, err := readBodyLimit(r.Body, maxConfigBodyBytes)
 	if err != nil {
+		if errors.Is(err, errRequestBodyTooLarge) {
+			writeJSON(w, http.StatusRequestEntityTooLarge, map[string]any{"ok": false, "error": "request too large"})
+			return
+		}
 		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "read body"})
 		return
 	}
@@ -266,6 +281,38 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
+func decodeJSONBodyLimit(r io.Reader, v any, maxBytes int64) error {
+	body, err := readBodyLimit(r, maxBytes)
+	if err != nil {
+		return err
+	}
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	if err := decoder.Decode(v); err != nil {
+		return err
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err == nil {
+		return errors.New("trailing json data")
+	} else if err != io.EOF {
+		return err
+	}
+	return nil
+}
+
+func readBodyLimit(r io.Reader, maxBytes int64) ([]byte, error) {
+	if maxBytes <= 0 {
+		return nil, errors.New("max bytes must be positive")
+	}
+	body, err := io.ReadAll(io.LimitReader(r, maxBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(body)) > maxBytes {
+		return nil, errRequestBodyTooLarge
+	}
+	return body, nil
+}
+
 type spaHandler struct {
 	root string
 }
@@ -284,7 +331,7 @@ func (h spaHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		clean = ""
 	}
 	full := filepath.Join(h.root, filepath.FromSlash(clean))
-	if !strings.HasPrefix(full, filepath.Clean(h.root)) {
+	if !pathWithinRoot(h.root, full) {
 		http.NotFound(w, r)
 		return
 	}
@@ -293,4 +340,20 @@ func (h spaHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.ServeFile(w, r, filepath.Join(h.root, "index.html"))
+}
+
+func pathWithinRoot(root, path string) bool {
+	rootAbs, err := filepath.Abs(root)
+	if err != nil {
+		return false
+	}
+	pathAbs, err := filepath.Abs(path)
+	if err != nil {
+		return false
+	}
+	rel, err := filepath.Rel(rootAbs, pathAbs)
+	if err != nil {
+		return false
+	}
+	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel)
 }

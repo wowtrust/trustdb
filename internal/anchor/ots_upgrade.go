@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -178,7 +177,7 @@ func upgradeOneCalendar(
 		return out
 	}
 	defer resp.Body.Close()
-	body, readErr := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	body, readErr := readOtsBodyLimit(resp.Body)
 	out.StatusCode = resp.StatusCode
 	if readErr != nil {
 		out.Error = fmt.Sprintf("read body: %v", readErr)

@@ -704,7 +704,17 @@ func decodeCBOREntry(entry archiveEntry, v any) error {
 
 func decodeJSONEntry(entry archiveEntry, v any) error {
 	return decodeEntry(entry, func(r io.Reader) error {
-		return json.NewDecoder(r).Decode(v)
+		decoder := json.NewDecoder(r)
+		if err := decoder.Decode(v); err != nil {
+			return err
+		}
+		var extra any
+		if err := decoder.Decode(&extra); err == nil {
+			return fmt.Errorf("backup entry %s has trailing JSON data", entry.Name)
+		} else if err != io.EOF {
+			return err
+		}
+		return nil
 	})
 }
 

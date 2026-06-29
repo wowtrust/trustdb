@@ -32,6 +32,15 @@ import (
 	"github.com/ryan-wong-coder/trustdb/internal/wal"
 )
 
+func TestDecodeSingleJSONRejectsTrailingData(t *testing.T) {
+	t.Parallel()
+	var dst map[string]bool
+	err := decodeSingleJSON(bytes.NewBufferString(`{"ok":true}{}`), &dst)
+	if err == nil {
+		t.Fatal("decodeSingleJSON() error = nil, want trailing JSON rejection")
+	}
+}
+
 // TestVerifyCmdRemoteAnchor spins up an in-process serve backed by a
 // FileSink, submits a single claim, waits for the L5 anchor to be
 // published, then invokes `trustdb verify --server=... --record=...`

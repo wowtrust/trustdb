@@ -314,7 +314,7 @@ func fetchAnchorResult(ctx context.Context, client *http.Client, serverURL strin
 		return nil, fmt.Errorf("verify: GET %s: %s: %s", endpoint, resp.Status, strings.TrimSpace(string(body)))
 	}
 	var env anchorResponseEnvelope
-	if err := json.NewDecoder(resp.Body).Decode(&env); err != nil {
+	if err := decodeSingleJSON(resp.Body, &env); err != nil {
 		return nil, fmt.Errorf("decode anchor response: %w", err)
 	}
 	if env.Result == nil {
@@ -337,7 +337,21 @@ func getJSON(ctx context.Context, client *http.Client, endpoint string, dst any)
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
 		return fmt.Errorf("GET %s: %s: %s", endpoint, resp.Status, strings.TrimSpace(string(body)))
 	}
-	return json.NewDecoder(resp.Body).Decode(dst)
+	return decodeSingleJSON(resp.Body, dst)
+}
+
+func decodeSingleJSON(r io.Reader, dst any) error {
+	decoder := json.NewDecoder(r)
+	if err := decoder.Decode(dst); err != nil {
+		return err
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err == nil {
+		return fmt.Errorf("trailing JSON data")
+	} else if err != io.EOF {
+		return err
+	}
+	return nil
 }
 
 // joinURL concatenates a base URL (e.g. "http://host:8080") with a

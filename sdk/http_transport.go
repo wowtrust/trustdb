@@ -299,7 +299,7 @@ func (t *httpTransport) doRaw(ctx context.Context, method, path string, query ur
 	if limit <= 0 {
 		limit = 16 << 20
 	}
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, limit))
+	raw, err := readAllLimit(resp.Body, limit)
 	if err != nil {
 		return nil, &Error{Op: method, URL: endpoint, Err: err}
 	}
@@ -330,6 +330,20 @@ func setQuery(values url.Values, name, value string) {
 	if strings.TrimSpace(value) != "" {
 		values.Set(name, value)
 	}
+}
+
+func readAllLimit(r io.Reader, limit int64) ([]byte, error) {
+	if limit <= 0 {
+		return nil, fmt.Errorf("response body limit must be positive")
+	}
+	body, err := io.ReadAll(io.LimitReader(r, limit+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(body)) > limit {
+		return nil, fmt.Errorf("response body too large: %d > %d", len(body), limit)
+	}
+	return body, nil
 }
 
 func pageValues(opts ListPageOptions) url.Values {
