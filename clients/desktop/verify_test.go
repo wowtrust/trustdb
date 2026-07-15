@@ -110,6 +110,20 @@ func TestReadProofBundleFileExplainsSingleProofMixup(t *testing.T) {
 	}
 }
 
+func TestReadProofBundleFileRejectsOversizedInput(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "oversized.tdproof")
+	if err := os.WriteFile(path, make([]byte, cborx.DefaultMaxBytes+1), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	var bundle model.ProofBundle
+	err := readProofBundleFile(path, &bundle)
+	if err == nil || !strings.Contains(err.Error(), "payload too large") {
+		t.Fatalf("readProofBundleFile() error = %v, want payload too large", err)
+	}
+}
+
 func writeCBORForTest(t *testing.T, path string, v any) {
 	t.Helper()
 	data, err := cborx.Marshal(v)

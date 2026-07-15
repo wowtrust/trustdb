@@ -141,12 +141,16 @@ func Unmarshal(data []byte) (model.SingleProof, error) {
 }
 
 func ReadFile(path string) (model.SingleProof, error) {
-	data, err := os.ReadFile(path)
+	f, err := os.Open(path)
 	if err != nil {
 		return model.SingleProof{}, err
 	}
-	proof, err := Unmarshal(data)
-	if err != nil {
+	defer f.Close()
+	var proof model.SingleProof
+	if err := cborx.DecodeReaderLimit(f, &proof, MaxBytes); err != nil {
+		return model.SingleProof{}, fmt.Errorf("read sproof %s: %w", filepath.Base(path), err)
+	}
+	if err := Validate(proof); err != nil {
 		return model.SingleProof{}, fmt.Errorf("read sproof %s: %w", filepath.Base(path), err)
 	}
 	return proof, nil
