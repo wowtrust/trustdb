@@ -533,6 +533,9 @@ func (s *Service) persistBatch(ctx context.Context, batchID string, closedAt tim
 }
 
 func (s *Service) writeBundlesAndRoot(ctx context.Context, batchID string, bundles []model.ProofBundle) (model.BatchRoot, error) {
+	if len(bundles) == 0 {
+		return model.BatchRoot{}, trusterr.New(trusterr.CodeInternal, "commit batch returned no proof bundles")
+	}
 	root := rootFromBundles(batchID, bundles)
 	if writer, ok := s.store.(proofstore.BatchArtifactWriter); ok {
 		if err := writer.PutBatchArtifacts(ctx, bundles, root); err != nil {
@@ -596,11 +599,11 @@ func rootFromBundles(batchID string, bundles []model.ProofBundle) model.BatchRoo
 	r := model.BatchRoot{
 		SchemaVersion: model.SchemaBatchRoot,
 		BatchID:       batchID,
-		BatchRoot:     append([]byte(nil), bundles[0].CommittedReceipt.BatchRoot...),
 		TreeSize:      uint64(len(bundles)),
-		ClosedAtUnixN: bundles[0].CommittedReceipt.ClosedAtUnixN,
 	}
 	if len(bundles) > 0 {
+		r.BatchRoot = append([]byte(nil), bundles[0].CommittedReceipt.BatchRoot...)
+		r.ClosedAtUnixN = bundles[0].CommittedReceipt.ClosedAtUnixN
 		r.NodeID = bundles[0].NodeID
 		r.LogID = bundles[0].LogID
 	}
@@ -614,6 +617,9 @@ func (s *Service) planBatchIndexes(batchID string, closedAt time.Time, signed []
 	bundles, err := s.engine.CommitBatch(batchID, closedAt, signed, records, accepted)
 	if err != nil {
 		return model.BatchRoot{}, nil, err
+	}
+	if len(bundles) != len(records) {
+		return model.BatchRoot{}, nil, trusterr.New(trusterr.CodeInternal, "commit batch returned inconsistent proof count")
 	}
 	indexes := make([]model.RecordIndex, len(bundles))
 	for i := range bundles {
