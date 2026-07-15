@@ -22,6 +22,33 @@ func testLogger() zerolog.Logger {
 	return zerolog.New(io.Discard).Level(zerolog.Disabled)
 }
 
+func TestWriteConfigAtomicRejectsDirectoryTarget(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.Mkdir(path, 0o755); err != nil {
+		t.Fatalf("Mkdir(target) error = %v", err)
+	}
+
+	if err := writeConfigAtomic(path, []byte("server:\n")); err == nil {
+		t.Fatalf("writeConfigAtomic() error = nil, want directory target error")
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("Stat(target) error = %v", err)
+	}
+	if !info.IsDir() {
+		t.Fatalf("target directory was replaced")
+	}
+	matches, err := filepath.Glob(filepath.Join(filepath.Dir(path), "."+filepath.Base(path)+".*.tmp"))
+	if err != nil {
+		t.Fatalf("Glob() error = %v", err)
+	}
+	if len(matches) != 0 {
+		t.Fatalf("temporary files were not cleaned up: %v", matches)
+	}
+}
+
 func TestNewRequiresIndexHTML(t *testing.T) {
 	t.Parallel()
 	tmp := t.TempDir()

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -52,6 +53,9 @@ func writeFileAtomic(path string, data []byte, mode fs.FileMode) error {
 }
 
 func renameReplace(src, dst string) error {
+	if err := rejectDirectoryTarget(dst); err != nil {
+		return err
+	}
 	if err := os.Rename(src, dst); err != nil {
 		if os.IsExist(err) {
 			if removeErr := os.Remove(dst); removeErr == nil {
@@ -61,4 +65,18 @@ func renameReplace(src, dst string) error {
 		return err
 	}
 	return nil
+}
+
+func rejectDirectoryTarget(path string) error {
+	info, err := os.Stat(path)
+	if err == nil {
+		if info.IsDir() {
+			return fmt.Errorf("%s is a directory", path)
+		}
+		return nil
+	}
+	if os.IsNotExist(err) {
+		return nil
+	}
+	return err
 }

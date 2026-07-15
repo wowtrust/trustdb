@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/ryan-wong-coder/trustdb/internal/model"
@@ -27,6 +28,34 @@ func TestLocalStoreBundleRoundTrip(t *testing.T) {
 	}
 	if got.RecordID != bundle.RecordID || got.SchemaVersion != model.SchemaProofBundle {
 		t.Fatalf("GetBundle() = %+v", got)
+	}
+}
+
+func TestWriteCBORAtomicRejectsDirectoryTarget(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "bundle.tdproof")
+	if err := os.Mkdir(path, 0o755); err != nil {
+		t.Fatalf("Mkdir(target) error = %v", err)
+	}
+
+	err := writeCBORAtomic(path, model.ProofBundle{RecordID: "record-1"})
+	if err == nil {
+		t.Fatalf("writeCBORAtomic() error = nil, want directory target error")
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("Stat(target) error = %v", err)
+	}
+	if !info.IsDir() {
+		t.Fatalf("target directory was replaced")
+	}
+	matches, err := filepath.Glob(filepath.Join(filepath.Dir(path), "."+filepath.Base(path)+".*.tmp"))
+	if err != nil {
+		t.Fatalf("Glob() error = %v", err)
+	}
+	if len(matches) != 0 {
+		t.Fatalf("temporary files were not cleaned up: %v", matches)
 	}
 }
 

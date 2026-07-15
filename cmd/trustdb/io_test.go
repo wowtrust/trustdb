@@ -39,3 +39,30 @@ func TestWriteFileAtomicReplacesFileAndCleansTemp(t *testing.T) {
 		t.Fatalf("temporary files were not cleaned up: %v", matches)
 	}
 }
+
+func TestWriteFileAtomicRejectsDirectoryTarget(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "artifact.json")
+	if err := os.Mkdir(path, 0o755); err != nil {
+		t.Fatalf("Mkdir(target) error = %v", err)
+	}
+
+	if err := writeFileAtomic(path, []byte("new"), 0o600); err == nil {
+		t.Fatalf("writeFileAtomic() error = nil, want directory target error")
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("Stat(target) error = %v", err)
+	}
+	if !info.IsDir() {
+		t.Fatalf("target directory was replaced")
+	}
+	matches, err := filepath.Glob(filepath.Join(filepath.Dir(path), "."+filepath.Base(path)+".*.tmp"))
+	if err != nil {
+		t.Fatalf("Glob() error = %v", err)
+	}
+	if len(matches) != 0 {
+		t.Fatalf("temporary files were not cleaned up: %v", matches)
+	}
+}

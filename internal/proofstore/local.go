@@ -1911,6 +1911,9 @@ func writeCBORAtomic(path string, value any) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
+	if err := rejectDirectoryTarget(path); err != nil {
+		return err
+	}
 	if err := os.Rename(tmpPath, path); err != nil {
 		if os.IsExist(err) {
 			if removeErr := os.Remove(path); removeErr == nil {
@@ -1924,6 +1927,20 @@ func writeCBORAtomic(path string, value any) error {
 	}
 	cleanup = false
 	return nil
+}
+
+func rejectDirectoryTarget(path string) error {
+	info, err := os.Stat(path)
+	if err == nil {
+		if info.IsDir() {
+			return fmt.Errorf("%s is a directory", path)
+		}
+		return nil
+	}
+	if os.IsNotExist(err) {
+		return nil
+	}
+	return err
 }
 
 func readFileWithFallback(primary string, fallbacks ...string) ([]byte, error) {

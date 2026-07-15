@@ -61,7 +61,10 @@ func (s LocalStore) Put(ctx context.Context, r io.Reader) (PutResult, error) {
 	if err := os.MkdirAll(filepath.Dir(finalPath), 0o755); err != nil {
 		return PutResult{}, err
 	}
-	if _, err := os.Stat(finalPath); err == nil {
+	if info, err := os.Stat(finalPath); err == nil {
+		if info.IsDir() {
+			return PutResult{}, fmt.Errorf("objectstore: object path %s is a directory", finalPath)
+		}
 		return PutResult{
 			HashAlg:       model.DefaultHashAlg,
 			ContentHash:   sum,
@@ -69,6 +72,8 @@ func (s LocalStore) Put(ctx context.Context, r io.Reader) (PutResult, error) {
 			URI:           "trustdb-local://" + model.DefaultHashAlg + "/" + hexSum,
 			Path:          finalPath,
 		}, nil
+	} else if !os.IsNotExist(err) {
+		return PutResult{}, err
 	}
 	if err := os.Rename(tmpPath, finalPath); err != nil {
 		return PutResult{}, err
