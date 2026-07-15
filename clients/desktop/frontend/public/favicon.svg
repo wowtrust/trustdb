@@ -1,0 +1,15 @@
+<svg width="1024" height="1024" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title">
+  <title id="title">TrustDB app icon</title>
+  <rect x="32" y="32" width="448" height="448" rx="112" fill="#070807"/>
+  <rect x="39" y="39" width="434" height="434" rx="105" stroke="#00FF22" stroke-opacity="0.18" stroke-width="6"/>
+  <g stroke="#00FF22" stroke-opacity="0.12" stroke-width="8" stroke-linecap="round">
+    <path d="M102 154H184"/>
+    <path d="M102 188H152"/>
+    <path d="M328 350H410"/>
+    <path d="M360 384H410"/>
+  </g>
+  <g fill="#00FF22">
+    <rect x="140" y="230" width="90" height="44" rx="12" transform="rotate(45 185 252)"/>
+    <rect x="196" y="234" width="190" height="44" rx="12" transform="rotate(-45 291 256)"/>
+  </g>
+</svg>

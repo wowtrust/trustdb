@@ -1,0 +1,14 @@
+{
+  "name": "TrustDB Admin",
+  "short_name": "TrustDB",
+  "icons": [
+    {
+      "src": "/admin/app-icon.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ],
+  "theme_color": "#070807",
+  "background_color": "#070807",
+  "display": "standalone"
+}
