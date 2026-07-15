@@ -278,7 +278,9 @@ func (t *httpTransport) doJSON(ctx context.Context, method, path string, query u
 
 func (t *httpTransport) doRaw(ctx context.Context, method, path string, query url.Values, body io.Reader, contentType string, limit int64) ([]byte, error) {
 	endpoint := t.endpoint(path, query)
-	req, err := http.NewRequestWithContext(ctx, method, endpoint, body)
+	reqCtx, cancel := contextWithDefaultTimeout(ctx)
+	defer cancel()
+	req, err := http.NewRequestWithContext(reqCtx, method, endpoint, body)
 	if err != nil {
 		return nil, &Error{Op: method, URL: endpoint, Err: err}
 	}

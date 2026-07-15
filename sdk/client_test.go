@@ -282,6 +282,31 @@ func TestClientOperationalEndpoints(t *testing.T) {
 	}
 }
 
+func TestHTTPTransportNilContextUsesDefaultTimeout(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/healthz" {
+			t.Fatalf("path = %s", r.URL.Path)
+		}
+		writeJSONForTest(t, w, http.StatusOK, map[string]bool{"ok": true})
+	}))
+	defer server.Close()
+
+	client, err := NewClient(server.URL)
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			t.Fatalf("CheckHealth(nil) panicked: %v", recovered)
+		}
+	}()
+	if status := client.CheckHealth(nil); !status.OK || status.ServerURL != server.URL {
+		t.Fatalf("health status = %+v", status)
+	}
+}
+
 func TestClientMetricsRejectsOversizedResponse(t *testing.T) {
 	t.Parallel()
 
