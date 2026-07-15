@@ -11,7 +11,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/rs/zerolog"
 	trustconfig "github.com/ryan-wong-coder/trustdb/internal/config"
@@ -234,27 +233,94 @@ func (h *handler) putConfig(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": err.Error()})
 		return
 	}
-	dir := filepath.Dir(h.opts.ConfigPath)
-	backup := filepath.Join(dir, filepath.Base(h.opts.ConfigPath)+fmt.Sprintf(".bak.%d", time.Now().UnixNano()))
+	backup := ""
 	prev, err := os.ReadFile(h.opts.ConfigPath)
-	if err == nil && len(prev) > 0 {
-		if err := os.WriteFile(backup, prev, 0o600); err != nil {
+	switch {
+	case err == nil && len(prev) > 0:
+		backup, err = writeConfigBackup(h.opts.ConfigPath, prev)
+		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": fmt.Sprintf("backup: %v", err)})
 			return
 		}
-	}
-	tmp := h.opts.ConfigPath + ".tmp"
-	if err := os.WriteFile(tmp, body, 0o600); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": err.Error()})
+	case err != nil && !os.IsNotExist(err):
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": fmt.Sprintf("read existing config: %v", err)})
 		return
 	}
-	if err := os.Rename(tmp, h.opts.ConfigPath); err != nil {
-		_ = os.Remove(tmp)
+	if err := writeConfigAtomic(h.opts.ConfigPath, body); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": err.Error()})
 		return
 	}
 	h.opts.Logger.Info().Str("path", h.opts.ConfigPath).Str("backup", backup).Msg("admin wrote config file")
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "backup": backup})
+}
+
+func writeConfigBackup(configPath string, data []byte) (string, error) {
+	dir := filepath.Dir(configPath)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", err
+	}
+	f, err := os.CreateTemp(dir, filepath.Base(configPath)+".bak.*")
+	if err != nil {
+		return "", err
+	}
+	path := f.Name()
+	cleanup := true
+	defer func() {
+		_ = f.Close()
+		if cleanup {
+			_ = os.Remove(path)
+		}
+	}()
+	if _, err := f.Write(data); err != nil {
+		return "", err
+	}
+	if err := f.Close(); err != nil {
+		return "", err
+	}
+	cleanup = false
+	return path, nil
+}
+
+func writeConfigAtomic(path string, data []byte) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	f, err := os.CreateTemp(dir, "."+filepath.Base(path)+".*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpPath := f.Name()
+	cleanup := true
+	defer func() {
+		_ = f.Close()
+		if cleanup {
+			_ = os.Remove(tmpPath)
+		}
+	}()
+	if _, err := f.Write(data); err != nil {
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	if err := renameReplace(tmpPath, path); err != nil {
+		return err
+	}
+	cleanup = false
+	return nil
+}
+
+func renameReplace(src, dst string) error {
+	if err := os.Rename(src, dst); err != nil {
+		if os.IsExist(err) {
+			if removeErr := os.Remove(dst); removeErr == nil {
+				return os.Rename(src, dst)
+			}
+		}
+		return err
+	}
+	return nil
 }
 
 func (h *handler) getOverlays(w http.ResponseWriter, r *http.Request) {

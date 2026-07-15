@@ -1,6 +1,7 @@
 package adminweb
 
 import (
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -194,6 +195,70 @@ func TestReadBodyLimitRejectsOversizedBody(t *testing.T) {
 	_, err := readBodyLimit(strings.NewReader("abcd"), 3)
 	if !errors.Is(err, errRequestBodyTooLarge) {
 		t.Fatalf("readBodyLimit() error = %v, want errRequestBodyTooLarge", err)
+	}
+}
+
+func TestPutConfigIgnoresStaleFixedTempPathAndWritesBackup(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "trustdb.yaml")
+	previous := []byte("previous: config\n")
+	if err := os.WriteFile(configPath, previous, 0o600); err != nil {
+		t.Fatalf("WriteFile(config): %v", err)
+	}
+	staleFixedTmp := configPath + ".tmp"
+	if err := os.Mkdir(staleFixedTmp, 0o755); err != nil {
+		t.Fatalf("Mkdir(stale tmp): %v", err)
+	}
+
+	h := &handler{opts: Options{
+		ConfigPath: configPath,
+		Logger:     testLogger(),
+	}}
+	req := httptest.NewRequest(http.MethodPut, "/api/config", strings.NewReader(trustconfig.DefaultYAML))
+	rec := httptest.NewRecorder()
+	h.putConfig(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("putConfig status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		OK     bool   `json:"ok"`
+		Backup string `json:"backup"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if !body.OK {
+		t.Fatalf("putConfig ok = false")
+	}
+	if body.Backup == "" {
+		t.Fatalf("putConfig backup path is empty")
+	}
+	if !strings.HasPrefix(filepath.Base(body.Backup), filepath.Base(configPath)+".bak.") {
+		t.Fatalf("backup path = %q, want prefix %q", body.Backup, filepath.Base(configPath)+".bak.")
+	}
+	backup, err := os.ReadFile(body.Backup)
+	if err != nil {
+		t.Fatalf("ReadFile(backup): %v", err)
+	}
+	if string(backup) != string(previous) {
+		t.Fatalf("backup = %q, want %q", backup, previous)
+	}
+	updated, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("ReadFile(config): %v", err)
+	}
+	if string(updated) != trustconfig.DefaultYAML {
+		t.Fatalf("updated config = %q, want default yaml", updated)
+	}
+	info, err := os.Stat(staleFixedTmp)
+	if err != nil {
+		t.Fatalf("stale fixed temp path missing: %v", err)
+	}
+	if !info.IsDir() {
+		t.Fatalf("stale fixed temp path was modified; isDir=false")
 	}
 }
 
