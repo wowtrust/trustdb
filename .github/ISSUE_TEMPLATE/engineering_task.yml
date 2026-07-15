@@ -1,0 +1,73 @@
+name: Engineering task
+description: Track refactoring, quality, CI, docs, deployment, release, or maintenance work.
+title: "[Task] "
+labels:
+  - task
+body:
+  - type: dropdown
+    id: task_type
+    attributes:
+      label: Task type
+      options:
+        - Documentation
+        - Refactor
+        - Tests
+        - CI
+        - Release
+        - Dependency
+        - Repository governance
+        - Deployment / operations
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: background
+    attributes:
+      label: Background
+      description: Explain why this task is needed now.
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope
+      description: State what is in scope and out of scope.
+      placeholder: |
+        In scope:
+        - ...
+
+        Out of scope:
+        - ...
+    validations:
+      required: true
+  - type: textarea
+    id: plan
+    attributes:
+      label: Implementation plan
+      placeholder: |
+        1. ...
+        2. ...
+        3. ...
+  - type: textarea
+    id: risk
+    attributes:
+      label: Risk areas
+      description: Note proof, storage, recovery, performance, desktop, deployment, or compatibility risks.
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      placeholder: |
+        - [ ] ...
+        - [ ] ...
+    validations:
+      required: true
+  - type: textarea
+    id: validation
+    attributes:
+      label: Validation plan
+      placeholder: |
+        - go test ./...
+        - go vet ./...
+    validations:
+      required: true

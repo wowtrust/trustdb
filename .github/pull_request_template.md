@@ -1,45 +1,50 @@
+## Linked Issue
+
+Fixes #
+
 ## Summary
 
 -
 
-## Linked Issue
+## Required Format
 
-Refs #
+- Branch name uses an approved prefix: `feat/`, `bug/`, `docs/`, `test/`, `refactor/`, `perf/`, `security/`, `chore/`, `ci/`, `build/`, `release/`, or `revert/`.
+- PR title uses Conventional Commit style, for example `fix(backup): validate restore checkpoints`.
+- Commit messages use Conventional Commits.
 
-## Scope Control
+## Scope
 
-- [ ] This PR only changes files needed for the linked Issue.
-- [ ] README / user-facing docs only describe behavior that is already implemented.
-- [ ] No local data, keys, logs, backups, build artifacts, `doc/`, or `docs/` files are included.
+- [ ] This PR solves one issue or one clearly scoped maintenance task.
+- [ ] This PR does not include unrelated formatting, experiments, generated files, local data, keys, logs, backups, or build artifacts.
+- [ ] User-facing documentation describes implemented behavior only.
 
-## Proof Semantics
+## Proof, Storage, And Compatibility
 
 - [ ] No L1/L2/L3/L4/L5 semantic change.
 - [ ] L4/L5 behavior is unchanged: L4 is batch root in Global Log; L5 is STH/global root externally anchored.
-- [ ] `.tdproof`, `.tdgproof`, `.tdanchor-result`, `.sproof`, and `.tdbackup` formats are unchanged.
-- [ ] If any box above is false, the Issue and this PR explain compatibility and verification impact.
+- [ ] `.tdclaim`, `.tdproof`, `.tdgproof`, `.tdanchor-result`, `.sproof`, and `.tdbackup` formats are unchanged.
+- [ ] WAL, proofstore, global log, anchor outbox, backup, and desktop local storage durable boundaries are unchanged.
+- [ ] No production path introduces full-scan, full-load, full-sort, or full-recompute behavior.
 
-## Storage, Recovery, and Scale
+If any box above is false, explain the compatibility, migration, recovery, or verification impact:
 
-- [ ] No production path introduces full-scan, full-load, or full-recompute behavior.
-- [ ] WAL, proofstore, global log, anchor outbox, backup, and desktop local storage boundaries are unchanged.
-- [ ] If storage/recovery behavior changes, tests or manual validation cover replay/retry/idempotency.
+-
 
 ## Validation
 
 - [ ] `go test ./...`
+- [ ] `go vet ./...`
 - [ ] `go test -race ./...`
 - [ ] `go test -tags=integration ./...`
 - [ ] `go test -tags=e2e ./...`
+- [ ] `cd clients/web && npm ci && npm run build`
 - [ ] `cd clients/desktop && go test ./...`
 - [ ] `cd clients/desktop && go test -race ./...`
-- [ ] `cd clients/desktop/frontend && npm run build`
-- [ ] `cd clients/desktop && wails build`
 
 Checks not run:
 
 -
 
-## Risk / Rollback
+## Risk And Rollback
 
 -

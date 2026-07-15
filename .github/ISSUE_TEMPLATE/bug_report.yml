@@ -1,0 +1,93 @@
+name: Bug report
+description: Report a defect in an implemented TrustDB path.
+title: "[Bug] "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this form for implemented behavior that is broken, unsafe, too slow, or inconsistent.
+  - type: dropdown
+    id: area
+    attributes:
+      label: Affected area
+      options:
+        - CLI
+        - HTTP API
+        - gRPC API
+        - Go SDK
+        - Desktop client
+        - Admin Web
+        - Proof verification
+        - WAL / recovery
+        - Proofstore / storage
+        - Global Log
+        - Anchor / OpenTimestamps
+        - Backup / restore
+        - CI / release
+        - Documentation
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: What broke
+      description: Describe the observable failure and why it matters.
+      placeholder: The restore command silently ignores a corrupt checkpoint and restarts from the beginning.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: Describe the behavior TrustDB should produce.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Reproduction
+      description: Provide commands, requests, files, or state needed to reproduce.
+      placeholder: |
+        1. ...
+        2. ...
+        3. ...
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence
+      description: Include logs, error text, record IDs, batch IDs, STH tree sizes, screenshots, or CI links.
+  - type: checkboxes
+    id: impact
+    attributes:
+      label: Impact
+      options:
+        - label: Proof semantics may be affected.
+        - label: Stored data, WAL, backup, global log, or anchor state may be affected.
+        - label: Security, authentication, authorization, or secret handling may be affected.
+        - label: Performance or large-data behavior may be affected.
+        - label: Unknown until investigated.
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: List the conditions that prove the bug is fixed.
+      placeholder: |
+        - [ ] ...
+        - [ ] ...
+    validations:
+      required: true
+  - type: textarea
+    id: validation
+    attributes:
+      label: Validation plan
+      description: List required tests or manual checks.
+      placeholder: |
+        - go test ./...
+        - go vet ./...
+    validations:
+      required: true

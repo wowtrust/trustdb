@@ -2,4 +2,4 @@ blank_issues_enabled: false
 contact_links:
   - name: TrustDB contribution guide
     url: https://github.com/ryan-wong-coder/trustdb/blob/main/CONTRIBUTING.md
-    about: Read the Issue-first workflow, proof-boundary rules, and required validation before opening work.
+    about: Read the branch, issue, PR, commit, proof-boundary, and validation standards before opening work.
