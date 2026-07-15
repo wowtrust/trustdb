@@ -316,6 +316,34 @@ func TestServiceAsyncProofModePublishesIndexBeforeBundle(t *testing.T) {
 	}
 }
 
+func TestServiceNonInlineFallbackRejectsInconsistentProofCount(t *testing.T) {
+	t.Parallel()
+
+	store := proofstore.LocalStore{Root: t.TempDir()}
+	svc := New(emptyBundleEngine{}, store, Options{
+		QueueSize:  4,
+		MaxRecords: 1,
+		MaxDelay:   time.Hour,
+		ProofMode:  ProofModeAsync,
+	}, nil)
+	defer svc.Shutdown(context.Background())
+
+	if err := svc.Enqueue(context.Background(), signed("bad-count"), recordWithWAL("bad-count", 33), accepted("bad-count")); err != nil {
+		t.Fatalf("Enqueue() error = %v", err)
+	}
+
+	err := waitForLastError(t, svc)
+	if trusterr.CodeOf(err) != trusterr.CodeInternal {
+		t.Fatalf("LastError() code = %s err=%v, want internal", trusterr.CodeOf(err), err)
+	}
+	if !strings.Contains(err.Error(), "inconsistent proof count") {
+		t.Fatalf("LastError() = %v, want inconsistent proof count", err)
+	}
+	if _, ok, err := store.GetRecordIndex(context.Background(), "bad-count"); err != nil || ok {
+		t.Fatalf("GetRecordIndex() ok=%v err=%v, want no index after failed plan", ok, err)
+	}
+}
+
 func TestServiceOnDemandProofModeMaterializesOnce(t *testing.T) {
 	t.Parallel()
 
@@ -522,6 +550,20 @@ func waitForProof(t *testing.T, svc *Service, recordID string) model.ProofBundle
 	return model.ProofBundle{}
 }
 
+func waitForLastError(t *testing.T, svc *Service) error {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if err := svc.LastError(); err != nil {
+			return err
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	err := svc.LastError()
+	t.Fatalf("LastError() after wait = %v, want non-nil", err)
+	return nil
+}
+
 type fakeEngine struct{}
 
 func (fakeEngine) CommitBatch(batchID string, closedAt time.Time, signed []model.SignedClaim, records []model.ServerRecord, accepted []model.AcceptedReceipt) ([]model.ProofBundle, error) {
@@ -592,6 +634,12 @@ func (e blockingEngine) CommitBatch(batchID string, closedAt time.Time, signed [
 	}
 	<-e.block
 	return fakeEngine{}.CommitBatch(batchID, closedAt, signed, records, accepted)
+}
+
+type emptyBundleEngine struct{}
+
+func (emptyBundleEngine) CommitBatch(string, time.Time, []model.SignedClaim, []model.ServerRecord, []model.AcceptedReceipt) ([]model.ProofBundle, error) {
+	return nil, nil
 }
 
 type blockingMaterializeEngine struct {
