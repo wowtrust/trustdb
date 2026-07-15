@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	trustconfig "github.com/ryan-wong-coder/trustdb/internal/config"
@@ -604,6 +605,51 @@ func TestKeyInspectCommand(t *testing.T) {
 	}
 	if got["kind"] != "public" || got["alg"] != "ed25519" || got["fingerprint"] == "" {
 		t.Fatalf("key inspect = %#v", got)
+	}
+}
+
+func TestKeygenPrefixCannotEscapeOutputDir(t *testing.T) {
+	t.Parallel()
+
+	tmp := t.TempDir()
+	outDir := filepath.Join(tmp, "keys")
+	outsidePub := filepath.Join(tmp, "outside.pub")
+	outsideKey := filepath.Join(tmp, "outside.key")
+
+	var out, errOut bytes.Buffer
+	cmd := newRootCommand(&out, &errOut)
+	cmd.SetArgs([]string{"keygen", "--out", outDir, "--prefix", "../outside"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("keygen error = %v stderr=%s", err, errOut.String())
+	}
+
+	var got map[string]string
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("keygen output is not json: %q err=%v", out.String(), err)
+	}
+	for _, path := range []string{got["public_key"], got["private_key"]} {
+		if path == "" {
+			t.Fatalf("keygen output missing key path: %#v", got)
+		}
+		if strings.ContainsAny(filepath.Base(path), `/\`) {
+			t.Fatalf("key path base contains a path separator: %q", path)
+		}
+		rel, err := filepath.Rel(outDir, path)
+		if err != nil {
+			t.Fatalf("Rel() error = %v", err)
+		}
+		if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
+			t.Fatalf("key path escapes output dir: outDir=%q path=%q rel=%q", outDir, path, rel)
+		}
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("expected key file at %q: %v", path, err)
+		}
+	}
+	if _, err := os.Stat(outsidePub); !os.IsNotExist(err) {
+		t.Fatalf("keygen wrote outside public key %q: %v", outsidePub, err)
+	}
+	if _, err := os.Stat(outsideKey); !os.IsNotExist(err) {
+		t.Fatalf("keygen wrote outside private key %q: %v", outsideKey, err)
 	}
 }
 

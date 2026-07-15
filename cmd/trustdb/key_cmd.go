@@ -41,8 +41,9 @@ func newKeygenCommand(rt *runtimeConfig, hidden bool) *cobra.Command {
 			if err := ensureDir(outDir); err != nil {
 				return err
 			}
-			pubPath := joinPath(outDir, prefix+".pub")
-			privPath := joinPath(outDir, prefix+".key")
+			prefixName := safeOutputFileName(prefix)
+			pubPath := joinPath(outDir, prefixName+".pub")
+			privPath := joinPath(outDir, prefixName+".key")
 			if err := writeKey(pubPath, pub); err != nil {
 				return err
 			}
