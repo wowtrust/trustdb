@@ -3,6 +3,7 @@ package proofstore
 import (
 	"bytes"
 	"context"
+	"os"
 	"testing"
 
 	"github.com/ryan-wong-coder/trustdb/internal/model"
@@ -26,6 +27,114 @@ func TestLocalStoreBundleRoundTrip(t *testing.T) {
 	}
 	if got.RecordID != bundle.RecordID || got.SchemaVersion != model.SchemaProofBundle {
 		t.Fatalf("GetBundle() = %+v", got)
+	}
+}
+
+func TestLocalStoreBundleIDsDoNotCollideAfterEscaping(t *testing.T) {
+	t.Parallel()
+
+	store := LocalStore{Root: t.TempDir()}
+	slashBundle := model.ProofBundle{
+		SchemaVersion: "slash",
+		RecordID:      "rec/1",
+	}
+	underscoreBundle := model.ProofBundle{
+		SchemaVersion: "underscore",
+		RecordID:      "rec_1",
+	}
+	if err := store.PutBundle(context.Background(), slashBundle); err != nil {
+		t.Fatalf("PutBundle(slash) error = %v", err)
+	}
+	if err := store.PutBundle(context.Background(), underscoreBundle); err != nil {
+		t.Fatalf("PutBundle(underscore) error = %v", err)
+	}
+	gotSlash, err := store.GetBundle(context.Background(), slashBundle.RecordID)
+	if err != nil {
+		t.Fatalf("GetBundle(slash) error = %v", err)
+	}
+	gotUnderscore, err := store.GetBundle(context.Background(), underscoreBundle.RecordID)
+	if err != nil {
+		t.Fatalf("GetBundle(underscore) error = %v", err)
+	}
+	if gotSlash.SchemaVersion != slashBundle.SchemaVersion || gotUnderscore.SchemaVersion != underscoreBundle.SchemaVersion {
+		t.Fatalf("bundles collided: slash=%+v underscore=%+v", gotSlash, gotUnderscore)
+	}
+}
+
+func TestLocalStoreBundleReadsLegacyEscapedPath(t *testing.T) {
+	t.Parallel()
+
+	store := LocalStore{Root: t.TempDir()}
+	bundle := model.ProofBundle{
+		SchemaVersion: model.SchemaProofBundle,
+		RecordID:      "legacy/rec",
+	}
+	if store.bundlePath(bundle.RecordID) == store.legacyBundlePath(bundle.RecordID) {
+		t.Fatalf("test record id must use a distinct legacy path")
+	}
+	if err := writeCBORAtomic(store.legacyBundlePath(bundle.RecordID), bundle); err != nil {
+		t.Fatalf("writeCBORAtomic(legacy) error = %v", err)
+	}
+	got, err := store.GetBundle(context.Background(), bundle.RecordID)
+	if err != nil {
+		t.Fatalf("GetBundle() error = %v", err)
+	}
+	if got.RecordID != bundle.RecordID {
+		t.Fatalf("GetBundle() RecordID = %q, want %q", got.RecordID, bundle.RecordID)
+	}
+}
+
+func TestSafeFileNameAvoidsLegacyCollisions(t *testing.T) {
+	t.Parallel()
+
+	if safeFileName("rec/1") == safeFileName("rec_1") {
+		t.Fatalf("safeFileName still collides for slash and underscore")
+	}
+	if safeFileName("") == safeFileName("_") {
+		t.Fatalf("safeFileName still collides for empty string and underscore")
+	}
+	if got := safeFileName(".."); got == ".." {
+		t.Fatalf("safeFileName(%q) = %q, want encoded non-path segment", "..", got)
+	}
+	const plain = "tr1_record-1.2"
+	if got := safeFileName(plain); got != plain {
+		t.Fatalf("safeFileName(%q) = %q, want unchanged", plain, got)
+	}
+}
+
+func TestLocalStoreRecordIndexUpdateRemovesLegacySecondaryIndexes(t *testing.T) {
+	t.Parallel()
+
+	store := LocalStore{Root: t.TempDir()}
+	old := model.RecordIndex{
+		SchemaVersion:   model.SchemaRecordIndex,
+		RecordID:        "rec/legacy",
+		BatchID:         "batch/legacy",
+		TenantID:        "tenant/legacy",
+		ClientID:        "client/legacy",
+		ProofLevel:      "L3",
+		ReceivedAtUnixN: 10,
+	}
+	if err := writeCBORAtomic(store.legacyRecordByIDPath(old.RecordID), old); err != nil {
+		t.Fatalf("write legacy by-id index error = %v", err)
+	}
+	legacySecondaryPaths := store.legacyRecordIndexSecondaryPaths(old)
+	for _, path := range legacySecondaryPaths {
+		if err := writeCBORAtomic(path, old); err != nil {
+			t.Fatalf("write legacy secondary index error = %v", err)
+		}
+	}
+
+	next := old
+	next.ProofLevel = "L4"
+	next.ReceivedAtUnixN = 20
+	if err := store.PutRecordIndex(context.Background(), next); err != nil {
+		t.Fatalf("PutRecordIndex() error = %v", err)
+	}
+	for _, path := range legacySecondaryPaths {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("legacy secondary index %q still exists or stat failed with %v", path, err)
+		}
 	}
 }
 
