@@ -15,6 +15,8 @@ import (
 	"github.com/spf13/cobra"
 )
 
+const encodedOutputNamePrefix = "~"
+
 type multiFlag []string
 
 func (m *multiFlag) String() string {
@@ -46,6 +48,26 @@ func ensureDir(path string) error {
 
 func joinPath(parts ...string) string {
 	return filepath.Join(parts...)
+}
+
+func safeOutputFileName(value string) string {
+	if isPlainOutputFileName(value) {
+		return value
+	}
+	return encodedOutputNamePrefix + base64.RawURLEncoding.EncodeToString([]byte(value))
+}
+
+func isPlainOutputFileName(value string) bool {
+	if value == "" || value == "." || value == ".." || strings.HasPrefix(value, ".") {
+		return false
+	}
+	for _, r := range value {
+		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-' || r == '_' || r == '.' {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func readCBORFile(path string, v any) error {

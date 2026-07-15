@@ -162,7 +162,7 @@ func newCommitBatchCommand(rt *runtimeConfig) *cobra.Command {
 			}
 			outputs := make([]map[string]string, len(bundles))
 			for i := range bundles {
-				outPath := filepath.Join(outDir, bundles[i].RecordID+".tdproof")
+				outPath := filepath.Join(outDir, safeOutputFileName(bundles[i].RecordID)+".tdproof")
 				data, err := cborx.Marshal(bundles[i])
 				if err != nil {
 					return err

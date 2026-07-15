@@ -3,6 +3,7 @@ package main
 import (
 	"crypto/ed25519"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -88,5 +89,32 @@ func TestResolveClientKeysRegistryFallback(t *testing.T) {
 	}
 	if resolver == nil {
 		t.Fatalf("resolveClientKeys() resolver = nil, want registry-backed resolver")
+	}
+}
+
+func TestSafeOutputFileNamePreventsTraversalAndCollisions(t *testing.T) {
+	t.Parallel()
+
+	outDir := t.TempDir()
+	name := safeOutputFileName("../outside")
+	if strings.ContainsAny(name, `/\`) {
+		t.Fatalf("safeOutputFileName() = %q, want a single path segment", name)
+	}
+	outPath := filepath.Join(outDir, name+".tdproof")
+	rel, err := filepath.Rel(outDir, outPath)
+	if err != nil {
+		t.Fatalf("Rel() error = %v", err)
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
+		t.Fatalf("output path escapes out dir: outDir=%q outPath=%q rel=%q", outDir, outPath, rel)
+	}
+	if safeOutputFileName("rec/1") == safeOutputFileName("rec_2F1") {
+		t.Fatalf("safeOutputFileName() collides for slash and escaped-slash spelling")
+	}
+	if safeOutputFileName("") == safeOutputFileName("_") {
+		t.Fatalf("safeOutputFileName() collides for empty string and underscore")
+	}
+	if got := safeOutputFileName("rec-1_2.3"); got != "rec-1_2.3" {
+		t.Fatalf("safeOutputFileName() = %q, want plain safe name unchanged", got)
 	}
 }
