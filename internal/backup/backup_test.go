@@ -2,6 +2,7 @@ package backup
 
 import (
 	"archive/tar"
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -158,6 +159,100 @@ func TestBackupCreateVerifyRestoreRoundTrip(t *testing.T) {
 	}
 	if _, ok, err := dst.GetGlobalLogOutboxItem(ctx, root.BatchID); err != nil || !ok {
 		t.Fatalf("GetGlobalLogOutboxItem restored ok=%v err=%v", ok, err)
+	}
+}
+
+func TestCreateDoesNotReplaceTargetOnFailure(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	src := proofstore.LocalStore{Root: filepath.Join(t.TempDir(), "src")}
+	path := filepath.Join(t.TempDir(), "trustdb.tdbackup")
+	original := []byte("existing backup content")
+	if err := os.WriteFile(path, original, 0o600); err != nil {
+		t.Fatalf("WriteFile(original): %v", err)
+	}
+
+	if _, err := Create(ctx, src, path, Options{Compression: "none"}); err == nil {
+		t.Fatal("Create() error = nil, want canceled context error")
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile(target): %v", err)
+	}
+	if !bytes.Equal(got, original) {
+		t.Fatalf("target backup was replaced on failure: got %q want %q", got, original)
+	}
+}
+
+func TestCreateUsesCollisionResistantArchiveNames(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	src := proofstore.LocalStore{Root: filepath.Join(t.TempDir(), "src")}
+	ids := []string{"rec/1", "rec_2F1"}
+	for _, id := range ids {
+		if err := src.PutBundle(ctx, model.ProofBundle{
+			SchemaVersion: model.SchemaProofBundle,
+			RecordID:      id,
+			CommittedReceipt: model.CommittedReceipt{
+				BatchID:   "batch/collide",
+				BatchRoot: repeatByte(0x11, 32),
+			},
+			BatchProof: model.BatchProof{TreeSize: 2},
+		}); err != nil {
+			t.Fatalf("PutBundle(%q): %v", id, err)
+		}
+	}
+	if err := src.PutManifest(ctx, model.BatchManifest{
+		SchemaVersion: model.SchemaBatchManifest,
+		BatchID:       "batch/collide",
+		State:         model.BatchStateCommitted,
+		TreeSize:      2,
+		BatchRoot:     repeatByte(0x11, 32),
+		RecordIDs:     ids,
+		ClosedAtUnixN: 1,
+	}); err != nil {
+		t.Fatalf("PutManifest: %v", err)
+	}
+
+	path := filepath.Join(t.TempDir(), "trustdb.tdbackup")
+	report, err := Create(ctx, src, path, Options{Compression: "none"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	names := make(map[string]struct{})
+	for _, entry := range report.Entries {
+		if entry.Type != "proof_bundle" {
+			continue
+		}
+		if _, ok := names[entry.Name]; ok {
+			t.Fatalf("duplicate proof bundle archive entry name: %q", entry.Name)
+		}
+		names[entry.Name] = struct{}{}
+	}
+	if len(names) != len(ids) {
+		t.Fatalf("proof bundle entry names = %v, want %d entries", names, len(ids))
+	}
+}
+
+func TestSafeNameAvoidsPathSegmentCollisions(t *testing.T) {
+	t.Parallel()
+
+	if safeName("rec/1") == safeName("rec_2F1") {
+		t.Fatalf("safeName still collides for escaped slash spelling")
+	}
+	if safeName("") == safeName("_") {
+		t.Fatalf("safeName still collides for empty string and underscore")
+	}
+	if got := safeName(".."); got == ".." {
+		t.Fatalf("safeName(%q) = %q, want encoded non-path segment", "..", got)
+	}
+	const plain = "batch-1_2.3"
+	if got := safeName(plain); got != plain {
+		t.Fatalf("safeName(%q) = %q, want unchanged", plain, got)
 	}
 }
 

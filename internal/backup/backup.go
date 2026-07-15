@@ -9,11 +9,11 @@ import (
 	"compress/gzip"
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -36,6 +36,8 @@ const (
 	paxOrdinal  = "trustdb.ordinal"
 	paxSHA256   = "trustdb.sha256"
 	paxType     = "trustdb.type"
+
+	encodedArchiveNamePrefix = "~"
 )
 
 type Entry struct {
@@ -97,11 +99,22 @@ func Create(ctx context.Context, store proofstore.Store, path string, opts Optio
 	if clock == nil {
 		clock = func() time.Time { return time.Now().UTC() }
 	}
-	f, err := os.Create(path)
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return Manifest{}, trusterr.Wrap(trusterr.CodeInternal, "create backup directory", err)
+	}
+	f, err := os.CreateTemp(dir, "."+filepath.Base(path)+".*.tmp")
 	if err != nil {
 		return Manifest{}, trusterr.Wrap(trusterr.CodeInternal, "create backup file", err)
 	}
-	defer f.Close()
+	tmpPath := f.Name()
+	cleanup := true
+	defer func() {
+		if cleanup {
+			_ = os.Remove(tmpPath)
+		}
+		_ = f.Close()
+	}()
 
 	var out io.Writer = f
 	var gz *gzip.Writer
@@ -335,6 +348,13 @@ func Create(ctx context.Context, store proofstore.Store, path string, opts Optio
 	if err := closeArchive(); err != nil {
 		return Manifest{}, trusterr.Wrap(trusterr.CodeDataLoss, "close backup archive", err)
 	}
+	if err := f.Close(); err != nil {
+		return Manifest{}, trusterr.Wrap(trusterr.CodeDataLoss, "close backup file", err)
+	}
+	if err := renameReplace(tmpPath, path); err != nil {
+		return Manifest{}, trusterr.Wrap(trusterr.CodeDataLoss, "publish backup archive", err)
+	}
+	cleanup = false
 	return report, nil
 }
 
@@ -822,16 +842,68 @@ func writeRestoreCheckpoint(path string, cp RestoreCheckpoint) error {
 		return err
 	}
 	data = append(data, '\n')
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o600); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
+	return writeFileAtomic(path, data)
 }
 
 func safeName(value string) string {
-	escaped := url.PathEscape(value)
-	return strings.ReplaceAll(escaped, "%", "_")
+	if isPlainArchiveName(value) {
+		return value
+	}
+	return encodedArchiveNamePrefix + base64.RawURLEncoding.EncodeToString([]byte(value))
+}
+
+func isPlainArchiveName(value string) bool {
+	if value == "" || value == "." || value == ".." || strings.HasPrefix(value, ".") {
+		return false
+	}
+	for _, r := range value {
+		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-' || r == '_' || r == '.' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func writeFileAtomic(path string, data []byte) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	cleanup := true
+	defer func() {
+		if cleanup {
+			_ = os.Remove(tmpPath)
+		}
+	}()
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := renameReplace(tmpPath, path); err != nil {
+		return err
+	}
+	cleanup = false
+	return nil
+}
+
+func renameReplace(src, dst string) error {
+	if err := os.Rename(src, dst); err != nil {
+		if os.IsExist(err) {
+			if removeErr := os.Remove(dst); removeErr == nil {
+				return os.Rename(src, dst)
+			}
+		}
+		return err
+	}
+	return nil
 }
 
 func normaliseCompression(value string) string {
