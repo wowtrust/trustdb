@@ -1,0 +1,13 @@
+<type>(<scope>): <imperative summary>
+
+Why:
+
+
+Validation:
+
+
+Risk:
+
+
+# Types: feat, fix, docs, test, refactor, perf, security, chore, ci, build, revert.
+# Example: fix(backup): validate restore checkpoints

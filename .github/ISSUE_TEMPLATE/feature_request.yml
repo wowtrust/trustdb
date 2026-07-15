@@ -1,0 +1,66 @@
+name: Feature request
+description: Propose a new implemented capability for TrustDB.
+title: "[Feature] "
+labels:
+  - enhancement
+body:
+  - type: textarea
+    id: goal
+    attributes:
+      label: Goal
+      description: Describe the user, operator, or developer outcome this feature should enable.
+    validations:
+      required: true
+  - type: textarea
+    id: current
+    attributes:
+      label: Current behavior
+      description: Describe what TrustDB can do today and where the gap is.
+    validations:
+      required: true
+  - type: textarea
+    id: proposed
+    attributes:
+      label: Proposed behavior
+      description: Describe the new CLI, API, SDK, desktop, storage, proof, backup, or operations behavior.
+    validations:
+      required: true
+  - type: textarea
+    id: non_goals
+    attributes:
+      label: Non-goals
+      description: List what this iteration intentionally will not solve.
+    validations:
+      required: true
+  - type: checkboxes
+    id: proof
+    attributes:
+      label: Proof and format impact
+      options:
+        - label: Touches L1/L2/L3/L4/L5 semantics.
+        - label: Changes `.tdclaim`, `.tdproof`, `.tdgproof`, `.tdanchor-result`, `.sproof`, or `.tdbackup`.
+        - label: Requires a compatibility or migration decision.
+        - label: No proof or format impact expected.
+  - type: textarea
+    id: scale
+    attributes:
+      label: Scale, recovery, and operations impact
+      description: Include expected data size, indexes, retry behavior, recovery behavior, and deployment impact.
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      placeholder: |
+        - [ ] ...
+        - [ ] ...
+    validations:
+      required: true
+  - type: textarea
+    id: validation
+    attributes:
+      label: Validation plan
+      placeholder: |
+        - go test ./...
+        - go vet ./...
+    validations:
+      required: true
