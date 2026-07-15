@@ -111,6 +111,18 @@ func TestSProofV1L3Vector(t *testing.T) {
 	}
 }
 
+func TestReadFileRejectsOversizedSingleProof(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "oversized.sproof")
+	if err := os.WriteFile(path, make([]byte, MaxBytes+1), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	if _, err := ReadFile(path); err == nil {
+		t.Fatal("ReadFile() error = nil, want oversized invalid proof rejection")
+	}
+}
+
 func vectorProof() model.SingleProof {
 	return model.SingleProof{
 		SchemaVersion:   model.SchemaSingleProof,

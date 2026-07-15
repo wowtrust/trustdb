@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 
@@ -248,7 +249,7 @@ func (a *App) resolveServerPub(override string) (ed25519.PublicKey, error) {
 }
 
 func readProofBundleFile(path string, out *model.ProofBundle) error {
-	data, err := os.ReadFile(path)
+	data, err := readCBORFileLimit(path, cborx.DefaultMaxBytes)
 	if err != nil {
 		return fmt.Errorf("read proof: %w", err)
 	}
@@ -262,7 +263,7 @@ func readProofBundleFile(path string, out *model.ProofBundle) error {
 }
 
 func readSingleProofFile(path string, out *model.SingleProof) error {
-	data, err := os.ReadFile(path)
+	data, err := readCBORFileLimit(path, sproof.MaxBytes)
 	if err != nil {
 		return fmt.Errorf("read single proof: %w", err)
 	}
@@ -278,7 +279,7 @@ func readSingleProofFile(path string, out *model.SingleProof) error {
 	return nil
 }
 func readGlobalProofFile(path string, out *model.GlobalLogProof) error {
-	data, err := os.ReadFile(path)
+	data, err := readCBORFileLimit(path, cborx.DefaultMaxBytes)
 	if err != nil {
 		return fmt.Errorf("read global proof: %w", err)
 	}
@@ -292,7 +293,7 @@ func readGlobalProofFile(path string, out *model.GlobalLogProof) error {
 }
 
 func readAnchorResultFile(path string, out *model.STHAnchorResult) error {
-	data, err := os.ReadFile(path)
+	data, err := readCBORFileLimit(path, cborx.DefaultMaxBytes)
 	if err != nil {
 		return fmt.Errorf("read anchor: %w", err)
 	}
@@ -303,6 +304,25 @@ func readAnchorResultFile(path string, out *model.STHAnchorResult) error {
 		return schemaMismatchError("anchor", path, model.SchemaSTHAnchorResult, out.SchemaVersion)
 	}
 	return nil
+}
+
+func readCBORFileLimit(path string, maxBytes int) ([]byte, error) {
+	if maxBytes <= 0 {
+		return nil, fmt.Errorf("max bytes must be positive")
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	data, err := io.ReadAll(io.LimitReader(f, int64(maxBytes)+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > maxBytes {
+		return nil, fmt.Errorf("payload too large: %d > %d", len(data), maxBytes)
+	}
+	return data, nil
 }
 
 func schemaMismatchError(kind, path, want, got string) error {
