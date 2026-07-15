@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -23,6 +24,76 @@ func TestStoreLoadMissingConfigUsesDefaults(t *testing.T) {
 	}
 	if cfg.ServerTransport != serverTransportHTTP {
 		t.Fatalf("ServerTransport = %q, want http", cfg.ServerTransport)
+	}
+}
+
+func TestWriteFileAtomicIgnoresStaleFixedTempPath(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "proof.tdproof")
+	staleFixedTmp := path + ".tmp"
+	if err := os.Mkdir(staleFixedTmp, 0o755); err != nil {
+		t.Fatalf("Mkdir(stale tmp): %v", err)
+	}
+
+	if err := writeFileAtomic(path, []byte("proof"), 0o644); err != nil {
+		t.Fatalf("writeFileAtomic() error = %v", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if string(got) != "proof" {
+		t.Fatalf("file content = %q, want proof", got)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("Stat(path) error = %v", err)
+	}
+	if info.Mode().Perm() != 0o644 {
+		t.Fatalf("file mode = %v, want 0644", info.Mode().Perm())
+	}
+	staleInfo, err := os.Stat(staleFixedTmp)
+	if err != nil {
+		t.Fatalf("stale fixed temp path missing: %v", err)
+	}
+	if !staleInfo.IsDir() {
+		t.Fatalf("stale fixed temp path was modified; isDir=false")
+	}
+}
+
+func TestStorePersistIgnoresStaleFixedTempPath(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "config.json")
+	staleFixedTmp := path + ".tmp"
+	if err := os.Mkdir(staleFixedTmp, 0o755); err != nil {
+		t.Fatalf("Mkdir(stale tmp): %v", err)
+	}
+
+	store, err := newStore(path)
+	if err != nil {
+		t.Fatalf("newStore: %v", err)
+	}
+	defer store.close()
+	settings := defaultSettings()
+	settings.ServerURL = "http://127.0.0.1:9090"
+	if err := store.setSettings(settings); err != nil {
+		t.Fatalf("setSettings() error = %v", err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile(config): %v", err)
+	}
+	if !bytes.Contains(raw, []byte(`"server_url": "http://127.0.0.1:9090"`)) {
+		t.Fatalf("persisted config missing server_url: %s", raw)
+	}
+	staleInfo, err := os.Stat(staleFixedTmp)
+	if err != nil {
+		t.Fatalf("stale fixed temp path missing: %v", err)
+	}
+	if !staleInfo.IsDir() {
+		t.Fatalf("stale fixed temp path was modified; isDir=false")
 	}
 }
 
