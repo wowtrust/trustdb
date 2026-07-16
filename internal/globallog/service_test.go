@@ -95,6 +95,36 @@ func TestAppendBatchRootProducesStableSTHAndInclusionProof(t *testing.T) {
 	}
 }
 
+func TestAppendBatchRootsPreservesSTHSequence(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	svc, store := newTestService(t)
+	roots := []model.BatchRoot{batchRoot("batch-1", 1), batchRoot("batch-2", 2), batchRoot("batch-3", 3)}
+	sths, err := svc.AppendBatchRoots(ctx, roots)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sths) != len(roots) {
+		t.Fatalf("sths=%d want=%d", len(sths), len(roots))
+	}
+	for i := range sths {
+		if sths[i].TreeSize != uint64(i+1) {
+			t.Fatalf("sth[%d].tree_size=%d", i, sths[i].TreeSize)
+		}
+	}
+	duplicate, err := svc.AppendBatchRoots(ctx, []model.BatchRoot{roots[1], batchRoot("batch-4", 4)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if duplicate[0].TreeSize != 2 || duplicate[1].TreeSize != 4 {
+		t.Fatalf("duplicate sequence=%+v", duplicate)
+	}
+	leaves, err := store.ListGlobalLeaves(ctx)
+	if err != nil || len(leaves) != 4 {
+		t.Fatalf("leaves=%d err=%v", len(leaves), err)
+	}
+}
+
 func TestAppendBatchRootRefusesPartialExistingLeafWithoutSTH(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

@@ -9,18 +9,27 @@ import (
 )
 
 type Metrics struct {
-	IngestRequests     *prometheus.CounterVec
-	IngestRejected     *prometheus.CounterVec
-	WALAppendLatency   *prometheus.HistogramVec
-	WALFsyncLatency    *prometheus.HistogramVec
-	QueueDepth         *prometheus.GaugeVec
-	BatchSizeRecords   prometheus.Histogram
-	BatchCommitLatency prometheus.Histogram
-	BatchStageLatency  *prometheus.HistogramVec
-	MerkleBuildLatency prometheus.Histogram
-	SemanticProfile    *prometheus.GaugeVec
-	AnchorPending      prometheus.Gauge
-	AnchorLatency      prometheus.Histogram
+	IngestRequests        *prometheus.CounterVec
+	IngestRejected        *prometheus.CounterVec
+	WALAppendLatency      *prometheus.HistogramVec
+	WALFsyncLatency       *prometheus.HistogramVec
+	QueueDepth            *prometheus.GaugeVec
+	BatchSizeRecords      prometheus.Histogram
+	BatchCommitLatency    prometheus.Histogram
+	BatchStageLatency     *prometheus.HistogramVec
+	MerkleBuildLatency    prometheus.Histogram
+	SemanticProfile       *prometheus.GaugeVec
+	MaterializerInFlight  prometheus.Gauge
+	MaterializerPrepared  prometheus.Gauge
+	MaterializerOldestAge prometheus.Gauge
+	MaterializerRetries   prometheus.Counter
+	MaterializedRecords   prometheus.Counter
+	BatchTreeTiles        prometheus.Histogram
+	GlobalLogBatchSize    prometheus.Histogram
+	GlobalLogBatchLatency prometheus.Histogram
+	AnchorPending         prometheus.Gauge
+	AnchorInFlight        prometheus.Gauge
+	AnchorLatency         prometheus.Histogram
 	// AnchorAttempts counts every Sink.Publish call the worker has
 	// issued, broken down by sink and outcome (success | transient |
 	// permanent). A sudden rise in transient spikes points at sink
@@ -132,9 +141,48 @@ func NewMetrics() *Metrics {
 			Name: "trustdb_semantic_profile_info",
 			Help: "Active semantic and durability performance profile labels for this process.",
 		}, []string{"semantic_profile", "durability_profile", "proof_mode", "record_index_mode", "artifact_sync_mode", "global_log"}),
+		MaterializerInFlight: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "trustdb_materializer_in_flight",
+			Help: "Current number of proof materialization jobs being processed.",
+		}),
+		MaterializerPrepared: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "trustdb_materializer_prepared_backlog",
+			Help: "Current number of due prepared manifests observed by the scanner.",
+		}),
+		MaterializerOldestAge: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "trustdb_materializer_oldest_prepared_age_seconds",
+			Help: "Age in seconds of the oldest due prepared manifest.",
+		}),
+		MaterializerRetries: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "trustdb_materializer_retries_total",
+			Help: "Total materialization attempts scheduled for retry.",
+		}),
+		MaterializedRecords: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "trustdb_materialized_records_total",
+			Help: "Total records whose L3 proof bundles were materialized.",
+		}),
+		BatchTreeTiles: prometheus.NewHistogram(prometheus.HistogramOpts{
+			Name:    "trustdb_batch_tree_tiles",
+			Help:    "Number of physical tree tiles written per batch.",
+			Buckets: []float64{1, 2, 4, 8, 16, 24, 32, 40, 64, 128},
+		}),
+		GlobalLogBatchSize: prometheus.NewHistogram(prometheus.HistogramOpts{
+			Name:    "trustdb_global_log_batch_size",
+			Help:    "Number of roots processed in one global-log outbox batch.",
+			Buckets: []float64{1, 2, 4, 8, 16, 32, 64, 128},
+		}),
+		GlobalLogBatchLatency: prometheus.NewHistogram(prometheus.HistogramOpts{
+			Name:    "trustdb_global_log_batch_latency_seconds",
+			Help:    "Latency of one global-log outbox batch.",
+			Buckets: prometheus.ExponentialBuckets(0.001, 2, 16),
+		}),
 		AnchorPending: prometheus.NewGauge(prometheus.GaugeOpts{
 			Name: "trustdb_anchor_pending_total",
 			Help: "Current pending anchor outbox entries.",
+		}),
+		AnchorInFlight: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "trustdb_anchor_in_flight",
+			Help: "Current number of anchor publish calls in flight.",
 		}),
 		AnchorLatency: prometheus.NewHistogram(prometheus.HistogramOpts{
 			Name:    "trustdb_anchor_latency_seconds",
@@ -200,7 +248,16 @@ func (m *Metrics) Collectors() []prometheus.Collector {
 		m.BatchStageLatency,
 		m.MerkleBuildLatency,
 		m.SemanticProfile,
+		m.MaterializerInFlight,
+		m.MaterializerPrepared,
+		m.MaterializerOldestAge,
+		m.MaterializerRetries,
+		m.MaterializedRecords,
+		m.BatchTreeTiles,
+		m.GlobalLogBatchSize,
+		m.GlobalLogBatchLatency,
 		m.AnchorPending,
+		m.AnchorInFlight,
 		m.AnchorLatency,
 		m.AnchorAttempts,
 		m.AnchorPublished,

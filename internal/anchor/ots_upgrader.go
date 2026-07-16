@@ -52,6 +52,8 @@ type UpgraderConfig struct {
 	// bounded so other goroutines on the shared store handle make
 	// progress.
 	BatchSize int
+	// Workers bounds concurrent upgrades for independent STHs.
+	Workers int
 	// Clock makes UnixNano deterministic in tests; nil => time.Now.
 	Clock func() time.Time
 }
@@ -62,6 +64,9 @@ func (c *UpgraderConfig) applyDefaults() {
 	}
 	if c.BatchSize <= 0 {
 		c.BatchSize = defaultUpgradeBatchSize
+	}
+	if c.Workers <= 0 {
+		c.Workers = 4
 	}
 	if c.HTTPOptions.Timeout <= 0 {
 		c.HTTPOptions.Timeout = defaultUpgradePerCallTO
@@ -221,18 +226,41 @@ func (u *OtsUpgrader) tick(ctx context.Context) UpgraderTickStats {
 		u.cfg.Logger.Warn().Err(err).Msg("ots-upgrader: list published failed")
 		return stats
 	}
+	treeSizes := make([]uint64, 0, len(items))
 	for _, item := range items {
-		if ctx.Err() != nil {
-			return stats
+		if item.SinkName == OtsSinkName {
+			treeSizes = append(treeSizes, item.TreeSize)
 		}
-		// Filter at the OTS layer: the upgrader has nothing to do
-		// for non-ots sinks and asking the store for sink-typed
-		// indexing would couple every backend to OTS internals.
-		if item.SinkName != OtsSinkName {
-			continue
+	}
+	workers := min(u.cfg.Workers, len(treeSizes))
+	if workers > 0 {
+		jobs := make(chan uint64)
+		results := make(chan UpgraderTickStats, len(treeSizes))
+		var wg sync.WaitGroup
+		for i := 0; i < workers; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for treeSize := range jobs {
+					local := UpgraderTickStats{Visited: 1}
+					u.processOne(ctx, treeSize, &local)
+					results <- local
+				}
+			}()
 		}
-		stats.Visited++
-		u.processOne(ctx, item.TreeSize, &stats)
+		for _, treeSize := range treeSizes {
+			select {
+			case jobs <- treeSize:
+			case <-ctx.Done():
+				break
+			}
+		}
+		close(jobs)
+		wg.Wait()
+		close(results)
+		for local := range results {
+			mergeUpgraderTickStats(&stats, local)
+		}
 	}
 	if u.cfg.Metrics != nil {
 		u.cfg.Metrics.OtsPendingBatches.Set(float64(stats.StillPending))
@@ -244,6 +272,18 @@ func (u *OtsUpgrader) tick(ctx context.Context) UpgraderTickStats {
 		Int("still_pending", stats.StillPending).
 		Msg("ots-upgrader: tick complete")
 	return stats
+}
+
+func mergeUpgraderTickStats(dst *UpgraderTickStats, src UpgraderTickStats) {
+	dst.Visited += src.Visited
+	dst.Skipped += src.Skipped
+	dst.Changed += src.Changed
+	dst.Unchanged += src.Unchanged
+	dst.Errored += src.Errored
+	dst.StillPending += src.StillPending
+	dst.CalendarChanged += src.CalendarChanged
+	dst.CalendarUnchanged += src.CalendarUnchanged
+	dst.CalendarErrored += src.CalendarErrored
 }
 
 // processOne loads the STHAnchorResult, runs the upgrade probe, and

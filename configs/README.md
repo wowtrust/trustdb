@@ -7,6 +7,13 @@ Shipped YAML files are **starting points** only: adjust paths, keys, `server.lis
 | `development.yaml` | `development` | Local demos: file proofstore, `noop` anchor, debug-friendly logging. |
 | `production.yaml` | `single_node_production` | Single-node baseline: Pebble (or TiKV) proofstore, OTS anchor, JSON logs. |
 | `benchmark.yaml` | `benchmark` | Throughput experiments: Pebble, `wal.fsync_mode: batch`, async batch proofs, `noop` anchor. |
+| `benchmark-l3-throughput.yaml` | `benchmark` | Reproduces the high-write L2/L3 profile from the April performance report. |
+| `benchmark-production-safe.yaml` | `benchmark` | Group-fsync, full-index, L4 and OTS L5 performance validation. |
+| `benchmark-large-payload.yaml` | `benchmark` | Dedicated 16 KiB/64 KiB claim and artifact pressure tests. |
+
+`benchmark*.yaml` files use separate data directories. Do not point them at an
+existing proofstore: the Pebble proofstore now requires storage schema v2 and
+intentionally refuses legacy key layouts instead of deleting or migrating them.
 
 ## `run_profile`
 

@@ -446,6 +446,23 @@ func (s LocalStore) ListBatchTreeNodes(ctx context.Context, opts model.BatchTree
 		return nil, trusterr.New(trusterr.CodeInvalidArgument, "batch_id is required")
 	}
 	limit := normaliseRecordLimit(opts.Limit)
+	if opts.Level == 0 {
+		after := opts.AfterStartIndex
+		hasAfter := opts.HasAfter
+		if !hasAfter && opts.StartIndex > 0 {
+			after = opts.StartIndex - 1
+			hasAfter = true
+		}
+		leaves, err := s.ListBatchTreeLeaves(ctx, model.BatchTreeLeafListOptions{BatchID: opts.BatchID, Limit: limit, AfterLeafIndex: after, HasAfter: hasAfter})
+		if err != nil {
+			return nil, err
+		}
+		nodes := make([]model.BatchTreeNode, len(leaves))
+		for i := range leaves {
+			nodes[i] = model.BatchTreeNode{SchemaVersion: model.SchemaBatchTreeNode, BatchID: leaves[i].BatchID, Level: 0, StartIndex: leaves[i].LeafIndex, Width: 1, Hash: append([]byte(nil), leaves[i].LeafHash...), CreatedAtUnixN: leaves[i].CreatedAtUnixN}
+		}
+		return nodes, nil
+	}
 	entries, err := os.ReadDir(s.batchTreeNodeLevelDir(opts.BatchID, opts.Level))
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -495,8 +512,8 @@ func (s LocalStore) PutManifest(ctx context.Context, manifest model.BatchManifes
 	if manifest.BatchID == "" {
 		return trusterr.New(trusterr.CodeInvalidArgument, "batch manifest batch_id is required")
 	}
-	if manifest.State != model.BatchStatePrepared && manifest.State != model.BatchStateCommitted {
-		return trusterr.New(trusterr.CodeInvalidArgument, "batch manifest state must be prepared or committed")
+	if !model.ValidBatchManifestState(manifest.State) {
+		return trusterr.New(trusterr.CodeInvalidArgument, "invalid batch manifest state")
 	}
 	if manifest.SchemaVersion == "" {
 		manifest.SchemaVersion = model.SchemaBatchManifest

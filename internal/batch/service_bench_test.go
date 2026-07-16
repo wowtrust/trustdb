@@ -38,11 +38,14 @@ func BenchmarkBatchProofModeAsync1024(b *testing.B) {
 	b.ReportAllocs()
 	for i := 0; b.Loop(); i++ {
 		batchID := fmt.Sprintf("bench-async-%d", i)
-		root, indexes, err := svc.planBatchIndexes(batchID, closedAt, signed, records, accepted)
+		commit, err := svc.computeBatch(context.Background(), batchID, closedAt, signed, records, accepted, model.BatchComputeOptions{Mode: model.BatchComputePlanOnly, IncludeTree: true})
 		if err != nil {
 			b.Fatal(err)
 		}
-		if err := svc.writeIndexesAndRoot(context.Background(), indexes, root); err != nil {
+		if err := svc.writeIndexesAndRoot(context.Background(), commit.Indexes, commit.Root); err != nil {
+			b.Fatal(err)
+		}
+		if err := svc.writeBatchTree(context.Background(), commit.Tree); err != nil {
 			b.Fatal(err)
 		}
 	}
@@ -152,6 +155,10 @@ func (benchmarkBatchStore) LatestRoot(context.Context) (model.BatchRoot, error) 
 }
 
 func (benchmarkBatchStore) PutBatchTreeArtifacts(context.Context, []model.BatchTreeLeaf, []model.BatchTreeNode) error {
+	return nil
+}
+
+func (benchmarkBatchStore) PutBatchTreeSnapshot(context.Context, model.BatchTreeSnapshot) error {
 	return nil
 }
 

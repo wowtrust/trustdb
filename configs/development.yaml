@@ -51,6 +51,11 @@ batch:
   queue_size: 1024
   max_records: 1024
   max_delay: "500ms"
+  proof_mode: "inline"
+  materializer_workers: 2
+  materializer_queue_size: 4
+  materializer_poll_interval: "250ms"
+  proof_workers: 0
 
 global_log:
   enabled: true
@@ -59,6 +64,7 @@ global_log:
 anchor:
   scope: "global"
   max_delay: "5m"
+  workers: 4
   sink: "noop"
   path: ".trustdb-dev/anchors/sth-anchors.jsonl"
   ots:
@@ -70,6 +76,7 @@ anchor:
       interval: ""
       batch_size: 0
       timeout: ""
+      workers: 4
 
 history:
   tile_size: 256

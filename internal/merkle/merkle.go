@@ -5,15 +5,21 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"sync"
 
 	"github.com/ryan-wong-coder/trustdb/internal/cborx"
 	"github.com/ryan-wong-coder/trustdb/internal/model"
 )
 
+const maxLeafBufferCapacity = 1 << 20
+
+var leafBufferPool = sync.Pool{New: func() any { return new(bytes.Buffer) }}
+
 type Tree struct {
 	leafHashes [][sha256.Size]byte
 	root       [sha256.Size]byte
-	nodes      map[nodeRange][sha256.Size]byte
+	nodeIndex  map[nodeRange]int
+	nodeHashes [][sha256.Size]byte
 }
 
 type Leaf struct {
@@ -26,6 +32,13 @@ type Node struct {
 	StartIndex uint64
 	Width      uint64
 	Hash       []byte
+}
+
+type CompactNode struct {
+	Level      uint64
+	StartIndex uint64
+	Width      uint64
+	Hash       [sha256.Size]byte
 }
 
 func Build(records []model.ServerRecord) (Tree, error) {
@@ -52,16 +65,24 @@ func HashLeaf(record model.ServerRecord) ([]byte, error) {
 }
 
 func hashLeafArray(record model.ServerRecord) ([sha256.Size]byte, error) {
-	b, err := cborx.Marshal(record)
-	if err != nil {
+	buf := leafBufferPool.Get().(*bytes.Buffer)
+	buf.Reset()
+	buf.WriteByte(0)
+	if err := cborx.MarshalBuffer(buf, record); err != nil {
+		releaseLeafBuffer(buf)
 		return [sha256.Size]byte{}, err
 	}
-	h := sha256.New()
-	h.Write([]byte{0})
-	h.Write(b)
-	var out [sha256.Size]byte
-	copy(out[:], h.Sum(nil))
+	out := sha256.Sum256(buf.Bytes())
+	releaseLeafBuffer(buf)
 	return out, nil
+}
+
+func releaseLeafBuffer(buf *bytes.Buffer) {
+	if buf == nil || buf.Cap() > maxLeafBufferCapacity {
+		return
+	}
+	buf.Reset()
+	leafBufferPool.Put(buf)
 }
 
 func RootFromLeaves(leaves [][]byte) ([]byte, error) {
@@ -108,6 +129,30 @@ func (t Tree) LeafHash(index int) ([]byte, error) {
 	return cloneHash(t.leafHashes[index]), nil
 }
 
+func (t Tree) LeafHashView(index int) ([]byte, error) {
+	if index < 0 || index >= len(t.leafHashes) {
+		return nil, fmt.Errorf("merkle: leaf index out of range: %d", index)
+	}
+	return t.leafHashes[index][:], nil
+}
+
+func (t Tree) CompactLeaves() [][sha256.Size]byte {
+	return t.leafHashes
+}
+
+func (t Tree) CompactNodes() []CompactNode {
+	out := make([]CompactNode, 0, len(t.nodeIndex))
+	for r, index := range t.nodeIndex {
+		out = append(out, CompactNode{
+			Level:      rangeLevel(r.size),
+			StartIndex: uint64(r.start),
+			Width:      uint64(r.size),
+			Hash:       t.nodeHashes[index],
+		})
+	}
+	return out
+}
+
 func (t Tree) Leaves() []Leaf {
 	out := make([]Leaf, len(t.leafHashes))
 	for i := range t.leafHashes {
@@ -120,13 +165,13 @@ func (t Tree) Leaves() []Leaf {
 }
 
 func (t Tree) Nodes() []Node {
-	out := make([]Node, 0, len(t.nodes))
-	for r, hash := range t.nodes {
+	out := make([]Node, 0, len(t.nodeIndex))
+	for r, index := range t.nodeIndex {
 		out = append(out, Node{
 			Level:      rangeLevel(r.size),
 			StartIndex: uint64(r.start),
 			Width:      uint64(r.size),
-			Hash:       cloneHash(hash),
+			Hash:       cloneHash(t.nodeHashes[index]),
 		})
 	}
 	return out
@@ -154,6 +199,22 @@ func (t Tree) Proofs() [][][]byte {
 		}
 	}
 	return out
+}
+
+// ProofView returns an immutable audit path backed by the tree's compact hash
+// storage. Callers must not mutate the returned byte slices.
+func (t Tree) ProofView(index int) ([][]byte, error) {
+	if index < 0 || index >= len(t.leafHashes) {
+		return nil, fmt.Errorf("merkle: leaf index out of range: %d", index)
+	}
+	ranges := make([]nodeRange, 0, merklePathLen(len(t.leafHashes)))
+	t.appendAuditPathRanges(&ranges, 0, len(t.leafHashes), index)
+	out := make([][]byte, len(ranges))
+	for i := range ranges {
+		nodeIndex := t.nodeIndex[ranges[i]]
+		out[i] = t.nodeHashes[nodeIndex][:]
+	}
+	return out, nil
 }
 
 func Verify(leafHash []byte, index, treeSize uint64, auditPath [][]byte, root []byte) bool {
@@ -187,22 +248,25 @@ type nodeRange struct {
 }
 
 func buildFromLeafHashes(leaves [][sha256.Size]byte) Tree {
-	nodes := make(map[nodeRange][sha256.Size]byte, len(leaves)*2)
-	root := buildRange(leaves, nodes, 0, len(leaves))
-	return Tree{leafHashes: leaves, root: root, nodes: nodes}
+	nodeIndex := make(map[nodeRange]int, len(leaves)*2)
+	nodeHashes := make([][sha256.Size]byte, 0, len(leaves)*2)
+	root := buildRange(leaves, nodeIndex, &nodeHashes, 0, len(leaves))
+	return Tree{leafHashes: leaves, root: root, nodeIndex: nodeIndex, nodeHashes: nodeHashes}
 }
 
-func buildRange(leaves [][sha256.Size]byte, nodes map[nodeRange][sha256.Size]byte, start, size int) [sha256.Size]byte {
+func buildRange(leaves [][sha256.Size]byte, nodeIndex map[nodeRange]int, nodeHashes *[][sha256.Size]byte, start, size int) [sha256.Size]byte {
 	key := nodeRange{start: start, size: size}
+	var out [sha256.Size]byte
 	if size == 1 {
-		nodes[key] = leaves[start]
-		return leaves[start]
+		out = leaves[start]
+	} else {
+		k := largestPowerOfTwoLessThan(size)
+		left := buildRange(leaves, nodeIndex, nodeHashes, start, k)
+		right := buildRange(leaves, nodeIndex, nodeHashes, start+k, size-k)
+		out = hashNode(left, right)
 	}
-	k := largestPowerOfTwoLessThan(size)
-	left := buildRange(leaves, nodes, start, k)
-	right := buildRange(leaves, nodes, start+k, size-k)
-	out := hashNode(left, right)
-	nodes[key] = out
+	nodeIndex[key] = len(*nodeHashes)
+	*nodeHashes = append(*nodeHashes, out)
 	return out
 }
 
@@ -219,11 +283,25 @@ func (t Tree) appendAuditPath(path *[][sha256.Size]byte, start, size, index int)
 	k := largestPowerOfTwoLessThan(size)
 	if index < k {
 		t.appendAuditPath(path, start, k, index)
-		*path = append(*path, t.nodes[nodeRange{start: start + k, size: size - k}])
+		*path = append(*path, t.nodeHashes[t.nodeIndex[nodeRange{start: start + k, size: size - k}]])
 		return
 	}
 	t.appendAuditPath(path, start+k, size-k, index-k)
-	*path = append(*path, t.nodes[nodeRange{start: start, size: k}])
+	*path = append(*path, t.nodeHashes[t.nodeIndex[nodeRange{start: start, size: k}]])
+}
+
+func (t Tree) appendAuditPathRanges(path *[]nodeRange, start, size, index int) {
+	if size == 1 {
+		return
+	}
+	k := largestPowerOfTwoLessThan(size)
+	if index < k {
+		t.appendAuditPathRanges(path, start, k, index)
+		*path = append(*path, nodeRange{start: start + k, size: size - k})
+		return
+	}
+	t.appendAuditPathRanges(path, start+k, size-k, index-k)
+	*path = append(*path, nodeRange{start: start, size: k})
 }
 
 func rebuild(leafHash []byte, index, treeSize int, path [][]byte, pos *int) ([]byte, bool) {

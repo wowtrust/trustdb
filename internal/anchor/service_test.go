@@ -29,6 +29,33 @@ type fakeResult struct {
 	err    error
 }
 
+type concurrentSink struct {
+	current atomic.Int32
+	max     atomic.Int32
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (s *concurrentSink) Name() string { return "concurrent" }
+
+func (s *concurrentSink) Publish(ctx context.Context, sth model.SignedTreeHead) (model.STHAnchorResult, error) {
+	current := s.current.Add(1)
+	defer s.current.Add(-1)
+	for {
+		maximum := s.max.Load()
+		if current <= maximum || s.max.CompareAndSwap(maximum, current) {
+			break
+		}
+	}
+	s.entered <- struct{}{}
+	select {
+	case <-s.release:
+	case <-ctx.Done():
+		return model.STHAnchorResult{}, ctx.Err()
+	}
+	return model.STHAnchorResult{SchemaVersion: model.SchemaSTHAnchorResult, TreeSize: sth.TreeSize, RootHash: sth.RootHash, STH: sth, AnchorID: fmt.Sprintf("anchor-%d", sth.TreeSize)}, nil
+}
+
 func (f *fakeSink) Name() string { return f.name }
 
 func (f *fakeSink) Publish(ctx context.Context, sth model.SignedTreeHead) (model.STHAnchorResult, error) {
@@ -89,6 +116,39 @@ func enqueue(t *testing.T, store proofstore.Store, treeSize uint64) {
 		EnqueuedAtUnixN: time.Now().UnixNano(),
 	}); err != nil {
 		t.Fatalf("EnqueueSTHAnchor: %v", err)
+	}
+}
+
+func TestServicePublishesIndependentAnchorsConcurrently(t *testing.T) {
+	store := newLocalStore(t)
+	for i := uint64(1); i <= 4; i++ {
+		enqueue(t, store, i)
+	}
+	sink := &concurrentSink{entered: make(chan struct{}, 4), release: make(chan struct{})}
+	svc, err := NewService(Config{Sink: sink, Store: store, Workers: 4, BatchSize: 4, PerCallTimeout: time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan struct{})
+	go func() {
+		svc.tick(context.Background())
+		close(done)
+	}()
+	for i := 0; i < 4; i++ {
+		select {
+		case <-sink.entered:
+		case <-time.After(time.Second):
+			t.Fatal("anchor workers did not run concurrently")
+		}
+	}
+	if got := sink.max.Load(); got != 4 {
+		t.Fatalf("max concurrent publishes=%d want=4", got)
+	}
+	close(sink.release)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("anchor tick did not finish")
 	}
 }
 

@@ -1,0 +1,42 @@
+# Large-claim profile for 16 KiB and 64 KiB benchmark matrices.
+run_profile: benchmark
+
+paths:
+  data_dir: ".trustdb-bench-large"
+  wal: ".trustdb-bench-large/wal"
+  object_dir: ".trustdb-bench-large/objects"
+  proof_dir: ".trustdb-bench-large/proofs"
+
+metastore: "pebble"
+metastore_path: ".trustdb-bench-large/pebble"
+
+proofstore:
+  record_index_mode: "time_only"
+  artifact_sync_mode: "batch"
+
+wal:
+  fsync_mode: "batch"
+
+batch:
+  queue_size: 262144
+  max_records: 4096
+  max_delay: "100ms"
+  proof_mode: "async"
+  materializer_workers: 2
+  materializer_queue_size: 4
+  materializer_poll_interval: "250ms"
+  proof_workers: 0
+
+global_log:
+  enabled: false
+
+anchor:
+  scope: "global"
+  max_delay: "5m"
+  workers: 4
+  sink: "off"
+
+log:
+  level: "warn"
+  format: "json"
+  output: "stderr"

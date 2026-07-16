@@ -107,10 +107,39 @@ type BatchArtifactWriter interface {
 	PutBatchArtifacts(ctx context.Context, bundles []model.ProofBundle, root model.BatchRoot) error
 }
 
+// MaterializedBatchArtifactWriter promotes an already persisted L2 batch to
+// L3. Implementations may update only the bundle, primary record index, and
+// proof-level secondary index because the prepared batch already owns the
+// remaining secondary indexes and root.
+type MaterializedBatchArtifactWriter interface {
+	PutMaterializedBatchArtifacts(ctx context.Context, bundles []model.ProofBundle) error
+}
+
 // BatchIndexRootWriter is an optional fast path for proof modes that expose
 // record visibility before full proof bundles are materialized. It persists
 // the record index projection and batch root without writing ProofBundle
 // payloads.
 type BatchIndexRootWriter interface {
 	PutBatchIndexesAndRoot(ctx context.Context, indexes []model.RecordIndex, root model.BatchRoot) error
+}
+
+// PreparedBatchIndexRootWriter writes a newly planned L2 batch. Unlike the
+// generic replacement API, it does not enumerate and delete secondary keys
+// that cannot exist yet; recovery may safely replay the same keys.
+type PreparedBatchIndexRootWriter interface {
+	PutPreparedBatchIndexesAndRoot(ctx context.Context, indexes []model.RecordIndex, root model.BatchRoot) error
+}
+
+// BatchTreeSnapshotWriter persists the compact in-memory tree directly,
+// avoiding thousands of transient leaf/node projection objects.
+type BatchTreeSnapshotWriter interface {
+	PutBatchTreeSnapshot(ctx context.Context, snapshot model.BatchTreeSnapshot) error
+}
+
+type PreparedManifestLister interface {
+	ListPreparedManifests(ctx context.Context, nodeID string, nowUnixN int64, limit int) ([]model.BatchManifest, error)
+}
+
+type GlobalLogPublishedBatchMarker interface {
+	MarkGlobalLogPublishedBatch(ctx context.Context, batchIDs []string, sths []model.SignedTreeHead) error
 }

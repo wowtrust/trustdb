@@ -1,0 +1,54 @@
+# Production-semantics performance profile: durable WAL, full indexes, L4/L5.
+run_profile: benchmark
+
+paths:
+  data_dir: ".trustdb-bench-safe"
+  wal: ".trustdb-bench-safe/wal"
+  object_dir: ".trustdb-bench-safe/objects"
+  proof_dir: ".trustdb-bench-safe/proofs"
+
+metastore: "pebble"
+metastore_path: ".trustdb-bench-safe/pebble"
+
+proofstore:
+  record_index_mode: "full"
+  artifact_sync_mode: "chunk"
+
+wal:
+  fsync_mode: "group"
+  group_commit_interval: "10ms"
+
+batch:
+  queue_size: 65536
+  max_records: 8192
+  max_delay: "200ms"
+  proof_mode: "async"
+  materializer_workers: 2
+  materializer_queue_size: 4
+  materializer_poll_interval: "250ms"
+  proof_workers: 0
+
+global_log:
+  enabled: true
+  log_id: "trustdb-bench-safe"
+
+anchor:
+  scope: "global"
+  max_delay: "5m"
+  workers: 4
+  sink: "ots"
+  ots:
+    calendars: []
+    min_accepted: 1
+    timeout: "20s"
+    upgrade:
+      enabled: true
+      interval: "1h"
+      batch_size: 128
+      timeout: "30s"
+      workers: 4
+
+log:
+  level: "warn"
+  format: "json"
+  output: "stderr"

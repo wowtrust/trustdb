@@ -44,6 +44,10 @@ type Store interface {
 	CommitGlobalLogAppend(context.Context, model.GlobalLogAppend) error
 }
 
+type BatchAppendStore interface {
+	CommitGlobalLogAppends(context.Context, []model.GlobalLogAppend) error
+}
+
 type Service struct {
 	mu         sync.Mutex
 	store      Store
@@ -106,76 +110,110 @@ func NewReader(store Store) (*Service, error) {
 }
 
 func (s *Service) AppendBatchRoot(ctx context.Context, root model.BatchRoot) (model.SignedTreeHead, error) {
+	sths, err := s.AppendBatchRoots(ctx, []model.BatchRoot{root})
+	if err != nil {
+		return model.SignedTreeHead{}, err
+	}
+	return sths[0], nil
+}
+
+func (s *Service) AppendBatchRoots(ctx context.Context, roots []model.BatchRoot) ([]model.SignedTreeHead, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	if len(s.privateKey) != ed25519.PrivateKeySize || s.keyID == "" {
-		return model.SignedTreeHead{}, trusterr.New(trusterr.CodeFailedPrecondition, "global log signer is not configured")
+		return nil, trusterr.New(trusterr.CodeFailedPrecondition, "global log signer is not configured")
 	}
-	if root.BatchID == "" {
-		return model.SignedTreeHead{}, trusterr.New(trusterr.CodeInvalidArgument, "global log batch_id is required")
+	if len(roots) == 0 {
+		return nil, trusterr.New(trusterr.CodeInvalidArgument, "global log append requires at least one batch root")
 	}
-	if len(root.BatchRoot) != sha256.Size {
-		return model.SignedTreeHead{}, trusterr.New(trusterr.CodeInvalidArgument, "global log batch_root must be sha256")
-	}
-	if existing, ok, err := s.store.GetGlobalLeafByBatchID(ctx, root.BatchID); err != nil {
-		return model.SignedTreeHead{}, err
-	} else if ok {
-		sth, found, err := s.store.GetSignedTreeHead(ctx, existing.LeafIndex+1)
-		if err != nil {
-			return model.SignedTreeHead{}, err
+	for i := range roots {
+		if roots[i].BatchID == "" {
+			return nil, trusterr.New(trusterr.CodeInvalidArgument, "global log batch_id is required")
 		}
-		if found {
-			return sth, nil
+		if len(roots[i].BatchRoot) != sha256.Size {
+			return nil, trusterr.New(trusterr.CodeInvalidArgument, "global log batch_root must be sha256")
 		}
-		return model.SignedTreeHead{}, trusterr.New(trusterr.CodeDataLoss, "global log leaf exists without matching signed tree head")
-	}
-	nodeID := strings.TrimSpace(root.NodeID)
-	if nodeID == "" {
-		nodeID = s.nodeID
-	}
-	logID := strings.TrimSpace(root.LogID)
-	if logID == "" {
-		logID = s.logID
 	}
 
 	state, err := s.loadState(ctx)
 	if err != nil {
-		return model.SignedTreeHead{}, err
+		return nil, err
 	}
-	leaf := model.GlobalLogLeaf{
-		SchemaVersion:      model.SchemaGlobalLogLeaf,
-		NodeID:             nodeID,
-		LogID:              logID,
-		BatchID:            root.BatchID,
-		BatchRoot:          append([]byte(nil), root.BatchRoot...),
-		BatchTreeSize:      root.TreeSize,
-		BatchClosedAtUnixN: root.ClosedAtUnixN,
-		LeafIndex:          state.TreeSize,
-		AppendedAtUnixN:    s.clock().UTC().UnixNano(),
+	sths := make([]model.SignedTreeHead, len(roots))
+	appends := make([]model.GlobalLogAppend, 0, len(roots))
+	planned := make(map[string]model.SignedTreeHead, len(roots))
+	for i := range roots {
+		root := roots[i]
+		if sth, ok := planned[root.BatchID]; ok {
+			sths[i] = sth
+			continue
+		}
+		if existing, ok, err := s.store.GetGlobalLeafByBatchID(ctx, root.BatchID); err != nil {
+			return nil, err
+		} else if ok {
+			sth, found, err := s.store.GetSignedTreeHead(ctx, existing.LeafIndex+1)
+			if err != nil {
+				return nil, err
+			}
+			if !found {
+				return nil, trusterr.New(trusterr.CodeDataLoss, "global log leaf exists without matching signed tree head")
+			}
+			sths[i] = sth
+			planned[root.BatchID] = sth
+			continue
+		}
+		nodeID := strings.TrimSpace(root.NodeID)
+		if nodeID == "" {
+			nodeID = s.nodeID
+		}
+		logID := strings.TrimSpace(root.LogID)
+		if logID == "" {
+			logID = s.logID
+		}
+		leaf := model.GlobalLogLeaf{
+			SchemaVersion:      model.SchemaGlobalLogLeaf,
+			NodeID:             nodeID,
+			LogID:              logID,
+			BatchID:            root.BatchID,
+			BatchRoot:          append([]byte(nil), root.BatchRoot...),
+			BatchTreeSize:      root.TreeSize,
+			BatchClosedAtUnixN: root.ClosedAtUnixN,
+			LeafIndex:          state.TreeSize,
+			AppendedAtUnixN:    s.clock().UTC().UnixNano(),
+		}
+		hash, err := HashLeaf(leaf)
+		if err != nil {
+			return nil, trusterr.Wrap(trusterr.CodeInternal, "hash global log leaf", err)
+		}
+		leaf.LeafHash = hash
+		nextState, nodes, err := s.appendState(state, leaf)
+		if err != nil {
+			return nil, err
+		}
+		sth, err := s.signSTHFromState(nextState)
+		if err != nil {
+			return nil, err
+		}
+		appends = append(appends, model.GlobalLogAppend{Leaf: leaf, Nodes: nodes, State: nextState, STH: sth})
+		state = nextState
+		sths[i] = sth
+		planned[root.BatchID] = sth
 	}
-	hash, err := HashLeaf(leaf)
-	if err != nil {
-		return model.SignedTreeHead{}, trusterr.Wrap(trusterr.CodeInternal, "hash global log leaf", err)
+	if len(appends) > 0 {
+		if store, ok := s.store.(BatchAppendStore); ok {
+			if err := store.CommitGlobalLogAppends(ctx, appends); err != nil {
+				return nil, err
+			}
+		} else {
+			for i := range appends {
+				if err := s.store.CommitGlobalLogAppend(ctx, appends[i]); err != nil {
+					return nil, err
+				}
+			}
+		}
 	}
-	leaf.LeafHash = hash
-	nextState, nodes, err := s.appendState(state, leaf)
-	if err != nil {
-		return model.SignedTreeHead{}, err
-	}
-	sth, err := s.signSTHFromState(nextState)
-	if err != nil {
-		return model.SignedTreeHead{}, err
-	}
-	if err := s.store.CommitGlobalLogAppend(ctx, model.GlobalLogAppend{
-		Leaf:  leaf,
-		Nodes: nodes,
-		State: nextState,
-		STH:   sth,
-	}); err != nil {
-		return model.SignedTreeHead{}, err
-	}
-	return sth, nil
+	return sths, nil
 }
 
 func (s *Service) LatestSTH(ctx context.Context) (model.SignedTreeHead, bool, error) {

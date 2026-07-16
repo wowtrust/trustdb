@@ -39,8 +39,10 @@ const (
 	KeyStatusRevoked     = "revoked"
 	KeyStatusCompromised = "compromised"
 
+	BatchStatePreparing = "preparing"
 	BatchStatePrepared  = "prepared"
 	BatchStateCommitted = "committed"
+	BatchStateFailed    = "failed"
 
 	// Anchor lifecycle states. Items start Pending, move to Published
 	// after AnchorSink.Publish succeeds, and Failed only when a sink
@@ -274,16 +276,44 @@ type AnchorListOptions struct {
 }
 
 func RecordIndexFromBundle(bundle ProofBundle) RecordIndex {
-	claim := bundle.SignedClaim.Claim
-	tenantID := bundle.ServerRecord.TenantID
+	record := bundle.ServerRecord
+	if record.RecordID == "" {
+		record.RecordID = bundle.RecordID
+	}
+	return RecordIndexFromBatchInputs(
+		bundle.SignedClaim,
+		record,
+		bundle.AcceptedReceipt,
+		bundle.NodeID,
+		bundle.LogID,
+		bundle.CommittedReceipt.BatchID,
+		bundle.CommittedReceipt.LeafIndex,
+		bundle.CommittedReceipt.ClosedAtUnixN,
+		"L3",
+	)
+}
+
+func RecordIndexFromBatchInputs(
+	signed SignedClaim,
+	record ServerRecord,
+	accepted AcceptedReceipt,
+	nodeID string,
+	logID string,
+	batchID string,
+	leafIndex uint64,
+	closedAtUnixN int64,
+	proofLevel string,
+) RecordIndex {
+	claim := signed.Claim
+	tenantID := record.TenantID
 	if tenantID == "" {
 		tenantID = claim.TenantID
 	}
-	clientID := bundle.ServerRecord.ClientID
+	clientID := record.ClientID
 	if clientID == "" {
 		clientID = claim.ClientID
 	}
-	keyID := bundle.ServerRecord.KeyID
+	keyID := record.KeyID
 	if keyID == "" {
 		keyID = claim.KeyID
 	}
@@ -291,25 +321,25 @@ func RecordIndexFromBundle(bundle ProofBundle) RecordIndex {
 	if fileName == "" {
 		fileName = claim.Metadata.Custom["filename"]
 	}
-	receivedAt := bundle.ServerRecord.ReceivedAtUnixN
+	receivedAt := record.ReceivedAtUnixN
 	if receivedAt == 0 {
-		receivedAt = bundle.AcceptedReceipt.ReceivedAtUnixN
+		receivedAt = accepted.ReceivedAtUnixN
 	}
 	if receivedAt == 0 {
-		receivedAt = bundle.CommittedReceipt.ClosedAtUnixN
+		receivedAt = closedAtUnixN
 	}
 	return RecordIndex{
 		SchemaVersion:      SchemaRecordIndex,
-		RecordID:           bundle.RecordID,
-		NodeID:             bundle.NodeID,
-		LogID:              bundle.LogID,
+		RecordID:           record.RecordID,
+		NodeID:             nodeID,
+		LogID:              logID,
 		TenantID:           tenantID,
 		ClientID:           clientID,
 		KeyID:              keyID,
-		ProofLevel:         "L3",
-		BatchID:            bundle.CommittedReceipt.BatchID,
-		BatchLeafIndex:     bundle.CommittedReceipt.LeafIndex,
-		BatchClosedAtUnixN: bundle.CommittedReceipt.ClosedAtUnixN,
+		ProofLevel:         proofLevel,
+		BatchID:            batchID,
+		BatchLeafIndex:     leafIndex,
+		BatchClosedAtUnixN: closedAtUnixN,
 		ReceivedAtUnixN:    receivedAt,
 		ContentHash:        append([]byte(nil), claim.Content.ContentHash...),
 		ContentLength:      claim.Content.ContentLength,
@@ -353,19 +383,24 @@ type WALCheckpoint struct {
 }
 
 type BatchManifest struct {
-	SchemaVersion    string   `cbor:"schema_version" json:"schema_version"`
-	BatchID          string   `cbor:"batch_id" json:"batch_id"`
-	NodeID           string   `cbor:"node_id,omitempty" json:"node_id,omitempty"`
-	LogID            string   `cbor:"log_id,omitempty" json:"log_id,omitempty"`
-	State            string   `cbor:"state" json:"state"`
-	TreeAlg          string   `cbor:"tree_alg" json:"tree_alg"`
-	TreeSize         uint64   `cbor:"tree_size" json:"tree_size"`
-	BatchRoot        []byte   `cbor:"batch_root" json:"batch_root"`
-	RecordIDs        []string `cbor:"record_ids" json:"record_ids"`
-	WALRange         WALRange `cbor:"wal_range" json:"wal_range"`
-	ClosedAtUnixN    int64    `cbor:"closed_at_unix_nano" json:"closed_at_unix_nano"`
-	PreparedAtUnixN  int64    `cbor:"prepared_at_unix_nano" json:"prepared_at_unix_nano"`
-	CommittedAtUnixN int64    `cbor:"committed_at_unix_nano,omitempty" json:"committed_at_unix_nano,omitempty"`
+	SchemaVersion          string   `cbor:"schema_version" json:"schema_version"`
+	BatchID                string   `cbor:"batch_id" json:"batch_id"`
+	NodeID                 string   `cbor:"node_id,omitempty" json:"node_id,omitempty"`
+	LogID                  string   `cbor:"log_id,omitempty" json:"log_id,omitempty"`
+	State                  string   `cbor:"state" json:"state"`
+	TreeAlg                string   `cbor:"tree_alg" json:"tree_alg"`
+	TreeSize               uint64   `cbor:"tree_size" json:"tree_size"`
+	BatchRoot              []byte   `cbor:"batch_root" json:"batch_root"`
+	RecordIDs              []string `cbor:"record_ids" json:"record_ids"`
+	WALRange               WALRange `cbor:"wal_range" json:"wal_range"`
+	ClosedAtUnixN          int64    `cbor:"closed_at_unix_nano" json:"closed_at_unix_nano"`
+	PreparingAtUnixN       int64    `cbor:"preparing_at_unix_nano,omitempty" json:"preparing_at_unix_nano,omitempty"`
+	PreparedAtUnixN        int64    `cbor:"prepared_at_unix_nano,omitempty" json:"prepared_at_unix_nano,omitempty"`
+	CommittedAtUnixN       int64    `cbor:"committed_at_unix_nano,omitempty" json:"committed_at_unix_nano,omitempty"`
+	MaterializeAttempts    int      `cbor:"materialize_attempts,omitempty" json:"materialize_attempts,omitempty"`
+	MaterializeNextUnixN   int64    `cbor:"materialize_next_unix_nano,omitempty" json:"materialize_next_unix_nano,omitempty"`
+	MaterializeLastError   string   `cbor:"materialize_last_error,omitempty" json:"materialize_last_error,omitempty"`
+	MaterializeFailureCode string   `cbor:"materialize_failure_code,omitempty" json:"materialize_failure_code,omitempty"`
 }
 
 // BatchTreeLeaf is a lightweight projection for browsing a batch Merkle tree.

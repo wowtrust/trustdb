@@ -18,6 +18,7 @@ import (
 const (
 	defaultPollInterval   = 2 * time.Second
 	defaultBatchSize      = 64
+	defaultWorkers        = 4
 	defaultPerCallTimeout = 30 * time.Second
 	defaultInitialBackoff = 1 * time.Second
 	defaultMaxBackoff     = 5 * time.Minute
@@ -43,6 +44,8 @@ type Config struct {
 	// large backlog cannot starve other goroutines on the shared
 	// store handle.
 	BatchSize int
+	// Workers bounds concurrent Sink.Publish calls for independent STHs.
+	Workers int
 	// PerCallTimeout bounds any single Sink.Publish call. Most
 	// sinks return in <1s; the default is deliberately generous to
 	// tolerate external notaries that rate-limit heavily.
@@ -68,6 +71,9 @@ func (c *Config) applyDefaults() {
 	}
 	if c.BatchSize <= 0 {
 		c.BatchSize = defaultBatchSize
+	}
+	if c.Workers <= 0 {
+		c.Workers = defaultWorkers
 	}
 	if c.PerCallTimeout <= 0 {
 		c.PerCallTimeout = defaultPerCallTimeout
@@ -217,12 +223,38 @@ func (s *Service) tick(ctx context.Context) {
 	if s.cfg.Metrics != nil {
 		s.cfg.Metrics.AnchorPending.Set(float64(len(items)))
 	}
+	workers := min(s.cfg.Workers, len(items))
+	if workers == 0 {
+		return
+	}
+	jobs := make(chan model.STHAnchorOutboxItem)
+	var wg sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for item := range jobs {
+				if s.cfg.Metrics != nil {
+					s.cfg.Metrics.AnchorInFlight.Inc()
+				}
+				s.processOne(ctx, item)
+				if s.cfg.Metrics != nil {
+					s.cfg.Metrics.AnchorInFlight.Dec()
+				}
+			}
+		}()
+	}
 	for _, item := range items {
-		if ctx.Err() != nil {
+		select {
+		case jobs <- item:
+		case <-ctx.Done():
+			close(jobs)
+			wg.Wait()
 			return
 		}
-		s.processOne(ctx, item)
 	}
+	close(jobs)
+	wg.Wait()
 }
 
 // processOne publishes a single outbox item and persists the

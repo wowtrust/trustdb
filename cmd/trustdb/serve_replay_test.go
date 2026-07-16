@@ -153,6 +153,43 @@ func TestReplayRecoversPreparedManifestWithoutBundles(t *testing.T) {
 	env.assertReplayIdempotent(t)
 }
 
+func TestReplayRecoversPreparingManifest(t *testing.T) {
+	t.Parallel()
+
+	env := newRecoveryEnv(t, 2)
+	env.manifest.State = model.BatchStatePreparing
+	env.manifest.PreparedAtUnixN = 0
+	if err := env.store.PutManifest(context.Background(), env.manifest); err != nil {
+		t.Fatal(err)
+	}
+
+	recovered, replayed, skipped := env.runReplay(t)
+	if recovered != 1 || replayed != 0 || skipped != 2 {
+		t.Fatalf("runReplay() recovered=%d replayed=%d skipped=%d, want 1/0/2", recovered, replayed, skipped)
+	}
+	env.assertCommittedBatch(t)
+}
+
+func TestReplayKeepsFailedManifestTerminal(t *testing.T) {
+	t.Parallel()
+
+	env := newRecoveryEnv(t, 2)
+	env.manifest.State = model.BatchStateFailed
+	env.manifest.MaterializeLastError = "deterministic data loss"
+	if err := env.store.PutManifest(context.Background(), env.manifest); err != nil {
+		t.Fatal(err)
+	}
+
+	recovered, replayed, skipped := env.runReplay(t)
+	if recovered != 0 || replayed != 0 || skipped != 2 {
+		t.Fatalf("runReplay() recovered=%d replayed=%d skipped=%d, want 0/0/2", recovered, replayed, skipped)
+	}
+	manifest, err := env.store.GetManifest(context.Background(), env.batchID)
+	if err != nil || manifest.State != model.BatchStateFailed {
+		t.Fatalf("manifest=%+v err=%v", manifest, err)
+	}
+}
+
 // TestReplayRecoversPartiallyWrittenBundles covers the crash point after a
 // prepared manifest and a subset of bundles have been written but neither the
 // root nor the committed manifest were flushed.

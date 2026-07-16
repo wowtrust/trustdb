@@ -162,6 +162,9 @@ Configuration examples live in [configs](configs):
 | --- | --- |
 | `configs/development.yaml` | Local development and demos. Uses file proofstore and `noop` anchoring. |
 | `configs/production.yaml` | Single-node production baseline with Pebble proofstore, directory WAL, group fsync, global log, and OTS anchoring. |
+| `configs/benchmark-l3-throughput.yaml` | High-write asynchronous L3 throughput and drain tests. |
+| `configs/benchmark-production-safe.yaml` | Durable L4/L5 end-to-end performance tests. |
+| `configs/benchmark-large-payload.yaml` | 16 KiB and 64 KiB payload pressure tests. |
 | `configs/benchmark.yaml` | Benchmark profile with throughput-oriented settings. Not a production audit profile. |
 
 See [configs/README.md](configs/README.md) for `run_profile` semantics and startup notes.

@@ -4,9 +4,12 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
+
+	"golang.org/x/sync/singleflight"
 
 	"github.com/ryan-wong-coder/trustdb/internal/merkle"
 	"github.com/ryan-wong-coder/trustdb/internal/model"
@@ -21,6 +24,10 @@ type Engine interface {
 
 type IndexEngine interface {
 	CommitBatchIndexes(batchID string, closedAt time.Time, signed []model.SignedClaim, records []model.ServerRecord, accepted []model.AcceptedReceipt) (model.BatchRoot, []model.RecordIndex, error)
+}
+
+type ComputeEngine interface {
+	ComputeBatch(ctx context.Context, batchID string, closedAt time.Time, signed []model.SignedClaim, records []model.ServerRecord, accepted []model.AcceptedReceipt, opts model.BatchComputeOptions) (model.BatchCommit, error)
 }
 
 const (
@@ -57,10 +64,15 @@ type Accepted struct {
 }
 
 type Options struct {
-	QueueSize  int
-	MaxRecords int
-	MaxDelay   time.Duration
-	ProofMode  string
+	QueueSize                int
+	MaxRecords               int
+	MaxDelay                 time.Duration
+	ProofMode                string
+	MaterializerWorkers      int
+	MaterializerQueueSize    int
+	MaterializerPollInterval time.Duration
+	MaterializerNodeID       string
+	DeferMaterializerScan    bool
 	// InitialSeq seeds the in-memory batch sequence counter so that
 	// batch_id suffixes keep increasing across restarts. Callers
 	// typically derive it from the latest persisted BatchRoot via
@@ -106,9 +118,26 @@ type Service struct {
 	wg      sync.WaitGroup
 	seq     uint64
 
-	materializeMu sync.Mutex
-	pendingMu     sync.Mutex
-	pending       map[string][]Accepted
+	ingestDone           chan struct{}
+	shutdownDone         chan struct{}
+	materializeQueue     chan materializeJob
+	materializeStop      chan struct{}
+	materializeScanStart chan struct{}
+	scannerDone          chan struct{}
+	scannerStartOnce     sync.Once
+
+	materializeStateMu  sync.Mutex
+	materializeInFlight map[string]struct{}
+	materializeGroup    singleflight.Group
+	artifactWriteMu     sync.Mutex
+	pendingMu           sync.Mutex
+	pending             map[string][]Accepted
+	pendingOrder        []string
+}
+
+type materializeJob struct {
+	manifest model.BatchManifest
+	items    []Accepted
 }
 
 func New(engine Engine, store Store, opts Options, metrics *observability.Metrics) *Service {
@@ -121,19 +150,59 @@ func New(engine Engine, store Store, opts Options, metrics *observability.Metric
 	if opts.MaxDelay <= 0 {
 		opts.MaxDelay = 500 * time.Millisecond
 	}
+	if opts.MaterializerWorkers <= 0 {
+		opts.MaterializerWorkers = 2
+	}
+	if opts.MaterializerQueueSize <= 0 {
+		opts.MaterializerQueueSize = 4
+	}
+	if opts.MaterializerPollInterval <= 0 {
+		opts.MaterializerPollInterval = 250 * time.Millisecond
+	}
 	opts.ProofMode = normalizeProofMode(opts.ProofMode)
 	s := &Service{
-		engine:  engine,
-		store:   store,
-		metrics: metrics,
-		queue:   make(chan Accepted, opts.QueueSize),
-		opts:    opts,
-		seq:     opts.InitialSeq,
-		pending: make(map[string][]Accepted),
+		engine:               engine,
+		store:                store,
+		metrics:              metrics,
+		queue:                make(chan Accepted, opts.QueueSize),
+		opts:                 opts,
+		seq:                  opts.InitialSeq,
+		ingestDone:           make(chan struct{}),
+		shutdownDone:         make(chan struct{}),
+		materializeQueue:     make(chan materializeJob, opts.MaterializerQueueSize),
+		materializeStop:      make(chan struct{}),
+		materializeScanStart: make(chan struct{}),
+		scannerDone:          make(chan struct{}),
+		materializeInFlight:  make(map[string]struct{}),
+		pending:              make(map[string][]Accepted),
 	}
 	s.wg.Add(1)
 	go s.worker()
+	if opts.ProofMode == ProofModeAsync {
+		if !opts.DeferMaterializerScan {
+			close(s.materializeScanStart)
+		}
+		for i := 0; i < opts.MaterializerWorkers; i++ {
+			s.wg.Add(1)
+			go s.materializerWorker()
+		}
+		s.wg.Add(1)
+		go s.materializerScanner()
+	}
 	return s
+}
+
+func (s *Service) StartMaterializerScan() {
+	if s.opts.ProofMode != ProofModeAsync {
+		return
+	}
+	s.scannerStartOnce.Do(func() {
+		select {
+		case <-s.materializeScanStart:
+		default:
+			close(s.materializeScanStart)
+		}
+	})
 }
 
 func normalizeProofMode(mode string) string {
@@ -322,19 +391,18 @@ func (s *Service) LastError() error {
 
 func (s *Service) Shutdown(ctx context.Context) error {
 	s.mu.Lock()
+	startedShutdown := false
 	if !s.closed {
 		s.closed = true
 		close(s.queue)
+		startedShutdown = true
 	}
 	s.mu.Unlock()
-
-	done := make(chan struct{})
-	go func() {
-		s.wg.Wait()
-		close(done)
-	}()
+	if startedShutdown {
+		go s.finishShutdown()
+	}
 	select {
-	case <-done:
+	case <-s.shutdownDone:
 		s.setQueueDepth()
 		return nil
 	case <-ctx.Done():
@@ -342,8 +410,20 @@ func (s *Service) Shutdown(ctx context.Context) error {
 	}
 }
 
+func (s *Service) finishShutdown() {
+	<-s.ingestDone
+	if s.opts.ProofMode == ProofModeAsync {
+		close(s.materializeStop)
+		<-s.scannerDone
+		close(s.materializeQueue)
+	}
+	s.wg.Wait()
+	close(s.shutdownDone)
+}
+
 func (s *Service) worker() {
 	defer s.wg.Done()
+	defer close(s.ingestDone)
 
 	batch := make([]Accepted, 0, s.opts.MaxRecords)
 	timer := time.NewTimer(s.opts.MaxDelay)
@@ -433,23 +513,24 @@ func (s *Service) persistBatch(ctx context.Context, batchID string, closedAt tim
 	s.observeBatchStage("collect", stageStart)
 
 	var (
-		bundles []model.ProofBundle
-		root    model.BatchRoot
-		indexes []model.RecordIndex
-		err     error
+		commit model.BatchCommit
+		err    error
 	)
 	stageStart = time.Now()
 	if s.opts.ProofMode == ProofModeInline {
-		bundles, err = s.engine.CommitBatch(batchID, closedAt, signed, records, accepted)
-		if err == nil && len(bundles) != len(items) {
+		commit, err = s.computeBatch(ctx, batchID, closedAt, signed, records, accepted, model.BatchComputeOptions{
+			Mode:        model.BatchComputeMaterialized,
+			IncludeTree: true,
+		})
+		if err == nil && len(commit.Bundles) != len(items) {
 			err = trusterr.New(trusterr.CodeInternal, "commit batch returned inconsistent proof count")
 		}
-		if err == nil {
-			root = rootFromBundles(batchID, bundles)
-		}
 	} else {
-		root, indexes, err = s.planBatchIndexes(batchID, closedAt, signed, records, accepted)
-		if err == nil && len(indexes) != len(items) {
+		commit, err = s.computeBatch(ctx, batchID, closedAt, signed, records, accepted, model.BatchComputeOptions{
+			Mode:        model.BatchComputePlanOnly,
+			IncludeTree: true,
+		})
+		if err == nil && len(commit.Indexes) != len(items) {
 			err = trusterr.New(trusterr.CodeInternal, "batch index plan returned inconsistent index count")
 		}
 	}
@@ -457,24 +538,19 @@ func (s *Service) persistBatch(ctx context.Context, batchID string, closedAt tim
 	if err != nil {
 		return trusterr.Wrap(trusterr.CodeInternal, "commit batch", err)
 	}
-	leaves, nodes, err := buildBatchTreeArtifacts(batchID, root, records)
-	if err != nil {
-		return trusterr.Wrap(trusterr.CodeInternal, "build batch tree artifacts", err)
-	}
-
 	manifest := model.BatchManifest{
-		SchemaVersion:   model.SchemaBatchManifest,
-		BatchID:         batchID,
-		NodeID:          root.NodeID,
-		LogID:           root.LogID,
-		State:           model.BatchStatePrepared,
-		TreeAlg:         model.DefaultMerkleTreeAlg,
-		TreeSize:        root.TreeSize,
-		BatchRoot:       append([]byte(nil), root.BatchRoot...),
-		RecordIDs:       recordIDs,
-		WALRange:        walRangeFor(items),
-		ClosedAtUnixN:   root.ClosedAtUnixN,
-		PreparedAtUnixN: closedAt.UnixNano(),
+		SchemaVersion:    model.SchemaBatchManifest,
+		BatchID:          batchID,
+		NodeID:           commit.Root.NodeID,
+		LogID:            commit.Root.LogID,
+		State:            model.BatchStatePreparing,
+		TreeAlg:          model.DefaultMerkleTreeAlg,
+		TreeSize:         commit.Root.TreeSize,
+		BatchRoot:        append([]byte(nil), commit.Root.BatchRoot...),
+		RecordIDs:        recordIDs,
+		WALRange:         walRangeFor(items),
+		ClosedAtUnixN:    commit.Root.ClosedAtUnixN,
+		PreparingAtUnixN: time.Now().UTC().UnixNano(),
 	}
 	stageStart = time.Now()
 	err = s.store.PutManifest(ctx, manifest)
@@ -484,11 +560,17 @@ func (s *Service) persistBatch(ctx context.Context, batchID string, closedAt tim
 	}
 	stageStart = time.Now()
 	if s.opts.ProofMode != ProofModeInline {
-		if err := s.writeIndexesAndRoot(ctx, indexes, root); err != nil {
+		if err := s.writeIndexesAndRoot(ctx, commit.Indexes, commit.Root); err != nil {
 			s.observeBatchStage("artifacts", stageStart)
 			return err
 		}
-		if err := s.store.PutBatchTreeArtifacts(ctx, leaves, nodes); err != nil {
+		if err := s.writeBatchTree(ctx, commit.Tree); err != nil {
+			s.observeBatchStage("artifacts", stageStart)
+			return err
+		}
+		manifest.State = model.BatchStatePrepared
+		manifest.PreparedAtUnixN = time.Now().UTC().UnixNano()
+		if err := s.store.PutManifest(ctx, manifest); err != nil {
 			s.observeBatchStage("artifacts", stageStart)
 			return err
 		}
@@ -501,12 +583,12 @@ func (s *Service) persistBatch(ctx context.Context, batchID string, closedAt tim
 		}
 		return nil
 	}
-	root, err = s.writeBundlesAndRoot(ctx, batchID, bundles)
+	root, err := s.writeBundlesAndRoot(ctx, batchID, commit.Bundles)
 	s.observeBatchStage("artifacts", stageStart)
 	if err != nil {
 		return err
 	}
-	if err := s.store.PutBatchTreeArtifacts(ctx, leaves, nodes); err != nil {
+	if err := s.writeBatchTree(ctx, commit.Tree); err != nil {
 		return err
 	}
 	manifest.State = model.BatchStateCommitted
@@ -555,41 +637,76 @@ func (s *Service) writeBundlesAndRoot(ctx context.Context, batchID string, bundl
 }
 
 func buildBatchTreeArtifacts(batchID string, root model.BatchRoot, records []model.ServerRecord) ([]model.BatchTreeLeaf, []model.BatchTreeNode, error) {
-	tree, err := merkle.Build(records)
+	snapshot, err := buildBatchTreeSnapshot(batchID, root, records)
 	if err != nil {
 		return nil, nil, err
 	}
+	return batchTreeArtifactsFromSnapshot(snapshot)
+}
+
+func buildBatchTreeSnapshot(batchID string, root model.BatchRoot, records []model.ServerRecord) (model.BatchTreeSnapshot, error) {
+	tree, err := merkle.Build(records)
+	if err != nil {
+		return model.BatchTreeSnapshot{}, err
+	}
 	if len(root.BatchRoot) > 0 && !bytes.Equal(root.BatchRoot, tree.Root()) {
-		return nil, nil, trusterr.New(trusterr.CodeDataLoss, "batch tree root does not match committed batch root")
+		return model.BatchTreeSnapshot{}, trusterr.New(trusterr.CodeDataLoss, "batch tree root does not match committed batch root")
 	}
 	now := time.Now().UTC().UnixNano()
-	rawLeaves := tree.Leaves()
-	leaves := make([]model.BatchTreeLeaf, len(rawLeaves))
-	for i := range rawLeaves {
-		recordID := ""
-		if int(rawLeaves[i].Index) < len(records) {
-			recordID = records[rawLeaves[i].Index].RecordID
+	recordIDs := make([]string, len(records))
+	for i := range records {
+		recordIDs[i] = records[i].RecordID
+	}
+	rawNodes := tree.CompactNodes()
+	sort.Slice(rawNodes, func(i, j int) bool {
+		if rawNodes[i].Level != rawNodes[j].Level {
+			return rawNodes[i].Level < rawNodes[j].Level
 		}
-		leaves[i] = model.BatchTreeLeaf{
-			SchemaVersion:  model.SchemaBatchTreeLeaf,
-			BatchID:        batchID,
-			RecordID:       recordID,
-			LeafIndex:      rawLeaves[i].Index,
-			LeafHash:       append([]byte(nil), rawLeaves[i].Hash...),
-			CreatedAtUnixN: now,
+		return rawNodes[i].StartIndex < rawNodes[j].StartIndex
+	})
+	nodes := make([]model.BatchTreeSnapshotNode, len(rawNodes))
+	for i := range rawNodes {
+		nodes[i] = model.BatchTreeSnapshotNode{
+			Level:      rawNodes[i].Level,
+			StartIndex: rawNodes[i].StartIndex,
+			Width:      rawNodes[i].Width,
+			Hash:       rawNodes[i].Hash,
 		}
 	}
-	rawNodes := tree.Nodes()
-	nodes := make([]model.BatchTreeNode, len(rawNodes))
-	for i := range rawNodes {
+	return model.BatchTreeSnapshot{
+		BatchID:        batchID,
+		CreatedAtUnixN: now,
+		RecordIDs:      recordIDs,
+		LeafHashes:     append([][32]byte(nil), tree.CompactLeaves()...),
+		Nodes:          nodes,
+	}, nil
+}
+
+func batchTreeArtifactsFromSnapshot(snapshot model.BatchTreeSnapshot) ([]model.BatchTreeLeaf, []model.BatchTreeNode, error) {
+	if snapshot.BatchID == "" || len(snapshot.LeafHashes) == 0 || len(snapshot.RecordIDs) != len(snapshot.LeafHashes) {
+		return nil, nil, trusterr.New(trusterr.CodeDataLoss, "invalid batch tree snapshot")
+	}
+	leaves := make([]model.BatchTreeLeaf, len(snapshot.LeafHashes))
+	for i := range snapshot.LeafHashes {
+		leaves[i] = model.BatchTreeLeaf{
+			SchemaVersion:  model.SchemaBatchTreeLeaf,
+			BatchID:        snapshot.BatchID,
+			RecordID:       snapshot.RecordIDs[i],
+			LeafIndex:      uint64(i),
+			LeafHash:       append([]byte(nil), snapshot.LeafHashes[i][:]...),
+			CreatedAtUnixN: snapshot.CreatedAtUnixN,
+		}
+	}
+	nodes := make([]model.BatchTreeNode, len(snapshot.Nodes))
+	for i := range snapshot.Nodes {
 		nodes[i] = model.BatchTreeNode{
 			SchemaVersion:  model.SchemaBatchTreeNode,
-			BatchID:        batchID,
-			Level:          rawNodes[i].Level,
-			StartIndex:     rawNodes[i].StartIndex,
-			Width:          rawNodes[i].Width,
-			Hash:           append([]byte(nil), rawNodes[i].Hash...),
-			CreatedAtUnixN: now,
+			BatchID:        snapshot.BatchID,
+			Level:          snapshot.Nodes[i].Level,
+			StartIndex:     snapshot.Nodes[i].StartIndex,
+			Width:          snapshot.Nodes[i].Width,
+			Hash:           append([]byte(nil), snapshot.Nodes[i].Hash[:]...),
+			CreatedAtUnixN: snapshot.CreatedAtUnixN,
 		}
 	}
 	return leaves, nodes, nil
@@ -628,7 +745,40 @@ func (s *Service) planBatchIndexes(batchID string, closedAt time.Time, signed []
 	return rootFromBundles(batchID, bundles), indexes, nil
 }
 
+func (s *Service) computeBatch(ctx context.Context, batchID string, closedAt time.Time, signed []model.SignedClaim, records []model.ServerRecord, accepted []model.AcceptedReceipt, opts model.BatchComputeOptions) (model.BatchCommit, error) {
+	if engine, ok := s.engine.(ComputeEngine); ok {
+		return engine.ComputeBatch(ctx, batchID, closedAt, signed, records, accepted, opts)
+	}
+	if opts.Mode == model.BatchComputeMaterialized {
+		bundles, err := s.engine.CommitBatch(batchID, closedAt, signed, records, accepted)
+		if err != nil {
+			return model.BatchCommit{}, err
+		}
+		result := model.BatchCommit{Root: rootFromBundles(batchID, bundles), Bundles: bundles}
+		result.Indexes = make([]model.RecordIndex, len(bundles))
+		for i := range bundles {
+			result.Indexes[i] = model.RecordIndexFromBundle(bundles[i])
+		}
+		if opts.IncludeTree {
+			result.Tree, err = buildBatchTreeSnapshot(batchID, result.Root, records)
+		}
+		return result, err
+	}
+	root, indexes, err := s.planBatchIndexes(batchID, closedAt, signed, records, accepted)
+	if err != nil {
+		return model.BatchCommit{}, err
+	}
+	result := model.BatchCommit{Root: root, Indexes: indexes}
+	if opts.IncludeTree {
+		result.Tree, err = buildBatchTreeSnapshot(batchID, root, records)
+	}
+	return result, err
+}
+
 func (s *Service) writeIndexesAndRoot(ctx context.Context, indexes []model.RecordIndex, root model.BatchRoot) error {
+	if writer, ok := s.store.(proofstore.PreparedBatchIndexRootWriter); ok {
+		return writer.PutPreparedBatchIndexesAndRoot(ctx, indexes, root)
+	}
 	if writer, ok := s.store.(proofstore.BatchIndexRootWriter); ok {
 		return writer.PutBatchIndexesAndRoot(ctx, indexes, root)
 	}
@@ -655,7 +805,10 @@ func (s *Service) RecoverManifest(ctx context.Context, manifest model.BatchManif
 	if manifest.State == model.BatchStateCommitted {
 		return nil
 	}
-	if manifest.State != model.BatchStatePrepared {
+	if manifest.State == model.BatchStateFailed {
+		return trusterr.New(trusterr.CodeFailedPrecondition, "batch materialization is permanently failed")
+	}
+	if manifest.State != model.BatchStatePreparing && manifest.State != model.BatchStatePrepared {
 		return trusterr.New(trusterr.CodeFailedPrecondition, fmt.Sprintf("unknown batch manifest state: %s", manifest.State))
 	}
 	if len(items) != len(manifest.RecordIDs) {
@@ -666,25 +819,34 @@ func (s *Service) RecoverManifest(ctx context.Context, manifest model.BatchManif
 			return trusterr.New(trusterr.CodeFailedPrecondition, fmt.Sprintf("recovered item %d record_id mismatch: got %s, want %s", i, items[i].Record.RecordID, rid))
 		}
 	}
-	if s.opts.ProofMode == ProofModeOnDemand {
-		root, indexes, records, err := s.planBatchIndexesFromItems(manifest.BatchID, time.Unix(0, manifest.ClosedAtUnixN).UTC(), items)
+	if s.opts.ProofMode != ProofModeInline {
+		signed, records, accepted := splitAcceptedItems(items)
+		planned, err := s.computeBatch(ctx, manifest.BatchID, time.Unix(0, manifest.ClosedAtUnixN).UTC(), signed, records, accepted, model.BatchComputeOptions{
+			Mode:        model.BatchComputePlanOnly,
+			IncludeTree: true,
+		})
 		if err != nil {
-			return trusterr.Wrap(trusterr.CodeInternal, "rebuild on-demand batch indexes during recovery", err)
+			return trusterr.Wrap(trusterr.CodeInternal, "rebuild batch indexes during recovery", err)
 		}
-		if len(manifest.BatchRoot) > 0 && !bytes.Equal(manifest.BatchRoot, root.BatchRoot) {
-			return trusterr.New(trusterr.CodeDataLoss, "recovered on-demand batch root does not match prepared manifest")
+		if len(manifest.BatchRoot) > 0 && !bytes.Equal(manifest.BatchRoot, planned.Root.BatchRoot) {
+			return trusterr.New(trusterr.CodeDataLoss, "recovered batch root does not match prepared manifest")
 		}
-		if err := s.writeIndexesAndRoot(ctx, indexes, root); err != nil {
+		if err := s.writeIndexesAndRoot(ctx, planned.Indexes, planned.Root); err != nil {
 			return err
 		}
-		leaves, nodes, err := buildBatchTreeArtifacts(manifest.BatchID, root, records)
-		if err != nil {
+		if err := s.writeBatchTree(ctx, planned.Tree); err != nil {
 			return err
 		}
-		if err := s.store.PutBatchTreeArtifacts(ctx, leaves, nodes); err != nil {
+		manifest.State = model.BatchStatePrepared
+		if manifest.PreparedAtUnixN == 0 {
+			manifest.PreparedAtUnixN = time.Now().UTC().UnixNano()
+		}
+		if err := s.store.PutManifest(ctx, manifest); err != nil {
 			return err
 		}
-		return nil
+		if s.opts.ProofMode == ProofModeOnDemand {
+			return nil
+		}
 	}
 
 	_, err := s.materializeManifest(ctx, manifest, items)
@@ -695,20 +857,199 @@ func (s *Service) RecoverManifest(ctx context.Context, manifest model.BatchManif
 }
 
 func (s *Service) startAsyncMaterialize(manifest model.BatchManifest, items []Accepted) {
-	s.wg.Add(1)
-	go func() {
-		defer s.wg.Done()
-		if _, err := s.materializeManifest(context.Background(), manifest, items); err != nil {
+	s.enqueueMaterialization(materializeJob{manifest: manifest, items: items})
+}
+
+func (s *Service) enqueueMaterialization(job materializeJob) bool {
+	if job.manifest.BatchID == "" {
+		return false
+	}
+	s.materializeStateMu.Lock()
+	if _, exists := s.materializeInFlight[job.manifest.BatchID]; exists {
+		s.materializeStateMu.Unlock()
+		return true
+	}
+	s.materializeInFlight[job.manifest.BatchID] = struct{}{}
+	s.materializeStateMu.Unlock()
+
+	select {
+	case s.materializeQueue <- job:
+		s.setMaterializerQueueDepth()
+		return true
+	default:
+		s.releaseMaterialization(job.manifest.BatchID)
+		s.setMaterializerQueueDepth()
+		return false
+	}
+}
+
+func (s *Service) releaseMaterialization(batchID string) {
+	s.materializeStateMu.Lock()
+	delete(s.materializeInFlight, batchID)
+	s.materializeStateMu.Unlock()
+}
+
+func (s *Service) materializerWorker() {
+	defer s.wg.Done()
+	for job := range s.materializeQueue {
+		s.setMaterializerQueueDepth()
+		if s.metrics != nil {
+			s.metrics.MaterializerInFlight.Inc()
+		}
+		s.runMaterializationJob(job)
+		if s.metrics != nil {
+			s.metrics.MaterializerInFlight.Dec()
+		}
+		s.releaseMaterialization(job.manifest.BatchID)
+	}
+}
+
+func (s *Service) runMaterializationJob(job materializeJob) {
+	ctx := context.Background()
+	manifest, err := s.store.GetManifest(ctx, job.manifest.BatchID)
+	if err != nil {
+		s.setLastError(err)
+		return
+	}
+	if manifest.State == model.BatchStateCommitted || manifest.State == model.BatchStateFailed {
+		return
+	}
+	if manifest.State != model.BatchStatePrepared || manifest.MaterializeNextUnixN > time.Now().UTC().UnixNano() {
+		return
+	}
+	items := job.items
+	if len(items) == 0 {
+		items, err = s.materializationItems(ctx, manifest)
+		if err != nil {
+			s.recordMaterializationFailure(ctx, manifest, err)
 			s.setLastError(err)
 			return
 		}
-		s.setLastError(nil)
-	}()
+	}
+	if _, err := s.materializeManifest(ctx, manifest, items); err != nil {
+		s.recordMaterializationFailure(ctx, manifest, err)
+		s.setLastError(err)
+		return
+	}
+	if s.metrics != nil {
+		s.metrics.MaterializedRecords.Add(float64(len(items)))
+	}
+	s.setLastError(nil)
+}
+
+func (s *Service) materializerScanner() {
+	defer s.wg.Done()
+	defer close(s.scannerDone)
+	select {
+	case <-s.materializeScanStart:
+	case <-s.materializeStop:
+		return
+	}
+	ticker := time.NewTicker(s.opts.MaterializerPollInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			s.schedulePreparedManifests(context.Background())
+		case <-s.materializeStop:
+			return
+		}
+	}
+}
+
+func (s *Service) schedulePreparedManifests(ctx context.Context) {
+	var (
+		manifests []model.BatchManifest
+		err       error
+	)
+	now := time.Now().UTC().UnixNano()
+	if lister, ok := s.store.(proofstore.PreparedManifestLister); ok {
+		manifests, err = lister.ListPreparedManifests(ctx, s.opts.MaterializerNodeID, now, cap(s.materializeQueue)+s.opts.MaterializerWorkers)
+	} else {
+		manifests, err = s.store.ListManifests(ctx)
+	}
+	if err != nil {
+		s.setLastError(err)
+		return
+	}
+	if s.metrics != nil {
+		s.metrics.MaterializerPrepared.Set(float64(len(manifests)))
+		oldest := int64(0)
+		for i := range manifests {
+			if manifests[i].PreparedAtUnixN > 0 && (oldest == 0 || manifests[i].PreparedAtUnixN < oldest) {
+				oldest = manifests[i].PreparedAtUnixN
+			}
+		}
+		age := float64(0)
+		if oldest > 0 && now > oldest {
+			age = time.Duration(now - oldest).Seconds()
+		}
+		s.metrics.MaterializerOldestAge.Set(age)
+	}
+	for i := range manifests {
+		manifest := manifests[i]
+		if manifest.State != model.BatchStatePrepared || manifest.MaterializeNextUnixN > now {
+			continue
+		}
+		if s.opts.MaterializerNodeID != "" && manifest.NodeID != "" && manifest.NodeID != s.opts.MaterializerNodeID {
+			continue
+		}
+		if !s.enqueueMaterialization(materializeJob{manifest: manifest}) {
+			return
+		}
+	}
+}
+
+func (s *Service) recordMaterializationFailure(ctx context.Context, manifest model.BatchManifest, cause error) {
+	latest, err := s.store.GetManifest(ctx, manifest.BatchID)
+	if err == nil {
+		manifest = latest
+	}
+	if manifest.State == model.BatchStateCommitted {
+		return
+	}
+	manifest.MaterializeAttempts++
+	manifest.MaterializeLastError = cause.Error()
+	manifest.MaterializeFailureCode = string(trusterr.CodeOf(cause))
+	if permanentMaterializationError(cause) {
+		manifest.State = model.BatchStateFailed
+		manifest.MaterializeNextUnixN = 0
+	} else {
+		manifest.State = model.BatchStatePrepared
+		manifest.MaterializeNextUnixN = time.Now().UTC().Add(materializationBackoff(manifest.MaterializeAttempts)).UnixNano()
+		if s.metrics != nil {
+			s.metrics.MaterializerRetries.Inc()
+		}
+	}
+	if err := s.store.PutManifest(ctx, manifest); err != nil {
+		s.setLastError(err)
+	}
+}
+
+func permanentMaterializationError(err error) bool {
+	switch trusterr.CodeOf(err) {
+	case trusterr.CodeInvalidArgument, trusterr.CodeDataLoss:
+		return true
+	default:
+		return false
+	}
+}
+
+func materializationBackoff(attempts int) time.Duration {
+	delay := 100 * time.Millisecond
+	for i := 1; i < attempts && delay < time.Minute; i++ {
+		if delay >= 30*time.Second {
+			return time.Minute
+		}
+		delay *= 2
+	}
+	if delay > time.Minute {
+		return time.Minute
+	}
+	return delay
 }
 
 func (s *Service) materializeRecord(ctx context.Context, recordID string) error {
-	s.materializeMu.Lock()
-	defer s.materializeMu.Unlock()
 	if _, err := s.store.GetBundle(ctx, recordID); err == nil {
 		return nil
 	} else if trusterr.CodeOf(err) != trusterr.CodeNotFound {
@@ -721,18 +1062,24 @@ func (s *Service) materializeRecord(ctx context.Context, recordID string) error 
 	if !ok || idx.BatchID == "" {
 		return trusterr.New(trusterr.CodeNotFound, "proof bundle not found")
 	}
-	manifest, err := s.store.GetManifest(ctx, idx.BatchID)
-	if err != nil {
-		return err
-	}
-	if manifest.State == model.BatchStateCommitted {
-		return nil
-	}
-	items, err := s.materializationItems(ctx, manifest)
-	if err != nil {
-		return err
-	}
-	_, err = s.materializeManifest(ctx, manifest, items)
+	_, err, _ = s.materializeGroup.Do(idx.BatchID, func() (any, error) {
+		manifest, err := s.store.GetManifest(ctx, idx.BatchID)
+		if err != nil {
+			return nil, err
+		}
+		if manifest.State == model.BatchStateCommitted {
+			return nil, nil
+		}
+		if manifest.State == model.BatchStateFailed {
+			return nil, trusterr.New(trusterr.CodeFailedPrecondition, "batch materialization failed")
+		}
+		items, err := s.materializationItems(ctx, manifest)
+		if err != nil {
+			return nil, err
+		}
+		_, err = s.materializeManifest(ctx, manifest, items)
+		return nil, err
+	})
 	return err
 }
 
@@ -752,28 +1099,39 @@ func (s *Service) materializationItems(ctx context.Context, manifest model.Batch
 func (s *Service) materializeManifest(ctx context.Context, manifest model.BatchManifest, items []Accepted) (model.BatchRoot, error) {
 	signed, records, accepted := splitAcceptedItems(items)
 	closedAt := time.Unix(0, manifest.ClosedAtUnixN).UTC()
-	bundles, err := s.engine.CommitBatch(manifest.BatchID, closedAt, signed, records, accepted)
+	commit, err := s.computeBatch(ctx, manifest.BatchID, closedAt, signed, records, accepted, model.BatchComputeOptions{
+		Mode:        model.BatchComputeMaterialized,
+		IncludeTree: s.opts.ProofMode == ProofModeInline,
+	})
 	if err != nil {
 		return model.BatchRoot{}, err
 	}
-	if len(bundles) != len(manifest.RecordIDs) {
+	if len(commit.Bundles) != len(manifest.RecordIDs) {
 		return model.BatchRoot{}, trusterr.New(trusterr.CodeInternal, "materialized bundle count mismatch")
 	}
-	root, err := s.writeBundlesAndRoot(ctx, manifest.BatchID, bundles)
+	if len(manifest.BatchRoot) > 0 && !bytes.Equal(manifest.BatchRoot, commit.Root.BatchRoot) {
+		return model.BatchRoot{}, trusterr.New(trusterr.CodeDataLoss, "materialized batch root does not match prepared manifest")
+	}
+	s.artifactWriteMu.Lock()
+	root, err := s.writeMaterializedBundles(ctx, manifest.BatchID, commit.Bundles)
 	if err != nil {
+		s.artifactWriteMu.Unlock()
 		return model.BatchRoot{}, err
 	}
-	leaves, nodes, err := buildBatchTreeArtifacts(manifest.BatchID, root, records)
-	if err != nil {
-		return model.BatchRoot{}, err
+	if s.opts.ProofMode == ProofModeInline {
+		if err := s.writeBatchTree(ctx, commit.Tree); err != nil {
+			s.artifactWriteMu.Unlock()
+			return model.BatchRoot{}, err
+		}
 	}
-	if err := s.store.PutBatchTreeArtifacts(ctx, leaves, nodes); err != nil {
-		return model.BatchRoot{}, err
-	}
+	s.artifactWriteMu.Unlock()
 	manifest.State = model.BatchStateCommitted
 	if manifest.CommittedAtUnixN == 0 {
 		manifest.CommittedAtUnixN = time.Now().UTC().UnixNano()
 	}
+	manifest.MaterializeNextUnixN = 0
+	manifest.MaterializeLastError = ""
+	manifest.MaterializeFailureCode = ""
 	if err := s.store.PutManifest(ctx, manifest); err != nil {
 		return model.BatchRoot{}, err
 	}
@@ -783,6 +1141,58 @@ func (s *Service) materializeManifest(ctx context.Context, manifest model.BatchM
 	s.forgetPending(manifest.BatchID)
 	s.fireOnBatchCommitted(ctx, root)
 	return root, nil
+}
+
+func (s *Service) writeMaterializedBundles(ctx context.Context, batchID string, bundles []model.ProofBundle) (model.BatchRoot, error) {
+	if len(bundles) == 0 {
+		return model.BatchRoot{}, trusterr.New(trusterr.CodeInternal, "commit batch returned no proof bundles")
+	}
+	root := rootFromBundles(batchID, bundles)
+	if s.opts.ProofMode != ProofModeInline {
+		if writer, ok := s.store.(proofstore.MaterializedBatchArtifactWriter); ok {
+			if err := writer.PutMaterializedBatchArtifacts(ctx, bundles); err != nil {
+				return model.BatchRoot{}, err
+			}
+			return root, nil
+		}
+	}
+	return s.writeBundlesAndRoot(ctx, batchID, bundles)
+}
+
+func (s *Service) writeBatchTree(ctx context.Context, snapshot model.BatchTreeSnapshot) error {
+	if s.metrics != nil {
+		s.metrics.BatchTreeTiles.Observe(float64(batchTreeTileCount(snapshot)))
+	}
+	if writer, ok := s.store.(proofstore.BatchTreeSnapshotWriter); ok {
+		return writer.PutBatchTreeSnapshot(ctx, snapshot)
+	}
+	leaves, nodes, err := batchTreeArtifactsFromSnapshot(snapshot)
+	if err != nil {
+		return err
+	}
+	return s.store.PutBatchTreeArtifacts(ctx, leaves, nodes)
+}
+
+func batchTreeTileCount(snapshot model.BatchTreeSnapshot) int {
+	tiles := (len(snapshot.LeafHashes) + 511) / 512
+	for start := 0; start < len(snapshot.Nodes); {
+		level := snapshot.Nodes[start].Level
+		end := start
+		for end < len(snapshot.Nodes) && snapshot.Nodes[end].Level == level {
+			end++
+		}
+		if level != 0 {
+			tiles += (end - start + 511) / 512
+		}
+		start = end
+	}
+	return tiles
+}
+
+func (s *Service) setMaterializerQueueDepth() {
+	if s.metrics != nil {
+		s.metrics.QueueDepth.WithLabelValues("materializer").Set(float64(len(s.materializeQueue)))
+	}
 }
 
 func (s *Service) planBatchIndexesFromItems(batchID string, closedAt time.Time, items []Accepted) (model.BatchRoot, []model.RecordIndex, []model.ServerRecord, error) {
@@ -806,13 +1216,28 @@ func splitAcceptedItems(items []Accepted) ([]model.SignedClaim, []model.ServerRe
 func (s *Service) rememberPending(batchID string, items []Accepted) {
 	s.pendingMu.Lock()
 	defer s.pendingMu.Unlock()
+	if _, exists := s.pending[batchID]; !exists {
+		s.pendingOrder = append(s.pendingOrder, batchID)
+	}
 	s.pending[batchID] = cloneAcceptedItems(items)
+	const maxPendingBatches = 64
+	for len(s.pendingOrder) > maxPendingBatches {
+		oldest := s.pendingOrder[0]
+		s.pendingOrder = s.pendingOrder[1:]
+		delete(s.pending, oldest)
+	}
 }
 
 func (s *Service) forgetPending(batchID string) {
 	s.pendingMu.Lock()
 	defer s.pendingMu.Unlock()
 	delete(s.pending, batchID)
+	for i := range s.pendingOrder {
+		if s.pendingOrder[i] == batchID {
+			s.pendingOrder = append(s.pendingOrder[:i], s.pendingOrder[i+1:]...)
+			break
+		}
+	}
 }
 
 // fireOnBatchCommitted runs the commit hook in a panic-safe wrapper so a buggy

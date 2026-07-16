@@ -4,6 +4,9 @@ import (
 	"context"
 	"crypto/ed25519"
 	"fmt"
+	"runtime"
+	"sort"
+	"sync"
 	"time"
 
 	"github.com/ryan-wong-coder/trustdb/internal/cborx"
@@ -24,6 +27,7 @@ type LocalEngine struct {
 	ClientPublicKey  ed25519.PublicKey
 	ClientKeys       ClientKeyResolver
 	ServerPrivateKey ed25519.PrivateKey
+	ProofWorkers     int
 	WAL              *wal.Writer
 	Idempotency      *IdempotencyIndex
 	Now              func() time.Time
@@ -201,89 +205,190 @@ func (e LocalEngine) resolveClientKey(signed model.SignedClaim, receivedAt time.
 }
 
 func (e LocalEngine) CommitBatch(batchID string, closedAt time.Time, signed []model.SignedClaim, records []model.ServerRecord, accepted []model.AcceptedReceipt) ([]model.ProofBundle, error) {
-	return e.commitBatch(batchID, closedAt, signed, records, accepted, true)
+	result, err := e.ComputeBatch(context.Background(), batchID, closedAt, signed, records, accepted, model.BatchComputeOptions{
+		Mode: model.BatchComputeMaterialized,
+	})
+	return result.Bundles, err
 }
 
 func (e LocalEngine) CommitBatchIndexes(batchID string, closedAt time.Time, signed []model.SignedClaim, records []model.ServerRecord, accepted []model.AcceptedReceipt) (model.BatchRoot, []model.RecordIndex, error) {
-	bundles, err := e.commitBatch(batchID, closedAt, signed, records, accepted, false)
-	if err != nil {
-		return model.BatchRoot{}, nil, err
-	}
-	root := model.BatchRoot{
-		SchemaVersion: model.SchemaBatchRoot,
-		BatchID:       batchID,
-		NodeID:        e.ServerID,
-		LogID:         e.LogID,
-		BatchRoot:     append([]byte(nil), bundles[0].CommittedReceipt.BatchRoot...),
-		TreeSize:      uint64(len(bundles)),
-		ClosedAtUnixN: bundles[0].CommittedReceipt.ClosedAtUnixN,
-	}
-	indexes := make([]model.RecordIndex, len(bundles))
-	for i := range bundles {
-		indexes[i] = model.RecordIndexFromBundle(bundles[i])
-	}
-	return root, indexes, nil
+	result, err := e.ComputeBatch(context.Background(), batchID, closedAt, signed, records, accepted, model.BatchComputeOptions{
+		Mode: model.BatchComputePlanOnly,
+	})
+	return result.Root, result.Indexes, err
 }
 
-func (e LocalEngine) commitBatch(batchID string, closedAt time.Time, signed []model.SignedClaim, records []model.ServerRecord, accepted []model.AcceptedReceipt, includeProofs bool) ([]model.ProofBundle, error) {
+func (e LocalEngine) ComputeBatch(ctx context.Context, batchID string, closedAt time.Time, signed []model.SignedClaim, records []model.ServerRecord, accepted []model.AcceptedReceipt, opts model.BatchComputeOptions) (model.BatchCommit, error) {
+	if err := ctx.Err(); err != nil {
+		return model.BatchCommit{}, err
+	}
 	if len(records) == 0 || len(records) != len(signed) || len(records) != len(accepted) {
-		return nil, fmt.Errorf("app: inconsistent batch input sizes")
+		return model.BatchCommit{}, fmt.Errorf("app: inconsistent batch input sizes")
 	}
 	tree, err := merkle.Build(records)
 	if err != nil {
-		return nil, err
+		return model.BatchCommit{}, err
 	}
 	if closedAt.IsZero() {
 		closedAt = e.now()
 	}
 	closedAt = closedAt.UTC()
 	root := tree.Root()
-	var proofs [][][]byte
-	if includeProofs {
-		proofs = tree.Proofs()
-	}
-	bundles := make([]model.ProofBundle, len(records))
-	for i := range records {
-		leaf, err := tree.LeafHash(i)
-		if err != nil {
-			return nil, err
-		}
-		committed := model.CommittedReceipt{
-			SchemaVersion: model.SchemaCommittedReceipt,
-			RecordID:      records[i].RecordID,
-			Status:        "committed",
+	result := model.BatchCommit{
+		Root: model.BatchRoot{
+			SchemaVersion: model.SchemaBatchRoot,
 			BatchID:       batchID,
-			LeafIndex:     uint64(i),
-			LeafHash:      leaf,
-			BatchRoot:     append([]byte(nil), root...),
-			ClosedAtUnixN: closedAt.UnixNano(),
 			NodeID:        e.ServerID,
 			LogID:         e.LogID,
-		}
-		committed, err = receipt.SignCommitted(committed, e.ServerKeyID, e.ServerPrivateKey)
-		if err != nil {
-			return nil, err
-		}
-		bundles[i] = model.ProofBundle{
-			SchemaVersion:    model.SchemaProofBundle,
-			RecordID:         records[i].RecordID,
-			NodeID:           e.ServerID,
-			LogID:            e.LogID,
-			SignedClaim:      signed[i],
-			ServerRecord:     records[i],
-			AcceptedReceipt:  accepted[i],
-			CommittedReceipt: committed,
-			BatchProof: model.BatchProof{
-				TreeAlg:   model.DefaultMerkleTreeAlg,
-				LeafIndex: uint64(i),
-				TreeSize:  uint64(len(records)),
-			},
-		}
-		if includeProofs {
-			bundles[i].BatchProof.AuditPath = proofs[i]
+			BatchRoot:     append([]byte(nil), root...),
+			TreeSize:      uint64(len(records)),
+			ClosedAtUnixN: closedAt.UnixNano(),
+		},
+		Indexes: make([]model.RecordIndex, len(records)),
+	}
+	proofLevel := "L2"
+	materialized := opts.Mode == model.BatchComputeMaterialized
+	if materialized {
+		proofLevel = "L3"
+	}
+	for i := range records {
+		result.Indexes[i] = model.RecordIndexFromBatchInputs(
+			signed[i], records[i], accepted[i], e.ServerID, e.LogID,
+			batchID, uint64(i), closedAt.UnixNano(), proofLevel,
+		)
+	}
+	if opts.IncludeTree {
+		result.Tree = compactBatchTree(batchID, closedAt.UnixNano(), records, tree)
+	}
+	if !materialized {
+		return result, nil
+	}
+
+	result.Bundles = make([]model.ProofBundle, len(records))
+	errs := make([]error, len(records))
+	jobs := make(chan int)
+	workers := e.proofWorkerCount(len(records))
+	var wg sync.WaitGroup
+	for worker := 0; worker < workers; worker++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := range jobs {
+				if err := ctx.Err(); err != nil {
+					errs[i] = err
+					continue
+				}
+				leaf, err := tree.LeafHashView(i)
+				if err != nil {
+					errs[i] = err
+					continue
+				}
+				proof, err := tree.ProofView(i)
+				if err != nil {
+					errs[i] = err
+					continue
+				}
+				committed := model.CommittedReceipt{
+					SchemaVersion: model.SchemaCommittedReceipt,
+					RecordID:      records[i].RecordID,
+					Status:        "committed",
+					BatchID:       batchID,
+					LeafIndex:     uint64(i),
+					LeafHash:      leaf,
+					BatchRoot:     append([]byte(nil), root...),
+					ClosedAtUnixN: closedAt.UnixNano(),
+					NodeID:        e.ServerID,
+					LogID:         e.LogID,
+				}
+				committed, err = receipt.SignCommitted(committed, e.ServerKeyID, e.ServerPrivateKey)
+				if err != nil {
+					errs[i] = err
+					continue
+				}
+				result.Bundles[i] = model.ProofBundle{
+					SchemaVersion:    model.SchemaProofBundle,
+					RecordID:         records[i].RecordID,
+					NodeID:           e.ServerID,
+					LogID:            e.LogID,
+					SignedClaim:      signed[i],
+					ServerRecord:     records[i],
+					AcceptedReceipt:  accepted[i],
+					CommittedReceipt: committed,
+					BatchProof: model.BatchProof{
+						TreeAlg:   model.DefaultMerkleTreeAlg,
+						LeafIndex: uint64(i),
+						TreeSize:  uint64(len(records)),
+						AuditPath: proof,
+					},
+				}
+			}
+		}()
+	}
+	for i := range records {
+		select {
+		case jobs <- i:
+		case <-ctx.Done():
+			close(jobs)
+			wg.Wait()
+			return model.BatchCommit{}, ctx.Err()
 		}
 	}
-	return bundles, nil
+	close(jobs)
+	wg.Wait()
+	for i := range errs {
+		if errs[i] != nil {
+			return model.BatchCommit{}, errs[i]
+		}
+	}
+	return result, nil
+}
+
+func (e LocalEngine) proofWorkerCount(records int) int {
+	workers := e.ProofWorkers
+	if workers <= 0 {
+		workers = runtime.GOMAXPROCS(0)
+		if workers > 32 {
+			workers = 32
+		}
+	}
+	if workers > records {
+		workers = records
+	}
+	if workers < 1 {
+		workers = 1
+	}
+	return workers
+}
+
+func compactBatchTree(batchID string, createdAtUnixN int64, records []model.ServerRecord, tree merkle.Tree) model.BatchTreeSnapshot {
+	recordIDs := make([]string, len(records))
+	for i := range records {
+		recordIDs[i] = records[i].RecordID
+	}
+	leaves := append([][32]byte(nil), tree.CompactLeaves()...)
+	compactNodes := tree.CompactNodes()
+	sort.Slice(compactNodes, func(i, j int) bool {
+		if compactNodes[i].Level != compactNodes[j].Level {
+			return compactNodes[i].Level < compactNodes[j].Level
+		}
+		return compactNodes[i].StartIndex < compactNodes[j].StartIndex
+	})
+	nodes := make([]model.BatchTreeSnapshotNode, len(compactNodes))
+	for i := range compactNodes {
+		nodes[i] = model.BatchTreeSnapshotNode{
+			Level:      compactNodes[i].Level,
+			StartIndex: compactNodes[i].StartIndex,
+			Width:      compactNodes[i].Width,
+			Hash:       compactNodes[i].Hash,
+		}
+	}
+	return model.BatchTreeSnapshot{
+		BatchID:        batchID,
+		CreatedAtUnixN: createdAtUnixN,
+		RecordIDs:      recordIDs,
+		LeafHashes:     leaves,
+		Nodes:          nodes,
+	}
 }
 
 func (e LocalEngine) now() time.Time {

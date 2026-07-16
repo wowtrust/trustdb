@@ -35,6 +35,26 @@ func BenchmarkCommitBatchSynthetic1024(b *testing.B) {
 	}
 }
 
+func BenchmarkCommitBatchIndexesSynthetic1024(b *testing.B) {
+	_, serverPriv, err := trustcrypto.GenerateEd25519Key()
+	if err != nil {
+		b.Fatal(err)
+	}
+	engine := LocalEngine{ServerID: "bench-server", ServerKeyID: "bench-server-key", ServerPrivateKey: serverPriv}
+	signed, records, accepted := syntheticCommitBatchInputs(1024)
+	closedAt := time.Unix(200, 0)
+	b.ReportAllocs()
+	for b.Loop() {
+		root, indexes, err := engine.CommitBatchIndexes("bench-batch", closedAt, signed, records, accepted)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if root.TreeSize != uint64(len(records)) || len(indexes) != len(records) {
+			b.Fatalf("root/indexes mismatch")
+		}
+	}
+}
+
 func syntheticCommitBatchInputs(n int) ([]model.SignedClaim, []model.ServerRecord, []model.AcceptedReceipt) {
 	signed := make([]model.SignedClaim, n)
 	records := make([]model.ServerRecord, n)

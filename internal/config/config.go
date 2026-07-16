@@ -60,6 +60,10 @@ batch:
   max_records: 1024
   max_delay: "500ms"
   proof_mode: "inline"
+  materializer_workers: 2
+  materializer_queue_size: 4
+  materializer_poll_interval: "250ms"
+  proof_workers: 0
 
 global_log:
   enabled: true
@@ -68,6 +72,7 @@ global_log:
 anchor:
   scope: "global"
   max_delay: "5m"
+  workers: 4
 
 history:
   tile_size: 256
@@ -176,10 +181,14 @@ type Registry struct {
 }
 
 type Batch struct {
-	QueueSize  int    `mapstructure:"queue_size" json:"queue_size"`
-	MaxRecords int    `mapstructure:"max_records" json:"max_records"`
-	MaxDelay   string `mapstructure:"max_delay" json:"max_delay"`
-	ProofMode  string `mapstructure:"proof_mode" json:"proof_mode"`
+	QueueSize                int    `mapstructure:"queue_size" json:"queue_size"`
+	MaxRecords               int    `mapstructure:"max_records" json:"max_records"`
+	MaxDelay                 string `mapstructure:"max_delay" json:"max_delay"`
+	ProofMode                string `mapstructure:"proof_mode" json:"proof_mode"`
+	MaterializerWorkers      int    `mapstructure:"materializer_workers" json:"materializer_workers"`
+	MaterializerQueueSize    int    `mapstructure:"materializer_queue_size" json:"materializer_queue_size"`
+	MaterializerPollInterval string `mapstructure:"materializer_poll_interval" json:"materializer_poll_interval"`
+	ProofWorkers             int    `mapstructure:"proof_workers" json:"proof_workers"`
 }
 
 type GlobalLog struct {
@@ -190,6 +199,7 @@ type GlobalLog struct {
 type Anchor struct {
 	Scope    string `mapstructure:"scope" json:"scope"`
 	MaxDelay string `mapstructure:"max_delay" json:"max_delay"`
+	Workers  int    `mapstructure:"workers" json:"workers"`
 }
 
 type History struct {
@@ -269,10 +279,14 @@ func Default() Config {
 			KeyID: "registry-key",
 		},
 		Batch: Batch{
-			QueueSize:  1024,
-			MaxRecords: 1024,
-			MaxDelay:   "500ms",
-			ProofMode:  "inline",
+			QueueSize:                1024,
+			MaxRecords:               1024,
+			MaxDelay:                 "500ms",
+			ProofMode:                "inline",
+			MaterializerWorkers:      2,
+			MaterializerQueueSize:    4,
+			MaterializerPollInterval: "250ms",
+			ProofWorkers:             0,
 		},
 		GlobalLog: GlobalLog{
 			Enabled: true,
@@ -281,6 +295,7 @@ func Default() Config {
 		Anchor: Anchor{
 			Scope:    "global",
 			MaxDelay: "5m",
+			Workers:  4,
 		},
 		History: History{
 			TileSize:        256,
@@ -395,6 +410,18 @@ func (c Config) Validate() error {
 	if err := validatePositiveDuration("batch.max_delay", c.Batch.MaxDelay); err != nil {
 		return err
 	}
+	if c.Batch.MaterializerWorkers <= 0 {
+		return fmt.Errorf("batch.materializer_workers must be greater than 0")
+	}
+	if c.Batch.MaterializerQueueSize <= 0 {
+		return fmt.Errorf("batch.materializer_queue_size must be greater than 0")
+	}
+	if err := validatePositiveDuration("batch.materializer_poll_interval", c.Batch.MaterializerPollInterval); err != nil {
+		return err
+	}
+	if c.Batch.ProofWorkers < 0 {
+		return fmt.Errorf("batch.proof_workers must be zero or greater")
+	}
 	switch strings.ToLower(c.Batch.ProofMode) {
 	case "", "inline", "async", "on_demand":
 	default:
@@ -407,6 +434,9 @@ func (c Config) Validate() error {
 	}
 	if err := validatePositiveDuration("anchor.max_delay", c.Anchor.MaxDelay); err != nil {
 		return err
+	}
+	if c.Anchor.Workers <= 0 {
+		return fmt.Errorf("anchor.workers must be greater than 0")
 	}
 	if c.History.TileSize == 0 {
 		return fmt.Errorf("history.tile_size must be greater than 0")

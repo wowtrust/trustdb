@@ -36,16 +36,18 @@ import (
 func newServeCommand(rt *runtimeConfig) *cobra.Command {
 	var listen, grpcListen, serverKeyPath, walPath, proofDir, clientPubPath, registryPath, registryPubPath string
 	var queueSize, workers, batchQueueSize, batchMaxRecords int
+	var batchMaterializerWorkers, batchMaterializerQueueSize, batchProofWorkers int
 	var walMaxSegmentBytes int64
 	var walKeepSegments int
 	var walFsyncMode string
-	var readTimeoutText, readHeaderTimeoutText, writeTimeoutText, idleTimeoutText, shutdownTimeoutText, batchMaxDelayText string
+	var readTimeoutText, readHeaderTimeoutText, writeTimeoutText, idleTimeoutText, shutdownTimeoutText, batchMaxDelayText, batchMaterializerPollText string
 	var walGroupCommitIntervalText string
 	var metastoreKind, metastorePath string
 	var proofstoreTiKVPDText, proofstoreTiKVKeyspace, proofstoreTiKVNamespace string
 	var batchProofMode, proofstoreArtifactSyncMode, proofstoreRecordIndexMode string
 	var proofstoreIndexStorageTokens bool
 	var anchorSinkKind, anchorPath string
+	var anchorWorkers int
 	var anchorOtsCalendars []string
 	var anchorOtsMinAccepted int
 	var anchorOtsTimeoutText string
@@ -53,6 +55,7 @@ func newServeCommand(rt *runtimeConfig) *cobra.Command {
 	var anchorOtsUpgradeIntervalText string
 	var anchorOtsUpgradeBatchSize int
 	var anchorOtsUpgradeTimeoutText string
+	var anchorOtsUpgradeWorkers int
 	cmd := &cobra.Command{
 		Use:   "serve",
 		Short: "Run a local TrustDB HTTP ingest server",
@@ -97,6 +100,11 @@ func newServeCommand(rt *runtimeConfig) *cobra.Command {
 				anchorOtsMinAccepted = rt.viper.GetInt("anchor.ots.min_accepted")
 			}
 			anchorOtsTimeoutText = stringOrLiteral(cmd, "anchor-ots-timeout", anchorOtsTimeoutText, rt.viper.GetString("anchor.ots.timeout"))
+			if cmd.Flags().Changed("anchor-workers") {
+				anchorWorkers, _ = cmd.Flags().GetInt("anchor-workers")
+			} else {
+				anchorWorkers = rt.cfg.Anchor.Workers
+			}
 			// OTS upgrader: default enabled (true) so flipping
 			// --anchor-sink=ots gives operators automatic
 			// pending→attested progression without a second flag.
@@ -117,6 +125,11 @@ func newServeCommand(rt *runtimeConfig) *cobra.Command {
 				anchorOtsUpgradeBatchSize = rt.viper.GetInt("anchor.ots.upgrade.batch_size")
 			}
 			anchorOtsUpgradeTimeoutText = stringOrLiteral(cmd, "anchor-ots-upgrade-timeout", anchorOtsUpgradeTimeoutText, rt.viper.GetString("anchor.ots.upgrade.timeout"))
+			if cmd.Flags().Changed("anchor-ots-upgrade-workers") {
+				anchorOtsUpgradeWorkers, _ = cmd.Flags().GetInt("anchor-ots-upgrade-workers")
+			} else {
+				anchorOtsUpgradeWorkers = rt.viper.GetInt("anchor.ots.upgrade.workers")
+			}
 			clientPubPath = stringOrConfig(cmd, rt, "client-public-key", clientPubPath, "keys.client_public")
 			registryPath = stringOrConfig(cmd, rt, "key-registry", registryPath, "key_registry")
 			registryPubPath = stringOrConfig(cmd, rt, "registry-public-key", registryPubPath, "keys.registry_public")
@@ -140,12 +153,28 @@ func newServeCommand(rt *runtimeConfig) *cobra.Command {
 			} else {
 				batchMaxRecords = rt.cfg.Batch.MaxRecords
 			}
+			if cmd.Flags().Changed("batch-materializer-workers") {
+				batchMaterializerWorkers, _ = cmd.Flags().GetInt("batch-materializer-workers")
+			} else {
+				batchMaterializerWorkers = rt.cfg.Batch.MaterializerWorkers
+			}
+			if cmd.Flags().Changed("batch-materializer-queue-size") {
+				batchMaterializerQueueSize, _ = cmd.Flags().GetInt("batch-materializer-queue-size")
+			} else {
+				batchMaterializerQueueSize = rt.cfg.Batch.MaterializerQueueSize
+			}
+			if cmd.Flags().Changed("batch-proof-workers") {
+				batchProofWorkers, _ = cmd.Flags().GetInt("batch-proof-workers")
+			} else {
+				batchProofWorkers = rt.cfg.Batch.ProofWorkers
+			}
 			readTimeoutText = stringOrLiteral(cmd, "read-timeout", readTimeoutText, rt.cfg.Server.ReadTimeout)
 			readHeaderTimeoutText = stringOrLiteral(cmd, "read-header-timeout", readHeaderTimeoutText, rt.cfg.Server.ReadHeaderTimeout)
 			writeTimeoutText = stringOrLiteral(cmd, "write-timeout", writeTimeoutText, rt.cfg.Server.WriteTimeout)
 			idleTimeoutText = stringOrLiteral(cmd, "idle-timeout", idleTimeoutText, rt.cfg.Server.IdleTimeout)
 			shutdownTimeoutText = stringOrLiteral(cmd, "shutdown-timeout", shutdownTimeoutText, rt.cfg.Server.ShutdownTimeout)
 			batchMaxDelayText = stringOrLiteral(cmd, "batch-max-delay", batchMaxDelayText, rt.cfg.Batch.MaxDelay)
+			batchMaterializerPollText = stringOrLiteral(cmd, "batch-materializer-poll-interval", batchMaterializerPollText, rt.cfg.Batch.MaterializerPollInterval)
 			batchProofMode = stringOrLiteral(cmd, "batch-proof-mode", batchProofMode, rt.cfg.Batch.ProofMode)
 			if serverKeyPath == "" {
 				return usageError("serve requires server-private-key")
@@ -176,6 +205,22 @@ func newServeCommand(rt *runtimeConfig) *cobra.Command {
 			batchMaxDelay, err := parsePositiveDurationFlag("batch-max-delay", batchMaxDelayText)
 			if err != nil {
 				return err
+			}
+			batchMaterializerPollInterval, err := parsePositiveDurationFlag("batch-materializer-poll-interval", batchMaterializerPollText)
+			if err != nil {
+				return err
+			}
+			if batchMaterializerWorkers <= 0 {
+				return usageError("batch-materializer-workers must be greater than 0")
+			}
+			if batchMaterializerQueueSize <= 0 {
+				return usageError("batch-materializer-queue-size must be greater than 0")
+			}
+			if batchProofWorkers < 0 {
+				return usageError("batch-proof-workers must be zero or greater")
+			}
+			if anchorWorkers <= 0 {
+				return usageError("anchor-workers must be greater than 0")
 			}
 			serverPriv, err := readPrivateKey(serverKeyPath)
 			if err != nil {
@@ -274,6 +319,7 @@ func newServeCommand(rt *runtimeConfig) *cobra.Command {
 				ClientPublicKey:  clientPub,
 				ClientKeys:       clientKeys,
 				ServerPrivateKey: serverPriv,
+				ProofWorkers:     batchProofWorkers,
 				WAL:              writer,
 				Idempotency:      idempotency,
 			}
@@ -344,11 +390,16 @@ func newServeCommand(rt *runtimeConfig) *cobra.Command {
 				}
 			}()
 			batchOpts := batch.Options{
-				QueueSize:  batchQueueSize,
-				MaxRecords: batchMaxRecords,
-				MaxDelay:   batchMaxDelay,
-				ProofMode:  batchProofMode,
-				InitialSeq: restoreBatchSeq(context.Background(), rt, proofStore),
+				QueueSize:                batchQueueSize,
+				MaxRecords:               batchMaxRecords,
+				MaxDelay:                 batchMaxDelay,
+				ProofMode:                batchProofMode,
+				MaterializerWorkers:      batchMaterializerWorkers,
+				MaterializerQueueSize:    batchMaterializerQueueSize,
+				MaterializerPollInterval: batchMaterializerPollInterval,
+				MaterializerNodeID:       nodeID,
+				DeferMaterializerScan:    true,
+				InitialSeq:               restoreBatchSeq(context.Background(), rt, proofStore),
 				LoadBatchItems: func(ctx context.Context, manifest model.BatchManifest) ([]batch.Accepted, error) {
 					return loadManifestItemsFromWAL(ctx, walPath, engine, manifest)
 				},
@@ -373,7 +424,7 @@ func newServeCommand(rt *runtimeConfig) *cobra.Command {
 			if !globalLogEnabled {
 				anchorSinkKind = "off"
 			}
-			anchorSvc, anchorAPI, anchorShutdown, err := buildAnchorService(rt, proofStore, metrics, anchorSinkKind, anchorPath, proofDir, otsSinkParams{
+			anchorSvc, anchorAPI, anchorShutdown, err := buildAnchorService(rt, proofStore, metrics, anchorSinkKind, anchorPath, proofDir, anchorWorkers, otsSinkParams{
 				Calendars:   anchorOtsCalendars,
 				MinAccepted: anchorOtsMinAccepted,
 				TimeoutText: anchorOtsTimeoutText,
@@ -396,8 +447,9 @@ func newServeCommand(rt *runtimeConfig) *cobra.Command {
 					return trusterr.Wrap(trusterr.CodeInternal, "build global log service", err)
 				}
 				globalOutbox = globallog.NewOutboxWorker(globallog.OutboxConfig{
-					Store:  proofStore,
-					Global: globalSvc,
+					Store:   proofStore,
+					Global:  globalSvc,
+					Metrics: metrics,
 					OnSTH: func(ctx context.Context, sth model.SignedTreeHead) {
 						if anchorSvc != nil {
 							enqueueSTHAnchor(ctx, rt, proofStore, anchorSvc, sth)
@@ -414,6 +466,7 @@ func newServeCommand(rt *runtimeConfig) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			batchSvc.StartMaterializerScan()
 			rt.logger.Info().
 				Int("recovered_batches", recovered).
 				Int("replayed", replayed).
@@ -445,6 +498,7 @@ func newServeCommand(rt *runtimeConfig) *cobra.Command {
 				IntervalText: anchorOtsUpgradeIntervalText,
 				BatchSize:    anchorOtsUpgradeBatchSize,
 				TimeoutText:  anchorOtsUpgradeTimeoutText,
+				Workers:      anchorOtsUpgradeWorkers,
 			})
 			if err != nil {
 				return err
@@ -560,6 +614,10 @@ func newServeCommand(rt *runtimeConfig) *cobra.Command {
 	cmd.Flags().IntVar(&workers, "workers", 0, "ingest worker count")
 	cmd.Flags().IntVar(&batchQueueSize, "batch-queue-size", 0, "bounded batch queue size")
 	cmd.Flags().IntVar(&batchMaxRecords, "batch-max-records", 0, "records per batch before commit")
+	cmd.Flags().IntVar(&batchMaterializerWorkers, "batch-materializer-workers", 0, "bounded async proof materializer worker count")
+	cmd.Flags().IntVar(&batchMaterializerQueueSize, "batch-materializer-queue-size", 0, "bounded in-memory async materializer job queue size")
+	cmd.Flags().StringVar(&batchMaterializerPollText, "batch-materializer-poll-interval", "", "interval for recovering durable prepared materialization jobs")
+	cmd.Flags().IntVar(&batchProofWorkers, "batch-proof-workers", 0, "global per-batch proof/signing workers (0 = auto)")
 	cmd.Flags().StringVar(&readTimeoutText, "read-timeout", "", "http read timeout")
 	cmd.Flags().StringVar(&readHeaderTimeoutText, "read-header-timeout", "", "http request header read timeout")
 	cmd.Flags().StringVar(&writeTimeoutText, "write-timeout", "", "http write timeout")
@@ -581,6 +639,7 @@ func newServeCommand(rt *runtimeConfig) *cobra.Command {
 	cmd.Flags().BoolVar(&proofstoreIndexStorageTokens, "proofstore-index-storage-tokens", true, "write StorageURI/FileName token secondary indexes in the proofstore; disable for high-write ingest profiles")
 	cmd.Flags().StringVar(&anchorSinkKind, "anchor-sink", "", "external anchor sink: off (default; no L5 proofs), file, noop, or ots (OpenTimestamps)")
 	cmd.Flags().StringVar(&anchorPath, "anchor-path", "", "file anchor sink output path (JSONL). Defaults to <proof-dir>/anchors.jsonl when --anchor-sink=file and this flag is empty")
+	cmd.Flags().IntVar(&anchorWorkers, "anchor-workers", 0, "bounded concurrent anchor publish worker count")
 	cmd.Flags().StringSliceVar(&anchorOtsCalendars, "anchor-ots-calendars", nil, "comma-separated OpenTimestamps calendar URLs. When empty a built-in public pool is used (only honored when --anchor-sink=ots)")
 	cmd.Flags().IntVar(&anchorOtsMinAccepted, "anchor-ots-min-accepted", 0, "minimum number of OTS calendars that must accept a submission for success (0 = require majority)")
 	cmd.Flags().StringVar(&anchorOtsTimeoutText, "anchor-ots-timeout", "", "per-calendar request timeout for the OpenTimestamps sink (default 20s)")
@@ -588,6 +647,7 @@ func newServeCommand(rt *runtimeConfig) *cobra.Command {
 	cmd.Flags().StringVar(&anchorOtsUpgradeIntervalText, "anchor-ots-upgrade-interval", "", "interval between OTS upgrade sweeps (default 1h; values <5m are usually wasteful against the public calendar pool)")
 	cmd.Flags().IntVar(&anchorOtsUpgradeBatchSize, "anchor-ots-upgrade-batch-size", 0, "max number of OTS STHAnchorResults processed per upgrade sweep (default 64)")
 	cmd.Flags().StringVar(&anchorOtsUpgradeTimeoutText, "anchor-ots-upgrade-timeout", "", "per-calendar GET timeout for the OTS upgrader (default 30s)")
+	cmd.Flags().IntVar(&anchorOtsUpgradeWorkers, "anchor-ots-upgrade-workers", 0, "bounded concurrent OTS proof upgrade worker count")
 	return cmd
 }
 
@@ -641,7 +701,7 @@ type otsSinkParams struct {
 // shutdown closure is always non-nil so `defer anchorShutdown()` is
 // safe even when anchoring is off. Legal sink kinds: "" / "off" (L5
 // disabled), "file", "noop".
-func buildAnchorService(rt *runtimeConfig, store proofstore.Store, metrics *observability.Metrics, sinkKind, anchorPath, proofDir string, ots otsSinkParams) (*anchor.Service, httpapi.AnchorService, func(), error) {
+func buildAnchorService(rt *runtimeConfig, store proofstore.Store, metrics *observability.Metrics, sinkKind, anchorPath, proofDir string, workers int, ots otsSinkParams) (*anchor.Service, httpapi.AnchorService, func(), error) {
 	kind := strings.ToLower(strings.TrimSpace(sinkKind))
 	switch kind {
 	case "", "off", "disabled", "none":
@@ -684,6 +744,7 @@ func buildAnchorService(rt *runtimeConfig, store proofstore.Store, metrics *obse
 		Store:   store,
 		Metrics: metrics,
 		Logger:  rt.logger,
+		Workers: workers,
 	})
 	if err != nil {
 		return nil, nil, nil, err
@@ -730,6 +791,7 @@ type otsUpgraderParams struct {
 	IntervalText string
 	BatchSize    int
 	TimeoutText  string
+	Workers      int
 }
 
 // buildOtsUpgrader returns nil (with no error) when the upgrader is
@@ -762,6 +824,9 @@ func buildOtsUpgrader(rt *runtimeConfig, store proofstore.Store, metrics *observ
 	if p.BatchSize < 0 {
 		return nil, trusterr.New(trusterr.CodeInvalidArgument, "--anchor-ots-upgrade-batch-size must be >= 0")
 	}
+	if p.Workers < 0 {
+		return nil, trusterr.New(trusterr.CodeInvalidArgument, "--anchor-ots-upgrade-workers must be >= 0")
+	}
 	var timeout time.Duration
 	if text := strings.TrimSpace(p.TimeoutText); text != "" {
 		d, err := time.ParseDuration(text)
@@ -779,6 +844,7 @@ func buildOtsUpgrader(rt *runtimeConfig, store proofstore.Store, metrics *observ
 		Logger:       rt.logger,
 		PollInterval: interval,
 		BatchSize:    p.BatchSize,
+		Workers:      p.Workers,
 		HTTPOptions:  anchor.OtsUpgradeOptions{Timeout: timeout},
 	})
 	if err != nil {
@@ -1243,6 +1309,7 @@ func replayWALAccepted(ctx context.Context, walPath string, engine app.LocalEngi
 	}
 
 	preparedByRecordID := make(map[string]*preparedReplay)
+	failedByRecordID := make(map[string]struct{})
 	var preparedManifests []*preparedReplay
 	var recovered int
 	for afterBatchID := ""; ; {
@@ -1257,7 +1324,19 @@ func replayWALAccepted(ctx context.Context, walPath string, engine app.LocalEngi
 			if manifest.State == model.BatchStateCommitted {
 				continue
 			}
-			if manifest.State != model.BatchStatePrepared {
+			if manifest.State == model.BatchStateFailed {
+				for _, rid := range manifest.RecordIDs {
+					if _, exists := preparedByRecordID[rid]; exists {
+						return recovered, 0, 0, trusterr.New(trusterr.CodeFailedPrecondition, "record "+rid+" appears in both failed and prepared manifests")
+					}
+					if _, exists := failedByRecordID[rid]; exists {
+						return recovered, 0, 0, trusterr.New(trusterr.CodeFailedPrecondition, "record "+rid+" appears in more than one failed manifest")
+					}
+					failedByRecordID[rid] = struct{}{}
+				}
+				continue
+			}
+			if manifest.State != model.BatchStatePreparing && manifest.State != model.BatchStatePrepared {
 				return recovered, 0, 0, trusterr.New(trusterr.CodeFailedPrecondition, "unknown batch manifest state: "+manifest.State)
 			}
 			// A prepared manifest whose WAL range is entirely below the
@@ -1270,6 +1349,9 @@ func replayWALAccepted(ctx context.Context, walPath string, engine app.LocalEngi
 			}
 			prepared := newPreparedReplay(manifest)
 			for _, rid := range manifest.RecordIDs {
+				if _, exists := failedByRecordID[rid]; exists {
+					return recovered, 0, 0, trusterr.New(trusterr.CodeFailedPrecondition, "record "+rid+" appears in both failed and prepared manifests")
+				}
 				if _, exists := preparedByRecordID[rid]; exists {
 					return recovered, 0, 0, trusterr.New(trusterr.CodeFailedPrecondition, "record "+rid+" appears in more than one prepared manifest")
 				}
@@ -1304,6 +1386,10 @@ func replayWALAccepted(ctx context.Context, walPath string, engine app.LocalEngi
 		}
 		if prepared := preparedByRecordID[item.Record.RecordID]; prepared != nil {
 			prepared.add(accepted)
+			return nil
+		}
+		if _, failed := failedByRecordID[item.Record.RecordID]; failed {
+			skipped++
 			return nil
 		}
 		if _, ok, err := store.GetRecordIndex(ctx, item.Record.RecordID); err != nil {

@@ -1,0 +1,43 @@
+# Reproduces the high-write L2 submit / asynchronous L3 drain profile.
+run_profile: benchmark
+
+paths:
+  data_dir: ".trustdb-bench-l3"
+  wal: ".trustdb-bench-l3/wal"
+  object_dir: ".trustdb-bench-l3/objects"
+  proof_dir: ".trustdb-bench-l3/proofs"
+
+metastore: "pebble"
+metastore_path: ".trustdb-bench-l3/pebble"
+
+proofstore:
+  record_index_mode: "time_only"
+  artifact_sync_mode: "batch"
+
+wal:
+  fsync_mode: "batch"
+  group_commit_interval: "50ms"
+
+batch:
+  queue_size: 1048576
+  max_records: 8192
+  max_delay: "50ms"
+  proof_mode: "async"
+  materializer_workers: 2
+  materializer_queue_size: 4
+  materializer_poll_interval: "250ms"
+  proof_workers: 0
+
+global_log:
+  enabled: false
+
+anchor:
+  scope: "global"
+  max_delay: "5m"
+  workers: 4
+  sink: "off"
+
+log:
+  level: "warn"
+  format: "json"
+  output: "stderr"

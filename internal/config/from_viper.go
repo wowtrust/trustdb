@@ -42,10 +42,14 @@ func FromViper(v *viper.Viper) Config {
 			KeyID: v.GetString("registry.key_id"),
 		},
 		Batch: Batch{
-			QueueSize:  v.GetInt("batch.queue_size"),
-			MaxRecords: v.GetInt("batch.max_records"),
-			MaxDelay:   v.GetString("batch.max_delay"),
-			ProofMode:  v.GetString("batch.proof_mode"),
+			QueueSize:                v.GetInt("batch.queue_size"),
+			MaxRecords:               v.GetInt("batch.max_records"),
+			MaxDelay:                 v.GetString("batch.max_delay"),
+			ProofMode:                v.GetString("batch.proof_mode"),
+			MaterializerWorkers:      v.GetInt("batch.materializer_workers"),
+			MaterializerQueueSize:    v.GetInt("batch.materializer_queue_size"),
+			MaterializerPollInterval: v.GetString("batch.materializer_poll_interval"),
+			ProofWorkers:             v.GetInt("batch.proof_workers"),
 		},
 		GlobalLog: GlobalLog{
 			Enabled: v.GetBool("global_log.enabled"),
@@ -54,6 +58,7 @@ func FromViper(v *viper.Viper) Config {
 		Anchor: Anchor{
 			Scope:    v.GetString("anchor.scope"),
 			MaxDelay: v.GetString("anchor.max_delay"),
+			Workers:  v.GetInt("anchor.workers"),
 		},
 		History: History{
 			TileSize:        v.GetUint64("history.tile_size"),

@@ -551,7 +551,7 @@ func testBatchTreeArtifactsRoundTrip(t *testing.T, newStore Factory) {
 	if err != nil {
 		t.Fatalf("ListBatchTreeNodes level0: %v", err)
 	}
-	if len(levelZero) != 2 || levelZero[0].StartIndex != 0 || levelZero[1].StartIndex != 1 {
+	if len(levelZero) != 3 || levelZero[0].StartIndex != 0 || levelZero[1].StartIndex != 1 || levelZero[2].StartIndex != 2 {
 		t.Fatalf("level0 nodes = %+v", levelZero)
 	}
 	levelOne, err := store.ListBatchTreeNodes(ctx, model.BatchTreeNodeListOptions{BatchID: "batch-tree", Level: 1, StartIndex: 0, Limit: 1})

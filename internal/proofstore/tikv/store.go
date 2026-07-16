@@ -38,7 +38,7 @@ const (
 const maxStoredObjectBytes = 64 << 20
 const (
 	batchArtifactChunkSize       = 1024
-	bundleCompressionMinBytes    = 1024
+	bundleCompressionMinBytes    = 4 << 10
 	maxBatchArtifactEncodeWorker = 16
 )
 
@@ -933,8 +933,9 @@ func encodeStoredProofBundle(bundle model.ProofBundle) ([]byte, *bytes.Buffer, e
 		return raw, rawBuf, nil
 	}
 	compressedBuf := getArtifactBuffer()
+	compressedBuf.Grow(snappy.MaxEncodedLen(len(raw)))
 	compressed := snappy.Encode(compressedBuf.Bytes()[:0], raw)
-	if len(compressed) >= len(raw) {
+	if len(compressed)*8 >= len(raw)*7 {
 		putArtifactBuffer(compressedBuf)
 		return raw, rawBuf, nil
 	}
@@ -1227,7 +1228,56 @@ func (s *Store) PutBatchArtifacts(ctx context.Context, bundles []model.ProofBund
 	return nil
 }
 
+func (s *Store) PutMaterializedBatchArtifacts(ctx context.Context, bundles []model.ProofBundle) error {
+	if err := ctx.Err(); err != nil {
+		return trusterr.Wrap(trusterr.CodeDeadlineExceeded, "proofstore put materialized batch artifacts canceled", err)
+	}
+	if len(bundles) == 0 {
+		return trusterr.New(trusterr.CodeInvalidArgument, "proofstore materialized batch artifacts require at least one bundle")
+	}
+	for start := 0; start < len(bundles); start += batchArtifactChunkSize {
+		end := start + batchArtifactChunkSize
+		if end > len(bundles) {
+			end = len(bundles)
+		}
+		if err := ctx.Err(); err != nil {
+			return trusterr.Wrap(trusterr.CodeDeadlineExceeded, "proofstore put materialized batch artifacts canceled", err)
+		}
+		artifacts, err := encodeBatchArtifacts(ctx, bundles[start:end])
+		if err != nil {
+			return err
+		}
+		batch := s.db.NewBatch()
+		for i := range artifacts {
+			if err := s.stageEncodedMaterializedBatchArtifact(batch, artifacts[i]); err != nil {
+				for j := i; j < len(artifacts); j++ {
+					artifacts[j].release()
+				}
+				_ = batch.Close()
+				return err
+			}
+			artifacts[i].release()
+		}
+		if err := batch.Commit(s.artifactWriteOptions()); err != nil {
+			_ = batch.Close()
+			return trusterr.Wrap(trusterr.CodeDataLoss, "commit materialized batch artifacts", err)
+		}
+		if err := batch.Close(); err != nil {
+			return trusterr.Wrap(trusterr.CodeDataLoss, "close materialized batch artifacts", err)
+		}
+	}
+	return nil
+}
+
 func (s *Store) PutBatchIndexesAndRoot(ctx context.Context, indexes []model.RecordIndex, root model.BatchRoot) error {
+	return s.putBatchIndexesAndRoot(ctx, indexes, root, true)
+}
+
+func (s *Store) PutPreparedBatchIndexesAndRoot(ctx context.Context, indexes []model.RecordIndex, root model.BatchRoot) error {
+	return s.putBatchIndexesAndRoot(ctx, indexes, root, false)
+}
+
+func (s *Store) putBatchIndexesAndRoot(ctx context.Context, indexes []model.RecordIndex, root model.BatchRoot, replace bool) error {
 	if err := ctx.Err(); err != nil {
 		return trusterr.Wrap(trusterr.CodeDeadlineExceeded, "proofstore put batch indexes canceled", err)
 	}
@@ -1259,7 +1309,13 @@ func (s *Store) PutBatchIndexesAndRoot(ctx context.Context, indexes []model.Reco
 		}
 		batch := s.db.NewBatch()
 		for i := range encoded {
-			if err := s.stageEncodedRecordIndexSetForMode(batch, encoded[i]); err != nil {
+			var stageErr error
+			if replace {
+				stageErr = s.stageEncodedRecordIndexSetForMode(batch, encoded[i])
+			} else {
+				stageErr = s.stageEncodedRecordIndexSet(batch, encoded[i])
+			}
+			if stageErr != nil {
 				for j := i; j < len(encoded); j++ {
 					encoded[j].release()
 				}
@@ -1299,6 +1355,27 @@ func (s *Store) stageEncodedBatchArtifact(batch *tikvBatch, artifact encodedBatc
 		return trusterr.Wrap(trusterr.CodeDataLoss, "stage proof bundle", err)
 	}
 	return s.stageEncodedRecordIndexSetForMode(batch, artifact.index)
+}
+
+func (s *Store) stageEncodedMaterializedBatchArtifact(batch *tikvBatch, artifact encodedBatchArtifact) error {
+	if err := stageSet(batch, bundleV2Key(artifact.recordID), artifact.bundleValue); err != nil {
+		return trusterr.Wrap(trusterr.CodeDataLoss, "stage proof bundle", err)
+	}
+	if err := stageSet(batch, recordByIDKey(artifact.recordID), artifact.index.value); err != nil {
+		return trusterr.Wrap(trusterr.CodeDataLoss, "stage materialized record index", err)
+	}
+	if s.recordIndexMode == RecordIndexModeTimeOnly {
+		return nil
+	}
+	oldLevelKey := appendRecordIndexEncodedPrefix(nil, prefixRecordByLevel, "L2", artifact.index.idx.ReceivedAtUnixN, artifact.index.idx.RecordID)
+	if err := batch.Delete(oldLevelKey, nil); err != nil {
+		return trusterr.Wrap(trusterr.CodeDataLoss, "stage old proof level delete", err)
+	}
+	newLevelKey := appendRecordIndexEncodedPrefix(nil, prefixRecordByLevel, "L3", artifact.index.idx.ReceivedAtUnixN, artifact.index.idx.RecordID)
+	if err := stageRecordIndexRef(batch, newLevelKey, artifact.index.idx.RecordID); err != nil {
+		return trusterr.Wrap(trusterr.CodeDataLoss, "stage materialized proof level", err)
+	}
+	return nil
 }
 
 func (s *Store) PutRecordIndex(ctx context.Context, idx model.RecordIndex) error {
@@ -1767,6 +1844,23 @@ func (s *Store) ListBatchTreeNodes(ctx context.Context, opts model.BatchTreeNode
 		return nil, trusterr.New(trusterr.CodeInvalidArgument, "batch_id is required")
 	}
 	limit := normaliseRecordLimit(opts.Limit)
+	if opts.Level == 0 {
+		after := opts.AfterStartIndex
+		hasAfter := opts.HasAfter
+		if !hasAfter && opts.StartIndex > 0 {
+			after = opts.StartIndex - 1
+			hasAfter = true
+		}
+		leaves, err := s.ListBatchTreeLeaves(ctx, model.BatchTreeLeafListOptions{BatchID: opts.BatchID, Limit: limit, AfterLeafIndex: after, HasAfter: hasAfter})
+		if err != nil {
+			return nil, err
+		}
+		nodes := make([]model.BatchTreeNode, len(leaves))
+		for i := range leaves {
+			nodes[i] = model.BatchTreeNode{SchemaVersion: model.SchemaBatchTreeNode, BatchID: leaves[i].BatchID, Level: 0, StartIndex: leaves[i].LeafIndex, Width: 1, Hash: append([]byte(nil), leaves[i].LeafHash...), CreatedAtUnixN: leaves[i].CreatedAtUnixN}
+		}
+		return nodes, nil
+	}
 	prefix := fmt.Sprintf("%s%s/%0*d/", prefixBatchTreeNode, opts.BatchID, rootSortKeyWidth, opts.Level)
 	lower, upper := prefixBounds(prefix)
 	iter, err := s.db.NewIter(&iterOptions{LowerBound: lower, UpperBound: upper})
@@ -1811,8 +1905,8 @@ func (s *Store) PutManifest(ctx context.Context, manifest model.BatchManifest) e
 	if manifest.BatchID == "" {
 		return trusterr.New(trusterr.CodeInvalidArgument, "batch manifest batch_id is required")
 	}
-	if manifest.State != model.BatchStatePrepared && manifest.State != model.BatchStateCommitted {
-		return trusterr.New(trusterr.CodeInvalidArgument, "batch manifest state must be prepared or committed")
+	if !model.ValidBatchManifestState(manifest.State) {
+		return trusterr.New(trusterr.CodeInvalidArgument, "invalid batch manifest state")
 	}
 	if manifest.SchemaVersion == "" {
 		manifest.SchemaVersion = model.SchemaBatchManifest
@@ -2404,6 +2498,90 @@ func (s *Store) CommitGlobalLogAppend(ctx context.Context, entry model.GlobalLog
 	return nil
 }
 
+func (s *Store) CommitGlobalLogAppends(ctx context.Context, entries []model.GlobalLogAppend) error {
+	if err := ctx.Err(); err != nil {
+		return trusterr.Wrap(trusterr.CodeDeadlineExceeded, "proofstore commit global log appends canceled", err)
+	}
+	if len(entries) == 0 {
+		return trusterr.New(trusterr.CodeInvalidArgument, "global log appends require at least one entry")
+	}
+	batch := s.db.NewBatch()
+	defer batch.Close()
+	var finalState model.GlobalLogState
+	for i := range entries {
+		entry := entries[i]
+		if entry.Leaf.BatchID == "" || entry.STH.TreeSize == 0 || entry.Leaf.LeafIndex != entry.STH.TreeSize-1 || entry.State.TreeSize != entry.STH.TreeSize {
+			return trusterr.New(trusterr.CodeInvalidArgument, "invalid global log append")
+		}
+		if entry.Leaf.SchemaVersion == "" {
+			entry.Leaf.SchemaVersion = model.SchemaGlobalLogLeaf
+		}
+		if entry.Leaf.AppendedAtUnixN == 0 {
+			entry.Leaf.AppendedAtUnixN = time.Now().UTC().UnixNano()
+		}
+		if entry.State.SchemaVersion == "" {
+			entry.State.SchemaVersion = model.SchemaGlobalLogState
+		}
+		if entry.State.UpdatedAtUnixN == 0 {
+			entry.State.UpdatedAtUnixN = time.Now().UTC().UnixNano()
+		}
+		if entry.STH.SchemaVersion == "" {
+			entry.STH.SchemaVersion = model.SchemaSignedTreeHead
+		}
+		if entry.STH.TimestampUnixN == 0 {
+			entry.STH.TimestampUnixN = time.Now().UTC().UnixNano()
+		}
+		leafData, err := cborx.Marshal(entry.Leaf)
+		if err != nil {
+			return trusterr.Wrap(trusterr.CodeDataLoss, "encode global log append leaf", err)
+		}
+		if err := batch.Set(globalLeafKey(entry.Leaf.LeafIndex), leafData, nil); err != nil {
+			return trusterr.Wrap(trusterr.CodeDataLoss, "stage global log append leaf", err)
+		}
+		if err := batch.Set(globalBatchKey(entry.Leaf.BatchID), leafData, nil); err != nil {
+			return trusterr.Wrap(trusterr.CodeDataLoss, "stage global log append leaf batch index", err)
+		}
+		for j := range entry.Nodes {
+			node := entry.Nodes[j]
+			if node.Width == 0 {
+				return trusterr.New(trusterr.CodeInvalidArgument, "global log append node width is required")
+			}
+			if node.SchemaVersion == "" {
+				node.SchemaVersion = model.SchemaGlobalLogNode
+			}
+			if node.CreatedAtUnixN == 0 {
+				node.CreatedAtUnixN = time.Now().UTC().UnixNano()
+			}
+			nodeData, err := cborx.Marshal(node)
+			if err != nil {
+				return trusterr.Wrap(trusterr.CodeDataLoss, "encode global log append node", err)
+			}
+			if err := batch.Set(globalNodeKey(node.Level, node.StartIndex), nodeData, nil); err != nil {
+				return trusterr.Wrap(trusterr.CodeDataLoss, "stage global log append node", err)
+			}
+		}
+		sthData, err := cborx.Marshal(entry.STH)
+		if err != nil {
+			return trusterr.Wrap(trusterr.CodeDataLoss, "encode global log append STH", err)
+		}
+		if err := batch.Set(sthKey(entry.STH.TreeSize), sthData, nil); err != nil {
+			return trusterr.Wrap(trusterr.CodeDataLoss, "stage global log append STH", err)
+		}
+		finalState = entry.State
+	}
+	stateData, err := cborx.Marshal(finalState)
+	if err != nil {
+		return trusterr.Wrap(trusterr.CodeDataLoss, "encode global log append state", err)
+	}
+	if err := batch.Set([]byte(globalStateKey), stateData, nil); err != nil {
+		return trusterr.Wrap(trusterr.CodeDataLoss, "stage global log append state", err)
+	}
+	if err := batch.Commit(syncWrite); err != nil {
+		return trusterr.Wrap(trusterr.CodeDataLoss, "commit global log appends", err)
+	}
+	return nil
+}
+
 func (s *Store) GetSignedTreeHead(ctx context.Context, treeSize uint64) (model.SignedTreeHead, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return model.SignedTreeHead{}, false, trusterr.Wrap(trusterr.CodeDeadlineExceeded, "proofstore get sth canceled", err)
@@ -2745,10 +2923,72 @@ func (s *Store) MarkGlobalLogPublished(ctx context.Context, batchID string, sth 
 	item.LastAttemptUnixN = now
 	item.NextAttemptUnixN = 0
 	item.CompletedAtUnixN = now
+	if err := s.promoteBatchRecords(ctx, batchID, "L4"); err != nil {
+		return err
+	}
 	if err := s.replaceGlobalLogOutbox(ctx, old, item); err != nil {
 		return err
 	}
-	return s.promoteBatchRecords(ctx, batchID, "L4")
+	return nil
+}
+
+func (s *Store) MarkGlobalLogPublishedBatch(ctx context.Context, batchIDs []string, sths []model.SignedTreeHead) error {
+	if err := ctx.Err(); err != nil {
+		return trusterr.Wrap(trusterr.CodeDeadlineExceeded, "proofstore mark global log batch published canceled", err)
+	}
+	if len(batchIDs) == 0 || len(batchIDs) != len(sths) {
+		return trusterr.New(trusterr.CodeInvalidArgument, "global log published batch inputs are inconsistent")
+	}
+	type update struct {
+		old  model.GlobalLogOutboxItem
+		next model.GlobalLogOutboxItem
+		data []byte
+	}
+	updates := make([]update, len(batchIDs))
+	now := time.Now().UTC().UnixNano()
+	for i := range batchIDs {
+		item, ok, err := s.GetGlobalLogOutboxItem(ctx, batchIDs[i])
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return trusterr.New(trusterr.CodeNotFound, "global log outbox item not found")
+		}
+		next := item
+		next.Status = model.AnchorStatePublished
+		next.STH = sths[i]
+		next.LastErrorMessage = ""
+		next.LastAttemptUnixN = now
+		next.NextAttemptUnixN = 0
+		next.CompletedAtUnixN = now
+		data, err := cborx.Marshal(next)
+		if err != nil {
+			return trusterr.Wrap(trusterr.CodeDataLoss, "encode global log outbox item", err)
+		}
+		updates[i] = update{old: item, next: next, data: data}
+	}
+	for i := range batchIDs {
+		if err := s.promoteBatchRecords(ctx, batchIDs[i], "L4"); err != nil {
+			return err
+		}
+	}
+	batch := s.db.NewBatch()
+	defer batch.Close()
+	for i := range updates {
+		if err := batch.Set(globalOutboxKey(updates[i].next.BatchID), updates[i].data, nil); err != nil {
+			return trusterr.Wrap(trusterr.CodeDataLoss, "stage global log outbox item", err)
+		}
+		if err := batch.Delete(globalStatusKey(updates[i].old.Status, globalStatusSortUnixN(updates[i].old), updates[i].old.BatchID), nil); err != nil {
+			return trusterr.Wrap(trusterr.CodeDataLoss, "stage old global log status delete", err)
+		}
+		if err := batch.Set(globalStatusKey(updates[i].next.Status, globalStatusSortUnixN(updates[i].next), updates[i].next.BatchID), updates[i].data, nil); err != nil {
+			return trusterr.Wrap(trusterr.CodeDataLoss, "stage global log status index", err)
+		}
+	}
+	if err := batch.Commit(syncWrite); err != nil {
+		return trusterr.Wrap(trusterr.CodeDataLoss, "commit global log outbox batch", err)
+	}
+	return nil
 }
 
 func (s *Store) RescheduleGlobalLog(ctx context.Context, batchID string, attempts int, nextAttemptUnixN int64, lastErrorMessage string) error {
