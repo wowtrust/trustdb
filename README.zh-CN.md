@@ -2,9 +2,11 @@
 
 ![CI](https://github.com/ryan-wong-coder/trustdb/actions/workflows/ci.yml/badge.svg)
 
-[English README](README.md) | [贡献指南](CONTRIBUTING.md) | [`.sproof` 格式](formats/SPROOF_V1.md)
+[官方网站](https://ryan-wong-coder.github.io/trustdb-website/) | [English README](README.md) | [贡献指南](CONTRIBUTING.md) | [`.sproof` 格式](formats/SPROOF_V1.md)
 
 TrustDB 是一个面向文件存证和证明交换的可验证证据数据库。它把本地文件哈希转换为客户端签名声明、服务端持久化收据、批次 Merkle 证明、Global Transparency Log 证明，以及可选的外部 Signed Tree Head（STH）锚定结果。
+
+文档、快速开始、版本发布和反馈渠道统一维护在 [TrustDB 官方网站](https://ryan-wong-coder.github.io/trustdb-website/)。
 
 ![TrustDB 系统架构](assets/readme/system-architecture.png)
 

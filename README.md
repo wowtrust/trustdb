@@ -2,9 +2,11 @@
 
 ![CI](https://github.com/ryan-wong-coder/trustdb/actions/workflows/ci.yml/badge.svg)
 
-[中文说明](README.zh-CN.md) | [Contributing](CONTRIBUTING.md) | [`.sproof` format](formats/SPROOF_V1.md)
+[Official Website](https://ryan-wong-coder.github.io/trustdb-website/) | [中文说明](README.zh-CN.md) | [Contributing](CONTRIBUTING.md) | [`.sproof` format](formats/SPROOF_V1.md)
 
 TrustDB is a verifiable evidence database for file claims and proof exchange. It turns a local file hash into a signed claim, a durable server receipt, a batch Merkle proof, a global transparency-log proof, and optionally an externally anchored Signed Tree Head (STH).
+
+Documentation, quick start guides, releases, and feedback channels are available on the [TrustDB official website](https://ryan-wong-coder.github.io/trustdb-website/).
 
 ![TrustDB system architecture](assets/readme/system-architecture.png)
 
