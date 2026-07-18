@@ -201,8 +201,9 @@ func (t Tree) Proofs() [][][]byte {
 	return out
 }
 
-// ProofView returns an immutable audit path backed by the tree's compact hash
-// storage. Callers must not mutate the returned byte slices.
+// ProofView returns a read-only audit path view backed by the tree's compact
+// hash storage. Callers must not mutate the returned byte slices; use Proof
+// when mutable copies are required.
 func (t Tree) ProofView(index int) ([][]byte, error) {
 	if index < 0 || index >= len(t.leafHashes) {
 		return nil, fmt.Errorf("merkle: leaf index out of range: %d", index)

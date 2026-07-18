@@ -1,6 +1,9 @@
 package prooflevel
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestEvaluate(t *testing.T) {
 	t.Parallel()
@@ -177,10 +180,11 @@ func TestDefinitionsReturnsCopy(t *testing.T) {
 func TestParse(t *testing.T) {
 	t.Parallel()
 
-	for _, raw := range []string{"L1", "L2", "L3", "L4", "L5"} {
+	for _, raw := range []string{"L1", "L2", "L3", "L4", "L5", " l5 "} {
 		got, ok := Parse(raw)
-		if !ok || got.String() != raw {
-			t.Fatalf("Parse(%q) = %q, %v", raw, got, ok)
+		want := strings.ToUpper(strings.TrimSpace(raw))
+		if !ok || got.String() != want {
+			t.Fatalf("Parse(%q) = %q, %v, want %q true", raw, got, ok, want)
 		}
 	}
 	if got, ok := Parse("L6"); ok || got != Unknown {
