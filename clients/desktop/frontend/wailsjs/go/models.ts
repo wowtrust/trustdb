@@ -601,6 +601,8 @@ export namespace model {
 	export class BatchRoot {
 	    schema_version: string;
 	    batch_id: string;
+	    node_id?: string;
+	    log_id?: string;
 	    batch_root: number[];
 	    tree_size: number;
 	    closed_at_unix_nano: number;
@@ -613,6 +615,8 @@ export namespace model {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.schema_version = source["schema_version"];
 	        this.batch_id = source["batch_id"];
+	        this.node_id = source["node_id"];
+	        this.log_id = source["log_id"];
 	        this.batch_root = source["batch_root"];
 	        this.tree_size = source["tree_size"];
 	        this.closed_at_unix_nano = source["closed_at_unix_nano"];
@@ -729,6 +733,8 @@ export namespace model {
 	    leaf_hash: number[];
 	    batch_root: number[];
 	    batch_closed_at_unix_nano: number;
+	    node_id?: string;
+	    log_id?: string;
 	    server_signature: Signature;
 	
 	    static createFrom(source: any = {}) {
@@ -745,6 +751,8 @@ export namespace model {
 	        this.leaf_hash = source["leaf_hash"];
 	        this.batch_root = source["batch_root"];
 	        this.batch_closed_at_unix_nano = source["batch_closed_at_unix_nano"];
+	        this.node_id = source["node_id"];
+	        this.log_id = source["log_id"];
 	        this.server_signature = this.convertValues(source["server_signature"], Signature);
 	    }
 	
@@ -789,6 +797,7 @@ export namespace model {
 	    tree_size: number;
 	    root_hash: number[];
 	    timestamp_unix_nano: number;
+	    node_id?: string;
 	    log_id?: string;
 	    signature: Signature;
 	
@@ -803,6 +812,7 @@ export namespace model {
 	        this.tree_size = source["tree_size"];
 	        this.root_hash = source["root_hash"];
 	        this.timestamp_unix_nano = source["timestamp_unix_nano"];
+	        this.node_id = source["node_id"];
 	        this.log_id = source["log_id"];
 	        this.signature = this.convertValues(source["signature"], Signature);
 	    }
@@ -827,6 +837,8 @@ export namespace model {
 	}
 	export class GlobalLogProof {
 	    schema_version: string;
+	    node_id?: string;
+	    log_id?: string;
 	    batch_id: string;
 	    leaf_index: number;
 	    leaf_hash: number[];
@@ -842,6 +854,8 @@ export namespace model {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.schema_version = source["schema_version"];
+	        this.node_id = source["node_id"];
+	        this.log_id = source["log_id"];
 	        this.batch_id = source["batch_id"];
 	        this.leaf_index = source["leaf_index"];
 	        this.leaf_hash = source["leaf_hash"];
@@ -973,6 +987,8 @@ export namespace model {
 	export class ProofBundle {
 	    schema_version: string;
 	    record_id: string;
+	    node_id?: string;
+	    log_id?: string;
 	    signed_claim: SignedClaim;
 	    server_record: ServerRecord;
 	    accepted_receipt: AcceptedReceipt;
@@ -987,6 +1003,8 @@ export namespace model {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.schema_version = source["schema_version"];
 	        this.record_id = source["record_id"];
+	        this.node_id = source["node_id"];
+	        this.log_id = source["log_id"];
 	        this.signed_claim = this.convertValues(source["signed_claim"], SignedClaim);
 	        this.server_record = this.convertValues(source["server_record"], ServerRecord);
 	        this.accepted_receipt = this.convertValues(source["accepted_receipt"], AcceptedReceipt);
@@ -1014,6 +1032,8 @@ export namespace model {
 	}
 	export class STHAnchorResult {
 	    schema_version: string;
+	    node_id?: string;
+	    log_id?: string;
 	    tree_size: number;
 	    sink_name: string;
 	    anchor_id: string;
@@ -1029,6 +1049,8 @@ export namespace model {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.schema_version = source["schema_version"];
+	        this.node_id = source["node_id"];
+	        this.log_id = source["log_id"];
 	        this.tree_size = source["tree_size"];
 	        this.sink_name = source["sink_name"];
 	        this.anchor_id = source["anchor_id"];

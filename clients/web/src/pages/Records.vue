@@ -5,27 +5,9 @@ import Button from '@/components/Button.vue'
 import HashChip from '@/components/HashChip.vue'
 import LevelBadge from '@/components/LevelBadge.vue'
 import EmptyState from '@/components/EmptyState.vue'
-import { proxyGet } from '@/lib/api'
+import { getRecords, type RecordIndex } from '@/lib/api'
 import { formatTime, nanoToDate, relativeTime } from '@/lib/format'
 import { ScrollText, RefreshCcw } from 'lucide-vue-next'
-
-interface RecordIndex {
-  record_id: string
-  proof_level?: string
-  tenant_id?: string
-  client_id?: string
-  batch_id?: string
-  received_at_unix_n?: number
-  content_hash?: string
-  storage_uri?: string
-}
-
-interface RecordsResponse {
-  records: RecordIndex[]
-  limit: number
-  direction: string
-  next_cursor?: string
-}
 
 const items = ref<RecordIndex[]>([])
 const limit = ref(50)
@@ -40,17 +22,12 @@ async function load(reset: boolean) {
   loading.value = true
   err.value = ''
   try {
-    const u = new URLSearchParams()
-    u.set('limit', String(limit.value))
-    if (cursor.value) u.set('cursor', cursor.value)
-    if (query.value.trim()) u.set('q', query.value.trim())
-    if (level.value.trim()) u.set('level', level.value.trim())
-    const res = await proxyGet(`/v1/records?${u.toString()}`)
-    if (!res.ok) {
-      err.value = await res.text()
-      return
-    }
-    const body = (await res.json()) as RecordsResponse
+    const body = await getRecords({
+      limit: limit.value,
+      cursor: cursor.value,
+      query: query.value.trim(),
+      level: level.value.trim(),
+    })
     if (reset) items.value = body.records
     else items.value = items.value.concat(body.records)
     cursor.value = body.next_cursor ?? ''

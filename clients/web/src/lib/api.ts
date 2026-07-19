@@ -112,6 +112,24 @@ export type ProofResponse = {
   }
 }
 
+export type RecordIndex = {
+  record_id: string
+  proof_level?: string
+  tenant_id?: string
+  client_id?: string
+  batch_id?: string
+  received_at_unix_n?: number
+  content_hash?: string
+  storage_uri?: string
+}
+
+export type RecordsResponse = {
+  records: RecordIndex[]
+  limit: number
+  direction: string
+  next_cursor?: string
+}
+
 async function parseJSON<T>(res: Response): Promise<T> {
   const text = await res.text()
   try {
@@ -219,6 +237,15 @@ function withParams(path: string, params: Record<string, string | number | undef
 
 export async function getBatches(opts: { limit?: number; cursor?: string } = {}): Promise<{ roots: BatchRoot[]; next_cursor?: string }> {
   return proxyJSON(withParams('/v1/batches', { limit: opts.limit, cursor: opts.cursor }))
+}
+
+export async function getRecords(opts: { limit?: number; cursor?: string; query?: string; level?: string } = {}): Promise<RecordsResponse> {
+  return proxyJSON(withParams('/v1/records', {
+    limit: opts.limit,
+    cursor: opts.cursor,
+    q: opts.query,
+    level: opts.level,
+  }))
 }
 
 export async function getBatchDetail(batchID: string): Promise<{ root: BatchRoot; manifest: BatchManifest; record_count: number }> {

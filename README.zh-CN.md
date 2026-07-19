@@ -31,6 +31,7 @@ github.com/ryan-wong-coder/trustdb
 - Go SDK：claim 签名、HTTP/gRPC 调用、证明导出、本地验证。
 - Wails + Vue 桌面客户端：本地身份、文件存证、记录管理、proof refresh、`.sproof` 导出和离线验证。
 - 可选 Vue Admin Web：由 `trustdb serve` 挂载，用于 metrics、只读浏览和受控 YAML 配置维护。
+- React + Vite 官网源码：位于 `website`，与主仓库一起构建和校验，并使用 GSAP 实现动态证明信号与滚动叙事。
 
 ## 证明等级
 

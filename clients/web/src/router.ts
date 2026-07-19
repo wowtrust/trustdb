@@ -20,6 +20,9 @@ export const router = createRouter({
 
 router.beforeEach(async (to) => {
   const auth = useAuth()
+  if (import.meta.env.DEV && import.meta.env.VITE_TRUSTDB_DEMO === '1') {
+    return true
+  }
   if (to.meta.public) {
     await auth.refresh()
     if (auth.ok && to.name === 'login') {

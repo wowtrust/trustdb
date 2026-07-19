@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { getBatchDetail, getBatches, getBatchTreeNodes, getGlobalTree, getGlobalTreeNodes, getMetrics, login, proxyGet, putConfigYaml } from './api'
+import { getBatchDetail, getBatches, getBatchTreeNodes, getGlobalTree, getGlobalTreeNodes, getMetrics, getRecords, login, proxyGet, putConfigYaml } from './api'
 
 const fetchMock = vi.fn()
 
@@ -72,6 +72,19 @@ describe('admin API facade', () => {
     expect(fetchMock).toHaveBeenNthCalledWith(1, '/admin/api/proxy/v1/batches?limit=10', { credentials: 'include' })
     expect(fetchMock).toHaveBeenNthCalledWith(2, '/admin/api/proxy/v1/batches/batch-a', { credentials: 'include' })
     expect(fetchMock).toHaveBeenNthCalledWith(3, '/admin/api/proxy/v1/batches/batch-a/tree/nodes?level=0&start=0', { credentials: 'include' })
+  })
+
+  it('loads filtered records through the typed proxy facade', async () => {
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({
+      records: [{ record_id: 'record-a', proof_level: 'L5' }],
+      limit: 25,
+      direction: 'desc',
+    }), { status: 200 }))
+
+    await expect(getRecords({ limit: 25, query: 'invoice', level: 'L5' })).resolves.toMatchObject({
+      records: [{ record_id: 'record-a', proof_level: 'L5' }],
+    })
+    expect(fetchMock).toHaveBeenCalledWith('/admin/api/proxy/v1/records?limit=25&q=invoice&level=L5', { credentials: 'include' })
   })
 
   it('loads global tree through the proxy facade', async () => {

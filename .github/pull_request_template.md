@@ -38,6 +38,7 @@ If any box above is false, explain the compatibility, migration, recovery, or ve
 - [ ] `go test -tags=integration ./...`
 - [ ] `go test -tags=e2e ./...`
 - [ ] `cd clients/web && npm ci && npm run build`
+- [ ] `cd website && npm ci && npm run build`
 - [ ] `cd clients/desktop && go test ./...`
 - [ ] `cd clients/desktop && go test -race ./...`
 

@@ -6,6 +6,22 @@
 import * as App from '@wails/go/main/App'
 import { anchor, main, model } from '@wails/go/models'
 
+type WailsWindow = Window & {
+  go?: {
+    main?: {
+      App?: Record<string, unknown>
+    }
+  }
+}
+
+// The Vite preview is intentionally usable without the native Wails shell.
+// Keep that distinction explicit so browser QA never leaks an implementation
+// error such as `window.go.main is undefined` into the product UI.
+export function hasNativeBridge(): boolean {
+  if (typeof window === 'undefined') return false
+  return Boolean((window as WailsWindow).go?.main?.App)
+}
+
 export type IdentityView       = main.IdentityView
 export type Settings           = main.Settings
 export type FileInfo           = main.FileInfo

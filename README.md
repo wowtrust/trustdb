@@ -182,7 +182,11 @@ The optional Admin Web (`clients/web`) is served under `/admin` by `trustdb serv
 
 The desktop client (`clients/desktop`) is a Wails + Vue application for local identity setup, file attestation, server settings, local record indexes, proof refresh, proof export, and offline verification.
 
-![TrustDB desktop overview](assets/readme/desktop-overview.png)
+The official website source now lives in `website`. It is a standalone React + Vite application with generated visual assets and GSAP motion, and it is validated in the main repository CI.
+
+The screenshot below is rendered directly from the current desktop client code:
+
+![TrustDB Desktop rendered from the current client code](design/qa/desktop-client-homepage.png)
 
 ## Project Documents
 
@@ -211,7 +215,11 @@ cd clients/web
 npm ci
 npm run build
 
-cd ../desktop
+cd ../../website
+npm ci
+npm run build
+
+cd ../clients/desktop
 go test ./...
 ```
 
