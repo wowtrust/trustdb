@@ -44,45 +44,86 @@ $package = "trustdb-desktop-$env:VERSION-windows-$env:TARGET_ARCH"
 $rawExe = Join-Path $outputDir "$package.exe"
 Copy-Item $builtExe $rawExe
 
-$certArgs = @{
-  Type = "CodeSigningCert"
-  Subject = "CN=TrustDB Community Self-Signed $env:VERSION, O=TrustDB Community"
-  CertStoreLocation = "Cert:\CurrentUser\My"
-  KeyAlgorithm = "RSA"
-  KeyLength = 3072
-  HashAlgorithm = "SHA256"
-  KeyExportPolicy = "Exportable"
-  NotAfter = (Get-Date).AddDays(397)
-}
-$cert = New-SelfSignedCertificate @certArgs
 $passwordText = [Guid]::NewGuid().ToString("N") + [Guid]::NewGuid().ToString("N")
-$password = ConvertTo-SecureString $passwordText -AsPlainText -Force
 $pfxPath = Join-Path $certDir "signing.pfx"
+$privateKeyPath = Join-Path $certDir "signing-key.pem"
+$pemCertPath = Join-Path $certDir "signing-cert.pem"
 $cerPath = Join-Path $outputDir "$package.cer"
-Export-PfxCertificate -Cert $cert -FilePath $pfxPath -Password $password | Out-Null
-Export-Certificate -Cert $cert -FilePath $cerPath -Type CERT | Out-Null
-$cert.Thumbprint | Set-Content -NoNewline (Join-Path $outputDir "$package-certificate.txt")
-Import-Certificate -FilePath $cerPath -CertStoreLocation "Cert:\CurrentUser\Root" | Out-Null
+$fingerprintPath = Join-Path $outputDir "$package-certificate.txt"
+
+Write-Host "Creating an isolated self-signed code-signing certificate"
+$openssl = Get-Command openssl.exe -ErrorAction Stop
+& $openssl.Source req -x509 -newkey rsa:3072 -sha256 -days 397 -nodes `
+  -keyout $privateKeyPath `
+  -out $pemCertPath `
+  -subj "/CN=TrustDB Community Self-Signed $env:VERSION/O=TrustDB Community" `
+  -addext "basicConstraints=critical,CA:FALSE" `
+  -addext "keyUsage=critical,digitalSignature" `
+  -addext "extendedKeyUsage=codeSigning"
+if ($LASTEXITCODE -ne 0) {
+  throw "OpenSSL certificate generation failed"
+}
+& $openssl.Source pkcs12 -export `
+  -out $pfxPath `
+  -inkey $privateKeyPath `
+  -in $pemCertPath `
+  -name "TrustDB Community Self-Signed $env:VERSION" `
+  -passout "pass:$passwordText"
+if ($LASTEXITCODE -ne 0) {
+  throw "OpenSSL PKCS#12 export failed"
+}
+& $openssl.Source x509 -in $pemCertPath -outform DER -out $cerPath
+if ($LASTEXITCODE -ne 0) {
+  throw "OpenSSL DER certificate export failed"
+}
+
+$cert = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new(
+  [System.IO.File]::ReadAllBytes($cerPath)
+)
+
+(Get-FileHash -Path $cerPath -Algorithm SHA256).Hash.ToLowerInvariant() |
+  Set-Content -NoNewline $fingerprintPath
+Write-Host "Certificate ready: $($cert.Thumbprint)"
 
 try {
   $sdkRoot = "${env:ProgramFiles(x86)}\Windows Kits\10\bin"
-  $signTool = Get-ChildItem $sdkRoot -Recurse -Filter signtool.exe |
-    Where-Object { $_.FullName -match "\\$env:SIGNTOOL_ARCH\\signtool\.exe$" } |
-    Sort-Object FullName -Descending |
+  $signTool = Get-ChildItem $sdkRoot -Directory |
+    Sort-Object Name -Descending |
+    ForEach-Object {
+      Get-Item (Join-Path $_.FullName "$env:SIGNTOOL_ARCH\signtool.exe") -ErrorAction SilentlyContinue
+    } |
     Select-Object -First 1
   if ($null -eq $signTool) {
     throw "signtool.exe for $env:SIGNTOOL_ARCH was not found"
   }
+  Write-Host "Using signtool: $($signTool.FullName)"
 
   function Sign-TrustDBFile([string] $Path) {
+    Write-Host "Signing $Path"
     & $signTool.FullName sign /fd SHA256 /f $pfxPath /p $passwordText $Path
     if ($LASTEXITCODE -ne 0) {
       throw "signtool failed for $Path"
     }
-    & $signTool.FullName verify /pa /v $Path
-    if ($LASTEXITCODE -ne 0) {
-      throw "signature verification failed for $Path"
+
+    $signature = Get-AuthenticodeSignature -FilePath $Path
+    if ($null -eq $signature.SignerCertificate) {
+      throw "signed file has no embedded signer certificate: $Path"
     }
+    if ($signature.SignerCertificate.Thumbprint -ne $cert.Thumbprint) {
+      throw "signed file has an unexpected signer certificate: $Path"
+    }
+    if ($signature.Status -eq "HashMismatch" -or $signature.Status -eq "NotSigned" -or
+      $signature.Status -eq "NotSupported") {
+      throw "signature integrity verification failed for ${Path}: $($signature.Status)"
+    }
+    if ($signature.Status -eq "UnknownError" -and $signature.StatusMessage -notmatch "not trusted") {
+      throw "unexpected signature verification error for ${Path}: $($signature.StatusMessage)"
+    }
+    if ($signature.Status -ne "Valid" -and $signature.Status -ne "NotTrusted" -and
+      $signature.Status -ne "UnknownError") {
+      throw "unexpected signature status for ${Path}: $($signature.Status)"
+    }
+    Write-Host "Signature integrity verified ($($signature.Status)): $Path"
   }
 
   Sign-TrustDBFile $rawExe
@@ -91,19 +132,20 @@ try {
   New-Item -ItemType Directory -Force -Path $zipStage | Out-Null
   Copy-Item $rawExe (Join-Path $zipStage "trustdb-desktop.exe")
   Copy-Item $cerPath (Join-Path $zipStage "TrustDB-self-signed.cer")
-  Copy-Item (Join-Path $outputDir "$package-certificate.txt") (Join-Path $zipStage "CERTIFICATE_SHA256.txt")
+  Copy-Item $fingerprintPath (Join-Path $zipStage "CERTIFICATE_SHA256.txt")
   Copy-Item (Join-Path $env:GITHUB_WORKSPACE "packaging\SELF_SIGNED_CLIENTS.md") $zipStage
   Compress-Archive -Path $zipStage -DestinationPath (Join-Path $outputDir "$package.zip") -CompressionLevel Optimal
 
+  Write-Host "Building NSIS installer"
   $setupExe = Join-Path $outputDir "$package-setup.exe"
   $makensis = "${env:ProgramFiles(x86)}\NSIS\makensis.exe"
   if (-not (Test-Path $makensis)) {
     throw "makensis.exe was not found"
   }
-  $sourceDefine = $rawExe.Replace("\", "/")
-  $certDefine = $cerPath.Replace("\", "/")
-  $guideDefine = (Join-Path $env:GITHUB_WORKSPACE "packaging\SELF_SIGNED_CLIENTS.md").Replace("\", "/")
-  $outputDefine = $setupExe.Replace("\", "/")
+  $sourceDefine = $rawExe
+  $certDefine = $cerPath
+  $guideDefine = Join-Path $env:GITHUB_WORKSPACE "packaging\SELF_SIGNED_CLIENTS.md"
+  $outputDefine = $setupExe
   $nsisArgs = @(
     "/DVERSION=$env:VERSION",
     "/DSOURCE_EXE=$sourceDefine",
@@ -118,6 +160,7 @@ try {
   }
   Sign-TrustDBFile $setupExe
 
+  Write-Host "Building WiX installer"
   $msi = Join-Path $outputDir "$package.msi"
   $wix = Join-Path $env:USERPROFILE ".dotnet\tools\wix.exe"
   $wixArgs = @(
@@ -138,7 +181,6 @@ try {
   Sign-TrustDBFile $msi
 }
 finally {
-  Remove-Item "Cert:\CurrentUser\Root\$($cert.Thumbprint)" -ErrorAction SilentlyContinue
-  Remove-Item "Cert:\CurrentUser\My\$($cert.Thumbprint)" -ErrorAction SilentlyContinue
-  Remove-Item $pfxPath -ErrorAction SilentlyContinue
+  $cert.Dispose()
+  Remove-Item $pfxPath, $privateKeyPath, $pemCertPath -ErrorAction SilentlyContinue
 }
