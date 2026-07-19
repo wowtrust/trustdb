@@ -1,0 +1,32 @@
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package
+    Name="TrustDB Desktop $(var.DisplayVersion)"
+    Manufacturer="TrustDB Community"
+    Version="$(var.ProductVersion)"
+    UpgradeCode="F1112087-E443-4C1B-A6B8-7A0616DE7F82"
+    Scope="perMachine">
+    <SummaryInformation Description="TrustDB Desktop self-signed installer" />
+    <MajorUpgrade DowngradeErrorMessage="A newer TrustDB Desktop version is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <StandardDirectory Id="ProgramFiles6432Folder">
+      <Directory Id="INSTALLFOLDER" Name="TrustDB">
+        <Component Id="TrustDBDesktopExecutable" Guid="*">
+          <File Id="TrustDBDesktopExe" Source="$(var.SourceExe)" Name="trustdb-desktop.exe" KeyPath="yes" />
+        </Component>
+        <Component Id="TrustDBSigningCertificate" Guid="*">
+          <File Source="$(var.CertSource)" Name="TrustDB-self-signed.cer" KeyPath="yes" />
+        </Component>
+        <Component Id="TrustDBSigningGuide" Guid="*">
+          <File Source="$(var.SigningGuide)" Name="SELF_SIGNED_CLIENTS.md" KeyPath="yes" />
+        </Component>
+      </Directory>
+    </StandardDirectory>
+
+    <Feature Id="MainFeature" Title="TrustDB Desktop" Level="1">
+      <ComponentRef Id="TrustDBDesktopExecutable" />
+      <ComponentRef Id="TrustDBSigningCertificate" />
+      <ComponentRef Id="TrustDBSigningGuide" />
+    </Feature>
+  </Package>
+</Wix>

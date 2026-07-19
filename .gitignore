@@ -13,6 +13,13 @@ build/
 dist/
 out/
 release/
+release-admin/
+release-bin/
+release-stage/
+release-output/
+clients/desktop/release-output/
+!packaging/release/
+!packaging/release/**
 !clients/desktop/build/
 !clients/desktop/build/appicon.png
 *.exe

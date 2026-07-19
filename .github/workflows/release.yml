@@ -1,0 +1,378 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version without the leading v"
+        required: true
+        default: "1.0.0-beta"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  GOFLAGS: -mod=readonly
+
+jobs:
+  prepare:
+    name: Prepare release metadata
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      numeric_version: ${{ steps.meta.outputs.numeric_version }}
+      build_date: ${{ steps.meta.outputs.build_date }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Validate version
+        id: meta
+        shell: bash
+        env:
+          DISPATCH_VERSION: ${{ inputs.version }}
+        run: |
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            version="${GITHUB_REF_NAME#v}"
+          else
+            version="$DISPATCH_VERSION"
+          fi
+          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::invalid release version: $version"
+            exit 1
+          fi
+          numeric_version="${version%%-*}"
+          build_date="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+          {
+            echo "version=$version"
+            echo "numeric_version=$numeric_version"
+            echo "build_date=$build_date"
+          } >> "$GITHUB_OUTPUT"
+
+  admin-web:
+    name: Build Admin Web
+    needs: prepare
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: clients/web/package-lock.json
+
+      - name: Build Admin Web
+        working-directory: clients/web
+        run: |
+          npm ci
+          npm run build
+
+      - name: Upload Admin Web
+        uses: actions/upload-artifact@v7
+        with:
+          name: admin-web-assets
+          path: clients/web/dist/
+          if-no-files-found: error
+
+  server:
+    name: Server/CLI · ${{ matrix.os }} · ${{ matrix.arch }}
+    needs:
+      - prepare
+      - admin-web
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            os: linux
+            arch: amd64
+            cgo: "1"
+            exe: ""
+            archive: tar.gz
+          - runner: ubuntu-24.04-arm
+            os: linux
+            arch: arm64
+            cgo: "1"
+            exe: ""
+            archive: tar.gz
+          - runner: macos-15-intel
+            os: darwin
+            arch: amd64
+            cgo: "1"
+            exe: ""
+            archive: tar.gz
+          - runner: macos-15
+            os: darwin
+            arch: arm64
+            cgo: "1"
+            exe: ""
+            archive: tar.gz
+          - runner: windows-2025
+            os: windows
+            arch: amd64
+            cgo: "0"
+            exe: ".exe"
+            archive: zip
+          - runner: windows-11-arm
+            os: windows
+            arch: arm64
+            cgo: "0"
+            exe: ".exe"
+            archive: zip
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Download Admin Web
+        uses: actions/download-artifact@v8
+        with:
+          name: admin-web-assets
+          path: release-admin
+
+      - name: Build and package Server/CLI
+        shell: bash
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+          BUILD_DATE: ${{ needs.prepare.outputs.build_date }}
+          TARGET_OS: ${{ matrix.os }}
+          TARGET_ARCH: ${{ matrix.arch }}
+          CGO_ENABLED: ${{ matrix.cgo }}
+          EXE_SUFFIX: ${{ matrix.exe }}
+          ARCHIVE_KIND: ${{ matrix.archive }}
+        run: bash packaging/release/build-server.sh
+
+      - name: Upload Server/CLI package
+        uses: actions/upload-artifact@v7
+        with:
+          name: server-${{ matrix.os }}-${{ matrix.arch }}
+          path: release-output/*
+          if-no-files-found: error
+
+  desktop-macos:
+    name: Desktop · macOS · ${{ matrix.arch }}
+    needs: prepare
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15-intel
+            arch: amd64
+          - runner: macos-15
+            arch: arm64
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: clients/desktop/go.mod
+          cache-dependency-path: |
+            go.sum
+            clients/desktop/go.sum
+
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: clients/desktop/frontend/package-lock.json
+
+      - name: Build, self-sign, and package
+        shell: bash
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+          BUILD_DATE: ${{ needs.prepare.outputs.build_date }}
+          TARGET_ARCH: ${{ matrix.arch }}
+        run: bash packaging/release/build-desktop-macos.sh
+
+      - name: Upload macOS desktop packages
+        uses: actions/upload-artifact@v7
+        with:
+          name: desktop-darwin-${{ matrix.arch }}
+          path: clients/desktop/release-output/*
+          if-no-files-found: error
+
+  desktop-windows:
+    name: Desktop · Windows · ${{ matrix.arch }}
+    needs: prepare
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 55
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-2025
+            arch: amd64
+            wix_arch: x64
+            signtool_arch: x64
+          - runner: windows-11-arm
+            arch: arm64
+            wix_arch: arm64
+            signtool_arch: arm64
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: clients/desktop/go.mod
+          cache-dependency-path: |
+            go.sum
+            clients/desktop/go.sum
+
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: clients/desktop/frontend/package-lock.json
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Install installer toolchains
+        shell: pwsh
+        run: |
+          choco install nsis -y --no-progress
+          dotnet tool install --global wix --version 5.0.2
+
+      - name: Build, self-sign, and package
+        shell: pwsh
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+          NUMERIC_VERSION: ${{ needs.prepare.outputs.numeric_version }}
+          BUILD_DATE: ${{ needs.prepare.outputs.build_date }}
+          TARGET_ARCH: ${{ matrix.arch }}
+          WIX_ARCH: ${{ matrix.wix_arch }}
+          SIGNTOOL_ARCH: ${{ matrix.signtool_arch }}
+          CGO_ENABLED: "0"
+        run: ./packaging/release/build-desktop-windows.ps1
+
+      - name: Upload Windows desktop packages
+        uses: actions/upload-artifact@v7
+        with:
+          name: desktop-windows-${{ matrix.arch }}
+          path: clients/desktop/release-output/*
+          if-no-files-found: error
+
+  docker:
+    name: Docker Hub · linux/amd64 + linux/arm64
+    needs: prepare
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v4
+        with:
+          username: ${{ vars.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Setup QEMU
+        uses: docker/setup-qemu-action@v4
+
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Build and push multi-architecture image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: |
+            ${{ vars.DOCKERHUB_USERNAME }}/trustdb:${{ needs.prepare.outputs.version }}
+            ${{ vars.DOCKERHUB_USERNAME }}/trustdb:beta
+          labels: |
+            org.opencontainers.image.version=${{ needs.prepare.outputs.version }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.created=${{ needs.prepare.outputs.build_date }}
+          build-args: |
+            VERSION=${{ needs.prepare.outputs.version }}
+            VCS_REF=${{ github.sha }}
+            BUILD_DATE=${{ needs.prepare.outputs.build_date }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: mode=max
+          sbom: true
+
+  release:
+    name: Publish GitHub Release
+    needs:
+      - prepare
+      - server
+      - desktop-macos
+      - desktop-windows
+      - docker
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+
+    steps:
+      - name: Download Server/CLI packages
+        uses: actions/download-artifact@v8
+        with:
+          pattern: server-*
+          path: release-assets
+          merge-multiple: true
+
+      - name: Download desktop packages
+        uses: actions/download-artifact@v8
+        with:
+          pattern: desktop-*
+          path: release-assets
+          merge-multiple: true
+
+      - name: Generate SHA-256 checksums
+        shell: bash
+        working-directory: release-assets
+        run: |
+          find . -maxdepth 1 -type f ! -name SHA256SUMS -print0 \
+            | sort -z \
+            | xargs -0 sha256sum \
+            | sed 's#  \./#  #' > SHA256SUMS
+          test -s SHA256SUMS
+
+      - name: Publish prerelease
+        uses: softprops/action-gh-release@v3
+        with:
+          name: TrustDB v${{ needs.prepare.outputs.version }}
+          prerelease: ${{ contains(needs.prepare.outputs.version, '-') }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: release-assets/*

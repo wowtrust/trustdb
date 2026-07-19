@@ -6,8 +6,23 @@
   "frontend:build": "npm run build",
   "frontend:dev:watcher": "npm run dev",
   "frontend:dev:serverUrl": "auto",
+  "info": {
+    "companyName": "TrustDB Community",
+    "productName": "TrustDB Desktop",
+    "productVersion": "1.0.0",
+    "comments": "Verify file claims and portable .sproof evidence bundles.",
+    "fileAssociations": [
+      {
+        "ext": "sproof",
+        "name": "TrustDB Proof Bundle",
+        "description": "Portable TrustDB proof bundle",
+        "iconName": "appicon",
+        "role": "Viewer"
+      }
+    ]
+  },
   "author": {
-    "name": "ryan",
+    "name": "TrustDB Community",
     "email": "2650306917@qq.com"
   }
 }

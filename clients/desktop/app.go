@@ -23,6 +23,12 @@ import (
 	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
+var (
+	desktopVersion = "dev"
+	desktopCommit  = "none"
+	desktopDate    = "unknown"
+)
+
 // App is the bridge Wails exposes to the frontend: every exported
 // method here becomes a TypeScript-callable RPC. We collect them on
 // one struct so state (store, ctx) is shared without globals.
@@ -45,8 +51,13 @@ func NewApp() *App {
 // Version returns a short string the UI puts in the footer so users
 // know which desktop build they are running when filing bugs.
 func (a *App) Version() string {
+	if desktopVersion != "" && desktopVersion != "dev" {
+		return desktopVersion
+	}
 	if info, ok := debug.ReadBuildInfo(); ok {
-		return info.Main.Version
+		if info.Main.Version != "" && info.Main.Version != "(devel)" {
+			return info.Main.Version
+		}
 	}
 	return "dev"
 }

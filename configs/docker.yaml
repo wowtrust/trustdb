@@ -1,0 +1,116 @@
+# Container baseline. Override any value with TRUSTDB_* environment variables.
+run_profile: single_node_production
+
+paths:
+  data_dir: "/var/lib/trustdb"
+  key_registry: "/var/lib/trustdb/keys/clients.tdkeys"
+  wal: "/var/lib/trustdb/wal"
+  object_dir: "/var/lib/trustdb/objects"
+  proof_dir: "/var/lib/trustdb/proofs"
+
+metastore: "pebble"
+metastore_path: "/var/lib/trustdb/pebble"
+
+proofstore:
+  record_index_mode: "full"
+  artifact_sync_mode: "chunk"
+  tikv_pd_endpoints: []
+  tikv_keyspace: ""
+  tikv_namespace: "default"
+
+wal:
+  fsync_mode: "group"
+  group_commit_interval: "10ms"
+
+identity:
+  tenant: "default"
+  client: ""
+  key_id: ""
+
+server:
+  listen: "0.0.0.0:8080"
+  grpc_listen: ""
+  id: "trustdb-container"
+  key_id: "server-key"
+  queue_size: 65536
+  workers: 8
+  read_timeout: "10s"
+  read_header_timeout: "5s"
+  write_timeout: "30s"
+  idle_timeout: "120s"
+  shutdown_timeout: "30s"
+
+registry:
+  key_id: "registry-key"
+
+batch:
+  queue_size: 65536
+  max_records: 8192
+  max_delay: "200ms"
+  proof_mode: "inline"
+  materializer_workers: 2
+  materializer_queue_size: 4
+  materializer_poll_interval: "250ms"
+  proof_workers: 0
+
+global_log:
+  enabled: true
+  log_id: "trustdb-container"
+
+anchor:
+  scope: "global"
+  max_delay: "5m"
+  poll_interval: "2s"
+  workers: 4
+  sink: "noop"
+  path: "/var/lib/trustdb/anchors/sth-anchors.jsonl"
+  ots:
+    calendars: []
+    min_accepted: 0
+    timeout: "20s"
+    upgrade:
+      enabled: true
+      interval: "1h"
+      batch_size: 128
+      timeout: "30s"
+      workers: 4
+
+history:
+  tile_size: 256
+  hot_window_leaves: 65536
+
+backup:
+  compression: "gzip"
+
+log:
+  level: "info"
+  format: "json"
+  output: "stderr"
+  file:
+    path: "/var/lib/trustdb/logs/trustdb.log"
+    max_size_mb: 256
+    max_backups: 16
+    max_age_days: 30
+    compress: true
+  async:
+    enabled: true
+    buffer_size: 8192
+    drop_on_full: false
+
+admin:
+  enabled: false
+  base_path: "/admin"
+  username: ""
+  password_hash: ""
+  session_secret: ""
+  web_dir: "/opt/trustdb/admin"
+  cookie_secure: false
+  session_ttl: "12h"
+
+keys:
+  client_private: "/var/lib/trustdb/keys/client.key"
+  client_public: "/var/lib/trustdb/keys/client.pub"
+  server_private: "/var/lib/trustdb/keys/server.key"
+  server_public: "/var/lib/trustdb/keys/server.pub"
+  registry_private: ""
+  registry_public: ""

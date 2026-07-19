@@ -18,6 +18,25 @@ github.com/ryan-wong-coder/trustdb
 
 许可证：AGPL-3.0-only，见 [LICENSE](LICENSE)。
 
+## v1.0.0-beta
+
+首个公开测试版通过 [GitHub Releases](https://github.com/ryan-wong-coder/trustdb/releases/tag/v1.0.0-beta) 发布，其中包括 Linux、macOS、Windows 两种架构的服务器与 CLI 归档，Apple Silicon、Intel Mac、Windows ARM64、Windows x86-64 四种桌面客户端，以及统一的 `SHA256SUMS`。
+
+Go SDK 使用同一个 module tag：
+
+```bash
+go get github.com/ryan-wong-coder/trustdb@v1.0.0-beta
+```
+
+Docker Hub 同步发布 amd64 与 arm64 镜像；测试版不会占用 `latest`：
+
+```bash
+docker pull wsy19990317/trustdb:1.0.0-beta
+docker run --name trustdb -p 8080:8080 -v trustdb-data:/var/lib/trustdb wsy19990317/trustdb:1.0.0-beta
+```
+
+桌面包使用本次发版临时生成的自签名证书，并附带公开 `.cer` 文件。自签名可以校验安装包是否被改动，但不会取得 Apple 或 Microsoft 的系统信任；Gatekeeper 或 SmartScreen 仍可能提示未知开发者。安装前请先核对 `SHA256SUMS`。
+
 ## 能力概览
 
 - 使用确定性 CBOR 表达 claim、receipt、proof bundle、global-log proof、STH、anchor result、backup 和 `.sproof` 文件。

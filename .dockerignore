@@ -1,0 +1,13 @@
+.git
+.github
+.idea
+.vscode
+.DS_Store
+**/node_modules
+**/dist
+**/build/bin
+clients/desktop/build/darwin
+presentations
+release
+tmp
+*.log

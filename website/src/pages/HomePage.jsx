@@ -19,7 +19,7 @@ const knowledgeItems = [
   ["01", "文档中心", "从本地启动到服务部署、CLI、Go SDK 与桌面客户端。", "/docs"],
   ["02", "性能基线", "基于 267.5 万次有效提交的双机压测结果与适用边界。", "/performance"],
   ["03", ".sproof v1", "确定性 CBOR 单文件证据交换格式、等级上限与验证算法。", "/sproof"],
-  ["04", "版本与下载", "跟踪真实开发里程碑，并在正式 Release 发布后获取构建产物。", "/changelog"],
+  ["04", "版本与下载", "查看 1.0.0-beta 变更记录，并获取各平台构建产物。", "/changelog"],
 ];
 
 function FlowCanvas({ mode = "hero" }) {

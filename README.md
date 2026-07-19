@@ -18,6 +18,25 @@ github.com/ryan-wong-coder/trustdb
 
 License: AGPL-3.0-only. See [LICENSE](LICENSE).
 
+## v1.0.0-beta
+
+The first public beta is distributed through [GitHub Releases](https://github.com/ryan-wong-coder/trustdb/releases/tag/v1.0.0-beta). It includes Server/CLI archives for Linux, macOS, and Windows on both supported architectures; self-signed desktop packages for Apple Silicon, Intel Mac, Windows ARM64, and Windows x86-64; and a single `SHA256SUMS` file.
+
+The Go SDK uses the same module tag:
+
+```bash
+go get github.com/ryan-wong-coder/trustdb@v1.0.0-beta
+```
+
+The multi-architecture Docker image is published to Docker Hub without assigning the beta to `latest`:
+
+```bash
+docker pull wsy19990317/trustdb:1.0.0-beta
+docker run --name trustdb -p 8080:8080 -v trustdb-data:/var/lib/trustdb wsy19990317/trustdb:1.0.0-beta
+```
+
+Desktop packages carry a release-specific self-signed certificate and its public `.cer` file. Self-signing verifies package integrity but does not establish Apple or Microsoft trust, so Gatekeeper or SmartScreen may still show an unknown-developer warning. Compare the download with `SHA256SUMS` before installing.
+
 ## What It Provides
 
 - Deterministic CBOR models for claims, receipts, proof bundles, global-log proofs, STHs, anchor results, backups, and `.sproof` files.
