@@ -142,10 +142,10 @@ try {
   if (-not (Test-Path $makensis)) {
     throw "makensis.exe was not found"
   }
-  $sourceDefine = $rawExe.Replace("\", "/")
-  $certDefine = $cerPath.Replace("\", "/")
-  $guideDefine = (Join-Path $env:GITHUB_WORKSPACE "packaging\SELF_SIGNED_CLIENTS.md").Replace("\", "/")
-  $outputDefine = $setupExe.Replace("\", "/")
+  $sourceDefine = $rawExe
+  $certDefine = $cerPath
+  $guideDefine = Join-Path $env:GITHUB_WORKSPACE "packaging\SELF_SIGNED_CLIENTS.md"
+  $outputDefine = $setupExe
   $nsisArgs = @(
     "/DVERSION=$env:VERSION",
     "/DSOURCE_EXE=$sourceDefine",
