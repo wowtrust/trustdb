@@ -83,7 +83,7 @@ $cert = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new(
 
 (Get-FileHash -Path $cerPath -Algorithm SHA256).Hash.ToLowerInvariant() |
   Set-Content -NoNewline $fingerprintPath
-& certutil.exe -user -addstore Root $cerPath
+& certutil.exe -f -user -addstore TrustedPeople $cerPath
 if ($LASTEXITCODE -ne 0) {
   throw "certutil could not trust the temporary certificate"
 }
@@ -169,7 +169,7 @@ try {
   Sign-TrustDBFile $msi
 }
 finally {
-  & certutil.exe -user -delstore Root $cert.Thumbprint | Out-Null
+  & certutil.exe -user -delstore TrustedPeople $cert.Thumbprint | Out-Null
   $cert.Dispose()
   Remove-Item $pfxPath, $privateKeyPath, $pemCertPath -ErrorAction SilentlyContinue
 }
