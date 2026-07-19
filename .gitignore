@@ -27,6 +27,7 @@ coverage.html
 # Frontend dependencies and caches
 node_modules/
 .npm/
+.npm-cache/
 .pnpm-store/
 .yarn/
 .vite/

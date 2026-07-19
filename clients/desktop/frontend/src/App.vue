@@ -11,13 +11,17 @@ import { useRecords } from '@/stores/records'
 const settings = useSettings()
 const identity = useIdentity()
 const records = useRecords()
+const demoMode = import.meta.env.VITE_TRUSTDB_DEMO === '1'
 
 const showOnboarding = ref(false)
 
 onMounted(async () => {
   // Load persistent state in parallel so the UI gets painted once,
   // not three separate times as each individual store resolves.
-  await Promise.all([settings.load(), identity.load(), records.load()])
+  // The native Wails bridge is not present when the UI is reviewed in a
+  // regular browser. Keep the shell usable there while native builds still
+  // hydrate every store normally.
+  await Promise.allSettled([settings.load(), identity.load(), records.load()])
 
   // Trigger the first-run wizard when this machine clearly hasn't
   // been set up yet — no signing identity loaded and the user has
@@ -27,7 +31,7 @@ onMounted(async () => {
   const dismissed = (() => {
     try { return !!localStorage.getItem('trustdb.onboarded') } catch { return false }
   })()
-  if (!identity.identity && !dismissed) {
+  if (!demoMode && !identity.identity && !dismissed) {
     showOnboarding.value = true
   }
 })
@@ -51,13 +55,13 @@ if (typeof window !== 'undefined') {
 </script>
 
 <template>
-  <div class="app-shell h-full w-full flex overflow-hidden">
+  <div class="app-shell td-app h-full w-full flex overflow-hidden">
     <div class="ambient-orb one"></div>
     <div class="ambient-orb two"></div>
     <Sidebar />
     <main class="relative z-[1] flex-1 h-full flex flex-col min-w-0">
       <TopBar />
-      <div class="flex-1 overflow-y-auto px-7 py-6 min-w-0">
+      <div class="td-route flex-1 overflow-y-auto min-w-0">
         <router-view v-slot="{ Component, route }">
           <transition name="page" mode="out-in">
             <component :is="Component" :key="route.fullPath" />

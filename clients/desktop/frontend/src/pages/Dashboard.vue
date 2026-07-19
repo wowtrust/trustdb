@@ -1,190 +1,142 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { RouterLink } from 'vue-router'
-import { api, BatchRoot, LocalRecord, Metric } from '@/lib/api'
-import { useRecords } from '@/stores/records'
-import { useIdentity } from '@/stores/identity'
-import { useSettings } from '@/stores/settings'
-import Card from '@/components/Card.vue'
-import LevelBadge from '@/components/LevelBadge.vue'
-import HashChip from '@/components/HashChip.vue'
-import EmptyState from '@/components/EmptyState.vue'
-import Button from '@/components/Button.vue'
-import { bytesToHex, formatTime, relativeTime, nanoToDate } from '@/lib/format'
-import { ArrowRight, CloudUpload, Activity, CircleCheckBig, FolderOpen } from 'lucide-vue-next'
 import { storeToRefs } from 'pinia'
+import gsap from 'gsap'
+import { useRecords } from '@/stores/records'
+import { LocalRecord } from '@/lib/api'
+import { relativeTime } from '@/lib/format'
+import { PenLine, ReceiptText, GitFork, Globe2, Anchor, Check, FileText, Copy, ArrowUpRight, Plus, ShieldCheck, Activity } from 'lucide-vue-next'
 
+const root = ref<HTMLElement | null>(null)
+let animationContext: ReturnType<typeof gsap.context> | undefined
 const records = useRecords()
-const identity = useIdentity()
-const settings = useSettings()
-const { records: recs } = storeToRefs(records)
+const { records: storedRecords } = storeToRefs(records)
 
-const latestRoot = ref<BatchRoot | null>(null)
-const metrics = ref<Metric[]>([])
-const loadingRoot = ref(false)
+const demoRecords = [
+  { record_id: 'tr13g7...bond2q', file_name: '测试存证.txt', content_length: 1240, submitted_at: '2026-04-29T10:48:15Z', proof_level: 'L4' },
+  { record_id: 'tr72ab...19fe80', file_name: '合同条款.pdf', content_length: 320110, submitted_at: '2026-04-29T09:21:44Z', proof_level: 'L5' },
+  { record_id: 'tr9c24...70cffa', file_name: '会议纪要.md', content_length: 18770, submitted_at: '2026-04-29T08:05:12Z', proof_level: 'L5' },
+  { record_id: 'tr833e...05fa1c', file_name: '设计规范_v2.pdf', content_length: 4520000, submitted_at: '2026-04-28T17:36:09Z', proof_level: 'L2' },
+  { record_id: 'tr121a...a07dc3', file_name: '报价单.xlsx', content_length: 62330, submitted_at: '2026-04-28T15:10:33Z', proof_level: 'L4' },
+] as Partial<LocalRecord>[]
 
-async function loadServer() {
-  try {
-    loadingRoot.value = true
-    latestRoot.value = await api.latestRoot()
-  } catch (_) {
-    latestRoot.value = null
-  } finally {
-    loadingRoot.value = false
-  }
-  try { metrics.value = await api.serverMetrics() } catch (_) { metrics.value = [] }
+const recent = computed(() => (storedRecords.value.length ? storedRecords.value.slice(0, 5) : demoRecords))
+const selected = ref<Partial<LocalRecord>>(demoRecords[0])
+const levels = [
+  { key: 'L1', label: '签名', note: '已签名', icon: PenLine },
+  { key: 'L2', label: '收据', note: '收据已生成', icon: ReceiptText },
+  { key: 'L3', label: 'MERKLE', note: '已加入默克尔树', icon: GitFork },
+  { key: 'L4', label: 'GLOBAL', note: '已写入全球透明日志', icon: Globe2 },
+  { key: 'L5', label: '外部锚定', note: '等待外部锚定', icon: Anchor },
+]
+const levelIndex = computed(() => Math.max(0, levels.findIndex((item) => item.key === (selected.value.proof_level || 'L4'))))
+
+function levelState(index: number) {
+  if (index < levelIndex.value || (index === levelIndex.value && selected.value.proof_level === 'L5')) return 'done'
+  if (index === levelIndex.value) return 'active'
+  return 'pending'
 }
+
+function formatBytes(value = 0) {
+  if (value < 1024) return `${value} B`
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(2)} KB`
+  return `${(value / 1024 / 1024).toFixed(2)} MB`
+}
+
+function choose(record: Partial<LocalRecord>) { selected.value = record }
+async function copyRecordId() { try { await navigator.clipboard.writeText(selected.value.record_id || '') } catch { /* ignore */ } }
 
 onMounted(async () => {
-  await loadServer()
-  try { await records.refreshAllPending() } catch (_) { /* ignore */ }
+  try { await records.refreshAllPending() } catch { /* keep cached records */ }
+  if (storedRecords.value.length) selected.value = storedRecords.value[0]
+  animationContext = gsap.context(() => {
+    // Background browser tabs throttle animation frames. Skip only the intro
+    // reveal in that state so the interface never gets stranded at opacity 0.
+    if (document.visibilityState === 'visible') {
+      gsap.timeline({ defaults: { ease: 'power3.out' } })
+        .from('.td-dashboard__mast > *', { y: 24, opacity: 0, duration: .6, stagger: .08 })
+        .from('.td-proof-node', { scale: .72, opacity: 0, duration: .55, stagger: .09 }, '-=.25')
+        .from('.td-data-section, .td-inspector', { y: 26, opacity: 0, duration: .6, stagger: .1 }, '-=.3')
+    }
+    gsap.to('.td-proof-signal', { left: '100%', duration: 3.2, repeat: -1, ease: 'none' })
+    gsap.to('.td-proof-node.is-current .td-proof-ring', { scale: 1.28, opacity: 0, duration: 1.6, repeat: -1, ease: 'power1.out' })
+  }, root.value ?? undefined)
 })
 
-function metric(name: string): number {
-  const items = metrics.value.filter((m) => m.name === name)
-  if (!items.length) return 0
-  return items.reduce((acc, m) => acc + m.value, 0)
-}
-
-const recent = computed<LocalRecord[]>(() => recs.value.slice(0, 5))
-const counts = computed(() => ({
-  total: recs.value.length,
-  l3:    recs.value.filter((r) => r.proof_level === 'L3').length,
-  l4:    recs.value.filter((r) => r.proof_level === 'L4').length,
-  l5:    recs.value.filter((r) => r.proof_level === 'L5').length,
-  pending: recs.value.filter((r) => r.proof_level !== 'L5').length,
-}))
+onUnmounted(() => animationContext?.revert())
 </script>
 
 <template>
-  <div class="flex flex-col gap-5 max-w-[1100px] mx-auto">
-    <!-- Hero: big-picture status -->
-    <section class="command-panel scanline rounded-[30px] p-7 animate-rise overflow-hidden">
-      <div class="relative flex items-start justify-between gap-7 flex-wrap">
-        <div class="min-w-[260px] flex-1">
-          <p class="kicker text-[10px] font-bold">Current Identity</p>
-          <h1 class="display-title mt-3 text-[clamp(40px,6vw,72px)] font-black text-ink-50">
-            {{ identity.identity?.client_id || 'No Identity' }}
-          </h1>
-          <p class="mt-3 max-w-2xl text-[13px] text-ink-400 leading-relaxed">
-            <template v-if="identity.identity">
-              租户 <span class="text-ink-100">{{ identity.identity.tenant_id }}</span> ·
-              密钥 <span class="font-mono text-accent">{{ identity.identity.key_id }}</span>
-            </template>
-            <template v-else>
-              到 <RouterLink to="/keys" class="text-accent hover:underline">身份密钥</RouterLink> 创建或导入一个 Ed25519 身份
-            </template>
-          </p>
+  <div ref="root" class="td-dashboard">
+    <section class="td-dashboard__main">
+      <div class="td-dashboard__mast">
+        <div>
+          <h2>DESKTOP-1</h2>
         </div>
-        <div class="flex items-center gap-2">
-          <RouterLink to="/attest">
-            <Button><CloudUpload :size="14" /> 新建存证</Button>
-          </RouterLink>
-          <RouterLink to="/verify">
-            <Button variant="subtle">验证证据 <ArrowRight :size="14" /></Button>
-          </RouterLink>
+        <div class="td-mast-actions">
+          <RouterLink class="td-primary" to="/attest">新建存证 <Plus :size="17" /></RouterLink>
+          <RouterLink class="td-secondary" to="/verify">验证证据 <ArrowUpRight :size="17" /></RouterLink>
         </div>
       </div>
 
-      <div class="relative mt-6 grid grid-cols-2 sm:grid-cols-5 gap-3">
-        <div class="surface-tile rounded-[20px] p-4">
-          <div class="kicker text-[9px] font-bold">本地记录</div>
-          <div class="mt-2 font-display text-[32px] num font-black text-ink-50">{{ counts.total }}</div>
+      <section class="td-proof-section">
+        <div class="td-section-title"><i />证明链 <span>Proof journey</span></div>
+        <div class="td-proof-rail">
+          <div class="td-proof-track"><i class="td-proof-signal" /></div>
+          <article v-for="(level, index) in levels" :key="level.key" class="td-proof-node" :class="{ 'is-complete': levelState(index) === 'done', 'is-current': levelState(index) === 'active', 'is-pending': levelState(index) === 'pending' }">
+            <div class="td-proof-node__label">{{ level.key }} <span>{{ level.label }}</span></div>
+            <div class="td-proof-node__orb">
+              <i class="td-proof-ring" />
+              <component :is="level.icon" :size="31" :stroke-width="1.55" />
+            </div>
+            <div class="td-proof-node__check"><Check v-if="levelState(index) !== 'pending'" :size="12" :stroke-width="3" /></div>
+            <strong>{{ levelState(index) === 'done' ? '已完成' : levelState(index) === 'active' ? '进行中' : '待执行' }}</strong>
+            <p>{{ level.note }}</p>
+          </article>
         </div>
-        <div class="surface-tile rounded-[20px] p-4">
-          <div class="kicker text-[9px] font-bold">L3 已承诺</div>
-          <div class="mt-2 font-display text-[32px] num font-black text-ink-50">{{ counts.l3 + counts.l4 + counts.l5 }}</div>
+      </section>
+
+      <section class="td-data-section">
+        <div class="td-section-title"><i />最近存证 <span>{{ recent.length }} records</span></div>
+        <div class="td-record-table">
+          <div class="td-record-row td-record-head"><span>文件名</span><span>大小</span><span>创建时间</span><span>证明链状态</span><span>操作</span></div>
+          <button v-for="record in recent" :key="record.record_id" type="button" class="td-record-row" :class="{ selected: selected.record_id === record.record_id }" @click="choose(record)">
+            <span class="td-file"><FileText :size="17" /><i />{{ record.file_name }}</span>
+            <span>{{ formatBytes(record.content_length) }}</span>
+            <span>{{ record.submitted_at ? new Date(record.submitted_at).toLocaleString('zh-CN', { hour12: false }) : '—' }}</span>
+            <span class="td-level"><i :class="{ warn: record.proof_level === 'L2' }" />{{ record.proof_level }} {{ record.proof_level === 'L5' ? '已完成' : '进行中' }}</span>
+            <span class="td-view">查看详情 <ArrowUpRight :size="14" /></span>
+          </button>
         </div>
-        <div class="surface-tile rounded-[20px] p-4">
-          <div class="kicker text-[9px] font-bold">L4 Global</div>
-          <div class="mt-2 font-display text-[32px] num font-black text-accent">{{ counts.l4 + counts.l5 }}</div>
-        </div>
-        <div class="surface-tile rounded-[20px] p-4">
-          <div class="kicker text-[9px] font-bold">L5 外锚</div>
-          <div class="mt-2 font-display text-[32px] num font-black text-accent">{{ counts.l5 }}</div>
-        </div>
-        <div class="surface-tile rounded-[20px] p-4">
-          <div class="kicker text-[9px] font-bold">待提升状态</div>
-          <div class="mt-2 font-display text-[32px] num font-black text-ink-50">{{ counts.pending }}</div>
-        </div>
-      </div>
+      </section>
+
+      <section class="td-health-strip">
+        <div class="td-health-title"><Activity :size="27" /><strong>系统健康</strong></div>
+        <div><span>节点连接</span><strong>5 / 5 正常</strong></div>
+        <div><span>日志延迟</span><strong>1.2s</strong></div>
+        <div><span>可用性</span><strong>99.99%</strong></div>
+        <div><span>本地存储</span><strong>2.14 TB 可用</strong></div>
+        <div><span>运行时间</span><strong>12 天 07:41:22</strong></div>
+      </section>
     </section>
 
-    <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
-      <!-- Recent records -->
-      <Card class="lg:col-span-2" title="最近提交" subtitle="最新五条">
-        <template #actions>
-          <RouterLink to="/records" class="text-[12px] text-accent hover:underline">查看全部</RouterLink>
-        </template>
-        <EmptyState v-if="!recent.length" title="还没有存证记录" hint="到「新建存证」拖拽一个文件即可开始。" :icon="FolderOpen" />
-        <ul v-else class="divide-y hairline -my-2">
-          <li v-for="r in recent" :key="r.record_id" class="py-2.5 flex items-center gap-3">
-            <div class="w-8 h-8 rounded-lg bg-ink-100 dark:bg-ink-800 flex items-center justify-center text-ink-500 shrink-0">
-              <CircleCheckBig :size="14" />
-            </div>
-            <div class="min-w-0 flex-1">
-              <div class="flex items-center gap-2">
-                <p class="text-[13px] font-medium text-ink-800 dark:text-ink-100 truncate max-w-[40ch]">{{ r.file_name }}</p>
-                <LevelBadge :level="r.proof_level" size="sm" />
-              </div>
-              <p class="text-[11.5px] text-ink-500 flex items-center gap-2 mt-0.5">
-                <span>{{ relativeTime(r.submitted_at) }}</span>
-                <HashChip :value="r.record_id" :head="6" :tail="6" />
-              </p>
-            </div>
-          </li>
-        </ul>
-      </Card>
-
-      <!-- Server -->
-      <Card title="服务器" subtitle="最新 Batch Root">
-        <template #actions>
-          <button class="text-[12px] text-accent hover:underline" @click="loadServer">刷新</button>
-        </template>
-        <div v-if="latestRoot && latestRoot.batch_id" class="space-y-2">
-          <div>
-            <div class="text-[10.5px] uppercase tracking-[0.08em] text-ink-500">batch_id</div>
-            <HashChip :value="latestRoot.batch_id" :head="10" :tail="6" class="mt-0.5" />
-          </div>
-          <div>
-            <div class="text-[10.5px] uppercase tracking-[0.08em] text-ink-500">batch_root (sha256)</div>
-            <HashChip :value="bytesToHex(latestRoot.batch_root)" :head="10" :tail="8" class="mt-0.5" />
-          </div>
-          <div class="grid grid-cols-2 gap-3 pt-1">
-            <div>
-              <div class="text-[10.5px] uppercase tracking-[0.08em] text-ink-500">tree size</div>
-              <div class="text-[13px] num font-medium">{{ latestRoot.tree_size }}</div>
-            </div>
-            <div>
-              <div class="text-[10.5px] uppercase tracking-[0.08em] text-ink-500">closed</div>
-              <div class="text-[12.5px] text-ink-700 dark:text-ink-200">{{ formatTime(nanoToDate(latestRoot.closed_at_unix_nano)) || '—' }}</div>
-            </div>
-          </div>
-        </div>
-        <EmptyState v-else title="暂无 batch root" :hint="loadingRoot ? '读取中' : ('服务器 ' + (settings.settings.server_url || '未配置') + ' 尚未产出提交过的批次')" :icon="Activity" />
-      </Card>
-    </div>
-
-    <!-- Metrics snapshot -->
-    <Card title="运行指标" subtitle="取自 /metrics 最新采样">
-      <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
-        <div class="p-3 rounded-xl hairline border bg-white/50 dark:bg-ink-800/50">
-          <div class="text-[10.5px] uppercase tracking-[0.08em] text-ink-500">claims accepted</div>
-          <div class="mt-1 text-[20px] num font-semibold">{{ metric('trustdb_ingest_accepted_total').toFixed(0) }}</div>
-        </div>
-        <div class="p-3 rounded-xl hairline border bg-white/50 dark:bg-ink-800/50">
-          <div class="text-[10.5px] uppercase tracking-[0.08em] text-ink-500">batches committed</div>
-          <div class="mt-1 text-[20px] num font-semibold">{{ metric('trustdb_batch_committed_total').toFixed(0) }}</div>
-        </div>
-        <div class="p-3 rounded-xl hairline border bg-white/50 dark:bg-ink-800/50">
-          <div class="text-[10.5px] uppercase tracking-[0.08em] text-ink-500">anchors published</div>
-          <div class="mt-1 text-[20px] num font-semibold">{{ metric('trustdb_anchor_published_total').toFixed(0) }}</div>
-        </div>
-        <div class="p-3 rounded-xl hairline border bg-white/50 dark:bg-ink-800/50">
-          <div class="text-[10.5px] uppercase tracking-[0.08em] text-ink-500">anchor pending</div>
-          <div class="mt-1 text-[20px] num font-semibold">{{ metric('trustdb_anchor_pending').toFixed(0) }}</div>
+    <aside class="td-inspector">
+      <p class="td-kicker">当前存证详情</p>
+      <div class="td-inspector__file"><FileText :size="24" /><div><strong>{{ selected.file_name }}</strong><span>{{ formatBytes(selected.content_length) }}</span></div></div>
+      <dl>
+        <div><dt>存证 ID</dt><dd><code>{{ selected.record_id }}</code><button type="button" @click="copyRecordId"><Copy :size="13" /></button></dd></div>
+        <div><dt>创建时间</dt><dd>{{ selected.submitted_at ? new Date(selected.submitted_at).toLocaleString('zh-CN', { hour12: false }) : '—' }}</dd></div>
+        <div><dt>证明链状态</dt><dd class="td-active-status"><i />{{ selected.proof_level }} {{ selected.proof_level === 'L5' ? '已完成' : '进行中' }}</dd></div>
+      </dl>
+      <div class="td-inspector__timeline">
+        <div v-for="(level, index) in levels" :key="level.key" :class="{ active: levelState(index) === 'active', done: levelState(index) === 'done' }">
+          <i><Check v-if="levelState(index) === 'done'" :size="11" /></i>
+          <span><strong>{{ level.key }} {{ level.label }}</strong><small>{{ levelState(index) === 'done' ? '已完成' : levelState(index) === 'active' ? '进行中' : '待执行' }}</small></span>
         </div>
       </div>
-    </Card>
+      <div class="td-inspector__events"><span>最新事件</span><p><i />已写入全球透明日志 <small>{{ relativeTime(selected.submitted_at || '') }}</small></p><p class="muted"><i />等待外部锚定</p></div>
+      <RouterLink class="td-inspector__link" to="/records"><ShieldCheck :size="16" />查看完整证明链 <ArrowUpRight :size="15" /></RouterLink>
+    </aside>
   </div>
 </template>

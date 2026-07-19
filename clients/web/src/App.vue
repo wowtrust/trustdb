@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { useRoute } from 'vue-router'
-import Sidebar from '@/components/Sidebar.vue'
-import TopBar from '@/components/TopBar.vue'
+import AdminHeader from '@/components/AdminHeader.vue'
 
 const route = useRoute()
 </script>
@@ -10,13 +9,10 @@ const route = useRoute()
   <div v-if="route.name === 'login'" class="h-full w-full">
     <router-view />
   </div>
-  <div v-else class="app-shell h-full w-full flex overflow-hidden">
-    <div class="ambient-orb one"></div>
-    <div class="ambient-orb two"></div>
-    <Sidebar />
-    <main class="relative z-[1] flex-1 h-full flex flex-col min-w-0">
-      <TopBar />
-      <div class="flex-1 overflow-y-auto px-7 py-6 min-w-0">
+  <div v-else class="app-shell wa-app h-full w-full flex flex-col overflow-hidden">
+    <AdminHeader />
+    <main class="wa-main relative z-[1] flex-1 min-h-0 flex flex-col min-w-0">
+      <div class="flex-1 overflow-y-auto min-w-0">
         <router-view v-slot="{ Component, route: r }">
           <transition name="page" mode="out-in">
             <component :is="Component" :key="r.fullPath" />
