@@ -184,7 +184,9 @@ The desktop client (`clients/desktop`) is a Wails + Vue application for local id
 
 The official website source now lives in `website`. It is a standalone React + Vite application with generated visual assets and GSAP motion, and it is validated in the main repository CI.
 
-![TrustDB desktop overview](assets/readme/desktop-overview.png)
+The screenshot below is rendered directly from the current desktop client code:
+
+![TrustDB Desktop rendered from the current client code](design/qa/desktop-client-homepage.png)
 
 ## Project Documents
 

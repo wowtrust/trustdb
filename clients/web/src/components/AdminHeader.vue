@@ -35,7 +35,7 @@ onUnmounted(() => { if (timer) window.clearInterval(timer) })
     <RouterLink class="wa-brand" to="/dashboard"><strong>TRUSTDB</strong><span>ADMIN</span></RouterLink>
     <nav aria-label="管理端导航"><RouterLink v-for="item in items" :key="item[0]" :to="item[0]" :class="{ active: active(item[0]) }">{{ item[1] }}</RouterLink></nav>
     <div class="wa-header__status">
-      <span><i :class="{ offline: healthOk === false }" />{{ healthOk === false ? '演示数据' : '服务在线' }}</span>
+      <span><i :class="{ offline: healthOk === false }" />{{ healthOk === false ? '服务不可达' : '服务在线' }}</span>
       <em>12 ms</em><b />
       <time>{{ time }}</time>
       <button type="button" title="退出登录" @click="logout"><LogOut :size="15" /></button>

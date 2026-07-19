@@ -270,7 +270,7 @@ async function upgradeOts(r: LocalRecord) {
       <div class="px-4 pt-4 pb-3 flex items-center gap-3 flex-wrap">
         <div class="relative flex-1 min-w-[240px]">
           <Search :size="14" class="absolute left-2.5 top-1/2 -translate-y-1/2 text-ink-400 pointer-events-none z-10" />
-          <Input v-model="query" placeholder="服务端支持 record_id / batch_id；本地缓存支持文件名 / sha256" />
+          <Input v-model="query" :leading-icon="true" placeholder="服务端支持 record_id / batch_id；本地缓存支持文件名 / sha256" />
         </div>
         <div class="inline-flex items-center gap-1 p-1 rounded-lg hairline border bg-white/50 dark:bg-ink-800/50">
           <button

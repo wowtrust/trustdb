@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
-import { api, LocalRecord, RecordPage, RecordPageOptions } from '@/lib/api'
+import { api, hasNativeBridge, LocalRecord, RecordPage, RecordPageOptions } from '@/lib/api'
 
 const DEFAULT_PAGE_SIZE = 50
 const REFRESH_CONCURRENCY = 4
@@ -33,6 +33,22 @@ export const useRecords = defineStore('records', () => {
   async function loadPage(opts: Partial<RecordPageOptions> = {}) {
     loading.value = true
     try {
+      if (!hasNativeBridge()) {
+        records.value = []
+        source.value = 'local'
+        listError.value = '当前为浏览器预览；打开 TrustDB 桌面客户端后会连接本地存证与服务端分页。'
+        page.value = {
+          items: [],
+          total: 0,
+          limit: opts.limit ?? DEFAULT_PAGE_SIZE,
+          offset: 0,
+          has_more: false,
+          source: 'local',
+          total_exact: true,
+        }
+        return
+      }
+
       const prevQuery = currentQuery.value
       const prevLevel = currentLevel.value
       const req: RecordPageOptions = {
