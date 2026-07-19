@@ -17,17 +17,30 @@ const lastPollAt = ref<Date | null>(null)
 const HISTORY_LEN = 60
 const history = ref<Record<string, number[]>>({})
 
-const HIGHLIGHTS = [
-  { name: 'trustdb_ingest_accepted_total', label: 'claims accepted', desc: '累计已受理 claim', fmt: 'int' as const },
-  { name: 'trustdb_ingest_rejected_total', label: 'claims rejected', desc: '累计拒绝 claim', fmt: 'int' as const },
-  { name: 'trustdb_batch_committed_total', label: 'batches committed', desc: '累计已承诺批次', fmt: 'int' as const },
-  { name: 'trustdb_batch_pending', label: 'batch pending', desc: '待承诺批次数量', fmt: 'int' as const },
-  { name: 'trustdb_anchor_published_total', label: 'anchors published', desc: '累计已发布锚点', fmt: 'int' as const },
-  { name: 'trustdb_anchor_pending', label: 'anchor pending', desc: '待锚定数量', fmt: 'int' as const },
-] as const
+type MetricSource = { name: string; labels?: Record<string, string> }
+type Highlight = { key: string; label: string; desc: string; fmt: 'int' | 'float'; sources: MetricSource[] }
 
-function sum(name: string): number {
-  return metrics.value.filter((m) => m.name === name).reduce((a, m) => a + m.value, 0)
+const HIGHLIGHTS: Highlight[] = [
+  { key: 'ingest-accepted', label: 'claims accepted', desc: '累计已受理 claim', fmt: 'int', sources: [{ name: 'trustdb_ingest_requests_total', labels: { result: 'accepted' } }, { name: 'trustdb_ingest_accepted_total' }] },
+  { key: 'ingest-rejected', label: 'claims rejected', desc: '累计拒绝 claim', fmt: 'int', sources: [{ name: 'trustdb_ingest_rejected_total' }] },
+  { key: 'batches-committed', label: 'batches committed', desc: '累计已承诺批次', fmt: 'int', sources: [{ name: 'trustdb_batch_commit_latency_seconds_count' }, { name: 'trustdb_batch_size_records_count' }, { name: 'trustdb_batch_committed_total' }] },
+  { key: 'batch-pending', label: 'batch pending', desc: '待承诺批次数量', fmt: 'int', sources: [{ name: 'trustdb_queue_depth', labels: { queue: 'batch' } }, { name: 'trustdb_batch_pending' }] },
+  { key: 'anchors-published', label: 'anchors published', desc: '累计已发布锚点', fmt: 'int', sources: [{ name: 'trustdb_anchor_published_total' }] },
+  { key: 'anchor-pending', label: 'anchor pending', desc: '待锚定数量', fmt: 'int', sources: [{ name: 'trustdb_anchor_pending_total' }, { name: 'trustdb_anchor_pending' }] },
+]
+
+function sourceValue(source: MetricSource): number | undefined {
+  const samples = metrics.value.filter((metric) => metric.name === source.name && (!source.labels || Object.entries(source.labels).every(([key, value]) => metric.labels?.[key] === value)))
+  if (!samples.length) return undefined
+  return samples.reduce((total, metric) => total + metric.value, 0)
+}
+
+function highlightValue(highlight: Highlight): number {
+  for (const source of highlight.sources) {
+    const value = sourceValue(source)
+    if (value !== undefined) return value
+  }
+  return 0
 }
 
 function fmt(v: number, kind: 'int' | 'float'): string {
@@ -48,10 +61,10 @@ async function fetchMetrics() {
     lastError.value = null
     lastPollAt.value = new Date()
     for (const h of HIGHLIGHTS) {
-      const buf = history.value[h.name] ?? []
-      buf.push(sum(h.name))
+      const buf = history.value[h.key] ?? []
+      buf.push(highlightValue(h))
       while (buf.length > HISTORY_LEN) buf.shift()
-      history.value[h.name] = buf
+      history.value[h.key] = buf
     }
   } catch (e: unknown) {
     lastError.value = e instanceof Error ? e.message : String(e)
@@ -74,7 +87,7 @@ const grouped = computed(() => {
     if (!map.has(m.name)) map.set(m.name, [])
     map.get(m.name)!.push(m)
   }
-  for (const h of HIGHLIGHTS) map.delete(h.name)
+  for (const h of HIGHLIGHTS) h.sources.forEach((source) => map.delete(source.name))
   return Array.from(map.entries()).sort((a, b) => a[0].localeCompare(b[0]))
 })
 
@@ -116,7 +129,7 @@ function labelString(m: Metric): string {
       <div class="px-4 pt-4 pb-5 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
         <div
           v-for="h in HIGHLIGHTS"
-          :key="h.name"
+          :key="h.key"
           class="rounded-xl hairline border bg-white/60 dark:bg-ink-800/50 p-3 flex flex-col gap-2"
         >
           <div class="flex items-center justify-between">
@@ -128,10 +141,10 @@ function labelString(m: Metric): string {
           </div>
           <div class="flex items-end justify-between gap-2">
             <div class="text-[22px] num font-semibold leading-none text-ink-800 dark:text-ink-100">
-              {{ fmt(sum(h.name), h.fmt) }}
+              {{ fmt(highlightValue(h), h.fmt) }}
             </div>
             <div class="text-accent flex-1 max-w-[160px]">
-              <Sparkline :values="history[h.name] ?? []" :height="28" />
+              <Sparkline :values="history[h.key] ?? []" :height="28" />
             </div>
           </div>
         </div>

@@ -1,26 +1,22 @@
 import { flushPromises, mount } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { proxyGet } from '@/lib/api'
+import { getRecords } from '@/lib/api'
 import Records from './Records.vue'
 
 vi.mock('@/lib/api', () => ({
-  proxyGet: vi.fn(),
+  getRecords: vi.fn(),
 }))
 
-const mockedProxyGet = vi.mocked(proxyGet)
-
-function jsonResponse(body: unknown, status = 200): Response {
-  return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
-}
+const mockedGetRecords = vi.mocked(getRecords)
 
 describe('Records page', () => {
   beforeEach(() => {
-    mockedProxyGet.mockReset()
+    mockedGetRecords.mockReset()
   })
 
   it('loads records and applies filters through the admin proxy', async () => {
-    mockedProxyGet
-      .mockResolvedValueOnce(jsonResponse({
+    mockedGetRecords
+      .mockResolvedValueOnce({
         records: [{
           record_id: 'record-abcdef123456',
           proof_level: 'L5',
@@ -31,12 +27,12 @@ describe('Records page', () => {
         }],
         limit: 50,
         direction: 'desc',
-      }))
-      .mockResolvedValueOnce(jsonResponse({
+      })
+      .mockResolvedValueOnce({
         records: [],
         limit: 50,
         direction: 'desc',
-      }))
+      })
 
     const wrapper = mount(Records)
     await flushPromises()
@@ -53,12 +49,12 @@ describe('Records page', () => {
     await apply!.trigger('click')
     await flushPromises()
 
-    expect(mockedProxyGet).toHaveBeenLastCalledWith('/v1/records?limit=50&q=invoice&level=L5')
+    expect(mockedGetRecords).toHaveBeenLastCalledWith({ limit: 50, cursor: '', query: 'invoice', level: 'L5' })
     wrapper.unmount()
   })
 
   it('shows proxy errors without replacing existing data', async () => {
-    mockedProxyGet.mockResolvedValueOnce(new Response('backend down', { status: 502 }))
+    mockedGetRecords.mockRejectedValueOnce(new Error('backend down'))
 
     const wrapper = mount(Records)
     await flushPromises()

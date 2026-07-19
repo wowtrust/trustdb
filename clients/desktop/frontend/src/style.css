@@ -391,6 +391,13 @@ body::before, body::after { content: none !important; display: none !important; 
 .td-record-row { width: 100%; min-height: 50px; padding: 0 10px; display: grid; grid-template-columns: 1.8fr .75fr 1.25fr 1fr .72fr; align-items: center; column-gap: 16px; border: 0; border-bottom: 1px solid rgba(255,255,255,.09); color: #aab2a8; background: transparent; text-align: left; font-size: 11px; cursor: pointer; transition: background .18s ease; }
 .td-record-row:hover, .td-record-row.selected { background: rgba(0,255,34,.045); }
 .td-record-head { min-height: 34px; color: #5c645b; font-size: 9px; cursor: default; }
+.td-record-empty { min-height: 152px; padding: 0 24px; display: flex; align-items: center; gap: 16px; color: #687067; }
+.td-record-empty > svg { color: var(--acid); }
+.td-record-empty span { flex: 1; }
+.td-record-empty strong, .td-record-empty small { display: block; }
+.td-record-empty strong { color: #c2c9bf; font-size: 12px; }
+.td-record-empty small { margin-top: 6px; font-size: 10px; }
+.td-record-empty a { color: var(--acid); display: inline-flex; align-items: center; gap: 8px; font-size: 10px; }
 .td-file, .td-level, .td-view { display: flex; align-items: center; gap: 8px; }
 .td-file { color: #d6dcd4; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .td-file i, .td-level i { width: 6px; height: 6px; border-radius: 50%; background: var(--acid); box-shadow: 0 0 10px rgba(0,255,34,.6); }
@@ -437,6 +444,10 @@ body::before, body::after { content: none !important; display: none !important; 
 .td-inspector__events p.muted { color: #5f675e; background: transparent; }
 .td-inspector__events p.muted i { background: #5f675e; }
 .td-inspector__link { position: absolute; left: 20px; right: 20px; bottom: 24px; height: 44px; display: flex; align-items: center; justify-content: space-between; color: var(--acid); border-top: 1px solid rgba(255,255,255,.08); font-size: 10px; }
+.td-inspector__empty { min-height: 100%; display: flex; flex-direction: column; align-items: flex-start; justify-content: center; gap: 16px; color: #657064; }
+.td-inspector__empty > svg { color: var(--acid); }
+.td-inspector__empty p { max-width: 220px; margin: 0; font-size: 11px; line-height: 1.7; }
+.td-inspector__empty a { color: var(--acid); font-size: 10px; }
 
 @media (max-width: 1350px) {
   .td-dashboard { grid-template-columns: minmax(0, 1fr) 242px; }
