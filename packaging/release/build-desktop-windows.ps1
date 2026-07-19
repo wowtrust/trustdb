@@ -44,37 +44,92 @@ $package = "trustdb-desktop-$env:VERSION-windows-$env:TARGET_ARCH"
 $rawExe = Join-Path $outputDir "$package.exe"
 Copy-Item $builtExe $rawExe
 
-$certArgs = @{
-  Type = "CodeSigningCert"
-  Subject = "CN=TrustDB Community Self-Signed $env:VERSION, O=TrustDB Community"
-  CertStoreLocation = "Cert:\CurrentUser\My"
-  KeyAlgorithm = "RSA"
-  KeyLength = 3072
-  HashAlgorithm = "SHA256"
-  KeyExportPolicy = "Exportable"
-  NotAfter = (Get-Date).AddDays(397)
-}
-$cert = New-SelfSignedCertificate @certArgs
 $passwordText = [Guid]::NewGuid().ToString("N") + [Guid]::NewGuid().ToString("N")
-$password = ConvertTo-SecureString $passwordText -AsPlainText -Force
 $pfxPath = Join-Path $certDir "signing.pfx"
 $cerPath = Join-Path $outputDir "$package.cer"
-Export-PfxCertificate -Cert $cert -FilePath $pfxPath -Password $password | Out-Null
-Export-Certificate -Cert $cert -FilePath $cerPath -Type CERT | Out-Null
-$cert.Thumbprint | Set-Content -NoNewline (Join-Path $outputDir "$package-certificate.txt")
-Import-Certificate -FilePath $cerPath -CertStoreLocation "Cert:\CurrentUser\Root" | Out-Null
+$fingerprintPath = Join-Path $outputDir "$package-certificate.txt"
+
+Write-Host "Creating an isolated self-signed code-signing certificate"
+$rsa = [System.Security.Cryptography.RSA]::Create(3072)
+$generatedCert = $null
+$cert = $null
+try {
+  $subject = [System.Security.Cryptography.X509Certificates.X500DistinguishedName]::new(
+    "CN=TrustDB Community Self-Signed $env:VERSION, O=TrustDB Community"
+  )
+  $request = [System.Security.Cryptography.X509Certificates.CertificateRequest]::new(
+    $subject,
+    $rsa,
+    [System.Security.Cryptography.HashAlgorithmName]::SHA256,
+    [System.Security.Cryptography.RSASignaturePadding]::Pkcs1
+  )
+  $ekuOids = [System.Security.Cryptography.OidCollection]::new()
+  [void]$ekuOids.Add([System.Security.Cryptography.Oid]::new("1.3.6.1.5.5.7.3.3"))
+  $request.CertificateExtensions.Add(
+    [System.Security.Cryptography.X509Certificates.X509EnhancedKeyUsageExtension]::new($ekuOids, $false)
+  )
+  $request.CertificateExtensions.Add(
+    [System.Security.Cryptography.X509Certificates.X509KeyUsageExtension]::new(
+      [System.Security.Cryptography.X509Certificates.X509KeyUsageFlags]::DigitalSignature,
+      $true
+    )
+  )
+  $request.CertificateExtensions.Add(
+    [System.Security.Cryptography.X509Certificates.X509BasicConstraintsExtension]::new($false, $false, 0, $true)
+  )
+
+  $generatedCert = $request.CreateSelfSigned((Get-Date).AddMinutes(-5), (Get-Date).AddDays(397))
+  $pfxBytes = $generatedCert.Export(
+    [System.Security.Cryptography.X509Certificates.X509ContentType]::Pfx,
+    $passwordText
+  )
+  $cerBytes = $generatedCert.Export([System.Security.Cryptography.X509Certificates.X509ContentType]::Cert)
+  [System.IO.File]::WriteAllBytes($pfxPath, $pfxBytes)
+  [System.IO.File]::WriteAllBytes($cerPath, $cerBytes)
+  $cert = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new(
+    $pfxBytes,
+    $passwordText,
+    ([System.Security.Cryptography.X509Certificates.X509KeyStorageFlags]::Exportable -bor
+      [System.Security.Cryptography.X509Certificates.X509KeyStorageFlags]::PersistKeySet)
+  )
+}
+finally {
+  if ($null -ne $generatedCert) {
+    $generatedCert.Dispose()
+  }
+  $rsa.Dispose()
+}
+
+(Get-FileHash -Path $cerPath -Algorithm SHA256).Hash.ToLowerInvariant() |
+  Set-Content -NoNewline $fingerprintPath
+$rootStore = [System.Security.Cryptography.X509Certificates.X509Store]::new(
+  [System.Security.Cryptography.X509Certificates.StoreName]::Root,
+  [System.Security.Cryptography.X509Certificates.StoreLocation]::CurrentUser
+)
+$rootStore.Open([System.Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
+try {
+  $rootStore.Add($cert)
+}
+finally {
+  $rootStore.Close()
+}
+Write-Host "Certificate ready: $($cert.Thumbprint)"
 
 try {
   $sdkRoot = "${env:ProgramFiles(x86)}\Windows Kits\10\bin"
-  $signTool = Get-ChildItem $sdkRoot -Recurse -Filter signtool.exe |
-    Where-Object { $_.FullName -match "\\$env:SIGNTOOL_ARCH\\signtool\.exe$" } |
-    Sort-Object FullName -Descending |
+  $signTool = Get-ChildItem $sdkRoot -Directory |
+    Sort-Object Name -Descending |
+    ForEach-Object {
+      Get-Item (Join-Path $_.FullName "$env:SIGNTOOL_ARCH\signtool.exe") -ErrorAction SilentlyContinue
+    } |
     Select-Object -First 1
   if ($null -eq $signTool) {
     throw "signtool.exe for $env:SIGNTOOL_ARCH was not found"
   }
+  Write-Host "Using signtool: $($signTool.FullName)"
 
   function Sign-TrustDBFile([string] $Path) {
+    Write-Host "Signing $Path"
     & $signTool.FullName sign /fd SHA256 /f $pfxPath /p $passwordText $Path
     if ($LASTEXITCODE -ne 0) {
       throw "signtool failed for $Path"
@@ -91,10 +146,11 @@ try {
   New-Item -ItemType Directory -Force -Path $zipStage | Out-Null
   Copy-Item $rawExe (Join-Path $zipStage "trustdb-desktop.exe")
   Copy-Item $cerPath (Join-Path $zipStage "TrustDB-self-signed.cer")
-  Copy-Item (Join-Path $outputDir "$package-certificate.txt") (Join-Path $zipStage "CERTIFICATE_SHA256.txt")
+  Copy-Item $fingerprintPath (Join-Path $zipStage "CERTIFICATE_SHA256.txt")
   Copy-Item (Join-Path $env:GITHUB_WORKSPACE "packaging\SELF_SIGNED_CLIENTS.md") $zipStage
   Compress-Archive -Path $zipStage -DestinationPath (Join-Path $outputDir "$package.zip") -CompressionLevel Optimal
 
+  Write-Host "Building NSIS installer"
   $setupExe = Join-Path $outputDir "$package-setup.exe"
   $makensis = "${env:ProgramFiles(x86)}\NSIS\makensis.exe"
   if (-not (Test-Path $makensis)) {
@@ -118,6 +174,7 @@ try {
   }
   Sign-TrustDBFile $setupExe
 
+  Write-Host "Building WiX installer"
   $msi = Join-Path $outputDir "$package.msi"
   $wix = Join-Path $env:USERPROFILE ".dotnet\tools\wix.exe"
   $wixArgs = @(
@@ -138,7 +195,13 @@ try {
   Sign-TrustDBFile $msi
 }
 finally {
-  Remove-Item "Cert:\CurrentUser\Root\$($cert.Thumbprint)" -ErrorAction SilentlyContinue
-  Remove-Item "Cert:\CurrentUser\My\$($cert.Thumbprint)" -ErrorAction SilentlyContinue
+  $rootStore.Open([System.Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
+  try {
+    $rootStore.Remove($cert)
+  }
+  finally {
+    $rootStore.Close()
+  }
+  $cert.Dispose()
   Remove-Item $pfxPath -ErrorAction SilentlyContinue
 }
