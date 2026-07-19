@@ -26,11 +26,41 @@ export function ChangelogPage() {
   );
 }
 
-const plannedAssets = [
-  ["macOS", "Apple Silicon / Universal", "DMG · ZIP", "签名与 notarization 待首个 Release"],
-  ["Windows", "x86_64", "MSI / EXE", "签名安装包尚未发布"],
-  ["Linux", "x86_64 / arm64", "AppImage / archive", "桌面包与 CLI archive 尚未发布"],
-  ["CLI & checksums", "multi-platform", "tar.gz · SHA-256", "版本化二进制与校验清单尚未发布"],
+const releaseGroups = [
+  {
+    index: "01",
+    title: "桌面客户端",
+    description: "面向日常存证和离线验证的图形客户端。macOS 与 Windows 各架构独立发布。",
+    assets: [
+      ["macOS", "Apple Silicon · arm64", "DMG · ZIP", "签名与公证"],
+      ["macOS", "Intel · x86_64", "DMG · ZIP", "签名与公证"],
+      ["Windows", "ARM64", "MSI · EXE · ZIP", "代码签名"],
+      ["Windows", "x86-64 · amd64", "MSI · EXE · ZIP", "代码签名"],
+    ],
+  },
+  {
+    index: "02",
+    title: "服务器与 CLI",
+    description: "同一份版本同时提供 trustdb 服务器和命令行工具，方便直接部署或集成到自动化任务。",
+    assets: [
+      ["Linux", "amd64", "tar.gz", "Server · CLI"],
+      ["Linux", "arm64", "tar.gz", "Server · CLI"],
+      ["macOS", "Apple Silicon · arm64", "tar.gz", "Server · CLI"],
+      ["macOS", "Intel · x86_64", "tar.gz", "Server · CLI"],
+      ["Windows", "ARM64", "ZIP", "Server · CLI"],
+      ["Windows", "x86-64 · amd64", "ZIP", "Server · CLI"],
+    ],
+  },
+  {
+    index: "03",
+    title: "容器与发布资料",
+    description: "镜像、部署示例和校验资料随正式版本一起发布。",
+    assets: [
+      ["Docker / OCI", "linux/amd64 · linux/arm64", "GHCR image", "版本标签 · latest"],
+      ["Docker Compose", "multi-arch", "compose.yaml", "服务 · 数据卷 · 健康检查"],
+      ["校验与溯源", "全部平台", "SHA-256 · SBOM", "签名 · 构建来源"],
+    ],
+  },
 ];
 
 export function DownloadsPage() {
@@ -46,8 +76,18 @@ export function DownloadsPage() {
       </section>
       <section className="asset-plan">
         <div className="section-shell">
-          <div className="asset-plan__heading" data-reveal><p>Planned release assets</p><h2>发布后，这里会有什么。</h2></div>
-          <div className="asset-grid">{plannedAssets.map(([platform, arch, format, status]) => <article key={platform} data-reveal><Package /><span>PLANNED</span><h3>{platform}</h3><strong>{arch}</strong><code>{format}</code><p>{status}</p></article>)}</div>
+          <div className="asset-plan__heading" data-reveal><p>Planned release assets</p><h2>客户端、服务端，<br />以及完整发布资料。</h2></div>
+          <div className="release-groups">
+            {releaseGroups.map((group) => (
+              <section className="release-group" key={group.title} data-reveal>
+                <header><span>{group.index}</span><div><Package /><h3>{group.title}</h3></div><p>{group.description}</p></header>
+                <div className="asset-matrix">
+                  <div className="asset-matrix__head"><span>系统 / 资源</span><span>架构</span><span>格式</span><span>包含</span></div>
+                  {group.assets.map(([platform, arch, format, included]) => <div className="asset-matrix__row" key={`${platform}-${arch}`}><strong>{platform}</strong><span>{arch}</span><code>{format}</code><p>{included}</p><b>待发布</b></div>)}
+                </div>
+              </section>
+            ))}
+          </div>
         </div>
       </section>
       <section className="source-build section-shell">
