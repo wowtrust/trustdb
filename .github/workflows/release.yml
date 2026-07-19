@@ -2,6 +2,8 @@ name: Release
 
 on:
   push:
+    branches:
+      - "ci/release-matrix-validation"
     tags:
       - "v*"
   workflow_dispatch:
@@ -44,7 +46,7 @@ jobs:
           if [ "$GITHUB_REF_TYPE" = "tag" ]; then
             version="${GITHUB_REF_NAME#v}"
           else
-            version="$DISPATCH_VERSION"
+            version="${DISPATCH_VERSION:-1.0.0-beta}"
           fi
           if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
             echo "::error::invalid release version: $version"
