@@ -5,6 +5,8 @@
 // reachable without inventing intermediate trust.
 package prooflevel
 
+import "strings"
+
 type Level string
 
 const (
@@ -88,9 +90,10 @@ func Definitions() []Definition {
 }
 
 func Parse(raw string) (Level, bool) {
-	switch Level(raw) {
+	level := Level(strings.ToUpper(strings.TrimSpace(raw)))
+	switch level {
 	case L1, L2, L3, L4, L5:
-		return Level(raw), true
+		return level, true
 	default:
 		return Unknown, false
 	}

@@ -281,7 +281,7 @@ func (a *App) ExportGlobalProof(recordID, outPath string) error {
 	return a.writeAuthorizedFile(outPath, raw, 0o644)
 }
 
-// ExportSingleProof writes the recommended .sproof artefact: one CBOR file
+// ExportSingleProof writes the recommended .sproof artifact: one CBOR file
 // containing the L1-L3 ProofBundle plus any currently available L4 GlobalLog
 // proof and L5 STH anchor result.
 func (a *App) ExportSingleProof(recordID, outPath string) error {
@@ -387,7 +387,7 @@ func (a *App) UpgradeOtsAnchor(recordID string) (*anchor.OtsUpgradeSummary, erro
 	return &summary, nil
 }
 
-// ExportAnchorResult mirrors ExportProofBundle for L5 artefacts.
+// ExportAnchorResult mirrors ExportProofBundle for L5 artifacts.
 // Emitting a separate file keeps each level independently verifiable
 // (you can hand out the ProofBundle without the anchor).
 func (a *App) ExportAnchorResult(recordID, outPath string) error {
