@@ -376,3 +376,27 @@ jobs:
       - name: Build admin web
         working-directory: clients/web
         run: npm run build
+
+  website-frontend:
+    name: Official website build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: website/package-lock.json
+
+      - name: Install dependencies
+        working-directory: website
+        run: npm ci
+
+      - name: Build official website
+        working-directory: website
+        run: npm run build

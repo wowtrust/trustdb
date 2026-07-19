@@ -120,7 +120,7 @@ No actionable P0, P1 or P2 differences remain.
 - [x] Primary interactions tested in a real browser.
 - [x] Final browser screenshots and same-input comparisons saved.
 - [x] All three production builds pass.
-- [x] Web admin unit tests pass: 9 files, 23 tests.
+- [x] Web admin unit tests pass: 10 files, 26 tests, including live dashboard data and partial-failure states.
 - [x] Go repository tests pass.
 
 ## Follow-up polish
