@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"encoding/json"
@@ -22,7 +23,10 @@ import (
 // httpFetchTimeout bounds a single GET against the TrustDB server.
 // Verify is intended for interactive/CI use so a conservative timeout
 // gives the user a clear failure mode if the server is unreachable.
-const httpFetchTimeout = 10 * time.Second
+const (
+	httpFetchTimeout           = 10 * time.Second
+	maxVerifyHTTPResponseBytes = 16 << 20
+)
 
 func newVerifyCommand(rt *runtimeConfig) *cobra.Command {
 	var (
@@ -341,7 +345,21 @@ func getJSON(ctx context.Context, client *http.Client, endpoint string, dst any)
 }
 
 func decodeSingleJSON(r io.Reader, dst any) error {
-	decoder := json.NewDecoder(r)
+	return decodeSingleJSONLimit(r, dst, maxVerifyHTTPResponseBytes)
+}
+
+func decodeSingleJSONLimit(r io.Reader, dst any, limit int64) error {
+	if limit <= 0 {
+		return fmt.Errorf("response body limit must be positive")
+	}
+	body, err := io.ReadAll(io.LimitReader(r, limit+1))
+	if err != nil {
+		return err
+	}
+	if int64(len(body)) > limit {
+		return fmt.Errorf("response body too large: %d > %d", len(body), limit)
+	}
+	decoder := json.NewDecoder(bytes.NewReader(body))
 	if err := decoder.Decode(dst); err != nil {
 		return err
 	}

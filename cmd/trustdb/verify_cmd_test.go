@@ -41,6 +41,24 @@ func TestDecodeSingleJSONRejectsTrailingData(t *testing.T) {
 	}
 }
 
+func TestDecodeSingleJSONLimitBoundsResponseBody(t *testing.T) {
+	t.Parallel()
+	data := []byte(`{"ok":true}`)
+
+	var dst map[string]bool
+	if err := decodeSingleJSONLimit(bytes.NewReader(data), &dst, int64(len(data))); err != nil {
+		t.Fatalf("decodeSingleJSONLimit exact boundary: %v", err)
+	}
+	if !dst["ok"] {
+		t.Fatalf("decoded response = %#v", dst)
+	}
+
+	oversized := append(append([]byte(nil), data...), ' ')
+	if err := decodeSingleJSONLimit(bytes.NewReader(oversized), &dst, int64(len(data))); err == nil {
+		t.Fatal("decodeSingleJSONLimit oversized response error = nil")
+	}
+}
+
 // TestVerifyCmdRemoteAnchor spins up an in-process serve backed by a
 // FileSink, submits a single claim, waits for the L5 anchor to be
 // published, then invokes `trustdb verify --server=... --record=...`
