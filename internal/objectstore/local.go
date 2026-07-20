@@ -8,9 +8,14 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sync"
 
 	"github.com/ryan-wong-coder/trustdb/internal/model"
 )
+
+const copyBufferSize = 256 * 1024
+
+var copyBufferPool = sync.Pool{New: func() any { return new([copyBufferSize]byte) }}
 
 type LocalStore struct {
 	Root string
@@ -99,13 +104,14 @@ func (s LocalStore) pathForHex(hexSum string) string {
 }
 
 func copyWithContext(ctx context.Context, dst io.Writer, src io.Reader) (int64, error) {
-	buf := make([]byte, 256*1024)
+	buf := copyBufferPool.Get().(*[copyBufferSize]byte)
+	defer copyBufferPool.Put(buf)
 	var written int64
 	for {
 		if err := ctx.Err(); err != nil {
 			return written, err
 		}
-		nr, er := src.Read(buf)
+		nr, er := src.Read(buf[:])
 		if nr > 0 {
 			nw, ew := dst.Write(buf[:nr])
 			if nw < 0 || nw > nr {

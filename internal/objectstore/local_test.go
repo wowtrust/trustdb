@@ -5,10 +5,24 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
 )
+
+func BenchmarkCopyWithContext1MiB(b *testing.B) {
+	payload := bytes.Repeat([]byte{1}, 1<<20)
+	reader := bytes.NewReader(payload)
+	b.ReportAllocs()
+	b.SetBytes(int64(len(payload)))
+	for b.Loop() {
+		reader.Reset(payload)
+		if _, err := copyWithContext(context.Background(), io.Discard, reader); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
 
 func TestLocalStorePutRejectsDirectoryObjectTarget(t *testing.T) {
 	t.Parallel()
