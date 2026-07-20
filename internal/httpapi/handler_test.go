@@ -283,6 +283,33 @@ func TestDecodeCBORRequestRejectsOversizedBody(t *testing.T) {
 	}
 }
 
+func TestDecodeCBORRequestAcceptsKnownAndUnknownLength(t *testing.T) {
+	t.Parallel()
+
+	body, err := cborx.Marshal(model.SignedClaim{SchemaVersion: model.SchemaSignedClaim})
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	tests := []struct {
+		name          string
+		contentLength int64
+	}{
+		{name: "known", contentLength: int64(len(body))},
+		{name: "unknown", contentLength: -1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var got model.SignedClaim
+			if err := decodeCBORRequest(bytes.NewReader(body), tt.contentLength, len(body), &got); err != nil {
+				t.Fatalf("decodeCBORRequest() error = %v", err)
+			}
+			if got.SchemaVersion != model.SchemaSignedClaim {
+				t.Fatalf("schema version = %q, want %q", got.SchemaVersion, model.SchemaSignedClaim)
+			}
+		})
+	}
+}
+
 func TestDecodeCBORRequestRejectsContentLengthMismatch(t *testing.T) {
 	t.Parallel()
 
