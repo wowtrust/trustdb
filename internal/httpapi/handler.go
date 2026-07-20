@@ -24,11 +24,14 @@ import (
 )
 
 const (
-	maxClaimBytes        = 1 << 20
-	maxClaimBatchBytes   = 16 << 20
-	maxClaimBatchItems   = 1000
-	maxClaimBatchWorkers = 64
+	maxClaimBytes             = 1 << 20
+	maxClaimBatchBytes        = 16 << 20
+	maxClaimBatchItems        = 1000
+	maxClaimBatchWorkers      = 64
+	maxPooledRequestBodyBytes = maxClaimBytes
 )
+
+var requestBodyBufferPool = sync.Pool{New: func() any { return new([]byte) }}
 
 type Handler struct {
 	Ingest  *ingest.Service
@@ -375,11 +378,53 @@ func (h Handler) submitClaimsBatch(w http.ResponseWriter, r *http.Request) {
 }
 
 func decodeCBORRequest(body io.Reader, contentLength int64, maxBytes int, out any) error {
+	if contentLength > int64(maxBytes) {
+		return &http.MaxBytesError{Limit: int64(maxBytes)}
+	}
+	if contentLength >= 0 && contentLength <= int64(maxPooledRequestBodyBytes) {
+		buffer := acquireRequestBodyBuffer(int(contentLength))
+		defer releaseRequestBodyBuffer(buffer)
+		if err := readKnownLengthRequestBody(body, contentLength, *buffer); err != nil {
+			return err
+		}
+		return cborx.UnmarshalLimit(*buffer, out, maxBytes)
+	}
 	raw, err := readBoundedRequestBody(body, contentLength, maxBytes)
 	if err != nil {
 		return err
 	}
 	return cborx.UnmarshalLimit(raw, out, maxBytes)
+}
+
+func acquireRequestBodyBuffer(size int) *[]byte {
+	buffer := requestBodyBufferPool.Get().(*[]byte)
+	if cap(*buffer) < size {
+		*buffer = make([]byte, size)
+	} else {
+		*buffer = (*buffer)[:size]
+	}
+	return buffer
+}
+
+func releaseRequestBodyBuffer(buffer *[]byte) {
+	if buffer == nil || cap(*buffer) > maxPooledRequestBodyBytes {
+		return
+	}
+	*buffer = (*buffer)[:0]
+	requestBodyBufferPool.Put(buffer)
+}
+
+func readKnownLengthRequestBody(body io.Reader, contentLength int64, raw []byte) error {
+	if _, err := io.ReadFull(body, raw); err != nil {
+		return err
+	}
+	var extra [1]byte
+	if n, err := io.ReadFull(body, extra[:]); n > 0 {
+		return fmt.Errorf("http: request body exceeds content length %d", contentLength)
+	} else if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
+		return err
+	}
+	return nil
 }
 
 func readBoundedRequestBody(body io.Reader, contentLength int64, maxBytes int) ([]byte, error) {
@@ -388,13 +433,7 @@ func readBoundedRequestBody(body io.Reader, contentLength int64, maxBytes int) (
 	}
 	if contentLength >= 0 {
 		raw := make([]byte, int(contentLength))
-		if _, err := io.ReadFull(body, raw); err != nil {
-			return nil, err
-		}
-		var extra [1]byte
-		if n, err := io.ReadFull(body, extra[:]); n > 0 {
-			return nil, fmt.Errorf("http: request body exceeds content length %d", contentLength)
-		} else if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
+		if err := readKnownLengthRequestBody(body, contentLength, raw); err != nil {
 			return nil, err
 		}
 		return raw, nil
