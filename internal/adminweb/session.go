@@ -21,10 +21,14 @@ type sessionPayload struct {
 }
 
 func issueSessionToken(secret []byte, user string, ttl time.Duration) (string, error) {
+	return issueSessionTokenAt(secret, user, ttl, time.Now())
+}
+
+func issueSessionTokenAt(secret []byte, user string, ttl time.Duration, now time.Time) (string, error) {
 	if len(secret) < 32 {
 		return "", errors.New("session secret too short")
 	}
-	exp := time.Now().Add(ttl).Unix()
+	exp := now.Add(ttl).Unix()
 	pl, err := json.Marshal(sessionPayload{Exp: exp, User: user})
 	if err != nil {
 		return "", err
@@ -36,6 +40,10 @@ func issueSessionToken(secret []byte, user string, ttl time.Duration) (string, e
 }
 
 func verifySessionToken(secret []byte, token string) (user string, ok bool) {
+	return verifySessionTokenAt(secret, token, time.Now())
+}
+
+func verifySessionTokenAt(secret []byte, token string, now time.Time) (user string, ok bool) {
 	parts := strings.Split(token, ".")
 	if len(parts) != 3 || parts[0] != sessionVersion {
 		return "", false
@@ -58,7 +66,7 @@ func verifySessionToken(secret []byte, token string) (user string, ok bool) {
 	if err := json.Unmarshal(pl, &p); err != nil || p.User == "" {
 		return "", false
 	}
-	if time.Now().Unix() > p.Exp {
+	if now.Unix() >= p.Exp {
 		return "", false
 	}
 	return p.User, true
