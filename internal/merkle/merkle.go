@@ -309,13 +309,10 @@ func rebuild(leafHash []byte, index, treeSize int, path [][]byte, pos *int) ([sh
 	if treeSize == 1 {
 		return bytesToHash(leafHash), true
 	}
-	if *pos >= len(path) {
-		return [sha256.Size]byte{}, false
-	}
 	k := largestPowerOfTwoLessThan(treeSize)
 	if index < k {
 		left, ok := rebuild(leafHash, index, k, path, pos)
-		if !ok {
+		if !ok || *pos >= len(path) {
 			return [sha256.Size]byte{}, false
 		}
 		right := path[*pos]
@@ -326,7 +323,7 @@ func rebuild(leafHash []byte, index, treeSize int, path [][]byte, pos *int) ([sh
 		return hashNode(left, bytesToHash(right)), true
 	}
 	right, ok := rebuild(leafHash, index-k, treeSize-k, path, pos)
-	if !ok {
+	if !ok || *pos >= len(path) {
 		return [sha256.Size]byte{}, false
 	}
 	left := path[*pos]
