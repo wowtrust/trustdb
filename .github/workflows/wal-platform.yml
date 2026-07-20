@@ -1,0 +1,54 @@
+name: WAL platform tests
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/wal-platform.yml"
+      - "internal/wal/**"
+      - "internal/model/**"
+      - "internal/trusterr/**"
+      - "go.mod"
+      - "go.sum"
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/wal-platform.yml"
+      - "internal/wal/**"
+      - "internal/model/**"
+      - "internal/trusterr/**"
+      - "go.mod"
+      - "go.sum"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: wal-platform-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  wal:
+    name: WAL · ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-15
+          - windows-2025
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Run WAL tests
+        run: go test -count=1 -mod=readonly ./internal/wal

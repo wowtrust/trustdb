@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -1039,25 +1040,48 @@ func restoreBatchSeq(ctx context.Context, rt *runtimeConfig, store proofstore.St
 // never propagate back into the batch pipeline because correctness of the
 // committed batch does not depend on prune succeeding.
 func newPruneHook(rt *runtimeConfig, walDir string, keepSegments int, metrics *observability.Metrics) func(context.Context, model.WALCheckpoint) {
+	return newPruneHookWithPruner(rt, walDir, keepSegments, metrics, wal.PruneSegmentsBefore)
+}
+
+type pruneSegmentsFunc func(string, uint64) (int, int64, error)
+
+func newPruneHookWithPruner(rt *runtimeConfig, walDir string, keepSegments int, metrics *observability.Metrics, prune pruneSegmentsFunc) func(context.Context, model.WALCheckpoint) {
 	refreshSegments := func() {
 		if err := refreshWALSegmentsTotal(metrics, walDir); err != nil {
 			rt.logger.Warn().Err(err).Str("wal", walDir).Msg("wal segment metric refresh failed")
 		}
 	}
+	var (
+		pruneMu              sync.Mutex
+		lastSuccessfulCutoff uint64
+	)
+	pruneOnce := func(cutoff uint64) (removed int, bytesRemoved int64, skipped bool, err error) {
+		pruneMu.Lock()
+		defer pruneMu.Unlock()
+		if cutoff <= lastSuccessfulCutoff {
+			return 0, 0, true, nil
+		}
+		removed, bytesRemoved, err = prune(walDir, cutoff)
+		if err == nil {
+			lastSuccessfulCutoff = cutoff
+		}
+		return removed, bytesRemoved, false, err
+	}
 	return func(_ context.Context, cp model.WALCheckpoint) {
 		if cp.SegmentID <= 1 {
-			refreshSegments()
 			return
 		}
 		cutoff := cp.SegmentID
 		if keepSegments > 0 {
 			if uint64(keepSegments) >= cp.SegmentID {
-				refreshSegments()
 				return
 			}
 			cutoff = cp.SegmentID - uint64(keepSegments)
 		}
-		removed, bytesRemoved, err := wal.PruneSegmentsBefore(walDir, cutoff)
+		removed, bytesRemoved, skipped, err := pruneOnce(cutoff)
+		if skipped {
+			return
+		}
 		if err != nil {
 			rt.logger.Warn().
 				Err(err).

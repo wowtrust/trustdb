@@ -81,7 +81,7 @@ TrustDB 默认可按单节点服务运行。启用 TiKV proofstore 后，多个 
 - Backup path：proofstore 数据可导出为 `.tdbackup`，支持 verify 与带 checkpoint 的 restore。
 - Observability path：`/metrics` 暴露 ingest、batch、global log、anchor、WAL、backup、storage 等指标。
 
-`wal.fsync_mode=strict` 会在每条 accepted record 的 WAL 文件完成 fsync 后才返回。`group` 通过 `wal.group_commit_interval` 限制异步未刷盘窗口；`batch` 仅在 segment 轮转或关闭时同步。回执契约要求逐条 fsync 时应选择 `strict`；端到端崩溃耐久性还取决于文件系统与存储设备保证。
+`wal.fsync_mode=strict` 会在每条 accepted record 的 WAL 文件完成 fsync 后才返回。`group` 通过 `wal.group_commit_interval` 限制异步未刷盘窗口；`batch` 会把 accepted record 数据的 fsync 延后到 segment 轮转或关闭。Writer 启动，以及 WAL 目录创建、文件发布、轮转与裁剪所需的命名空间屏障，不受该追加策略影响。在 Windows 上，如果底层文件系统拒绝当前可用的最强目录刷新操作，TrustDB 会直接失败而不会静默降级。回执契约要求逐条 fsync 时应选择 `strict`；端到端崩溃耐久性仍取决于文件系统与存储设备保证。
 
 ## 快速开始
 

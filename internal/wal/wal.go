@@ -33,6 +33,14 @@ const (
 
 var crcTable = crc32.MakeTable(crc32.Castagnoli)
 
+var (
+	errRepairableFirstHeader = errors.New("wal: repairable first record header")
+	errTornRecord            = errors.New("wal: torn record")
+	errCorruptRecord         = errors.New("wal: corrupt record")
+	errBadRecordMagic        = errors.New("wal: bad record magic")
+	errUnsupportedRecord     = errors.New("wal: unsupported record encoding")
+)
+
 const (
 	FsyncStrict = "strict"
 	FsyncGroup  = "group"
@@ -68,8 +76,10 @@ type Options struct {
 	// defaults to 10ms to keep latency bounded while avoiding per-record sync.
 	GroupCommitInterval time.Duration
 	OnAppend            func(string, time.Duration)
-	// OnFsync reports successful fsync calls. In group mode it may run from
-	// the background timer, so callbacks must be safe for concurrent use.
+	// OnFsync reports successful WAL durability operations. A rotation's new
+	// file and directory publication is reported as one combined operation.
+	// In group mode it may run from the background timer, so callbacks must
+	// be safe for concurrent use.
 	// Fsync callbacks must signal an owner goroutine rather than call Close
 	// directly because Close waits for background callbacks to finish.
 	OnFsync func(string, time.Duration)
@@ -111,7 +121,9 @@ type Writer struct {
 	closeErr        error
 	closeDone       chan struct{}
 	afterFunc       func(time.Duration, func()) timerStopper
+	openFile        func(string, int, os.FileMode) (*os.File, error)
 	syncFile        func(*os.File) error
+	syncDir         func(string) error
 	closeFile       func(*os.File) error
 	appendHook      func(string, time.Duration)
 	fsyncHook       func(string, time.Duration)
@@ -141,6 +153,32 @@ func defaultCloseFile(file *os.File) error {
 	return file.Close()
 }
 
+type walFileOps struct {
+	stat         func(string) (os.FileInfo, error)
+	mkdir        func(string, os.FileMode) error
+	openFile     func(string, int, os.FileMode) (*os.File, error)
+	remove       func(string) error
+	truncateFile func(*os.File, int64) error
+	syncFile     func(*os.File) error
+	syncDir      func(string) error
+	closeFile    func(*os.File) error
+}
+
+func defaultWALFileOps() walFileOps {
+	return walFileOps{
+		stat:     os.Stat,
+		mkdir:    os.Mkdir,
+		openFile: os.OpenFile,
+		remove:   os.Remove,
+		truncateFile: func(file *os.File, size int64) error {
+			return file.Truncate(size)
+		},
+		syncFile:  defaultSyncFile,
+		syncDir:   syncDirectory,
+		closeFile: defaultCloseFile,
+	}
+}
+
 type Record struct {
 	Position   model.WALPosition
 	UnixNano   int64
@@ -168,16 +206,201 @@ type RepairResult struct {
 	Repaired       bool   `json:"repaired"`
 }
 
+// ensureDurableDirectory creates missing path components from the first
+// existing ancestor downward. Each child is published in its parent before
+// the next level is created, so a successful return never relies on
+// os.MkdirAll's in-memory namespace state alone.
+func ensureDurableDirectory(path string, perm os.FileMode, ops walFileOps) error {
+	clean := filepath.Clean(path)
+	missing := make([]string, 0, 4)
+	var boundary string
+	for current := clean; ; current = filepath.Dir(current) {
+		info, err := ops.stat(current)
+		if err == nil {
+			if !info.IsDir() {
+				return fmt.Errorf("wal: path component %q is not a directory", current)
+			}
+			boundary = current
+			break
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("wal: stat directory %q: %w", current, err)
+		}
+		missing = append(missing, current)
+		parent := filepath.Dir(current)
+		if parent == current {
+			return fmt.Errorf("wal: no existing parent for directory %q", clean)
+		}
+	}
+	// Re-publish the first visible boundary before relying on it. This heals
+	// a retry after a prior mkdir succeeded but both its publication barrier
+	// and cleanup failed, leaving a directory that is visible in memory but
+	// not yet guaranteed durable in its parent.
+	boundaryParent := filepath.Dir(boundary)
+	if boundaryParent != boundary {
+		if err := ops.syncDir(boundaryParent); err != nil {
+			return fmt.Errorf("wal: sync parent directory %q for existing boundary %q: %w", boundaryParent, boundary, err)
+		}
+	}
+
+	for i := len(missing) - 1; i >= 0; i-- {
+		component := missing[i]
+		created := false
+		err := ops.mkdir(component, perm)
+		switch {
+		case err == nil:
+			created = true
+		case errors.Is(err, os.ErrExist):
+			info, statErr := ops.stat(component)
+			if statErr != nil {
+				return fmt.Errorf("wal: stat concurrently created directory %q: %w", component, statErr)
+			}
+			if !info.IsDir() {
+				return fmt.Errorf("wal: concurrently created path %q is not a directory", component)
+			}
+		default:
+			return fmt.Errorf("wal: create directory %q: %w", component, err)
+		}
+
+		parent := filepath.Dir(component)
+		if err := ops.syncDir(parent); err != nil {
+			primary := fmt.Errorf("wal: sync parent directory %q after creating %q: %w", parent, component, err)
+			if !created {
+				if retryErr := ops.syncDir(parent); retryErr != nil {
+					return errors.Join(primary, fmt.Errorf("wal: retry sync parent directory %q after concurrent creation: %w", parent, retryErr))
+				}
+				return primary
+			}
+			var cleanupErrs []error
+			if err := ops.remove(component); err != nil {
+				cleanupErrs = append(cleanupErrs, fmt.Errorf("wal: remove unpublished directory %q: %w", component, err))
+			}
+			if err := ops.syncDir(parent); err != nil {
+				cleanupErrs = append(cleanupErrs, fmt.Errorf("wal: sync parent directory %q after cleanup: %w", parent, err))
+			}
+			return errors.Join(append([]error{primary}, cleanupErrs...)...)
+		}
+	}
+	return nil
+}
+
+func syncWALFileAndDirectory(file *os.File, path string, ops walFileOps) error {
+	if err := ops.syncFile(file); err != nil {
+		return fmt.Errorf("wal: sync file %q before publishing: %w", path, err)
+	}
+	parent := filepath.Dir(path)
+	if err := ops.syncDir(parent); err != nil {
+		return fmt.Errorf("wal: sync containing directory %q for %q: %w", parent, path, err)
+	}
+	return nil
+}
+
+func closeAfterOpenError(file *os.File, operation string, cause error, ops walFileOps) error {
+	if err := ops.closeFile(file); err != nil {
+		return errors.Join(cause, fmt.Errorf("wal: close file after %s: %w", operation, err))
+	}
+	return cause
+}
+
+type segmentChainState struct {
+	trustBoundary bool
+	haveSegment   bool
+	lastSegment   uint64
+	havePrev      bool
+	expectPrev    [32]byte
+	prevSegment   uint64
+	lastSequence  uint64
+}
+
+func (chain *segmentChainState) startPrev(path string) ([32]byte, error) {
+	if chain.havePrev || !chain.trustBoundary {
+		return chain.expectPrev, nil
+	}
+	header, present, err := peekFirstHeaderIfPresent(path)
+	if err != nil {
+		return [32]byte{}, err
+	}
+	if !present {
+		return [32]byte{}, nil
+	}
+	return header.prevHash, nil
+}
+
+// repairStartPrev keeps normal reads strict while allowing the active tail
+// repair path to truncate a torn first header at a trusted retained-suffix
+// boundary. A complete valid header still supplies its stored boundary hash.
+func (chain *segmentChainState) repairStartPrev(path string) ([32]byte, error) {
+	prev, err := chain.startPrev(path)
+	if err != nil && chain.trustBoundary && !chain.havePrev && errors.Is(err, errRepairableFirstHeader) {
+		return [32]byte{}, nil
+	}
+	return prev, err
+}
+
+func (chain *segmentChainState) validateNextSegment(segmentID uint64) error {
+	if chain.haveSegment && segmentID != chain.lastSegment+1 {
+		return fmt.Errorf("wal: segment id gap between %d and %d", chain.lastSegment, segmentID)
+	}
+	return nil
+}
+
+func (chain *segmentChainState) validateFirstRecord(segmentID uint64, record Record) error {
+	return chain.validateFirstPosition(segmentID, record.Position.SegmentID, record.Position.Sequence, record.PrevHash)
+}
+
+func (chain *segmentChainState) validateFirstPosition(segmentID, recordSegmentID, sequence uint64, prevHash [32]byte) error {
+	if recordSegmentID != segmentID {
+		return fmt.Errorf("wal: segment %d file reports segment_id %d", segmentID, recordSegmentID)
+	}
+	if sequence == 0 {
+		return fmt.Errorf("wal: segment %d starts with zero sequence", segmentID)
+	}
+	if chain.havePrev {
+		if chain.lastSequence == ^uint64(0) || sequence != chain.lastSequence+1 {
+			return fmt.Errorf("wal: sequence discontinuity between segments %d and %d: got %d after %d", chain.prevSegment, segmentID, sequence, chain.lastSequence)
+		}
+	} else if (!chain.trustBoundary || prevHash == [32]byte{}) && sequence != 1 {
+		return fmt.Errorf("wal: first segment %d starts at sequence %d, want 1", segmentID, sequence)
+	}
+	return nil
+}
+
+func (chain *segmentChainState) accept(segmentID uint64, state scanState) error {
+	if err := chain.validateNextSegment(segmentID); err != nil {
+		return err
+	}
+	chain.haveSegment = true
+	chain.lastSegment = segmentID
+	if state.records == 0 {
+		return nil
+	}
+	if err := chain.validateFirstPosition(segmentID, state.segmentID, state.firstSequence, state.firstPrev); err != nil {
+		return err
+	}
+	if chain.havePrev && state.firstPrev != chain.expectPrev {
+		return fmt.Errorf("wal: hash chain break between segments %d and %d", chain.prevSegment, segmentID)
+	}
+	chain.havePrev = true
+	chain.expectPrev = state.lastHash
+	chain.prevSegment = segmentID
+	chain.lastSequence = state.lastSequence
+	return nil
+}
+
 // OpenDirWriter opens a WAL in directory mode. The directory may be empty
 // (a fresh WAL) or already contain segment files; in the latter case the
 // writer reopens the highest-numbered segment and continues appending to it,
 // preserving sequence counters and the cross-segment hash chain. Setting
 // opts.MaxSegmentBytes > 0 enables automatic segment rotation on Append.
 func OpenDirWriter(dir string, opts Options) (*Writer, error) {
+	return openDirWriterWithOps(dir, opts, defaultWALFileOps())
+}
+
+func openDirWriterWithOps(dir string, opts Options, ops walFileOps) (*Writer, error) {
 	if dir == "" {
 		return nil, errors.New("wal: directory path is required")
 	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := ensureDurableDirectory(dir, 0o755, ops); err != nil {
 		return nil, fmt.Errorf("wal: create dir: %w", err)
 	}
 	segments, err := ListSegments(dir)
@@ -187,10 +410,11 @@ func OpenDirWriter(dir string, opts Options) (*Writer, error) {
 	var (
 		activeSeg uint64
 		sequence  uint64
-		offset    int64
 		prev      [32]byte
+		create    bool
 	)
 	if len(segments) == 0 {
+		create = true
 		activeSeg = opts.InitialSegmentID
 		if activeSeg == 0 {
 			activeSeg = 1
@@ -200,42 +424,49 @@ func OpenDirWriter(dir string, opts Options) (*Writer, error) {
 		// sequence/prev-hash state the next Append would need. The prev
 		// hash threads across segments, which is also where any chain
 		// break is diagnosed.
-		var (
-			last      scanState
-			chainPrev [32]byte
-			prevSeg   uint64
-		)
-		for i, seg := range segments {
-			state, err := scanFileFrom(filepath.Join(dir, segmentName(seg)), false, false, chainPrev)
+		var last scanState
+		chain := segmentChainState{trustBoundary: segments[0] > 1}
+		for _, seg := range segments {
+			segmentPath := filepath.Join(dir, segmentName(seg))
+			if err := chain.validateNextSegment(seg); err != nil {
+				return nil, err
+			}
+			startPrev, err := chain.startPrev(segmentPath)
+			if err != nil {
+				return nil, fmt.Errorf("wal: seed segment %d: %w", seg, err)
+			}
+			state, err := scanFileFrom(segmentPath, false, false, startPrev)
 			if err != nil {
 				return nil, fmt.Errorf("wal: scan segment %d: %w", seg, err)
 			}
-			if state.records == 0 {
-				continue
+			if err := chain.accept(seg, state); err != nil {
+				return nil, err
 			}
-			if state.segmentID != seg {
-				return nil, fmt.Errorf("wal: segment %d file reports segment_id %d", seg, state.segmentID)
+			if state.records > 0 {
+				last = state
 			}
-			if i > 0 && last.records > 0 && state.firstPrev != last.lastHash {
-				return nil, fmt.Errorf("wal: hash chain break between segments %d and %d", prevSeg, seg)
-			}
-			chainPrev = state.lastHash
-			prevSeg = seg
-			last = state
 		}
 		activeSeg = segments[len(segments)-1]
 		sequence = last.lastSequence
-		offset = last.validBytes
 		prev = last.lastHash
 	}
 	path := filepath.Join(dir, segmentName(activeSeg))
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0o600)
+	flags := os.O_RDWR | os.O_APPEND
+	if create {
+		flags |= os.O_CREATE | os.O_EXCL
+	}
+	f, err := ops.openFile(path, flags, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("wal: open segment %d: %w", activeSeg, err)
 	}
-	if _, err := f.Seek(0, io.SeekEnd); err != nil {
-		_ = f.Close()
-		return nil, fmt.Errorf("wal: seek end: %w", err)
+	offset, err := f.Seek(0, io.SeekEnd)
+	if err != nil {
+		cause := fmt.Errorf("wal: seek end of segment %d: %w", activeSeg, err)
+		return nil, closeAfterOpenError(f, "seek", cause, ops)
+	}
+	if err := syncWALFileAndDirectory(f, path, ops); err != nil {
+		cause := fmt.Errorf("wal: publish segment %d: %w", activeSeg, err)
+		return nil, closeAfterOpenError(f, "publication", cause, ops)
 	}
 	return &Writer{
 		file:           f,
@@ -249,8 +480,10 @@ func OpenDirWriter(dir string, opts Options) (*Writer, error) {
 		fsyncMode:      normalizeFsyncMode(opts.FsyncMode),
 		groupEvery:     normalizeGroupInterval(opts.GroupCommitInterval),
 		afterFunc:      defaultAfterFunc,
-		syncFile:       defaultSyncFile,
-		closeFile:      defaultCloseFile,
+		openFile:       ops.openFile,
+		syncFile:       ops.syncFile,
+		syncDir:        ops.syncDir,
+		closeFile:      ops.closeFile,
 		appendHook:     opts.OnAppend,
 		fsyncHook:      opts.OnFsync,
 		fsyncErrorHook: opts.OnFsyncError,
@@ -271,35 +504,57 @@ func OpenWriter(path string, segmentID uint64) (*Writer, error) {
 }
 
 func OpenWriterWithOptions(path string, segmentID uint64, opts Options) (*Writer, error) {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	return openWriterWithOptionsAndOps(path, segmentID, opts, defaultWALFileOps())
+}
+
+func openWriterWithOptionsAndOps(path string, segmentID uint64, opts Options, ops walFileOps) (*Writer, error) {
+	if segmentID == 0 {
+		return nil, errors.New("wal: segment id must be greater than zero")
+	}
+	if err := ensureDurableDirectory(filepath.Dir(path), 0o755, ops); err != nil {
 		return nil, fmt.Errorf("wal: create dir: %w", err)
 	}
 	state, err := scanFile(path, false, false)
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
+	create := errors.Is(err, os.ErrNotExist)
+	if err != nil && !create {
 		return nil, fmt.Errorf("wal: scan existing log: %w", err)
+	}
+	if err := validateSingleFileStart(state); err != nil {
+		return nil, err
 	}
 	if state.records > 0 && state.segmentID != segmentID {
 		return nil, fmt.Errorf("wal: segment id mismatch: existing %d requested %d", state.segmentID, segmentID)
 	}
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0o600)
+	flags := os.O_RDWR | os.O_APPEND
+	if create {
+		flags |= os.O_CREATE | os.O_EXCL
+	}
+	f, err := ops.openFile(path, flags, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("wal: open writer: %w", err)
 	}
-	if _, err := f.Seek(0, io.SeekEnd); err != nil {
-		_ = f.Close()
-		return nil, fmt.Errorf("wal: seek end: %w", err)
+	offset, err := f.Seek(0, io.SeekEnd)
+	if err != nil {
+		cause := fmt.Errorf("wal: seek end: %w", err)
+		return nil, closeAfterOpenError(f, "seek", cause, ops)
+	}
+	if err := syncWALFileAndDirectory(f, path, ops); err != nil {
+		cause := fmt.Errorf("wal: publish writer file: %w", err)
+		return nil, closeAfterOpenError(f, "publication", cause, ops)
 	}
 	return &Writer{
 		file:           f,
 		segmentID:      segmentID,
 		sequence:       state.lastSequence,
-		offset:         state.validBytes,
+		offset:         offset,
 		prevHash:       state.lastHash,
 		fsyncMode:      normalizeFsyncMode(opts.FsyncMode),
 		groupEvery:     normalizeGroupInterval(opts.GroupCommitInterval),
 		afterFunc:      defaultAfterFunc,
-		syncFile:       defaultSyncFile,
-		closeFile:      defaultCloseFile,
+		openFile:       ops.openFile,
+		syncFile:       ops.syncFile,
+		syncDir:        ops.syncDir,
+		closeFile:      ops.closeFile,
 		appendHook:     opts.OnAppend,
 		fsyncHook:      opts.OnFsync,
 		fsyncErrorHook: opts.OnFsyncError,
@@ -312,8 +567,8 @@ func (w *Writer) Append(ctx context.Context, payload []byte) (model.WALPosition,
 }
 
 func (w *Writer) AppendAt(ctx context.Context, payload []byte, at time.Time) (model.WALPosition, [32]byte, error) {
-	if len(payload) == 0 {
-		return model.WALPosition{}, [32]byte{}, errors.New("wal: empty payload")
+	if err := validatePayloadLength(len(payload)); err != nil {
+		return model.WALPosition{}, [32]byte{}, err
 	}
 	if err := ctx.Err(); err != nil {
 		return model.WALPosition{}, [32]byte{}, err
@@ -327,7 +582,7 @@ func (w *Writer) AppendAt(ctx context.Context, payload []byte, at time.Time) (mo
 	}()
 
 	var (
-		fsyncs     [2]fsyncObservation
+		fsyncs     [3]fsyncObservation
 		fsyncCount int
 	)
 	w.mu.Lock()
@@ -344,6 +599,9 @@ func (w *Writer) AppendAt(ctx context.Context, payload []byte, at time.Time) (mo
 	if w.file == nil {
 		return model.WALPosition{}, [32]byte{}, errors.New("wal: writer is closed")
 	}
+	if w.sequence == ^uint64(0) {
+		return model.WALPosition{}, [32]byte{}, errors.New("wal: sequence exhausted")
+	}
 
 	// Auto-rotate before writing, never in the middle, so a single record
 	// is always entirely contained in one segment. A segment that does not
@@ -353,11 +611,13 @@ func (w *Writer) AppendAt(ctx context.Context, payload []byte, at time.Time) (mo
 	// forever between rotations.
 	nextSeq := w.sequence + 1
 	encoded, recordHash := encodeRecordInto(w.recordBuf, w.segmentID, nextSeq, at.UTC().UnixNano(), w.prevHash, payload)
-	if w.dir != "" && w.maxBytes > 0 && w.offset > 0 && w.offset+int64(len(encoded)) > w.maxBytes {
-		fsync, err := w.rotateLocked()
-		if fsync.attempted {
-			fsyncs[fsyncCount] = fsync
-			fsyncCount++
+	if w.dir != "" && w.maxBytes > 0 && w.offset > 0 && w.offset > w.maxBytes-int64(len(encoded)) {
+		beforeRotate, publish, err := w.rotateLocked()
+		for _, fsync := range [...]fsyncObservation{beforeRotate, publish} {
+			if fsync.attempted {
+				fsyncs[fsyncCount] = fsync
+				fsyncCount++
+			}
 		}
 		if err != nil {
 			return model.WALPosition{}, [32]byte{}, err
@@ -403,39 +663,64 @@ func (w *Writer) AppendAt(ctx context.Context, payload []byte, at time.Time) (mo
 	return pos, recordHash, nil
 }
 
+func validatePayloadLength(length int) error {
+	if length == 0 {
+		return errors.New("wal: empty payload")
+	}
+	if length > maxPayloadBytes {
+		return fmt.Errorf("wal: payload too large: %d > %d", length, maxPayloadBytes)
+	}
+	return nil
+}
+
 // rotateLocked closes the active segment and opens the next one. The caller
 // must hold w.mu. The hash chain and sequence counter continue across the
 // boundary so the first record of segment N+1 references the last record of
 // segment N via its prev_hash, keeping verification symmetric with the
 // single-file layout.
-func (w *Writer) rotateLocked() (fsyncObservation, error) {
+func (w *Writer) rotateLocked() (fsyncObservation, fsyncObservation, error) {
 	if w.dir == "" {
-		return fsyncObservation{}, errors.New("wal: rotation requires directory mode")
+		return fsyncObservation{}, fsyncObservation{}, errors.New("wal: rotation requires directory mode")
+	}
+	if w.segmentID == ^uint64(0) {
+		return fsyncObservation{}, fsyncObservation{}, errors.New("wal: segment id exhausted")
 	}
 	w.cancelGroupTimerLocked()
-	fsync := w.syncCurrentLocked("sync before rotate")
-	if fsync.err != nil {
-		return fsync, fsync.err
+	beforeRotate := w.syncCurrentLocked("sync before rotate")
+	if beforeRotate.err != nil {
+		return beforeRotate, fsyncObservation{}, beforeRotate.err
 	}
 	err := w.closeFile(w.file)
 	w.file = nil
 	if err != nil {
-		return fsync, w.poisonLocked(fmt.Errorf("wal: close before rotate: %w", err))
+		return beforeRotate, fsyncObservation{}, w.poisonLocked(fmt.Errorf("wal: close before rotate: %w", err))
 	}
 	from := w.segmentID
 	nextSeg := w.segmentID + 1
 	path := filepath.Join(w.dir, segmentName(nextSeg))
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR|os.O_APPEND|os.O_EXCL, 0o600)
+	f, err := w.openFile(path, os.O_CREATE|os.O_RDWR|os.O_APPEND|os.O_EXCL, 0o600)
 	if err != nil {
-		return fsync, w.poisonLocked(fmt.Errorf("wal: open rotated segment %d: %w", nextSeg, err))
+		return beforeRotate, fsyncObservation{}, w.poisonLocked(fmt.Errorf("wal: open rotated segment %d: %w", nextSeg, err))
 	}
+	start := time.Now()
+	publish := fsyncObservation{attempted: true}
+	if err := syncWALFileAndDirectory(f, path, walFileOps{syncFile: w.syncFile, syncDir: w.syncDir}); err != nil {
+		primary := fmt.Errorf("wal: publish rotated segment %d: %w", nextSeg, err)
+		if closeErr := w.closeFile(f); closeErr != nil {
+			primary = errors.Join(primary, fmt.Errorf("wal: close unpublished segment %d: %w", nextSeg, closeErr))
+		}
+		publish.duration = time.Since(start)
+		publish.err = w.poisonLocked(primary)
+		return beforeRotate, publish, publish.err
+	}
+	publish.duration = time.Since(start)
 	w.file = f
 	w.segmentID = nextSeg
 	w.offset = 0
 	if w.rotateHook != nil {
 		w.rotateHook(from, nextSeg)
 	}
-	return fsync, nil
+	return beforeRotate, publish, nil
 }
 
 func (w *Writer) Close() error {
@@ -617,6 +902,9 @@ func ReadAll(path string) ([]Record, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := validateSingleFileStart(state); err != nil {
+		return nil, err
+	}
 	return state.recordsList, nil
 }
 
@@ -624,8 +912,27 @@ func ReadAll(path string) ([]Record, error) {
 // Unlike ReadAll it never builds a []Record, so startup recovery can keep
 // memory proportional to the active recovery window rather than the WAL size.
 func Scan(path string, visit func(Record) error) error {
-	_, err := scanFileVisit(path, false, [32]byte{}, visit)
+	first := true
+	_, err := scanFileVisit(path, false, [32]byte{}, func(record Record) error {
+		if first {
+			first = false
+			if record.Position.Sequence != 1 {
+				return fmt.Errorf("wal: first record starts at sequence %d, want 1", record.Position.Sequence)
+			}
+		}
+		if visit != nil {
+			return visit(record)
+		}
+		return nil
+	})
 	return err
+}
+
+func validateSingleFileStart(state scanState) error {
+	if state.records > 0 && state.firstSequence != 1 {
+		return fmt.Errorf("wal: first record starts at sequence %d, want 1", state.firstSequence)
+	}
+	return nil
 }
 
 // ListSegments returns the segment ids found in dir, in ascending order.
@@ -641,12 +948,31 @@ func ListSegments(dir string) ([]uint64, error) {
 	}
 	ids := make([]uint64, 0, len(entries))
 	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
 		id, ok := parseSegmentName(entry.Name())
 		if !ok {
+			if strings.HasSuffix(entry.Name(), segmentFileExt) {
+				stem := strings.TrimSuffix(entry.Name(), segmentFileExt)
+				if isDecimalSegmentStem(stem) {
+					parsed, parseErr := strconv.ParseUint(stem, 10, 64)
+					if parseErr != nil {
+						return nil, fmt.Errorf("wal: segment entry %q has invalid numeric id: %w", entry.Name(), parseErr)
+					}
+					if parsed == 0 {
+						return nil, fmt.Errorf("wal: segment entry %q uses reserved id 0", entry.Name())
+					}
+				}
+			}
 			continue
+		}
+		if entry.Name() != segmentName(id) {
+			return nil, fmt.Errorf("wal: segment %d entry %q is not canonically named %q", id, entry.Name(), segmentName(id))
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return nil, fmt.Errorf("wal: inspect segment entry %q: %w", entry.Name(), err)
+		}
+		if !info.Mode().IsRegular() {
+			return nil, fmt.Errorf("wal: segment %d entry %q is not a regular file", id, entry.Name())
 		}
 		ids = append(ids, id)
 	}
@@ -654,28 +980,24 @@ func ListSegments(dir string) ([]uint64, error) {
 	return ids, nil
 }
 
-// ReadAllDir reads every WAL record in dir, verifying the hash chain across
-// segment boundaries. Equivalent to ReadAllDirFrom(dir, 0).
+// ReadAllDir reads every currently retained WAL record in dir, verifying the
+// hash chain across segment boundaries. Equivalent to ReadAllDirFrom(dir, 0).
 func ReadAllDir(dir string) ([]Record, error) {
 	return ReadAllDirFrom(dir, 0)
 }
 
 // ReadAllDirFrom reads records from segments whose id >= minSegmentID. When
-// minSegmentID is 0, every segment is included. The hash chain is verified
-// within each returned segment but callers that skip earlier segments
-// (e.g. because a checkpoint covers them) only verify the returned suffix;
-// earlier segments remain on disk for offline inspection.
+// minSegmentID is 0, every retained segment is included. When the first
+// on-disk id is greater than 1, or minSegmentID skips files, the first
+// non-empty record's link to the absent prefix is trusted once. Every later
+// segment id and hash link remains strict.
 func ReadAllDirFrom(dir string, minSegmentID uint64) ([]Record, error) {
 	segments, err := ListSegments(dir)
 	if err != nil {
 		return nil, err
 	}
-	var (
-		out         []Record
-		havePrev    bool
-		expectPrev  [32]byte
-		prevSegment uint64
-	)
+	var out []Record
+	chain := segmentChainState{trustBoundary: len(segments) > 0 && segments[0] > 1}
 	// When minSegmentID elides a prefix we cannot verify the link to the
 	// skipped tail, but the callers that skip (typically checkpoint-aware
 	// replay) have already committed to trusting those earlier segments:
@@ -686,38 +1008,28 @@ func ReadAllDirFrom(dir string, minSegmentID uint64) ([]Record, error) {
 	// verifying it) and from that point on verify the chain normally.
 	for _, seg := range segments {
 		if seg < minSegmentID {
+			chain.trustBoundary = true
 			continue
 		}
-		var startPrev [32]byte
-		switch {
-		case havePrev:
-			startPrev = expectPrev
-		case minSegmentID > 0 && seg > 1:
-			// Only trust the on-disk prev when we actually skipped something;
-			// a fresh-boot read of segment 1 still demands a zero prev.
-			peek, err := peekFirstPrev(filepath.Join(dir, segmentName(seg)))
-			if err != nil {
-				return nil, fmt.Errorf("wal: peek segment %d: %w", seg, err)
-			}
-			startPrev = peek
+		segmentPath := filepath.Join(dir, segmentName(seg))
+		if err := chain.validateNextSegment(seg); err != nil {
+			return nil, err
 		}
-		state, err := scanFileFrom(filepath.Join(dir, segmentName(seg)), false, true, startPrev)
+		startPrev, err := chain.startPrev(segmentPath)
+		if err != nil {
+			return nil, fmt.Errorf("wal: seed segment %d: %w", seg, err)
+		}
+		state, err := scanFileFrom(segmentPath, false, true, startPrev)
 		if err != nil {
 			return nil, fmt.Errorf("wal: scan segment %d: %w", seg, err)
+		}
+		if err := chain.accept(seg, state); err != nil {
+			return nil, err
 		}
 		if state.records == 0 {
 			continue
 		}
-		if state.segmentID != seg {
-			return nil, fmt.Errorf("wal: segment %d file reports segment_id %d", seg, state.segmentID)
-		}
-		if havePrev && state.firstPrev != expectPrev {
-			return nil, fmt.Errorf("wal: hash chain break between segments %d and %d", prevSegment, seg)
-		}
 		out = append(out, state.recordsList...)
-		expectPrev = state.lastHash
-		havePrev = true
-		prevSegment = seg
 	}
 	return out, nil
 }
@@ -731,42 +1043,40 @@ func ScanDirFrom(dir string, minSegmentID uint64, visit func(Record) error) erro
 	if err != nil {
 		return err
 	}
-	var (
-		havePrev    bool
-		expectPrev  [32]byte
-		prevSegment uint64
-	)
+	chain := segmentChainState{trustBoundary: len(segments) > 0 && segments[0] > 1}
 	for _, seg := range segments {
 		if seg < minSegmentID {
+			chain.trustBoundary = true
 			continue
 		}
-		var startPrev [32]byte
-		switch {
-		case havePrev:
-			startPrev = expectPrev
-		case minSegmentID > 0 && seg > 1:
-			peek, err := peekFirstPrev(filepath.Join(dir, segmentName(seg)))
-			if err != nil {
-				return fmt.Errorf("wal: peek segment %d: %w", seg, err)
-			}
-			startPrev = peek
+		segmentPath := filepath.Join(dir, segmentName(seg))
+		if err := chain.validateNextSegment(seg); err != nil {
+			return err
 		}
-		state, err := scanFileVisit(filepath.Join(dir, segmentName(seg)), false, startPrev, visit)
+		startPrev, err := chain.startPrev(segmentPath)
+		if err != nil {
+			return fmt.Errorf("wal: seed segment %d: %w", seg, err)
+		}
+		segmentVisit := visit
+		if visit != nil {
+			first := true
+			segmentVisit = func(record Record) error {
+				if first {
+					first = false
+					if err := chain.validateFirstRecord(seg, record); err != nil {
+						return err
+					}
+				}
+				return visit(record)
+			}
+		}
+		state, err := scanFileVisit(segmentPath, false, startPrev, segmentVisit)
 		if err != nil {
 			return fmt.Errorf("wal: scan segment %d: %w", seg, err)
 		}
-		if state.records == 0 {
-			continue
+		if err := chain.accept(seg, state); err != nil {
+			return err
 		}
-		if state.segmentID != seg {
-			return fmt.Errorf("wal: segment %d file reports segment_id %d", seg, state.segmentID)
-		}
-		if havePrev && state.firstPrev != expectPrev {
-			return fmt.Errorf("wal: hash chain break between segments %d and %d", prevSegment, seg)
-		}
-		expectPrev = state.lastHash
-		havePrev = true
-		prevSegment = seg
 	}
 	return nil
 }
@@ -776,16 +1086,41 @@ func ScanDirFrom(dir string, minSegmentID uint64, visit func(Record) error) erro
 // total size in bytes. It is safe to call with segmentID <= 1 (no-op) or
 // against a directory that holds no segments. Callers are expected to only
 // prune segments that a committed WAL checkpoint already covers: the
-// function does not re-check the checkpoint itself, because prune is an
-// idempotent best-effort GC and the data is also backed by committed
-// manifests + bundles in the proof store.
+// function does not re-check the checkpoint itself. Pruning is idempotent,
+// but it returns success only after each oldest-first removal has crossed a
+// directory metadata barrier.
 func PruneSegmentsBefore(dir string, segmentID uint64) (int, int64, error) {
+	return pruneSegmentsBeforeWithOps(dir, segmentID, defaultWALFileOps())
+}
+
+func pruneSegmentsBeforeWithOps(dir string, segmentID uint64, ops walFileOps) (int, int64, error) {
 	if segmentID <= 1 {
 		return 0, 0, nil
 	}
 	segments, err := ListSegments(dir)
 	if err != nil {
 		return 0, 0, err
+	}
+	if len(segments) == 0 {
+		info, statErr := ops.stat(dir)
+		if errors.Is(statErr, os.ErrNotExist) {
+			return 0, 0, nil
+		}
+		if statErr != nil {
+			return 0, 0, fmt.Errorf("wal: stat directory before pruning: %w", statErr)
+		}
+		if !info.IsDir() {
+			return 0, 0, fmt.Errorf("wal: prune path %q is not a directory", dir)
+		}
+	}
+	// Heal a prior failed attempt before issuing another unlink. Without
+	// this barrier, a retry could observe an already-removed entry in the
+	// page cache and then return without ever making that deletion durable.
+	if err := ops.syncDir(dir); err != nil {
+		return 0, 0, fmt.Errorf("wal: sync directory before pruning: %w", err)
+	}
+	if len(segments) == 0 {
+		return 0, 0, nil
 	}
 	var removed int
 	var bytesRemoved int64
@@ -794,42 +1129,61 @@ func PruneSegmentsBefore(dir string, segmentID uint64) (int, int64, error) {
 			break
 		}
 		path := filepath.Join(dir, segmentName(seg))
-		info, err := os.Stat(path)
+		info, err := ops.stat(path)
 		if err != nil {
 			if os.IsNotExist(err) {
 				continue
 			}
 			return removed, bytesRemoved, fmt.Errorf("wal: stat segment %d: %w", seg, err)
 		}
-		if err := os.Remove(path); err != nil {
+		if err := ops.remove(path); err != nil {
 			return removed, bytesRemoved, fmt.Errorf("wal: remove segment %d: %w", seg, err)
 		}
 		removed++
 		bytesRemoved += info.Size()
+		// Persist each oldest-first deletion independently. A single final
+		// sync would allow a crash to retain an arbitrary subset and create
+		// an internal chain gap.
+		if err := ops.syncDir(dir); err != nil {
+			return removed, bytesRemoved, fmt.Errorf("wal: sync directory after removing segment %d: %w", seg, err)
+		}
 	}
 	return removed, bytesRemoved, nil
 }
 
-// peekFirstPrev reads just enough of a segment file to recover the prev_hash
-// field of its first record, without verifying anything else. Used by
-// ReadAllDirFrom when the leading segments are intentionally skipped and we
-// need a starting point for the visible tail's chain verification.
-func peekFirstPrev(path string) ([32]byte, error) {
-	var out [32]byte
+type firstRecordHeader struct {
+	segmentID uint64
+	sequence  uint64
+	prevHash  [32]byte
+}
+
+// peekFirstHeaderIfPresent reads the fixed header of a segment's first
+// record. An empty segment reports present=false so a retained suffix can
+// skip leading crash-created empty segments before trusting one boundary.
+func peekFirstHeaderIfPresent(path string) (firstRecordHeader, bool, error) {
+	var out firstRecordHeader
 	f, err := os.Open(path)
 	if err != nil {
-		return out, err
+		return out, false, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	header := make([]byte, headerSize)
 	if _, err := io.ReadFull(f, header); err != nil {
-		return out, fmt.Errorf("wal: read first header: %w", err)
+		if errors.Is(err, io.EOF) {
+			return out, false, nil
+		}
+		if errors.Is(err, io.ErrUnexpectedEOF) {
+			return out, false, fmt.Errorf("%w: truncated header: %v", errRepairableFirstHeader, err)
+		}
+		return out, false, fmt.Errorf("wal: read first header: %w", err)
 	}
 	if binary.BigEndian.Uint32(header[0:4]) != magic {
-		return out, fmt.Errorf("wal: bad magic at segment start")
+		return out, false, fmt.Errorf("%w at segment start", errBadRecordMagic)
 	}
-	copy(out[:], header[32:64])
-	return out, nil
+	out.segmentID = binary.BigEndian.Uint64(header[8:16])
+	out.sequence = binary.BigEndian.Uint64(header[16:24])
+	copy(out.prevHash[:], header[32:64])
+	return out, true, nil
 }
 
 func segmentName(id uint64) string {
@@ -845,15 +1199,30 @@ func parseSegmentName(name string) (uint64, bool) {
 		return 0, false
 	}
 	id, err := strconv.ParseUint(stem, 10, 64)
-	if err != nil {
+	if err != nil || id == 0 {
 		return 0, false
 	}
 	return id, true
 }
 
+func isDecimalSegmentStem(stem string) bool {
+	if stem == "" {
+		return false
+	}
+	for i := 0; i < len(stem); i++ {
+		if stem[i] < '0' || stem[i] > '9' {
+			return false
+		}
+	}
+	return true
+}
+
 func Inspect(path string) (InspectResult, error) {
 	state, err := scanFile(path, false, false)
 	if err != nil {
+		return InspectResult{}, err
+	}
+	if err := validateSingleFileStart(state); err != nil {
 		return InspectResult{}, err
 	}
 	return InspectResult{
@@ -893,11 +1262,21 @@ func InspectDir(dir string) (DirInspectResult, error) {
 	if len(ids) == 0 {
 		return out, nil
 	}
-	var prev [32]byte
+	chain := segmentChainState{trustBoundary: ids[0] > 1}
 	for _, id := range ids {
 		segPath := filepath.Join(dir, segmentName(id))
-		state, err := scanFileFrom(segPath, false, false, prev)
+		if err := chain.validateNextSegment(id); err != nil {
+			return out, err
+		}
+		startPrev, err := chain.startPrev(segPath)
 		if err != nil {
+			return out, fmt.Errorf("wal: seed segment %d: %w", id, err)
+		}
+		state, err := scanFileFrom(segPath, false, false, startPrev)
+		if err != nil {
+			return out, err
+		}
+		if err := chain.accept(id, state); err != nil {
 			return out, err
 		}
 		res := InspectResult{
@@ -918,50 +1297,75 @@ func InspectDir(dir string) (DirInspectResult, error) {
 		if state.lastSequence > out.LastSequence {
 			out.LastSequence = state.lastSequence
 		}
-		if state.records > 0 {
-			prev = state.lastHash
-		}
 		out.ActiveSegmentID = id
 	}
-	out.LastHash = append([]byte(nil), prev[:]...)
+	out.LastHash = append([]byte(nil), chain.expectPrev[:]...)
 	return out, nil
 }
 
 func Repair(path string) (RepairResult, error) {
-	info, err := os.Stat(path)
+	return repairWithOps(path, defaultWALFileOps())
+}
+
+func repairWithOps(path string, ops walFileOps) (RepairResult, error) {
+	info, err := ops.stat(path)
 	if err != nil {
 		return RepairResult{}, fmt.Errorf("wal: stat: %w", err)
 	}
-	return repairFile(path, info.Size(), [32]byte{})
+	header, present, peekErr := peekFirstHeaderIfPresent(path)
+	if peekErr != nil && !errors.Is(peekErr, errRepairableFirstHeader) {
+		return RepairResult{}, peekErr
+	}
+	if present && (header.segmentID == 0 || header.sequence != 1) {
+		return RepairResult{}, fmt.Errorf("wal: first record has segment_id %d sequence %d, want nonzero segment and sequence 1", header.segmentID, header.sequence)
+	}
+	return repairFileWithOps(path, info.Size(), [32]byte{}, ops)
 }
 
-// repairFile is the shared tail-tolerant repair routine used by both
+// repairFileWithOps is the shared tail-tolerant repair routine used by both
 // single-file Repair and the tail-segment branch of RepairDir. startPrev
 // lets directory-mode pass in the hash chain state that was stitched across
 // earlier segments so the tail segment is scanned from the correct seed
 // rather than always assuming a zero prev_hash.
-func repairFile(path string, originalBytes int64, startPrev [32]byte) (RepairResult, error) {
+func repairFileWithOps(path string, originalBytes int64, startPrev [32]byte, ops walFileOps) (RepairResult, error) {
 	state, scanErr := scanFileFrom(path, true, false, startPrev)
+	if scanErr != nil {
+		return RepairResult{}, scanErr
+	}
+	if state.validBytes > originalBytes {
+		return RepairResult{}, fmt.Errorf("wal: repair file grew during scan: valid bytes %d exceed original bytes %d", state.validBytes, originalBytes)
+	}
 	truncated := originalBytes - state.validBytes
-	if scanErr == nil && truncated == 0 {
-		return RepairResult{
-			Path:          path,
-			Records:       state.records,
-			ValidBytes:    state.validBytes,
-			OriginalBytes: originalBytes,
-		}, nil
-	}
-	if err := os.Truncate(path, state.validBytes); err != nil {
-		return RepairResult{}, fmt.Errorf("wal: truncate: %w", err)
-	}
-	return RepairResult{
+	result := RepairResult{
 		Path:           path,
 		Records:        state.records,
 		ValidBytes:     state.validBytes,
 		OriginalBytes:  originalBytes,
 		TruncatedBytes: truncated,
 		Repaired:       truncated > 0,
-	}, nil
+	}
+	file, err := ops.openFile(path, os.O_RDWR, 0)
+	if err != nil {
+		return RepairResult{}, fmt.Errorf("wal: open for repair: %w", err)
+	}
+	var operationErr error
+	if truncated > 0 {
+		if err := ops.truncateFile(file, state.validBytes); err != nil {
+			operationErr = fmt.Errorf("wal: truncate repair file: %w", err)
+		}
+	}
+	if operationErr == nil {
+		if err := ops.syncFile(file); err != nil {
+			operationErr = fmt.Errorf("wal: sync repair file: %w", err)
+		}
+	}
+	if err := ops.closeFile(file); err != nil {
+		operationErr = errors.Join(operationErr, fmt.Errorf("wal: close repair file: %w", err))
+	}
+	if operationErr != nil {
+		return RepairResult{}, operationErr
+	}
+	return result, nil
 }
 
 // trusterrNonTailBreak produces a FAILED_PRECONDITION error when a
@@ -996,6 +1400,10 @@ type DirRepairResult struct {
 // everything past them. Operators who hit that case should restore from
 // backup or investigate manually.
 func RepairDir(dir string) (DirRepairResult, error) {
+	return repairDirWithOps(dir, defaultWALFileOps())
+}
+
+func repairDirWithOps(dir string, ops walFileOps) (DirRepairResult, error) {
 	ids, err := ListSegments(dir)
 	if err != nil {
 		return DirRepairResult{}, err
@@ -1005,14 +1413,24 @@ func RepairDir(dir string) (DirRepairResult, error) {
 		return out, nil
 	}
 
-	var prev [32]byte
+	chain := segmentChainState{trustBoundary: ids[0] > 1}
 	// Verify every segment strictly except the last. Any error here is a
 	// non-tail chain break and we bail out before touching disk.
 	for _, id := range ids[:len(ids)-1] {
 		segPath := filepath.Join(dir, segmentName(id))
-		state, scanErr := scanFileFrom(segPath, false, false, prev)
+		if err := chain.validateNextSegment(id); err != nil {
+			return out, trusterrNonTailBreak(id, segPath, err)
+		}
+		startPrev, seedErr := chain.startPrev(segPath)
+		if seedErr != nil {
+			return out, trusterrNonTailBreak(id, segPath, seedErr)
+		}
+		state, scanErr := scanFileFrom(segPath, false, false, startPrev)
 		if scanErr != nil {
 			return out, trusterrNonTailBreak(id, segPath, scanErr)
+		}
+		if chainErr := chain.accept(id, state); chainErr != nil {
+			return out, trusterrNonTailBreak(id, segPath, chainErr)
 		}
 		out.Segments = append(out.Segments, InspectResult{
 			Path:          segPath,
@@ -1023,18 +1441,31 @@ func RepairDir(dir string) (DirRepairResult, error) {
 			SegmentID:     id,
 			LastHash:      append([]byte(nil), state.lastHash[:]...),
 		})
-		if state.records > 0 {
-			prev = state.lastHash
-		}
 	}
 
 	tailID := ids[len(ids)-1]
 	tailPath := filepath.Join(dir, segmentName(tailID))
-	info, err := os.Stat(tailPath)
+	if err := chain.validateNextSegment(tailID); err != nil {
+		return out, trusterrNonTailBreak(tailID, tailPath, err)
+	}
+	if header, present, peekErr := peekFirstHeaderIfPresent(tailPath); peekErr == nil && present {
+		if err := chain.validateFirstPosition(tailID, header.segmentID, header.sequence, header.prevHash); err != nil {
+			return out, trusterr.Wrap(
+				trusterr.CodeFailedPrecondition,
+				fmt.Sprintf("wal: tail segment %d (%s) has invalid position metadata; refusing to mutate it", tailID, tailPath),
+				err,
+			)
+		}
+	}
+	startPrev, err := chain.repairStartPrev(tailPath)
+	if err != nil {
+		return out, fmt.Errorf("wal: seed tail segment %d: %w", tailID, err)
+	}
+	info, err := ops.stat(tailPath)
 	if err != nil {
 		return out, fmt.Errorf("wal: stat tail segment: %w", err)
 	}
-	tail, err := repairFile(tailPath, info.Size(), prev)
+	tail, err := repairFileWithOps(tailPath, info.Size(), startPrev, ops)
 	if err != nil {
 		return out, err
 	}
@@ -1043,9 +1474,12 @@ func RepairDir(dir string) (DirRepairResult, error) {
 	// Re-scan the tail after truncation so the Segments slice reflects the
 	// post-repair state; the scan now always succeeds because the tail was
 	// truncated exactly at the first invalid record boundary.
-	tailState, scanErr := scanFileFrom(tailPath, false, false, prev)
+	tailState, scanErr := scanFileFrom(tailPath, false, false, startPrev)
 	if scanErr != nil {
 		return out, fmt.Errorf("wal: verify tail after repair: %w", scanErr)
+	}
+	if err := chain.accept(tailID, tailState); err != nil {
+		return out, fmt.Errorf("wal: verify tail chain after repair: %w", err)
 	}
 	out.Segments = append(out.Segments, InspectResult{
 		Path:          tailPath,
@@ -1110,15 +1544,34 @@ func scanFileVisit(path string, tolerateTail bool, startPrev [32]byte, visit fun
 			return state, nil
 		}
 		if err != nil {
-			if tolerateTail {
+			if tolerateTail && (errors.Is(err, errTornRecord) || errors.Is(err, errCorruptRecord) || (state.records > 0 && errors.Is(err, errBadRecordMagic))) {
 				return state, nil
 			}
 			return scanState{}, err
+		}
+		if rec.Position.SegmentID == 0 || rec.Position.Sequence == 0 {
+			if tolerateTail {
+				return state, nil
+			}
+			return scanState{}, fmt.Errorf("wal: zero segment_id or sequence at offset %d", offset)
 		}
 		if state.records == 0 {
 			state.firstSequence = rec.Position.Sequence
 			state.segmentID = rec.Position.SegmentID
 			state.firstPrev = rec.PrevHash
+		} else {
+			if rec.Position.SegmentID != state.segmentID {
+				if tolerateTail {
+					return state, nil
+				}
+				return scanState{}, fmt.Errorf("wal: segment_id changed from %d to %d at offset %d", state.segmentID, rec.Position.SegmentID, offset)
+			}
+			if state.lastSequence == ^uint64(0) || rec.Position.Sequence != state.lastSequence+1 {
+				if tolerateTail {
+					return state, nil
+				}
+				return scanState{}, fmt.Errorf("wal: sequence discontinuity at offset %d: got %d after %d", offset, rec.Position.Sequence, state.lastSequence)
+			}
 		}
 		state.records++
 		if visit != nil {
@@ -1176,35 +1629,44 @@ func readOneWithFrame(r io.Reader, offset int64, expectedPrev [32]byte, frame *r
 	header := frame.header[:]
 	if _, err := io.ReadFull(r, header); err != nil {
 		if errors.Is(err, io.ErrUnexpectedEOF) {
-			return Record{}, 0, fmt.Errorf("wal: truncated header at offset %d", offset)
+			return Record{}, 0, fmt.Errorf("%w: truncated header at offset %d", errTornRecord, offset)
 		}
 		return Record{}, 0, err
 	}
 	if binary.BigEndian.Uint32(header[0:4]) != magic {
-		return Record{}, 0, fmt.Errorf("wal: bad magic at offset %d", offset)
+		return Record{}, 0, fmt.Errorf("%w at offset %d", errBadRecordMagic, offset)
 	}
 	if binary.BigEndian.Uint16(header[4:6]) != version {
-		return Record{}, 0, fmt.Errorf("wal: unsupported version at offset %d", offset)
+		return Record{}, 0, fmt.Errorf("%w: version at offset %d", errUnsupportedRecord, offset)
 	}
 	if binary.BigEndian.Uint16(header[6:8]) != typeAccepted {
-		return Record{}, 0, fmt.Errorf("wal: unsupported record type at offset %d", offset)
+		return Record{}, 0, fmt.Errorf("%w: record type at offset %d", errUnsupportedRecord, offset)
 	}
 	var prev [32]byte
 	copy(prev[:], header[32:64])
 	if prev != expectedPrev {
-		return Record{}, 0, fmt.Errorf("wal: hash chain mismatch at offset %d", offset)
+		return Record{}, 0, fmt.Errorf("%w: hash chain mismatch at offset %d", errCorruptRecord, offset)
 	}
 	payloadLen := binary.BigEndian.Uint32(header[64:68])
+	if payloadLen == 0 {
+		return Record{}, 0, fmt.Errorf("%w: empty payload at offset %d", errCorruptRecord, offset)
+	}
 	if payloadLen > maxPayloadBytes {
-		return Record{}, 0, fmt.Errorf("wal: payload too large at offset %d: %d > %d", offset, payloadLen, maxPayloadBytes)
+		return Record{}, 0, fmt.Errorf("%w: payload too large at offset %d: %d > %d", errCorruptRecord, offset, payloadLen, maxPayloadBytes)
 	}
 	payload := make([]byte, payloadLen)
 	if _, err := io.ReadFull(r, payload); err != nil {
-		return Record{}, 0, fmt.Errorf("wal: truncated payload at offset %d: %w", offset, err)
+		if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+			return Record{}, 0, fmt.Errorf("%w: truncated payload at offset %d: %v", errTornRecord, offset, err)
+		}
+		return Record{}, 0, err
 	}
 	trailer := frame.trailer[:]
 	if _, err := io.ReadFull(r, trailer); err != nil {
-		return Record{}, 0, fmt.Errorf("wal: truncated trailer at offset %d: %w", offset, err)
+		if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+			return Record{}, 0, fmt.Errorf("%w: truncated trailer at offset %d: %v", errTornRecord, offset, err)
+		}
+		return Record{}, 0, err
 	}
 	wantCRC := binary.BigEndian.Uint32(trailer[:4])
 	crc := crc32.New(crcTable)
@@ -1212,7 +1674,7 @@ func readOneWithFrame(r io.Reader, offset int64, expectedPrev [32]byte, frame *r
 	_, _ = crc.Write(payload)
 	gotCRC := crc.Sum32()
 	if gotCRC != wantCRC {
-		return Record{}, 0, fmt.Errorf("wal: crc mismatch at offset %d", offset)
+		return Record{}, 0, fmt.Errorf("%w: crc mismatch at offset %d", errCorruptRecord, offset)
 	}
 	h := sha256.New()
 	_, _ = h.Write(header)
@@ -1223,7 +1685,7 @@ func readOneWithFrame(r io.Reader, offset int64, expectedPrev [32]byte, frame *r
 	var storedHash [32]byte
 	copy(storedHash[:], trailer[4:])
 	if gotHash != storedHash {
-		return Record{}, 0, fmt.Errorf("wal: record hash mismatch at offset %d", offset)
+		return Record{}, 0, fmt.Errorf("%w: record hash mismatch at offset %d", errCorruptRecord, offset)
 	}
 	sequence := binary.BigEndian.Uint64(header[16:24])
 	segmentID := binary.BigEndian.Uint64(header[8:16])

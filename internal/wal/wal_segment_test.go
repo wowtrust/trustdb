@@ -369,6 +369,9 @@ func TestSegmentNameRoundTrip(t *testing.T) {
 	if _, ok := parseSegmentName("not-a-segment.txt"); ok {
 		t.Fatal("parseSegmentName() accepted non-segment name")
 	}
+	if _, ok := parseSegmentName(segmentName(0)); ok {
+		t.Fatal("parseSegmentName() accepted reserved segment id 0")
+	}
 }
 
 // TestWriterRotatesPastOversizedRecord makes sure an Append whose single

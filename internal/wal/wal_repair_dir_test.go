@@ -256,4 +256,3 @@ func TestRepairDirMissingDir(t *testing.T) {
 		t.Fatalf("expected empty result, got %+v", result)
 	}
 }
-

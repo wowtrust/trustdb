@@ -80,7 +80,7 @@ Core paths:
 - Backup path: proofstore data can be exported to `.tdbackup`, verified, and restored with resume checkpoints.
 - Observability path: `/metrics` exposes ingest, batch, global log, anchor, WAL, backup, and storage metrics.
 
-`wal.fsync_mode=strict` waits for each accepted record's WAL file fsync before returning. `group` bounds the asynchronous dirty window by `wal.group_commit_interval`; `batch` syncs only at rotation or close. Choose `strict` when the receipt contract requires a per-record fsync; end-to-end crash durability also depends on the filesystem and storage guarantees.
+`wal.fsync_mode=strict` waits for each accepted record's WAL file fsync before returning. `group` bounds the asynchronous dirty window by `wal.group_commit_interval`; `batch` defers accepted-record data fsync until rotation or close. Writer startup and the namespace barriers used for WAL directory creation, file publication, rotation, and pruning are independent of that append policy. On Windows, TrustDB fails closed when the underlying filesystem rejects its best-available directory flush. Choose `strict` when the receipt contract requires a per-record fsync; end-to-end crash durability still depends on the filesystem and storage guarantees.
 
 ## Quick Start
 

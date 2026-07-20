@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -247,6 +248,65 @@ func TestPruneHookRefreshesSegmentGaugeWithoutRemoval(t *testing.T) {
 	}
 	if got := testutil.ToFloat64(metrics.WALBytesPrunedTotal); got != 0 {
 		t.Fatalf("wal_bytes_pruned_total = %v, want 0 when no files were removed", got)
+	}
+}
+
+func TestPruneHookCachesSuccessfulCutoffAndRetriesFailures(t *testing.T) {
+	t.Parallel()
+
+	sentinel := errors.New("injected prune failure")
+	var calls []uint64
+	failFirst := true
+	pruner := func(_ string, cutoff uint64) (int, int64, error) {
+		calls = append(calls, cutoff)
+		if failFirst {
+			failFirst = false
+			return 0, 0, sentinel
+		}
+		return 0, 0, nil
+	}
+	hook := newPruneHookWithPruner(&runtimeConfig{logger: silentLogger()}, t.TempDir(), 0, nil, pruner)
+	hook(context.Background(), model.WALCheckpoint{SegmentID: 3}) // fails; must remain retryable
+	hook(context.Background(), model.WALCheckpoint{SegmentID: 3}) // succeeds and caches
+	hook(context.Background(), model.WALCheckpoint{SegmentID: 3}) // identical cutoff skips
+	hook(context.Background(), model.WALCheckpoint{SegmentID: 2}) // older cutoff skips
+	hook(context.Background(), model.WALCheckpoint{SegmentID: 4}) // new segment prunes once
+
+	want := []uint64{3, 3, 4}
+	if fmt.Sprint(calls) != fmt.Sprint(want) {
+		t.Fatalf("prune cutoffs = %v, want %v", calls, want)
+	}
+
+	panicCalls := 0
+	panicHook := newPruneHookWithPruner(&runtimeConfig{logger: silentLogger()}, t.TempDir(), 0, nil, func(_ string, _ uint64) (int, int64, error) {
+		panicCalls++
+		if panicCalls == 1 {
+			panic("injected prune panic")
+		}
+		return 0, 0, nil
+	})
+	func() {
+		defer func() {
+			if recover() == nil {
+				t.Error("first prune call did not panic")
+			}
+		}()
+		panicHook(context.Background(), model.WALCheckpoint{SegmentID: 5})
+	}()
+	panicHook(context.Background(), model.WALCheckpoint{SegmentID: 5})
+	if panicCalls != 2 {
+		t.Fatalf("prune calls after panic = %d, want retry without deadlock", panicCalls)
+	}
+
+	noPruneCalls := 0
+	noPruneHook := newPruneHookWithPruner(&runtimeConfig{logger: silentLogger()}, t.TempDir(), 10, nil, func(string, uint64) (int, int64, error) {
+		noPruneCalls++
+		return 0, 0, nil
+	})
+	noPruneHook(context.Background(), model.WALCheckpoint{SegmentID: 1})
+	noPruneHook(context.Background(), model.WALCheckpoint{SegmentID: 5})
+	if noPruneCalls != 0 {
+		t.Fatalf("pruner called %d times before an eligible cutoff", noPruneCalls)
 	}
 }
 
