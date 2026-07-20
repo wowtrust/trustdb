@@ -37,11 +37,41 @@ func TestMarshalBufferMatchesMarshal(t *testing.T) {
 		t.Fatalf("Marshal() error = %v", err)
 	}
 	var buf bytes.Buffer
+	buf.WriteString("prefix")
 	if err := MarshalBuffer(&buf, v); err != nil {
 		t.Fatalf("MarshalBuffer() error = %v", err)
 	}
-	if !bytes.Equal(buf.Bytes(), want) {
-		t.Fatalf("MarshalBuffer() = %x, want %x", buf.Bytes(), want)
+	if got := buf.Bytes(); !bytes.Equal(got[:len("prefix")], []byte("prefix")) || !bytes.Equal(got[len("prefix"):], want) {
+		t.Fatalf("MarshalBuffer() = %x, want prefix + %x", got, want)
+	}
+}
+
+func TestMarshalBufferRestoresLengthAfterError(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	buf.WriteString("prefix")
+	before := append([]byte(nil), buf.Bytes()...)
+	if err := MarshalBuffer(&buf, struct {
+		Unsupported func() `cbor:"unsupported"`
+	}{}); err == nil {
+		t.Fatal("MarshalBuffer() error = nil, want unsupported type error")
+	}
+	if !bytes.Equal(buf.Bytes(), before) {
+		t.Fatalf("MarshalBuffer() after error = %x, want %x", buf.Bytes(), before)
+	}
+}
+
+func BenchmarkMarshalBuffer(b *testing.B) {
+	v := sample{A: "x", B: 7}
+	var buf bytes.Buffer
+	buf.Grow(64)
+	b.ReportAllocs()
+	for b.Loop() {
+		buf.Reset()
+		if err := MarshalBuffer(&buf, v); err != nil {
+			b.Fatal(err)
+		}
 	}
 }
 
