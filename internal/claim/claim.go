@@ -1,12 +1,14 @@
 package claim
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/base32"
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ryan-wong-coder/trustdb/internal/cborx"
@@ -15,9 +17,12 @@ import (
 )
 
 const (
-	signingDomain = "trustdb.client-claim.v1"
-	recordDomain  = "trustdb.record-id.v1"
+	signingDomain                 = "trustdb.client-claim.v1"
+	recordDomain                  = "trustdb.record-id.v1"
+	maxSigningInputBufferCapacity = 1 << 20
 )
+
+var signingInputBufferPool = sync.Pool{New: func() any { return new(bytes.Buffer) }}
 
 type Verified struct {
 	Claim     model.ClientClaim
@@ -82,7 +87,9 @@ func Sign(claim model.ClientClaim, privateKey ed25519.PrivateKey) (model.SignedC
 	if err != nil {
 		return model.SignedClaim{}, err
 	}
-	sig, err := trustcrypto.SignEd25519(claim.KeyID, privateKey, SigningInput(claimCBOR))
+	input, buf := pooledSigningInput(claimCBOR)
+	defer releaseSigningInputBuffer(buf)
+	sig, err := trustcrypto.SignEd25519(claim.KeyID, privateKey, input)
 	if err != nil {
 		return model.SignedClaim{}, err
 	}
@@ -104,7 +111,9 @@ func Verify(signed model.SignedClaim, publicKey ed25519.PublicKey) (Verified, er
 	if signed.Signature.KeyID != signed.Claim.KeyID {
 		return Verified{}, errors.New("signature key_id does not match claim key_id")
 	}
-	if err := trustcrypto.VerifyEd25519(publicKey, SigningInput(claimCBOR), signed.Signature); err != nil {
+	input, buf := pooledSigningInput(claimCBOR)
+	defer releaseSigningInputBuffer(buf)
+	if err := trustcrypto.VerifyEd25519(publicKey, input, signed.Signature); err != nil {
 		return Verified{}, err
 	}
 	return Verified{
@@ -113,6 +122,24 @@ func Verify(signed model.SignedClaim, publicKey ed25519.PublicKey) (Verified, er
 		Signature: signed.Signature,
 		RecordID:  RecordID(claimCBOR, signed.Signature),
 	}, nil
+}
+
+func pooledSigningInput(claimCBOR []byte) ([]byte, *bytes.Buffer) {
+	buf := signingInputBufferPool.Get().(*bytes.Buffer)
+	buf.Reset()
+	buf.Grow(len(signingDomain) + 1 + len(claimCBOR))
+	buf.WriteString(signingDomain)
+	buf.WriteByte(0)
+	buf.Write(claimCBOR)
+	return buf.Bytes(), buf
+}
+
+func releaseSigningInputBuffer(buf *bytes.Buffer) {
+	if buf == nil || buf.Cap() > maxSigningInputBufferCapacity {
+		return
+	}
+	buf.Reset()
+	signingInputBufferPool.Put(buf)
 }
 
 func RecordID(claimCBOR []byte, sig model.Signature) string {

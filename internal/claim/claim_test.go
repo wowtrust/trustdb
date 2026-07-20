@@ -75,3 +75,18 @@ func TestVerifyRejectsTamperedClaim(t *testing.T) {
 		t.Fatal("Verify() error = nil, want signature failure")
 	}
 }
+
+func TestSigningInputReturnsIndependentOwnedBytes(t *testing.T) {
+	t.Parallel()
+
+	claimCBOR := []byte{1, 2, 3, 4}
+	first := SigningInput(claimCBOR)
+	second := SigningInput(claimCBOR)
+	first[0] ^= 0xff
+	if bytes.Equal(first, second) {
+		t.Fatal("SigningInput results alias each other")
+	}
+	if !bytes.Equal(claimCBOR, []byte{1, 2, 3, 4}) {
+		t.Fatalf("claim CBOR mutated: %v", claimCBOR)
+	}
+}
