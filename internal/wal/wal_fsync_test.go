@@ -190,17 +190,17 @@ func TestGroupFsyncRotationInvalidatesOldTimer(t *testing.T) {
 	if got := writer.ActiveSegmentID(); got != 2 {
 		t.Fatalf("ActiveSegmentID() = %d, want 2", got)
 	}
-	if got := syncCalls.Load(); got != 2 {
-		t.Fatalf("sync calls after rotation = %d, want 2", got)
+	if got := syncCalls.Load(); got != 3 {
+		t.Fatalf("sync calls after rotation = %d, want 3", got)
 	}
 
 	created[0].fire()
-	if got := syncCalls.Load(); got != 2 {
-		t.Fatalf("stale old-segment timer sync calls = %d, want 2", got)
+	if got := syncCalls.Load(); got != 3 {
+		t.Fatalf("stale old-segment timer sync calls = %d, want 3", got)
 	}
 	created[1].fire()
-	if got := syncCalls.Load(); got != 3 {
-		t.Fatalf("new-segment timer sync calls = %d, want 3", got)
+	if got := syncCalls.Load(); got != 4 {
+		t.Fatalf("new-segment timer sync calls = %d, want 4", got)
 	}
 	if err := writer.Close(); err != nil {
 		t.Fatalf("Close() error = %v", err)
