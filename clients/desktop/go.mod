@@ -1,6 +1,6 @@
 module github.com/ryan-wong-coder/trustdb/clients/desktop
 
-go 1.26.2
+go 1.26.5
 
 require (
 	github.com/cockroachdb/pebble v1.1.5

@@ -5,7 +5,7 @@ RUN npm ci
 COPY clients/web/ ./
 RUN npm run build
 
-FROM golang:1.26.3-bookworm AS server
+FROM golang:1.26.5-bookworm AS server
 ARG TARGETOS
 ARG TARGETARCH
 ARG VERSION=dev
