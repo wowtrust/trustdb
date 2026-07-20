@@ -536,6 +536,7 @@ func (c *Client) submitLogStreamNative(ctx context.Context, entries <-chan LogEn
 	}()
 	go func() {
 		defer completion.Done()
+		defer cancel()
 		for item := range nativeOut {
 			if !emit(LogSubmitItemResult{Index: item.Index, Result: item.Result, Err: item.Err}) {
 				return

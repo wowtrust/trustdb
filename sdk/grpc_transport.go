@@ -165,10 +165,10 @@ func (t *grpcTransport) SubmitSignedClaimStream(ctx context.Context, in <-chan s
 	if in == nil {
 		return nil, errors.New("sdk: signed claim stream is nil")
 	}
-	callCtx, cancel := context.WithCancel(context.Background())
-	if ctx != nil {
-		callCtx, cancel = context.WithCancel(ctx)
+	if ctx == nil {
+		ctx = context.Background()
 	}
+	callCtx, cancel := context.WithCancel(ctx)
 	stream, err := t.conn.NewStream(callCtx, &grpc.StreamDesc{
 		StreamName:    "SubmitClaimStream",
 		ServerStreams: true,
@@ -185,7 +185,17 @@ func (t *grpcTransport) SubmitSignedClaimStream(ctx context.Context, in <-chan s
 	go func() {
 		defer wg.Done()
 		defer stream.CloseSend()
-		for item := range in {
+		for {
+			var item signedClaimStreamItem
+			var ok bool
+			select {
+			case <-callCtx.Done():
+				return
+			case item, ok = <-in:
+				if !ok {
+					return
+				}
+			}
 			req := grpcapi.SubmitClaimStreamRequest{Index: item.Index, SignedClaim: item.SignedClaim}
 			sent.Store(item.Index, item.SignedClaim)
 			if err := stream.SendMsg(&req); err != nil {
@@ -201,6 +211,7 @@ func (t *grpcTransport) SubmitSignedClaimStream(ctx context.Context, in <-chan s
 	}()
 	go func() {
 		defer wg.Done()
+		defer cancel()
 		for {
 			var resp grpcapi.SubmitClaimStreamResponse
 			if err := stream.RecvMsg(&resp); err != nil {
@@ -213,6 +224,7 @@ func (t *grpcTransport) SubmitSignedClaimStream(ctx context.Context, in <-chan s
 				}
 				return
 			}
+			cached, _ := sent.LoadAndDelete(resp.Index)
 			item := signedClaimStreamItemResult{Index: resp.Index}
 			if resp.Error != nil {
 				item.Err = &Error{
@@ -224,10 +236,7 @@ func (t *grpcTransport) SubmitSignedClaimStream(ctx context.Context, in <-chan s
 			} else if resp.Result == nil {
 				item.Err = &Error{Op: "grpc submit claim stream item", URL: t.target, Message: "server returned neither result nor error"}
 			} else {
-				var signed SignedClaim
-				if cached, ok := sent.LoadAndDelete(resp.Index); ok {
-					signed, _ = cached.(SignedClaim)
-				}
+				signed, _ := cached.(SignedClaim)
 				item.Result = submitResultFromGRPC(*resp.Result, signed)
 			}
 			select {

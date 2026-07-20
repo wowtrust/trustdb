@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ryan-wong-coder/trustdb/internal/grpcapi"
 	"github.com/ryan-wong-coder/trustdb/internal/ingest"
@@ -131,6 +132,28 @@ func TestGRPCTransportSubmitLogStream(t *testing.T) {
 	}
 }
 
+func TestGRPCTransportRemoteStreamTerminationClosesLogStream(t *testing.T) {
+	t.Parallel()
+
+	server := &grpcTerminatingStreamServer{Server: grpcapi.NewServer(nil, grpcTestBatch{}, nil, nil, nil)}
+	client := newBufconnClient(t, server)
+	entries := make(chan LogEntry)
+	t.Cleanup(func() { close(entries) })
+	out, err := client.SubmitLogStream(context.Background(), entries, Identity{}, LogStreamOptions{QueueSize: 1})
+	if err != nil {
+		t.Fatalf("SubmitLogStream: %v", err)
+	}
+
+	select {
+	case _, ok := <-out:
+		if ok {
+			t.Fatal("result stream emitted an item after the remote stream ended")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("result stream did not close after the remote stream ended")
+	}
+}
+
 func newBufconnClient(t *testing.T, srv grpcapi.TrustDBServiceServer) *Client {
 	t.Helper()
 	listener := bufconn.Listen(1 << 20)
@@ -168,6 +191,14 @@ func newBufconnClient(t *testing.T, srv grpcapi.TrustDBServiceServer) *Client {
 }
 
 type grpcTestBatch struct{}
+
+type grpcTerminatingStreamServer struct {
+	*grpcapi.Server
+}
+
+func (*grpcTerminatingStreamServer) SubmitClaimStream(grpcapi.TrustDBService_SubmitClaimStreamServer) error {
+	return nil
+}
 
 type grpcProcessorFunc func(context.Context, model.SignedClaim) (model.ServerRecord, model.AcceptedReceipt, bool, error)
 
