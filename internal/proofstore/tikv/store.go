@@ -170,12 +170,20 @@ type batchOp struct {
 }
 
 type deferredSet struct {
-	batch *tikvBatch
-	Key   []byte
-	Value []byte
+	batch       *tikvBatch
+	physicalKey []byte
+	Key         []byte
+	Value       []byte
 }
 
-func (op deferredSet) Finish() error { return op.batch.Set(op.Key, op.Value, nil) }
+func (op deferredSet) Finish() error {
+	key := op.physicalKey
+	if key == nil {
+		key = op.Key
+	}
+	op.batch.ops = append(op.batch.ops, batchOp{key: key, value: op.Value})
+	return nil
+}
 
 type tikvBatch struct {
 	db  *tikvDB
@@ -184,7 +192,17 @@ type tikvBatch struct {
 }
 
 func (b *tikvBatch) SetDeferred(keyLen, valueLen int) deferredSet {
-	return deferredSet{batch: b, Key: make([]byte, keyLen), Value: make([]byte, valueLen)}
+	if b.raw {
+		return deferredSet{batch: b, Key: make([]byte, keyLen), Value: make([]byte, valueLen)}
+	}
+	physicalKey := make([]byte, len(b.db.namespace)+keyLen)
+	copy(physicalKey, b.db.namespace)
+	return deferredSet{
+		batch:       b,
+		physicalKey: physicalKey,
+		Key:         physicalKey[len(b.db.namespace):],
+		Value:       make([]byte, valueLen),
+	}
 }
 
 func (b *tikvBatch) Set(key, value []byte, _ any) error {
@@ -921,7 +939,7 @@ func marshalArtifact(v any) ([]byte, *bytes.Buffer, error) {
 	return buf.Bytes(), buf, nil
 }
 
-func encodeStoredProofBundle(bundle model.ProofBundle) ([]byte, *bytes.Buffer, error) {
+func encodeStoredProofBundle(bundle *model.ProofBundle) ([]byte, *bytes.Buffer, error) {
 	if bundle.RecordID == "" {
 		return nil, nil, trusterr.New(trusterr.CodeInvalidArgument, "proof bundle record_id is required")
 	}
@@ -1002,35 +1020,54 @@ func (s *Store) readStoredProofBundle(key []byte) (model.ProofBundle, bool, erro
 }
 
 func encodeRecordIndexArtifact(idx model.RecordIndex) (encodedRecordIndex, error) {
+	var encoded encodedRecordIndex
+	if err := encodeRecordIndexArtifactInto(&encoded, idx); err != nil {
+		return encodedRecordIndex{}, err
+	}
+	return encoded, nil
+}
+
+func encodeRecordIndexArtifactInto(encoded *encodedRecordIndex, idx model.RecordIndex) error {
 	if idx.RecordID == "" {
-		return encodedRecordIndex{}, trusterr.New(trusterr.CodeInvalidArgument, "record index record_id is required")
+		return trusterr.New(trusterr.CodeInvalidArgument, "record index record_id is required")
 	}
 	idx.ProofLevel = model.RecordIndexProofLevel(idx)
 	if idx.SchemaVersion == "" {
 		idx.SchemaVersion = model.SchemaRecordIndex
 	}
-	indexData, indexBuf, err := marshalArtifact(idx)
+	encoded.idx = idx
+	indexData, indexBuf, err := marshalArtifact(&encoded.idx)
 	if err != nil {
-		return encodedRecordIndex{}, trusterr.Wrap(trusterr.CodeDataLoss, "encode record index", err)
+		*encoded = encodedRecordIndex{}
+		return trusterr.Wrap(trusterr.CodeDataLoss, "encode record index", err)
 	}
-	return encodedRecordIndex{
-		idx:      idx,
-		value:    indexData,
-		valueBuf: indexBuf,
-	}, nil
+	encoded.value = indexData
+	encoded.valueBuf = indexBuf
+	return nil
 }
 
 func encodeBatchArtifact(bundle model.ProofBundle) (encodedBatchArtifact, error) {
+	var artifact encodedBatchArtifact
+	if err := encodeBatchArtifactInto(&artifact, &bundle); err != nil {
+		return encodedBatchArtifact{}, err
+	}
+	return artifact, nil
+}
+
+func encodeBatchArtifactInto(artifact *encodedBatchArtifact, bundle *model.ProofBundle) error {
 	bundleValue, bundleBuf, err := encodeStoredProofBundle(bundle)
 	if err != nil {
-		return encodedBatchArtifact{}, err
+		return err
 	}
-	index, err := encodeRecordIndexArtifact(model.RecordIndexFromBundle(bundle))
-	if err != nil {
+	artifact.recordID = bundle.RecordID
+	artifact.bundleValue = bundleValue
+	artifact.bundleBuf = bundleBuf
+	if err := encodeRecordIndexArtifactInto(&artifact.index, model.RecordIndexFromBundle(*bundle)); err != nil {
 		putArtifactBuffer(bundleBuf)
-		return encodedBatchArtifact{}, err
+		*artifact = encodedBatchArtifact{}
+		return err
 	}
-	return encodedBatchArtifact{recordID: bundle.RecordID, bundleValue: bundleValue, bundleBuf: bundleBuf, index: index}, nil
+	return nil
 }
 
 func encodeBatchArtifacts(ctx context.Context, bundles []model.ProofBundle) ([]encodedBatchArtifact, error) {
@@ -1057,12 +1094,10 @@ func encodeBatchArtifacts(ctx context.Context, bundles []model.ProofBundle) ([]e
 					errs[i] = trusterr.Wrap(trusterr.CodeDeadlineExceeded, "proofstore encode batch artifacts canceled", err)
 					continue
 				}
-				artifact, err := encodeBatchArtifact(bundles[i])
-				if err != nil {
+				if err := encodeBatchArtifactInto(&artifacts[i], &bundles[i]); err != nil {
 					errs[i] = err
 					continue
 				}
-				artifacts[i] = artifact
 			}
 		}()
 	}
@@ -1100,6 +1135,14 @@ func releaseBatchArtifacts(artifacts []encodedBatchArtifact) {
 func stageSet(batch *tikvBatch, key, value []byte) error {
 	op := batch.SetDeferred(len(key), len(value))
 	copy(op.Key, key)
+	copy(op.Value, value)
+	return op.Finish()
+}
+
+func stageSetRecordKey(batch *tikvBatch, prefix, recordID string, value []byte) error {
+	op := batch.SetDeferred(len(prefix)+len(recordID), len(value))
+	n := copy(op.Key, prefix)
+	copy(op.Key[n:], recordID)
 	copy(op.Value, value)
 	return op.Finish()
 }
@@ -1165,7 +1208,7 @@ func (s *Store) PutBundle(ctx context.Context, bundle model.ProofBundle) error {
 	}
 	batch := s.db.NewBatch()
 	defer batch.Close()
-	if err := stageSet(batch, bundleV2Key(bundle.RecordID), artifact.bundleValue); err != nil {
+	if err := stageSetRecordKey(batch, prefixBundleV2, bundle.RecordID, artifact.bundleValue); err != nil {
 		return trusterr.Wrap(trusterr.CodeDataLoss, "stage proof bundle", err)
 	}
 	if err := s.stageEncodedRecordIndexReplace(batch, artifact.index, old, oldFound); err != nil {
@@ -1351,17 +1394,17 @@ func (s *Store) stageNewBundle(batch *tikvBatch, bundle model.ProofBundle) error
 }
 
 func (s *Store) stageEncodedBatchArtifact(batch *tikvBatch, artifact encodedBatchArtifact) error {
-	if err := stageSet(batch, bundleV2Key(artifact.recordID), artifact.bundleValue); err != nil {
+	if err := stageSetRecordKey(batch, prefixBundleV2, artifact.recordID, artifact.bundleValue); err != nil {
 		return trusterr.Wrap(trusterr.CodeDataLoss, "stage proof bundle", err)
 	}
 	return s.stageEncodedRecordIndexSetForMode(batch, artifact.index)
 }
 
 func (s *Store) stageEncodedMaterializedBatchArtifact(batch *tikvBatch, artifact encodedBatchArtifact) error {
-	if err := stageSet(batch, bundleV2Key(artifact.recordID), artifact.bundleValue); err != nil {
+	if err := stageSetRecordKey(batch, prefixBundleV2, artifact.recordID, artifact.bundleValue); err != nil {
 		return trusterr.Wrap(trusterr.CodeDataLoss, "stage proof bundle", err)
 	}
-	if err := stageSet(batch, recordByIDKey(artifact.recordID), artifact.index.value); err != nil {
+	if err := stageSetRecordKey(batch, prefixRecordByID, artifact.recordID, artifact.index.value); err != nil {
 		return trusterr.Wrap(trusterr.CodeDataLoss, "stage materialized record index", err)
 	}
 	if s.recordIndexMode == RecordIndexModeTimeOnly {
