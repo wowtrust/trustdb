@@ -40,6 +40,8 @@ const (
 	batchArtifactChunkSize       = 1024
 	bundleCompressionMinBytes    = 4 << 10
 	maxBatchArtifactEncodeWorker = 16
+	promotionCommitMaxAttempts   = 3
+	promotionReferenceBatchSize  = 1024
 )
 
 var errStopScan = errors.New("stop scan")
@@ -236,6 +238,17 @@ func (b *tikvBatch) Commit(_ *writeOptions) error {
 			_ = txn.Rollback()
 		}
 	}()
+	if err := b.apply(txn); err != nil {
+		return err
+	}
+	if err := txn.Commit(ctx); err != nil {
+		return err
+	}
+	committed = true
+	return nil
+}
+
+func (b *tikvBatch) apply(txn *txnkv.KVTxn) error {
 	for _, op := range b.ops {
 		if op.delete {
 			if err := txn.Delete(op.key); err != nil {
@@ -247,10 +260,6 @@ func (b *tikvBatch) Commit(_ *writeOptions) error {
 			return err
 		}
 	}
-	if err := txn.Commit(ctx); err != nil {
-		return err
-	}
-	committed = true
 	return nil
 }
 
@@ -1184,25 +1193,6 @@ func decodeRecordIndexRef(value []byte) (string, bool) {
 	}
 	recordID := string(value[len(recordIndexRefPrefix):])
 	return recordID, recordID != ""
-}
-
-func (s *Store) readRecordIndexScanValue(value []byte) (model.RecordIndex, error) {
-	if recordID, ok := decodeRecordIndexRef(value); ok {
-		var idx model.RecordIndex
-		found, err := s.readCBOR(recordByIDKey(recordID), &idx)
-		if err != nil {
-			return model.RecordIndex{}, err
-		}
-		if !found {
-			return model.RecordIndex{}, trusterr.New(trusterr.CodeDataLoss, "record index reference target not found")
-		}
-		return idx, nil
-	}
-	var idx model.RecordIndex
-	if err := cborx.UnmarshalLimit(value, &idx, maxStoredObjectBytes); err != nil {
-		return model.RecordIndex{}, err
-	}
-	return idx, nil
 }
 
 func (s *Store) visitRecordIndexRefs(ctx context.Context, iter *tikvIter, recordIDs []string, visit func(model.RecordIndex) bool) error {
@@ -3672,16 +3662,20 @@ func (s *Store) stageRecordIndexReplace(batch *tikvBatch, idx, old model.RecordI
 
 func (s *Store) stageEncodedRecordIndexReplace(batch *tikvBatch, idx encodedRecordIndex, old model.RecordIndex, oldFound bool) error {
 	if oldFound {
-		if err := visitRecordIndexKeys(old, RecordIndexModeFull, func(key []byte) error {
-			if err := batch.Delete(key, nil); err != nil {
-				return trusterr.Wrap(trusterr.CodeDataLoss, "stage old record index delete", err)
-			}
-			return nil
-		}); err != nil {
+		if err := stageRecordIndexDelete(batch, old); err != nil {
 			return err
 		}
 	}
 	return s.stageEncodedRecordIndexSet(batch, idx)
+}
+
+func stageRecordIndexDelete(batch *tikvBatch, idx model.RecordIndex) error {
+	return visitRecordIndexKeys(idx, RecordIndexModeFull, func(key []byte) error {
+		if err := batch.Delete(key, nil); err != nil {
+			return trusterr.Wrap(trusterr.CodeDataLoss, "stage old record index delete", err)
+		}
+		return nil
+	})
 }
 
 func (s *Store) stageEncodedRecordIndexSetForMode(batch *tikvBatch, idx encodedRecordIndex) error {
@@ -3769,31 +3763,85 @@ func (s *Store) promoteBatchRecords(ctx context.Context, batchID, proofLevel str
 	if batchID == "" {
 		return nil
 	}
-	prefix := prefixRecordByBatch + recordSecondaryPart(batchID) + "/"
-	updates := make([]recordIndexPromotion, 0, 16)
-	err := s.scanPrefix(ctx, prefix, func(value []byte) error {
-		_, isReference := decodeRecordIndexRef(value)
-		idx, err := s.readRecordIndexScanValue(value)
-		if err != nil {
-			return err
-		}
-		if model.ProofLevelRank(model.RecordIndexProofLevel(idx)) >= model.ProofLevelRank(proofLevel) {
-			return nil
-		}
-		next := idx
-		next.ProofLevel = proofLevel
-		updates = append(updates, recordIndexPromotion{old: idx, next: next, replaceAll: !isReference})
-		return nil
-	})
+	updates, err := s.collectRecordIndexPromotions(ctx, batchID, proofLevel)
 	if err != nil {
 		return trusterr.Wrap(trusterr.CodeDataLoss, "scan batch record indexes", err)
 	}
 	return s.commitRecordIndexPromotions(ctx, updates)
 }
 
+func (s *Store) collectRecordIndexPromotions(ctx context.Context, batchID, proofLevel string) ([]recordIndexPromotion, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	prefix := prefixRecordByBatch + recordSecondaryPart(batchID) + "/"
+	lower, upper := prefixBounds(prefix)
+	iter, err := s.db.NewIter(&iterOptions{LowerBound: lower, UpperBound: upper})
+	if err != nil {
+		return nil, err
+	}
+	defer iter.Close()
+
+	updates := make([]recordIndexPromotion, 0, 16)
+	appendPromotion := func(idx model.RecordIndex, replaceAll bool) bool {
+		if model.ProofLevelRank(model.RecordIndexProofLevel(idx)) >= model.ProofLevelRank(proofLevel) {
+			return true
+		}
+		next := idx
+		next.ProofLevel = proofLevel
+		updates = append(updates, recordIndexPromotion{old: idx, next: next, replaceAll: replaceAll})
+		return true
+	}
+	// Resolve references through the scan's snapshot in bounded runs. Keep all
+	// candidates in memory until every read and decode succeeds so a read-phase
+	// failure cannot commit an earlier promotion chunk.
+	pendingRecordIDs := make([]string, 0, promotionReferenceBatchSize)
+	flushPending := func() error {
+		if len(pendingRecordIDs) == 0 {
+			return nil
+		}
+		err := s.visitRecordIndexRefs(ctx, iter, pendingRecordIDs, func(idx model.RecordIndex) bool {
+			return appendPromotion(idx, false)
+		})
+		pendingRecordIDs = pendingRecordIDs[:0]
+		return err
+	}
+
+	for ok := iter.First(); ok; ok = iter.Next() {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if recordID, isReference := decodeRecordIndexRef(iter.Value()); isReference {
+			pendingRecordIDs = append(pendingRecordIDs, recordID)
+			if len(pendingRecordIDs) >= promotionReferenceBatchSize {
+				if err := flushPending(); err != nil {
+					return nil, err
+				}
+			}
+			continue
+		}
+		if err := flushPending(); err != nil {
+			return nil, err
+		}
+		var idx model.RecordIndex
+		if err := cborx.UnmarshalLimit(iter.Value(), &idx, maxStoredObjectBytes); err != nil {
+			return nil, err
+		}
+		appendPromotion(idx, true)
+	}
+	if err := flushPending(); err != nil {
+		return nil, err
+	}
+	if err := iter.Error(); err != nil {
+		return nil, err
+	}
+	return updates, nil
+}
+
 type recordIndexPromotion struct {
 	old        model.RecordIndex
 	next       model.RecordIndex
+	stale      model.RecordIndex
 	replaceAll bool
 }
 
@@ -3808,6 +3856,11 @@ func (s *Store) stageRecordIndexPromotion(batch *tikvBatch, promotion recordInde
 		mode = normalizeRecordIndexMode(Options{RecordIndexMode: s.recordIndexMode})
 	}
 	if promotion.replaceAll || mode != RecordIndexModeFull {
+		if promotion.stale.RecordID != "" {
+			if err := stageRecordIndexDelete(batch, promotion.stale); err != nil {
+				return err
+			}
+		}
 		return s.stageEncodedRecordIndexReplace(batch, encoded, promotion.old, true)
 	}
 	if err := stageSetRecordKey(batch, prefixRecordByID, encoded.idx.RecordID, encoded.value); err != nil {
@@ -3845,22 +3898,109 @@ func (s *Store) commitRecordIndexPromotions(ctx context.Context, updates []recor
 		if err := ctx.Err(); err != nil {
 			return trusterr.Wrap(trusterr.CodeDeadlineExceeded, "proofstore promote batch records canceled", err)
 		}
-		batch := s.db.NewBatch()
-		for i := start; i < end; i++ {
-			if err := s.stageRecordIndexPromotion(batch, updates[i]); err != nil {
-				_ = batch.Close()
-				return err
-			}
-		}
-		if err := batch.Commit(syncWrite); err != nil {
-			_ = batch.Close()
+		if err := s.commitRecordIndexPromotionChunk(ctx, updates[start:end]); err != nil {
 			return trusterr.Wrap(trusterr.CodeDataLoss, "commit promoted record indexes", err)
-		}
-		if err := batch.Close(); err != nil {
-			return trusterr.Wrap(trusterr.CodeDataLoss, "close promoted record indexes", err)
 		}
 	}
 	return nil
+}
+
+func (s *Store) commitRecordIndexPromotionChunk(ctx context.Context, updates []recordIndexPromotion) error {
+	var err error
+	for attempt := 0; attempt < promotionCommitMaxAttempts; attempt++ {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
+		err = s.tryCommitRecordIndexPromotionChunk(ctx, updates)
+		if err == nil || !isRetryablePromotionCommitError(err) {
+			return err
+		}
+	}
+	return err
+}
+
+func (s *Store) tryCommitRecordIndexPromotionChunk(ctx context.Context, updates []recordIndexPromotion) error {
+	if s == nil || s.db == nil || s.db.client == nil {
+		return trusterr.New(trusterr.CodeFailedPrecondition, "tikv proofstore is closed")
+	}
+	txn, err := s.db.client.Begin()
+	if err != nil {
+		return err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = txn.Rollback()
+		}
+	}()
+
+	keys := make([][]byte, len(updates))
+	for index := range updates {
+		keys[index] = s.db.physicalKey(recordByIDKey(updates[index].next.RecordID))
+	}
+	currentValues, err := txn.BatchGet(ctx, keys)
+	if err != nil {
+		return err
+	}
+	batch := s.db.NewBatch()
+	defer batch.Close()
+	for index := range updates {
+		promotion := updates[index]
+		if value, found := currentValues[string(keys[index])]; found {
+			var current model.RecordIndex
+			if err := cborx.UnmarshalLimit(value, &current, maxStoredObjectBytes); err != nil {
+				return err
+			}
+			targetLevel := promotion.next.ProofLevel
+			if model.ProofLevelRank(model.RecordIndexProofLevel(current)) >= model.ProofLevelRank(targetLevel) {
+				if !promotion.replaceAll {
+					continue
+				}
+				promotion.stale = promotion.old
+				promotion.old = current
+				promotion.next = current
+			} else {
+				if promotion.replaceAll {
+					promotion.stale = promotion.old
+				}
+				promotion.old = current
+				promotion.next = current
+				promotion.next.ProofLevel = targetLevel
+			}
+		} else if !promotion.replaceAll {
+			return trusterr.New(trusterr.CodeDataLoss, "record index reference target not found")
+		}
+		if err := s.stageRecordIndexPromotion(batch, promotion); err != nil {
+			return err
+		}
+	}
+	if len(batch.ops) == 0 {
+		return nil
+	}
+	if err := batch.apply(txn); err != nil {
+		return err
+	}
+	if err := txn.Commit(ctx); err != nil {
+		return err
+	}
+	committed = true
+	return nil
+}
+
+func isRetryablePromotionCommitError(err error) bool {
+	if tikverr.IsErrWriteConflict(err) {
+		return true
+	}
+	var latchConflict *tikverr.ErrWriteConflictInLatch
+	if errors.As(err, &latchConflict) {
+		return true
+	}
+	var retryable *tikverr.ErrRetryable
+	if errors.As(err, &retryable) {
+		return true
+	}
+	var deadlock *tikverr.ErrDeadlock
+	return errors.As(err, &deadlock) && deadlock.IsRetryable
 }
 
 func (s *Store) replaceSTHAnchorOutbox(ctx context.Context, old, next model.STHAnchorOutboxItem) error {

@@ -529,8 +529,10 @@ type countingTiKVClient struct {
 	getRequests      atomic.Int64
 	batchGetRequests atomic.Int64
 	batchGetKeys     atomic.Int64
+	batchGetMaxKeys  atomic.Int64
 	scanVersion      atomic.Uint64
 	batchGetVersion  atomic.Uint64
+	readVersionDrift atomic.Bool
 	batchGetHook     func()
 }
 
@@ -543,8 +545,18 @@ func (client *countingTiKVClient) SendRequest(ctx context.Context, address strin
 		client.getRequests.Add(1)
 	case tikvrpc.CmdBatchGet:
 		client.batchGetRequests.Add(1)
-		client.batchGetKeys.Add(int64(len(request.BatchGet().Keys)))
-		client.batchGetVersion.Store(request.BatchGet().Version)
+		keyCount := int64(len(request.BatchGet().Keys))
+		client.batchGetKeys.Add(keyCount)
+		for current := client.batchGetMaxKeys.Load(); keyCount > current; current = client.batchGetMaxKeys.Load() {
+			if client.batchGetMaxKeys.CompareAndSwap(current, keyCount) {
+				break
+			}
+		}
+		batchGetVersion := request.BatchGet().Version
+		client.batchGetVersion.Store(batchGetVersion)
+		if scanVersion := client.scanVersion.Load(); scanVersion != 0 && scanVersion != batchGetVersion {
+			client.readVersionDrift.Store(true)
+		}
 		if client.batchGetHook != nil {
 			client.batchGetHook()
 		}
@@ -557,8 +569,10 @@ func (client *countingTiKVClient) resetReadRequests() {
 	client.getRequests.Store(0)
 	client.batchGetRequests.Store(0)
 	client.batchGetKeys.Store(0)
+	client.batchGetMaxKeys.Store(0)
 	client.scanVersion.Store(0)
 	client.batchGetVersion.Store(0)
+	client.readVersionDrift.Store(false)
 }
 
 func (it *scriptedTiKVIterator) Valid() bool {
