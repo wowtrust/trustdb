@@ -40,6 +40,7 @@ const (
 	batchArtifactChunkSize       = 1024
 	bundleCompressionMinBytes    = 4 << 10
 	maxBatchArtifactEncodeWorker = 16
+	globalOutboxReadBatchSize    = 1024
 	promotionCommitMaxAttempts   = 3
 	promotionReferenceBatchSize  = 1024
 )
@@ -3069,6 +3070,86 @@ func (s *Store) GetGlobalLogOutboxItem(ctx context.Context, batchID string) (mod
 	return item, found, nil
 }
 
+// readGlobalLogOutboxItems resolves a caller-ordered batch from one TiKV
+// snapshot. BatchGet returns an unordered map, so orderedKeys retains the
+// original order (and duplicates) while uniqueKeys avoids redundant transport
+// work. Chunks bound each request without obtaining another timestamp.
+func (s *Store) readGlobalLogOutboxItems(ctx context.Context, batchIDs []string) ([]model.GlobalLogOutboxItem, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, trusterr.Wrap(trusterr.CodeDeadlineExceeded, "proofstore read global log outbox batch canceled", err)
+	}
+	if len(batchIDs) == 0 {
+		return []model.GlobalLogOutboxItem{}, nil
+	}
+	if s == nil || s.db == nil || s.db.client == nil {
+		return nil, trusterr.New(trusterr.CodeFailedPrecondition, "tikv proofstore is closed")
+	}
+
+	orderedKeys := make([]string, len(batchIDs))
+	uniqueKeys := make([][]byte, 0, len(batchIDs))
+	uniqueOrdinals := make(map[string]int, len(batchIDs))
+	for index, batchID := range batchIDs {
+		if batchID == "" {
+			return nil, trusterr.New(trusterr.CodeInvalidArgument, "batch_id is required")
+		}
+		key := s.db.physicalKey(globalOutboxKey(batchID))
+		keyString := string(key)
+		orderedKeys[index] = keyString
+		if _, duplicate := uniqueOrdinals[keyString]; duplicate {
+			continue
+		}
+		uniqueOrdinals[keyString] = len(uniqueKeys)
+		uniqueKeys = append(uniqueKeys, key)
+	}
+
+	ts, err := s.db.client.GetTimestamp(ctx)
+	if err != nil {
+		return nil, globalOutboxBatchReadError(ctx, err)
+	}
+	snapshot := s.db.client.GetSnapshot(ts)
+	values := make(map[string][]byte, len(uniqueKeys))
+	items := make([]model.GlobalLogOutboxItem, len(batchIDs))
+	nextDecode := 0
+	for start := 0; start < len(uniqueKeys); start += globalOutboxReadBatchSize {
+		if err := ctx.Err(); err != nil {
+			return nil, trusterr.Wrap(trusterr.CodeDeadlineExceeded, "proofstore read global log outbox batch canceled", err)
+		}
+		end := min(start+globalOutboxReadBatchSize, len(uniqueKeys))
+		chunk, err := snapshot.BatchGet(ctx, uniqueKeys[start:end])
+		if err != nil {
+			return nil, globalOutboxBatchReadError(ctx, err)
+		}
+		for key, value := range chunk {
+			values[key] = value
+		}
+		// Validate every now-resolvable caller-order item before issuing the
+		// next request. This preserves the old point-read loop's error order:
+		// an early missing or malformed item cannot be masked by a later
+		// chunk's cancellation or transport failure.
+		for nextDecode < len(orderedKeys) && uniqueOrdinals[orderedKeys[nextDecode]] < end {
+			if err := ctx.Err(); err != nil {
+				return nil, trusterr.Wrap(trusterr.CodeDeadlineExceeded, "proofstore read global log outbox batch canceled", err)
+			}
+			value, found := values[orderedKeys[nextDecode]]
+			if !found {
+				return nil, trusterr.New(trusterr.CodeNotFound, "global log outbox item not found")
+			}
+			if err := cborx.UnmarshalLimit(value, &items[nextDecode], maxStoredObjectBytes); err != nil {
+				return nil, trusterr.Wrap(trusterr.CodeDataLoss, "read global log outbox item", err)
+			}
+			nextDecode++
+		}
+	}
+	return items, nil
+}
+
+func globalOutboxBatchReadError(ctx context.Context, err error) error {
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return trusterr.Wrap(trusterr.CodeDeadlineExceeded, "proofstore read global log outbox batch canceled", ctxErr)
+	}
+	return trusterr.Wrap(trusterr.CodeDataLoss, "read global log outbox batch", err)
+}
+
 func (s *Store) MarkGlobalLogPublished(ctx context.Context, batchID string, sth model.SignedTreeHead) error {
 	item, ok, err := s.GetGlobalLogOutboxItem(ctx, batchID)
 	if err != nil {
@@ -3124,14 +3205,12 @@ func (s *Store) markGlobalLogPublishedBatch(ctx context.Context, batchIDs []stri
 	}
 	anchorUpdates := make([]anchorUpdate, len(anchors))
 	now := time.Now().UTC().UnixNano()
+	items, err := s.readGlobalLogOutboxItems(ctx, batchIDs)
+	if err != nil {
+		return err
+	}
 	for i := range batchIDs {
-		item, ok, err := s.GetGlobalLogOutboxItem(ctx, batchIDs[i])
-		if err != nil {
-			return err
-		}
-		if !ok {
-			return trusterr.New(trusterr.CodeNotFound, "global log outbox item not found")
-		}
+		item := items[i]
 		next := item
 		next.Status = model.AnchorStatePublished
 		next.STH = sths[i]

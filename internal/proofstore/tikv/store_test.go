@@ -553,6 +553,9 @@ func (client *countingTiKVClient) SendRequest(ctx context.Context, address strin
 			}
 		}
 		batchGetVersion := request.BatchGet().Version
+		if previous := client.batchGetVersion.Load(); previous != 0 && previous != batchGetVersion {
+			client.readVersionDrift.Store(true)
+		}
 		client.batchGetVersion.Store(batchGetVersion)
 		if scanVersion := client.scanVersion.Load(); scanVersion != 0 && scanVersion != batchGetVersion {
 			client.readVersionDrift.Store(true)
