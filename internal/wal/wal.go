@@ -907,10 +907,11 @@ func scanFileVisit(path string, tolerateTail bool, startPrev [32]byte, visit fun
 	defer f.Close()
 
 	var state scanState
+	var frame recordReadFrame
 	prev := startPrev
 	var offset int64
 	for {
-		rec, n, err := readOne(f, offset, prev)
+		rec, n, err := readOneWithFrame(f, offset, prev, &frame)
 		if errors.Is(err, io.EOF) {
 			return state, nil
 		}
@@ -937,6 +938,11 @@ func scanFileVisit(path string, tolerateTail bool, startPrev [32]byte, visit fun
 		prev = rec.RecordHash
 		offset += n
 	}
+}
+
+type recordReadFrame struct {
+	header  [headerSize]byte
+	trailer [crcSize + recordHashSize]byte
 }
 
 func encodeRecord(segmentID, sequence uint64, unixNano int64, prevHash [32]byte, payload []byte) ([]byte, [32]byte) {
@@ -968,7 +974,12 @@ func encodeRecordInto(buf []byte, segmentID, sequence uint64, unixNano int64, pr
 }
 
 func readOne(r io.Reader, offset int64, expectedPrev [32]byte) (Record, int64, error) {
-	header := make([]byte, headerSize)
+	var frame recordReadFrame
+	return readOneWithFrame(r, offset, expectedPrev, &frame)
+}
+
+func readOneWithFrame(r io.Reader, offset int64, expectedPrev [32]byte, frame *recordReadFrame) (Record, int64, error) {
+	header := frame.header[:]
 	if _, err := io.ReadFull(r, header); err != nil {
 		if errors.Is(err, io.ErrUnexpectedEOF) {
 			return Record{}, 0, fmt.Errorf("wal: truncated header at offset %d", offset)
@@ -997,7 +1008,7 @@ func readOne(r io.Reader, offset int64, expectedPrev [32]byte) (Record, int64, e
 	if _, err := io.ReadFull(r, payload); err != nil {
 		return Record{}, 0, fmt.Errorf("wal: truncated payload at offset %d: %w", offset, err)
 	}
-	trailer := make([]byte, crcSize+recordHashSize)
+	trailer := frame.trailer[:]
 	if _, err := io.ReadFull(r, trailer); err != nil {
 		return Record{}, 0, fmt.Errorf("wal: truncated trailer at offset %d: %w", offset, err)
 	}
@@ -1013,8 +1024,8 @@ func readOne(r io.Reader, offset int64, expectedPrev [32]byte) (Record, int64, e
 	_, _ = h.Write(header)
 	_, _ = h.Write(payload)
 	_, _ = h.Write(trailer[:4])
-	var gotHash [32]byte
-	copy(gotHash[:], h.Sum(nil))
+	var gotHash [recordHashSize]byte
+	h.Sum(gotHash[:0])
 	var storedHash [32]byte
 	copy(storedHash[:], trailer[4:])
 	if gotHash != storedHash {

@@ -62,3 +62,33 @@ func BenchmarkWALAppendGroup(b *testing.B) {
 		}
 	}
 }
+
+func BenchmarkWALRecoveryScan1024(b *testing.B) {
+	path := b.TempDir() + "/recovery.wal"
+	w, err := OpenWriterWithOptions(path, 1, Options{FsyncMode: FsyncBatch})
+	if err != nil {
+		b.Fatal(err)
+	}
+	payload := bytes.Repeat([]byte{1}, 1024)
+	ctx := context.Background()
+	for range 1024 {
+		if _, _, err := w.Append(ctx, payload); err != nil {
+			b.Fatal(err)
+		}
+	}
+	if err := w.Close(); err != nil {
+		b.Fatal(err)
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		state, err := scanFileVisit(path, false, [32]byte{}, func(Record) error { return nil })
+		if err != nil {
+			b.Fatal(err)
+		}
+		if state.records != 1024 {
+			b.Fatalf("scanned %d records, want 1024", state.records)
+		}
+	}
+}
