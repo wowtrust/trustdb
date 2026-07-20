@@ -12,3 +12,4 @@ When implementing from a selected generated mock, treat that image as the source
 - Trust ImageGen for polished static visual assets such as terrain, evidence fields, and ambient textures.
 - Draw visuals that need to move in code: proof signals, topology nodes, live pipeline lines, and particles should use Canvas/SVG/DOM and GSAP so motion stays responsive and meaningful.
 - The official website should feel closer to premium data-landscape editorial work than to a dense SaaS dashboard.
+- The homepage client preview must be rendered from the real desktop client in the currently selected language; never reuse a Chinese client screenshot for other locales.

@@ -5,6 +5,7 @@ import gsap from 'gsap'
 import { getBatches, getMetrics, getRecords, type BatchRoot, type Metric, type RecordIndex } from '@/lib/api'
 import { bytesToHex, nanoToDate, shortHash } from '@/lib/format'
 import { ArrowRight, Download, Activity, Layers3, Anchor, Share2, TriangleAlert, Copy, ChevronUp, CircleCheckBig } from 'lucide-vue-next'
+import { locale, t } from '@/i18n'
 
 type PipelineNode = {
   name: string
@@ -219,7 +220,7 @@ onUnmounted(() => {
   <div ref="root" class="wa-dashboard">
     <section class="wa-overview">
       <div class="wa-mast">
-        <div><p>TrustDB proof operations</p><h1>ALL SYSTEMS PROVABLE</h1><span :class="{ offline: !healthy }"><i />{{ healthy ? '系统运行正常' : '部分数据不可用' }} <em>最后更新：{{ lastUpdated?.toLocaleTimeString('zh-CN', { hour12: false }) || '—' }}</em></span></div>
+        <div><p>TrustDB proof operations</p><h1>ALL SYSTEMS PROVABLE</h1><span :class="{ offline: !healthy }"><i />{{ healthy ? '系统运行正常' : '部分数据不可用' }} <em>{{ t('最后更新：{time}', { time: lastUpdated?.toLocaleTimeString(locale, { hour12: false }) || '—' }) }}</em></span></div>
         <div class="wa-mast__actions"><button type="button" :disabled="busy" @click="load">{{ busy ? '刷新中' : '刷新数据' }} <ArrowRight :size="17" /></button><RouterLink to="/global-tree">查看全局树</RouterLink></div>
       </div>
 
@@ -272,7 +273,7 @@ onUnmounted(() => {
         </div>
       </div>
       <div class="wa-proof-bars">
-        <h2>证明等级 · 最近 {{ records.length || (demoMode ? 1919 : 0) }} 条</h2>
+        <h2>{{ t('证明等级 · 最近 {count} 条', { count: records.length || (demoMode ? 1919 : 0) }) }}</h2>
         <div class="wa-bar-head"><span /><span>分布</span><span>记录数量</span><span>占比</span></div>
         <div v-for="bar in proofBars" :key="bar[0]" class="wa-bar-row"><b>{{ bar[0] }}</b><i><em :style="{ width: `${bar[1]}%` }" /></i><span>{{ bar[2] }}</span><span>{{ bar[1] }}%</span></div>
       </div>

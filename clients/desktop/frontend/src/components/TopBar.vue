@@ -2,6 +2,7 @@
 import { onMounted, onUnmounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { api } from '@/lib/api'
+import LanguageSwitcher from '@/components/LanguageSwitcher.vue'
 
 const route = useRoute()
 const healthOk = ref<boolean | null>(null)
@@ -21,6 +22,7 @@ onUnmounted(() => { if (timer) window.clearInterval(timer) })
   <header class="td-topbar drag-region">
     <h1>{{ route.meta.title ?? 'TrustDB' }}</h1>
     <div class="td-topbar__status no-drag">
+      <LanguageSwitcher compact />
       <span :class="{ offline: healthOk === false }"><i />{{ healthOk === false ? '离线模式' : '系统在线' }}</span>
     </div>
   </header>

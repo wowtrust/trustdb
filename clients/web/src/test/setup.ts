@@ -1,5 +1,10 @@
 import { afterEach, vi } from 'vitest'
 
+// Product tests assert the existing Simplified Chinese copy. Locale-specific
+// behavior is covered separately; pinning the test shell keeps snapshots and
+// text assertions independent from the host machine's browser language.
+localStorage.setItem('trustdb.locale', 'zh-CN')
+
 const canvasContext = {
   setTransform: vi.fn(),
   clearRect: vi.fn(),

@@ -1,6 +1,7 @@
 import { ArrowUpRight, GithubLogo, List, X } from "@phosphor-icons/react";
 import { useEffect, useState } from "react";
 import { Link } from "../router";
+import { LanguageSwitcher } from "./LanguageSwitcher";
 
 const navItems = [
   ["产品", "/"],
@@ -34,6 +35,7 @@ export function SiteHeader({ route }) {
           ))}
         </nav>
         <div className="site-header__actions">
+          <LanguageSwitcher compact />
           <a className="header-github" href="https://github.com/ryan-wong-coder/trustdb" target="_blank" rel="noreferrer" aria-label="打开 TrustDB GitHub 仓库">
             <GithubLogo weight="fill" /><span>GitHub</span>
           </a>
@@ -44,6 +46,7 @@ export function SiteHeader({ route }) {
       </header>
       {open && (
         <nav className="mobile-menu" aria-label="移动导航">
+          <LanguageSwitcher />
           {navItems.map(([label, href], index) => <Link key={href} href={href}><span>0{index + 1}</span>{label}</Link>)}
         </nav>
       )}

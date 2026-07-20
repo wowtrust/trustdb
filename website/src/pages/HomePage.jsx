@@ -6,7 +6,22 @@ import heroLandscape from "../assets/generated/trustdb-hero-landscape.png";
 import evidenceField from "../assets/generated/trustdb-evidence-field.png";
 import terminalLandscape from "../assets/generated/trustdb-terminal-landscape.png";
 import evidenceProblemLineart from "../assets/generated/trustdb-evidence-problem-lineart.png";
-import desktopProduct from "../../../design/qa/desktop-client-homepage.png";
+import desktopZh from "../assets/client-locales/desktop-zh-CN.png";
+import desktopEn from "../assets/client-locales/desktop-en.png";
+import desktopRu from "../assets/client-locales/desktop-ru.png";
+import desktopJa from "../assets/client-locales/desktop-ja.png";
+import desktopFr from "../assets/client-locales/desktop-fr.png";
+import desktopKo from "../assets/client-locales/desktop-ko.png";
+import { useLocale } from "../i18n";
+
+const desktopProducts = {
+  "zh-CN": desktopZh,
+  en: desktopEn,
+  ru: desktopRu,
+  ja: desktopJa,
+  fr: desktopFr,
+  ko: desktopKo,
+};
 
 const proofLevels = [
   ["L1", "签名", "客户端签名，锁定来源与内容。"],
@@ -117,6 +132,7 @@ function FlowCanvas({ mode = "hero" }) {
 }
 
 export function HomePage() {
+  const locale = useLocale();
   const [copied, setCopied] = useState(false);
   const command = "trustdb verify --file document.pdf --sproof document.sproof --server-public-key server.pub --client-public-key client.pub";
 
@@ -201,7 +217,7 @@ export function HomePage() {
 
       <section className="ecosystem section-shell">
         <div className="ecosystem__heading" data-reveal><p>CLI · SDK · Desktop</p><h2>一套证据链，<br />适合不同用法。</h2><span>CLI 用于自动化，Go SDK 接入业务系统，桌面客户端处理日常文件。无论从哪里提交，都用同样的方法验证。</span></div>
-        <div className="product-shot product-shot--desktop" data-reveal><div className="product-shot__bar"><span />TrustDB Desktop / Local proof workspace</div><img src={desktopProduct} alt="TrustDB Desktop 客户端概览界面" /></div>
+        <div className="product-shot product-shot--desktop" data-reveal><div className="product-shot__bar"><span />TrustDB Desktop / Local proof workspace</div><img src={desktopProducts[locale] || desktopZh} alt="TrustDB Desktop 客户端概览界面" /></div>
         <div className="ecosystem__lower">
           <div className="ecosystem__tools">
             <article data-reveal><span>CLI</span><h3>自动化与离线验证</h3><p>密钥、声明、提交、验证、备份、诊断与性能测试，适合脚本和受控环境。</p><Link href="/docs/cli">CLI 文档 <ArrowRight /></Link></article>

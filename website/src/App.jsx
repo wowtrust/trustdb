@@ -10,6 +10,7 @@ import { CliDocsPage, DesktopDocsPage, DesktopInstallPage, DocsIndexPage, Missin
 import { PerformancePage } from "./pages/PerformancePage";
 import { SproofPage } from "./pages/SproofPage";
 import { ChangelogPage, DownloadsPage } from "./pages/ReleasePages";
+import { t, useLocale } from "./i18n";
 
 gsap.registerPlugin(ScrollTrigger, useGSAP);
 
@@ -49,11 +50,12 @@ function RouteView({ route }) {
 
 export function App() {
   const { route, navigationKey } = useRoute();
+  const locale = useLocale();
   const root = useRef(null);
 
   useEffect(() => {
-    document.title = titles[route] || "页面未找到 · TrustDB";
-  }, [route]);
+    document.title = t(titles[route] || "页面未找到 · TrustDB");
+  }, [route, locale]);
 
   useLayoutEffect(() => {
     const rootElement = document.documentElement;

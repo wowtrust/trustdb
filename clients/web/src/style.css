@@ -304,6 +304,7 @@ body::before, body::after { content: none !important; display: none !important; 
 .wa-header nav a::after { content: ''; position: absolute; left: 20px; right: 20px; bottom: 0; height: 3px; background: var(--acid); transform: scaleX(0); transition: transform .22s ease; }
 .wa-header nav a:hover, .wa-header nav a.active { color: #eef4eb; background: rgba(0,255,34,.025); }
 .wa-header nav a.active::after { transform: scaleX(1); }
+.wa-header__actions { justify-self: end; display: flex; align-items: center; gap: 12px; min-width: 0; }
 .wa-header__status { display: flex; align-items: center; gap: 14px; color: #99a197; font: 10px/1 theme('fontFamily.mono'); }
 .wa-header__status span { display: flex; align-items: center; gap: 8px; color: #d6dcd3; }
 .wa-header__status i { width: 7px; height: 7px; border-radius: 50%; background: var(--acid); box-shadow: 0 0 13px rgba(0,255,34,.8); }

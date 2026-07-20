@@ -8,7 +8,7 @@ import Button from '@/components/Button.vue'
 import Input from '@/components/Input.vue'
 import Field from '@/components/Field.vue'
 import StatusDot from '@/components/StatusDot.vue'
-import { Save, RotateCcw, PlugZap, SunMedium, Moon, Monitor, Sparkles } from 'lucide-vue-next'
+import { Save, RotateCcw, PlugZap, Sparkles } from 'lucide-vue-next'
 
 const settings = useSettings()
 const toasts = useToasts()
@@ -27,8 +27,7 @@ const dirty = computed(() => {
     form.server_transport !== settings.settings.server_transport ||
     form.server_public_key_b64 !== settings.settings.server_public_key_b64 ||
     form.default_media_type !== settings.settings.default_media_type ||
-    form.default_event_type !== settings.settings.default_event_type ||
-    form.theme !== settings.settings.theme
+    form.default_event_type !== settings.settings.default_event_type
   )
 })
 
@@ -87,12 +86,6 @@ const endpointHint = computed(() =>
 const endpointPlaceholder = computed(() =>
   form.server_transport === 'grpc' ? '127.0.0.1:9090' : 'http://host:port',
 )
-
-const THEMES = [
-  { v: 'auto',  label: '跟随系统', icon: Monitor    },
-  { v: 'light', label: '浅色',    icon: SunMedium  },
-  { v: 'dark',  label: '深色',    icon: Moon       },
-]
 
 function reopenOnboarding() {
   // App.vue exposes this on window so we don't need a dedicated
@@ -172,23 +165,6 @@ function reopenOnboarding() {
         <Button size="sm" variant="subtle" @click="reopenOnboarding">
           <Sparkles :size="13" /> 打开向导
         </Button>
-      </div>
-    </Card>
-
-    <Card title="外观" subtitle="主题跟随系统是最推荐的选项">
-      <div class="inline-flex items-center gap-1 p-1 rounded-lg hairline border bg-white/50 dark:bg-ink-800/50">
-        <button
-          v-for="t in THEMES"
-          :key="t.v"
-          class="inline-flex items-center gap-1.5 px-3 h-8 rounded-md text-[12.5px] transition-all duration-150 ease-ios"
-          :class="form.theme === t.v
-            ? 'bg-white dark:bg-ink-700 text-ink-800 dark:text-ink-100 shadow-soft-sm'
-            : 'text-ink-500 hover:text-ink-700'"
-          @click="form.theme = t.v"
-        >
-          <component :is="t.icon" :size="13" />
-          {{ t.label }}
-        </button>
       </div>
     </Card>
 

@@ -8,6 +8,8 @@ import Button from '@/components/Button.vue'
 import Input from '@/components/Input.vue'
 import Field from '@/components/Field.vue'
 import HashChip from '@/components/HashChip.vue'
+import LanguageSwitcher from '@/components/LanguageSwitcher.vue'
+import { t } from '@/i18n'
 import { copyToClipboard } from '@/lib/format'
 import {
   Sparkles,
@@ -210,20 +212,23 @@ function skip() {
           </div>
           <div class="flex-1 min-w-0">
             <div class="kicker text-[10px] font-bold">
-              第 {{ stepIdx + 1 }} / {{ steps.length }} 步
+              {{ t('第 {current} / {total} 步', { current: stepIdx + 1, total: steps.length }) }}
             </div>
             <h2 class="display-title mt-2 text-[34px] font-black text-ink-50">
               {{ current.title }}
             </h2>
             <p class="mt-2 text-[13px] text-ink-400">{{ current.subtitle }}</p>
           </div>
-          <button
-            class="text-ink-500 hover:text-accent transition p-1 -mr-1 -mt-1"
-            title="跳过向导"
-            @click="skip"
-          >
-            <X :size="16" />
-          </button>
+          <div class="flex items-center gap-2 no-drag">
+            <LanguageSwitcher />
+            <button
+              class="text-ink-500 hover:text-accent transition p-1 -mr-1"
+              title="跳过向导"
+              @click="skip"
+            >
+              <X :size="16" />
+            </button>
+          </div>
         </div>
 
         <div class="px-8 py-6 overflow-y-auto min-h-0">

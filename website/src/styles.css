@@ -35,7 +35,12 @@ button { font: inherit; }
 .site-nav a[aria-current="page"] { color: var(--acid); }
 .online { justify-self: end; display: inline-flex; align-items: center; gap: 10px; color: var(--acid); font: 600 11px/1 monospace; }
 .online > span, .online i { width: 6px; height: 6px; border-radius: 50%; background: var(--acid); box-shadow: 0 0 14px var(--acid); }
-.site-header__actions { justify-self: end; display: flex; align-items: center; }
+.site-header__actions { justify-self: end; display: flex; align-items: center; gap: 14px; }
+.language-switcher { position: relative; display: inline-flex; align-items: center; gap: 7px; min-height: 34px; padding: 0 10px; border: 1px solid rgba(235,244,232,.16); background: rgba(4,8,5,.74); color: #dce4d9; }
+.language-switcher svg { width: 15px; height: 15px; color: var(--acid); pointer-events: none; }
+.language-switcher select { max-width: 132px; border: 0; outline: 0; appearance: none; background: transparent; color: inherit; font: 650 10px/1 monospace; letter-spacing: .06em; cursor: pointer; }
+.language-switcher option { color: #101310; background: #f2f5ef; }
+.language-switcher--compact select { width: 28px; }
 .header-github { display: inline-flex; align-items: center; gap: 8px; color: #b7c0b5; font: 650 11px/1 monospace; transition: color .25s ease; }
 .header-github:hover { color: var(--acid); }
 .header-github svg { width: 17px; height: 17px; }

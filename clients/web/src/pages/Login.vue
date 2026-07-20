@@ -6,6 +6,7 @@ import Input from '@/components/Input.vue'
 import Field from '@/components/Field.vue'
 import TrustDBLogo from '@/components/TrustDBLogo.vue'
 import { useAuth } from '@/stores/auth'
+import LanguageSwitcher from '@/components/LanguageSwitcher.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -36,6 +37,7 @@ async function submit() {
     <div class="ambient-orb one"></div>
     <div class="ambient-orb two"></div>
     <section class="relative z-[1] w-full max-w-[420px] glass rounded-[28px] p-8 shadow-soft">
+      <div class="absolute right-5 top-5"><LanguageSwitcher /></div>
       <div class="flex flex-col items-center gap-3">
         <div class="brand-logo-shell">
           <TrustDBLogo :size="56" />
