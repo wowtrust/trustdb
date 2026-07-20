@@ -4,7 +4,7 @@
 
 [官方网站](https://www.trustdb.ryan-wong.cn/) | [English README](README.md) | [贡献指南](CONTRIBUTING.md) | [`.sproof` 格式](formats/SPROOF_V1.md)
 
-TrustDB 是一个面向文件存证和证明交换的可验证证据数据库。它把本地文件哈希转换为客户端签名声明、服务端持久化收据、批次 Merkle 证明、Global Transparency Log 证明，以及可选的外部 Signed Tree Head（STH）锚定结果。
+TrustDB 是一个面向文件存证和证明交换的可验证证据数据库。它把本地文件哈希转换为客户端签名声明、服务端接受收据、批次 Merkle 证明、Global Transparency Log 证明，以及可选的外部 Signed Tree Head（STH）锚定结果。
 
 文档、快速开始、版本发布和反馈渠道统一维护在 [TrustDB 官方网站](https://www.trustdb.ryan-wong.cn/)。
 
@@ -59,7 +59,7 @@ docker run --name trustdb -p 8080:8080 -v trustdb-data:/var/lib/trustdb wsy19990
 | 等级 | 含义 | 主要产物 |
 | --- | --- | --- |
 | L1 | 客户端对包含内容哈希和元数据的 claim 签名。 | `SignedClaim` / `.tdclaim` |
-| L2 | 服务端校验 claim，并在 WAL 持久化边界内接受。 | `AcceptedReceipt` |
+| L2 | 服务端校验并将 claim 接受到 WAL；崩溃耐久性取决于配置的 fsync 策略。 | `AcceptedReceipt` |
 | L3 | accepted claim 被提交进 batch Merkle tree。 | `ProofBundle` / `.tdproof` |
 | L4 | batch root 已进入 Global Transparency Log，并能证明包含于目标 STH。 | `GlobalLogProof` / `.tdgproof` |
 | L5 | 对应 STH/global root 已被外部 anchor sink 锚定。 | `STHAnchorResult` / `.tdanchor-result` |
@@ -73,13 +73,15 @@ TrustDB 默认可按单节点服务运行。启用 TiKV proofstore 后，多个 
 核心路径：
 
 - Client path：CLI、SDK 或桌面客户端计算文件哈希，签名 claim，并提交到本地或服务端。
-- Ingest path：服务端校验签名和 key 状态，写入 WAL durable boundary，返回 accepted receipt。
+- Ingest path：服务端校验签名和 key 状态，将接受记录追加到 WAL，并返回 accepted receipt。
 - Batch path：accepted records 被聚合成 Merkle batch，存储 proof bundle 和索引。
 - Global log path：committed batch roots 被追加到 global transparency log，生成持久化 STH 和 global proof。
 - Anchor path：STH/global roots 入队后由 anchor worker 按配置发布。
 - Storage path：proof 数据可落到 file、Pebble 或 TiKV proofstore。
 - Backup path：proofstore 数据可导出为 `.tdbackup`，支持 verify 与带 checkpoint 的 restore。
 - Observability path：`/metrics` 暴露 ingest、batch、global log、anchor、WAL、backup、storage 等指标。
+
+`wal.fsync_mode=strict` 会在每条 accepted record 的 WAL 文件完成 fsync 后才返回。`group` 通过 `wal.group_commit_interval` 限制异步未刷盘窗口；`batch` 仅在 segment 轮转或关闭时同步。回执契约要求逐条 fsync 时应选择 `strict`；端到端崩溃耐久性还取决于文件系统与存储设备保证。
 
 ## 快速开始
 

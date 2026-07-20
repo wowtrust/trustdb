@@ -61,14 +61,22 @@ type Options struct {
 	// field because rotation never happens there.
 	OnRotate func(from, to uint64)
 	// FsyncMode controls when Append waits for durable storage:
-	// strict = fsync every record; group = fsync at most once per interval;
-	// batch = rely on rotation/close/checkpoint boundaries.
+	// strict = fsync every record; group = coalesce fsyncs while bounding
+	// the dirty interval; batch = rely on rotation and close boundaries.
 	FsyncMode string
 	// GroupCommitInterval is used when FsyncMode is group. A zero value
 	// defaults to 10ms to keep latency bounded while avoiding per-record sync.
 	GroupCommitInterval time.Duration
 	OnAppend            func(string, time.Duration)
-	OnFsync             func(string, time.Duration)
+	// OnFsync reports successful fsync calls. In group mode it may run from
+	// the background timer, so callbacks must be safe for concurrent use.
+	// Fsync callbacks must signal an owner goroutine rather than call Close
+	// directly because Close waits for background callbacks to finish.
+	OnFsync func(string, time.Duration)
+	// OnFsyncError reports fsync failures, including failures from the
+	// asynchronous group-commit timer that cannot be returned by Append. It
+	// may run from that timer and must be safe for concurrent use.
+	OnFsyncError func(string, error)
 }
 
 // segmentFileExt is the on-disk suffix for each WAL segment. Segments are
@@ -82,21 +90,55 @@ const segmentFileExt = ".wal"
 const segmentIDWidth = 9
 
 type Writer struct {
-	mu         sync.Mutex
-	file       *os.File
-	dir        string // empty in legacy single-file mode
-	maxBytes   int64
-	segmentID  uint64
-	sequence   uint64
-	offset     int64
-	prevHash   [32]byte
-	rotateHook func(from, to uint64) // test hook; nil in production
-	fsyncMode  string
-	groupEvery time.Duration
-	lastSync   time.Time
-	appendHook func(string, time.Duration)
-	fsyncHook  func(string, time.Duration)
-	recordBuf  []byte
+	mu              sync.Mutex
+	file            *os.File
+	dir             string // empty in legacy single-file mode
+	maxBytes        int64
+	segmentID       uint64
+	sequence        uint64
+	offset          int64
+	prevHash        [32]byte
+	rotateHook      func(from, to uint64) // test hook; nil in production
+	fsyncMode       string
+	groupEvery      time.Duration
+	lastSync        time.Time
+	dirty           bool
+	groupTimer      timerStopper
+	groupTimerGen   uint64
+	backgroundHooks sync.WaitGroup
+	stickyErr       error
+	closed          bool
+	closeErr        error
+	closeDone       chan struct{}
+	afterFunc       func(time.Duration, func()) timerStopper
+	syncFile        func(*os.File) error
+	closeFile       func(*os.File) error
+	appendHook      func(string, time.Duration)
+	fsyncHook       func(string, time.Duration)
+	fsyncErrorHook  func(string, error)
+	recordBuf       []byte
+}
+
+type timerStopper interface {
+	Stop() bool
+}
+
+type fsyncObservation struct {
+	attempted bool
+	duration  time.Duration
+	err       error
+}
+
+func defaultAfterFunc(delay time.Duration, callback func()) timerStopper {
+	return time.AfterFunc(delay, callback)
+}
+
+func defaultSyncFile(file *os.File) error {
+	return file.Sync()
+}
+
+func defaultCloseFile(file *os.File) error {
+	return file.Close()
 }
 
 type Record struct {
@@ -196,18 +238,23 @@ func OpenDirWriter(dir string, opts Options) (*Writer, error) {
 		return nil, fmt.Errorf("wal: seek end: %w", err)
 	}
 	return &Writer{
-		file:       f,
-		dir:        dir,
-		maxBytes:   opts.MaxSegmentBytes,
-		segmentID:  activeSeg,
-		sequence:   sequence,
-		offset:     offset,
-		prevHash:   prev,
-		rotateHook: opts.OnRotate,
-		fsyncMode:  normalizeFsyncMode(opts.FsyncMode),
-		groupEvery: normalizeGroupInterval(opts.GroupCommitInterval),
-		appendHook: opts.OnAppend,
-		fsyncHook:  opts.OnFsync,
+		file:           f,
+		dir:            dir,
+		maxBytes:       opts.MaxSegmentBytes,
+		segmentID:      activeSeg,
+		sequence:       sequence,
+		offset:         offset,
+		prevHash:       prev,
+		rotateHook:     opts.OnRotate,
+		fsyncMode:      normalizeFsyncMode(opts.FsyncMode),
+		groupEvery:     normalizeGroupInterval(opts.GroupCommitInterval),
+		afterFunc:      defaultAfterFunc,
+		syncFile:       defaultSyncFile,
+		closeFile:      defaultCloseFile,
+		appendHook:     opts.OnAppend,
+		fsyncHook:      opts.OnFsync,
+		fsyncErrorHook: opts.OnFsyncError,
+		closeDone:      make(chan struct{}),
 	}, nil
 }
 
@@ -243,15 +290,20 @@ func OpenWriterWithOptions(path string, segmentID uint64, opts Options) (*Writer
 		return nil, fmt.Errorf("wal: seek end: %w", err)
 	}
 	return &Writer{
-		file:       f,
-		segmentID:  segmentID,
-		sequence:   state.lastSequence,
-		offset:     state.validBytes,
-		prevHash:   state.lastHash,
-		fsyncMode:  normalizeFsyncMode(opts.FsyncMode),
-		groupEvery: normalizeGroupInterval(opts.GroupCommitInterval),
-		appendHook: opts.OnAppend,
-		fsyncHook:  opts.OnFsync,
+		file:           f,
+		segmentID:      segmentID,
+		sequence:       state.lastSequence,
+		offset:         state.validBytes,
+		prevHash:       state.lastHash,
+		fsyncMode:      normalizeFsyncMode(opts.FsyncMode),
+		groupEvery:     normalizeGroupInterval(opts.GroupCommitInterval),
+		afterFunc:      defaultAfterFunc,
+		syncFile:       defaultSyncFile,
+		closeFile:      defaultCloseFile,
+		appendHook:     opts.OnAppend,
+		fsyncHook:      opts.OnFsync,
+		fsyncErrorHook: opts.OnFsyncError,
+		closeDone:      make(chan struct{}),
 	}, nil
 }
 
@@ -274,8 +326,24 @@ func (w *Writer) AppendAt(ctx context.Context, payload []byte, at time.Time) (mo
 		}
 	}()
 
+	var (
+		fsyncs     [2]fsyncObservation
+		fsyncCount int
+	)
 	w.mu.Lock()
-	defer w.mu.Unlock()
+	defer func() {
+		w.mu.Unlock()
+		w.observeFsyncs(fsyncs[:fsyncCount])
+	}()
+	if w.closed {
+		return model.WALPosition{}, [32]byte{}, errors.New("wal: writer is closed")
+	}
+	if w.stickyErr != nil {
+		return model.WALPosition{}, [32]byte{}, w.stickyErr
+	}
+	if w.file == nil {
+		return model.WALPosition{}, [32]byte{}, errors.New("wal: writer is closed")
+	}
 
 	// Auto-rotate before writing, never in the middle, so a single record
 	// is always entirely contained in one segment. A segment that does not
@@ -286,7 +354,12 @@ func (w *Writer) AppendAt(ctx context.Context, payload []byte, at time.Time) (mo
 	nextSeq := w.sequence + 1
 	encoded, recordHash := encodeRecordInto(w.recordBuf, w.segmentID, nextSeq, at.UTC().UnixNano(), w.prevHash, payload)
 	if w.dir != "" && w.maxBytes > 0 && w.offset > 0 && w.offset+int64(len(encoded)) > w.maxBytes {
-		if err := w.rotateLocked(); err != nil {
+		fsync, err := w.rotateLocked()
+		if fsync.attempted {
+			fsyncs[fsyncCount] = fsync
+			fsyncCount++
+		}
+		if err != nil {
 			return model.WALPosition{}, [32]byte{}, err
 		}
 		nextSeq = w.sequence + 1
@@ -304,13 +377,25 @@ func (w *Writer) AppendAt(ctx context.Context, payload []byte, at time.Time) (mo
 	}
 	n, err := w.file.Write(encoded)
 	if err != nil {
-		return model.WALPosition{}, [32]byte{}, fmt.Errorf("wal: write: %w", err)
+		if n > 0 {
+			w.dirty = true
+		}
+		return model.WALPosition{}, [32]byte{}, w.poisonLocked(fmt.Errorf("wal: write: %w", err))
 	}
 	if n != len(encoded) {
-		return model.WALPosition{}, [32]byte{}, io.ErrShortWrite
+		if n > 0 {
+			w.dirty = true
+		}
+		return model.WALPosition{}, [32]byte{}, w.poisonLocked(fmt.Errorf("wal: write: %w", io.ErrShortWrite))
 	}
-	if err := w.syncAfterAppendLocked(); err != nil {
-		return model.WALPosition{}, [32]byte{}, fmt.Errorf("wal: sync: %w", err)
+	w.dirty = true
+	fsync := w.syncAfterAppendLocked()
+	if fsync.attempted {
+		fsyncs[fsyncCount] = fsync
+		fsyncCount++
+	}
+	if fsync.err != nil {
+		return model.WALPosition{}, [32]byte{}, fsync.err
 	}
 	w.sequence = pos.Sequence
 	w.offset += int64(n)
@@ -323,23 +408,26 @@ func (w *Writer) AppendAt(ctx context.Context, payload []byte, at time.Time) (mo
 // boundary so the first record of segment N+1 references the last record of
 // segment N via its prev_hash, keeping verification symmetric with the
 // single-file layout.
-func (w *Writer) rotateLocked() error {
+func (w *Writer) rotateLocked() (fsyncObservation, error) {
 	if w.dir == "" {
-		return errors.New("wal: rotation requires directory mode")
+		return fsyncObservation{}, errors.New("wal: rotation requires directory mode")
 	}
-	if err := w.file.Sync(); err != nil {
-		return fmt.Errorf("wal: sync before rotate: %w", err)
+	w.cancelGroupTimerLocked()
+	fsync := w.syncCurrentLocked("sync before rotate")
+	if fsync.err != nil {
+		return fsync, fsync.err
 	}
-	w.lastSync = time.Now().UTC()
-	if err := w.file.Close(); err != nil {
-		return fmt.Errorf("wal: close before rotate: %w", err)
+	err := w.closeFile(w.file)
+	w.file = nil
+	if err != nil {
+		return fsync, w.poisonLocked(fmt.Errorf("wal: close before rotate: %w", err))
 	}
 	from := w.segmentID
 	nextSeg := w.segmentID + 1
 	path := filepath.Join(w.dir, segmentName(nextSeg))
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR|os.O_APPEND|os.O_EXCL, 0o600)
 	if err != nil {
-		return fmt.Errorf("wal: open rotated segment %d: %w", nextSeg, err)
+		return fsync, w.poisonLocked(fmt.Errorf("wal: open rotated segment %d: %w", nextSeg, err))
 	}
 	w.file = f
 	w.segmentID = nextSeg
@@ -347,54 +435,160 @@ func (w *Writer) rotateLocked() error {
 	if w.rotateHook != nil {
 		w.rotateHook(from, nextSeg)
 	}
-	return nil
+	return fsync, nil
 }
 
 func (w *Writer) Close() error {
 	w.mu.Lock()
-	defer w.mu.Unlock()
-	if w.file == nil {
-		return nil
+	if w.closeDone == nil {
+		w.closeDone = make(chan struct{})
 	}
-	syncErr := w.file.Sync()
-	err := w.file.Close()
-	w.file = nil
-	if syncErr != nil {
-		return syncErr
+	if w.closed {
+		done := w.closeDone
+		w.mu.Unlock()
+		<-done
+		w.mu.Lock()
+		err := w.closeErr
+		w.mu.Unlock()
+		return err
 	}
-	return err
+	w.closed = true
+	w.cancelGroupTimerLocked()
+
+	var (
+		closeErrors []error
+		fsync       fsyncObservation
+	)
+	if w.stickyErr != nil {
+		closeErrors = append(closeErrors, w.stickyErr)
+	}
+	if w.file != nil {
+		start := time.Now()
+		err := w.syncFile(w.file)
+		fsync = fsyncObservation{
+			attempted: true,
+			duration:  time.Since(start),
+		}
+		if err != nil {
+			fsync.err = fmt.Errorf("wal: final sync: %w", err)
+			closeErrors = append(closeErrors, fsync.err)
+		} else {
+			w.dirty = false
+			w.lastSync = time.Now()
+		}
+		if err := w.closeFile(w.file); err != nil {
+			closeErrors = append(closeErrors, fmt.Errorf("wal: close: %w", err))
+		}
+		w.file = nil
+	}
+	w.closeErr = errors.Join(closeErrors...)
+	closeErr := w.closeErr
+	done := w.closeDone
+	w.mu.Unlock()
+	w.observeFsyncs([]fsyncObservation{fsync})
+	w.backgroundHooks.Wait()
+	close(done)
+	return closeErr
 }
 
-func (w *Writer) syncAfterAppendLocked() error {
+func (w *Writer) syncAfterAppendLocked() fsyncObservation {
 	switch w.fsyncMode {
 	case FsyncBatch:
-		return nil
+		return fsyncObservation{}
 	case FsyncGroup:
-		now := time.Now().UTC()
-		if !w.lastSync.IsZero() && now.Sub(w.lastSync) < w.groupEvery {
-			return nil
+		now := time.Now()
+		if !w.lastSync.IsZero() {
+			deadline := w.lastSync.Add(w.groupEvery)
+			if now.Before(deadline) {
+				w.armGroupTimerLocked(deadline.Sub(now))
+				return fsyncObservation{}
+			}
 		}
-		start := time.Now()
-		if err := w.file.Sync(); err != nil {
-			return err
-		}
-		w.observeFsync(time.Since(start))
-		w.lastSync = now
-		return nil
+		w.cancelGroupTimerLocked()
+		return w.syncCurrentLocked("sync")
 	default:
-		start := time.Now()
-		if err := w.file.Sync(); err != nil {
-			return err
-		}
-		w.observeFsync(time.Since(start))
-		w.lastSync = time.Now().UTC()
-		return nil
+		w.cancelGroupTimerLocked()
+		return w.syncCurrentLocked("sync")
 	}
 }
 
-func (w *Writer) observeFsync(duration time.Duration) {
-	if w.fsyncHook != nil {
-		w.fsyncHook(w.fsyncMode, duration)
+func (w *Writer) syncCurrentLocked(operation string) fsyncObservation {
+	start := time.Now()
+	err := w.syncFile(w.file)
+	observation := fsyncObservation{
+		attempted: true,
+		duration:  time.Since(start),
+	}
+	if err != nil {
+		observation.err = w.poisonLocked(fmt.Errorf("wal: %s: %w", operation, err))
+		return observation
+	}
+	w.dirty = false
+	w.lastSync = time.Now()
+	return observation
+}
+
+func (w *Writer) armGroupTimerLocked(delay time.Duration) {
+	if w.groupTimer != nil || !w.dirty || w.stickyErr != nil || w.closed {
+		return
+	}
+	w.groupTimerGen++
+	generation := w.groupTimerGen
+	segmentID := w.segmentID
+	w.groupTimer = w.afterFunc(delay, func() {
+		w.flushGroupTimer(generation, segmentID)
+	})
+}
+
+func (w *Writer) cancelGroupTimerLocked() {
+	if w.groupTimer != nil {
+		w.groupTimer.Stop()
+		w.groupTimer = nil
+	}
+	w.groupTimerGen++
+}
+
+func (w *Writer) flushGroupTimer(generation, segmentID uint64) {
+	w.mu.Lock()
+	if w.closed || w.file == nil || w.fsyncMode != FsyncGroup ||
+		w.groupTimer == nil || w.groupTimerGen != generation || w.segmentID != segmentID {
+		w.mu.Unlock()
+		return
+	}
+	w.groupTimer = nil
+	w.groupTimerGen++
+	if !w.dirty || w.stickyErr != nil {
+		w.mu.Unlock()
+		return
+	}
+	fsync := w.syncCurrentLocked("background group sync")
+	w.backgroundHooks.Add(1)
+	w.mu.Unlock()
+	defer w.backgroundHooks.Done()
+	w.observeFsyncs([]fsyncObservation{fsync})
+}
+
+func (w *Writer) poisonLocked(err error) error {
+	if w.stickyErr == nil {
+		w.stickyErr = err
+	}
+	return w.stickyErr
+}
+
+func (w *Writer) observeFsyncs(observations []fsyncObservation) {
+	for _, observation := range observations {
+		if !observation.attempted {
+			continue
+		}
+		if observation.err != nil {
+			if w.fsyncErrorHook != nil {
+				w.fsyncErrorHook(w.fsyncMode, observation.err)
+			}
+			continue
+		}
+		if w.fsyncHook != nil {
+			w.fsyncHook(w.fsyncMode, observation.duration)
+		}
 	}
 }
 

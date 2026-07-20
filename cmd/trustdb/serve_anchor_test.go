@@ -8,6 +8,7 @@ import (
 
 	"github.com/ryan-wong-coder/trustdb/internal/anchor"
 	"github.com/ryan-wong-coder/trustdb/internal/proofstore"
+	"github.com/ryan-wong-coder/trustdb/internal/wal"
 )
 
 // newTestRuntime returns a runtimeConfig minimal enough to drive the
@@ -86,6 +87,19 @@ func TestServeDurationFlagBounds(t *testing.T) {
 	}
 	if _, err := parsePositiveDurationFlag("batch-max-delay", "0s"); err == nil || !strings.Contains(err.Error(), "--batch-max-delay") {
 		t.Fatalf("zero batch-max-delay error = %v, want flag error", err)
+	}
+	if got, err := parseWALGroupCommitInterval(wal.FsyncGroup, "10ms"); err != nil || got != 10*time.Millisecond {
+		t.Fatalf("parse WAL group interval = %v err=%v, want 10ms nil", got, err)
+	}
+	for _, value := range []string{"0s", "-1ms"} {
+		if _, err := parseWALGroupCommitInterval(wal.FsyncGroup, value); err == nil || !strings.Contains(err.Error(), "--wal-group-commit-interval") {
+			t.Fatalf("WAL group interval %q error = %v, want flag error", value, err)
+		}
+	}
+	for _, mode := range []string{wal.FsyncStrict, wal.FsyncBatch} {
+		if got, err := parseWALGroupCommitInterval(mode, "0s"); err != nil || got != 10*time.Millisecond {
+			t.Fatalf("inactive WAL group interval for %s = %v err=%v, want normalized 10ms nil", mode, got, err)
+		}
 	}
 }
 

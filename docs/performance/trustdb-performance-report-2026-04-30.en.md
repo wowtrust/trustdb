@@ -65,7 +65,7 @@ The report intentionally omits server passwords, private keys, client private ke
 | `batch_queue_size` | `1,048,576` | Prevents batch queue saturation during 100k burst submissions. |
 | `batch_max_records` | `8,192` | Reduces batch count and proofstore write batches. |
 
-This profile is intended for high-write benchmarking. It is not the default production-safe profile. If the requirement is never losing an accepted record after a crash, retest with `wal.fsync_mode=group` or `strict`.
+This profile is intended for high-write benchmarking. It is not the default production-safe profile. Use `wal.fsync_mode=group` to bound the asynchronous loss window, or `strict` when every accepted record must wait for its WAL file fsync before acknowledgement. End-to-end crash durability also depends on the filesystem and storage guarantees.
 
 ## Measurement Semantics
 

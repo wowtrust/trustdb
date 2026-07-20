@@ -2,7 +2,9 @@
 #
 # Operational intent:
 # - Pebble proofstore is the production backend.
-# - WAL uses directory segments plus group fsync.
+# - WAL uses directory segments plus group fsync, bounding the asynchronous
+#   dirty window to group_commit_interval. Use strict when every accepted
+#   receipt must wait for its WAL file fsync before it is returned.
 # - L4 global log is always enabled in current serve path.
 # - L5 anchors publish STH/global roots only.
 

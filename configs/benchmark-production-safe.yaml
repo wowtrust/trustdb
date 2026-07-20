@@ -1,4 +1,5 @@
-# Production-semantics performance profile: durable WAL, full indexes, L4/L5.
+# Production-semantics performance profile: bounded group-fsync WAL window,
+# full indexes, and L4/L5. Use strict for a file fsync before each receipt.
 run_profile: benchmark
 
 paths:

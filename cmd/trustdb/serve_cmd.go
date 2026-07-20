@@ -254,9 +254,9 @@ func newServeCommand(rt *runtimeConfig) *cobra.Command {
 			if strings.TrimSpace(walGroupCommitIntervalText) == "" {
 				walGroupCommitIntervalText = "10ms"
 			}
-			walGroupCommitInterval, err := time.ParseDuration(walGroupCommitIntervalText)
+			walGroupCommitInterval, err := parseWALGroupCommitInterval(walFsyncMode, walGroupCommitIntervalText)
 			if err != nil {
-				return trusterr.Wrap(trusterr.CodeInvalidArgument, "parse wal-group-commit-interval", err)
+				return err
 			}
 			batchProofMode = normalizeSemanticProofMode(batchProofMode)
 			proofstoreRecordIndexMode = normalizeSemanticRecordIndexMode(proofstoreRecordIndexMode)
@@ -284,12 +284,19 @@ func newServeCommand(rt *runtimeConfig) *cobra.Command {
 				OnFsync: func(mode string, d time.Duration) {
 					metrics.WALFsyncLatency.WithLabelValues(mode).Observe(d.Seconds())
 				},
+				OnFsyncError: func(mode string, err error) {
+					rt.logger.Error().Err(err).Str("fsync_mode", mode).Str("wal", walPath).Msg("wal fsync failed")
+				},
 			}
 			writer, walMode, err := openWALWriterWithOptions(walPath, walOpts)
 			if err != nil {
 				return err
 			}
-			defer writer.Close()
+			defer func() {
+				if err := writer.Close(); err != nil {
+					rt.logger.Error().Err(err).Str("wal", walPath).Msg("wal close failed")
+				}
+			}()
 			rt.logger.Info().
 				Str("wal", walPath).
 				Str("mode", walMode).
@@ -639,7 +646,7 @@ func newServeCommand(rt *runtimeConfig) *cobra.Command {
 	cmd.Flags().Int64Var(&walMaxSegmentBytes, "wal-max-segment-bytes", 0, "rotate WAL directory segments above this byte count (0 disables rotation; only honored in directory mode)")
 	cmd.Flags().IntVar(&walKeepSegments, "wal-keep-segments", 0, "after checkpoint advance, keep this many segments older than the checkpoint-covered segment (directory mode; 0 = only retain the active segment + checkpoint-covered one)")
 	cmd.Flags().StringVar(&walFsyncMode, "wal-fsync-mode", "", "WAL fsync mode: strict, group (production default), or batch")
-	cmd.Flags().StringVar(&walGroupCommitIntervalText, "wal-group-commit-interval", "", "WAL group fsync interval when --wal-fsync-mode=group (default 10ms)")
+	cmd.Flags().StringVar(&walGroupCommitIntervalText, "wal-group-commit-interval", "", "maximum WAL dirty interval in group mode (default 10ms; use strict for fsync before each receipt)")
 	cmd.Flags().StringVar(&metastoreKind, "metastore", "", "proof store backend: file (default), pebble, or tikv (shared PD/TiKV cluster)")
 	cmd.Flags().StringVar(&metastorePath, "metastore-path", "", "proof store path (defaults to --proof-dir; for tikv, accepts comma-separated PD endpoints)")
 	cmd.Flags().StringVar(&proofstoreTiKVPDText, "proofstore-tikv-pd-endpoints", "", "comma-separated TiKV PD endpoints for the tikv proofstore backend")
@@ -694,6 +701,23 @@ func parsePositiveDurationFlag(name, text string) (time.Duration, error) {
 	}
 	if d <= 0 {
 		return 0, trusterr.New(trusterr.CodeInvalidArgument, "--"+name+" must be > 0")
+	}
+	return d, nil
+}
+
+func parseWALGroupCommitInterval(mode, text string) (time.Duration, error) {
+	if strings.EqualFold(strings.TrimSpace(mode), wal.FsyncGroup) {
+		return parsePositiveDurationFlag("wal-group-commit-interval", text)
+	}
+	d, err := time.ParseDuration(text)
+	if err != nil {
+		return 0, trusterr.Wrap(trusterr.CodeInvalidArgument, "parse wal-group-commit-interval", err)
+	}
+	// Preserve compatibility for strict and batch profiles, where this
+	// setting is inactive, while logging the same normalized value the WAL
+	// writer would use if the mode later changed to group.
+	if d <= 0 {
+		return 10 * time.Millisecond, nil
 	}
 	return d, nil
 }

@@ -4,7 +4,7 @@
 
 [Official Website](https://www.trustdb.ryan-wong.cn/) | [中文说明](README.zh-CN.md) | [Contributing](CONTRIBUTING.md) | [`.sproof` format](formats/SPROOF_V1.md)
 
-TrustDB is a verifiable evidence database for file claims and proof exchange. It turns a local file hash into a signed claim, a durable server receipt, a batch Merkle proof, a global transparency-log proof, and optionally an externally anchored Signed Tree Head (STH).
+TrustDB is a verifiable evidence database for file claims and proof exchange. It turns a local file hash into a signed claim, a server acceptance receipt, a batch Merkle proof, a global transparency-log proof, and optionally an externally anchored Signed Tree Head (STH).
 
 Documentation, quick start guides, releases, and feedback channels are available on the [TrustDB official website](https://www.trustdb.ryan-wong.cn/).
 
@@ -58,7 +58,7 @@ Desktop packages carry a release-specific self-signed certificate and its public
 | Level | Meaning | Primary artifact |
 | --- | --- | --- |
 | L1 | Client signs a claim containing the content hash and metadata. | `SignedClaim` / `.tdclaim` |
-| L2 | Server validates and accepts the claim into the durable WAL boundary. | `AcceptedReceipt` |
+| L2 | Server validates and accepts the claim into WAL; crash durability follows the configured fsync policy. | `AcceptedReceipt` |
 | L3 | The accepted claim is committed into a batch Merkle tree. | `ProofBundle` / `.tdproof` |
 | L4 | The batch root is included in the Global Transparency Log and a target STH. | `GlobalLogProof` / `.tdgproof` |
 | L5 | The corresponding STH/global root is externally anchored. | `STHAnchorResult` / `.tdanchor-result` |
@@ -72,13 +72,15 @@ TrustDB runs as a single-node service by default. With the TiKV proofstore backe
 Core paths:
 
 - Client path: CLI, SDK, or desktop computes a file hash, signs a claim, and submits it locally or to the server.
-- Ingest path: the server validates signatures and key state, appends durable acceptance to WAL, and returns an accepted receipt.
+- Ingest path: the server validates signatures and key state, appends acceptance to WAL, and returns an accepted receipt.
 - Batch path: accepted records are grouped into Merkle batches and stored as proof bundles plus indexes.
 - Global log path: committed batch roots are appended into the global transparency log, producing persisted STHs and global proofs.
 - Anchor path: STH/global roots are queued and published by the configured anchor worker.
 - Storage path: proof data is stored in file, Pebble, or TiKV proofstores.
 - Backup path: proofstore data can be exported to `.tdbackup`, verified, and restored with resume checkpoints.
 - Observability path: `/metrics` exposes ingest, batch, global log, anchor, WAL, backup, and storage metrics.
+
+`wal.fsync_mode=strict` waits for each accepted record's WAL file fsync before returning. `group` bounds the asynchronous dirty window by `wal.group_commit_interval`; `batch` syncs only at rotation or close. Choose `strict` when the receipt contract requires a per-record fsync; end-to-end crash durability also depends on the filesystem and storage guarantees.
 
 ## Quick Start
 

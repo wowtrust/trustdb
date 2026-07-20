@@ -86,7 +86,7 @@ net.ipv4.tcp_max_syn_backlog = 65535
 | 瞬时 `burst` | batch fsync、16,384 records/batch、500 ms、32 workers | 短峰吸收，后台继续完成 L3 | 62,319 Submit/s |
 | 持续高写 `l3-throughput` | batch fsync、8,192 records、200 ms、16 ingest、4 materializer | L2/L3 综合吞吐 | 55,125 Submit/s；14,797 L3/s |
 | Proof 优先 `proof-ready` | 8 ingest、8 materializer | 压低 proof backlog 和 p99 | 46,393 Submit/s；18,487 L3/s |
-| 综合 `balanced` | group fsync、no-storage-token、L4、8/3 workers | 耐久接受 + L4 + 较低写放大 | 37,443 Submit/s；6,377 L4/s |
+| 综合 `balanced` | group fsync、no-storage-token、L4、8/3 workers | 有界异步 WAL 窗口 + L4 + 较低写放大 | 37,443 Submit/s；6,377 L4/s |
 | 生产安全 `production-safe` | group fsync、full index、chunk sync、L4/OTS、4/2 workers | 默认推荐生产性能基线 | 23,562 Submit/s；4,569 L4/s |
 | 生产保证 `production-guaranteed` | strict fsync、full index、chunk sync、L4/OTS | 每条 accepted receipt 对应一次 WAL fsync | 1,043 Submit/s；1,033 L4/s |
 | 大载荷 `large-payload` | batch fsync、4,096 records、16/4 workers | 16/64 KiB claim 压测 | 见下表 |

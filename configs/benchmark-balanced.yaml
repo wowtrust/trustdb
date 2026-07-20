@@ -1,4 +1,4 @@
-# Balances durable accepted receipts, reduced index amplification, and L4 proofs.
+# Balances a bounded group-fsync window, reduced index amplification, and L4 proofs.
 run_profile: benchmark
 
 paths:

@@ -65,7 +65,7 @@
 | `batch_queue_size` | `1,048,576` | 避免 10 万条瞬时提交下 batch queue full |
 | `batch_max_records` | `8,192` | 减少 batch 数量和 proofstore 写入批次 |
 
-这组配置适合高写入压测，不是默认生产安全 profile。若业务要求崩溃后已确认提交绝不丢失，应回到 `wal.fsync_mode=group` 或 `strict`，并重新按安全 profile 测试。
+这组配置适合高写入压测，不是默认生产安全 profile。`wal.fsync_mode=group` 可限制异步未刷盘窗口；若要求每条 accepted record 在确认前完成 WAL 文件 fsync，必须使用 `strict` 并重新按安全 profile 测试。端到端崩溃耐久性还取决于文件系统与存储设备保证。
 
 ## 测试口径
 
