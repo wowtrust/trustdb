@@ -446,6 +446,14 @@ func (c *Client) submitLogStreamNative(ctx context.Context, entries <-chan LogEn
 		return nil, err
 	}
 	out := make(chan LogSubmitItemResult, queueSize)
+	emit := func(item LogSubmitItemResult) bool {
+		select {
+		case out <- item:
+			return true
+		case <-workCtx.Done():
+			return false
+		}
+	}
 	var wg sync.WaitGroup
 	wg.Add(2)
 	go func() {
@@ -464,7 +472,9 @@ func (c *Client) submitLogStreamNative(ctx context.Context, entries <-chan LogEn
 				index++
 				raw, err := logEntryReader(entry)
 				if err != nil {
-					out <- LogSubmitItemResult{Index: itemIndex, Err: err}
+					if !emit(LogSubmitItemResult{Index: itemIndex, Err: err}) {
+						return
+					}
 					if opts.StopOnError {
 						cancel()
 						return
@@ -473,7 +483,9 @@ func (c *Client) submitLogStreamNative(ctx context.Context, entries <-chan LogEn
 				}
 				signed, err := BuildSignedLogClaim(raw, id, mergeLogClaimOptions(opts.Claim, entry.Options))
 				if err != nil {
-					out <- LogSubmitItemResult{Index: itemIndex, Err: err}
+					if !emit(LogSubmitItemResult{Index: itemIndex, Err: err}) {
+						return
+					}
 					if opts.StopOnError {
 						cancel()
 						return
@@ -491,7 +503,9 @@ func (c *Client) submitLogStreamNative(ctx context.Context, entries <-chan LogEn
 	go func() {
 		defer wg.Done()
 		for item := range nativeOut {
-			out <- LogSubmitItemResult{Index: item.Index, Result: item.Result, Err: item.Err}
+			if !emit(LogSubmitItemResult{Index: item.Index, Result: item.Result, Err: item.Err}) {
+				return
+			}
 			if item.Err != nil && opts.StopOnError {
 				cancel()
 				return

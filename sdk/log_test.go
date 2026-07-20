@@ -349,6 +349,54 @@ func TestClientSubmitLogStreamNilContextDoesNotPanic(t *testing.T) {
 	}
 }
 
+func TestClientSubmitLogStreamNativeCancellationUnblocksFullResultBuffer(t *testing.T) {
+	secondReceived := make(chan struct{})
+	transport := &stubStreamTransport{
+		results:        []signedClaimStreamItemResult{{Index: 0}, {Index: 1}},
+		secondReceived: secondReceived,
+	}
+	client, err := NewClientWithTransport(transport)
+	if err != nil {
+		t.Fatalf("NewClientWithTransport: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	entries := make(chan LogEntry)
+	out, err := client.SubmitLogStream(ctx, entries, Identity{}, LogStreamOptions{QueueSize: 1})
+	if err != nil {
+		t.Fatalf("SubmitLogStream: %v", err)
+	}
+	close(entries)
+
+	deadline := time.Now().Add(time.Second)
+	for len(out) != 1 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if len(out) != 1 {
+		t.Fatal("result buffer did not fill")
+	}
+	select {
+	case <-secondReceived:
+	case <-time.After(time.Second):
+		t.Fatal("native result receiver did not reach the full output buffer")
+	}
+	cancel()
+	time.Sleep(10 * time.Millisecond)
+
+	select {
+	case <-out:
+	case <-time.After(time.Second):
+		t.Fatal("timed out reading buffered result")
+	}
+	select {
+	case _, ok := <-out:
+		if ok {
+			t.Fatal("stream emitted another result after cancellation")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("result stream did not close after cancellation")
+	}
+}
+
 func TestSubmitLogBatchRejectsSharedDefaults(t *testing.T) {
 	t.Parallel()
 
@@ -366,6 +414,26 @@ func TestSubmitLogBatchRejectsSharedDefaults(t *testing.T) {
 }
 
 type stubTransport struct{}
+
+type stubStreamTransport struct {
+	stubTransport
+	results        []signedClaimStreamItemResult
+	secondReceived chan struct{}
+}
+
+func (s *stubStreamTransport) SubmitSignedClaimStream(_ context.Context, _ <-chan signedClaimStreamItem) (<-chan signedClaimStreamItemResult, error) {
+	out := make(chan signedClaimStreamItemResult)
+	go func() {
+		defer close(out)
+		for index, result := range s.results {
+			out <- result
+			if index == 1 && s.secondReceived != nil {
+				close(s.secondReceived)
+			}
+		}
+	}()
+	return out, nil
+}
 
 func (stubTransport) Endpoint() string { return "stub" }
 func (stubTransport) CheckHealth(context.Context) HealthStatus {

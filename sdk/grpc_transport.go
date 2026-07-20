@@ -189,7 +189,12 @@ func (t *grpcTransport) SubmitSignedClaimStream(ctx context.Context, in <-chan s
 			req := grpcapi.SubmitClaimStreamRequest{Index: item.Index, SignedClaim: item.SignedClaim}
 			sent.Store(item.Index, item.SignedClaim)
 			if err := stream.SendMsg(&req); err != nil {
-				out <- signedClaimStreamItemResult{Index: item.Index, Err: grpcError(grpcapi.FullMethodSubmitClaimStream, t.target, err)}
+				item := signedClaimStreamItemResult{Index: item.Index, Err: grpcError(grpcapi.FullMethodSubmitClaimStream, t.target, err)}
+				select {
+				case out <- item:
+				default:
+				}
+				cancel()
 				return
 			}
 		}
@@ -200,7 +205,11 @@ func (t *grpcTransport) SubmitSignedClaimStream(ctx context.Context, in <-chan s
 			var resp grpcapi.SubmitClaimStreamResponse
 			if err := stream.RecvMsg(&resp); err != nil {
 				if err != io.EOF {
-					out <- signedClaimStreamItemResult{Index: -1, Err: grpcError(grpcapi.FullMethodSubmitClaimStream, t.target, err)}
+					item := signedClaimStreamItemResult{Index: -1, Err: grpcError(grpcapi.FullMethodSubmitClaimStream, t.target, err)}
+					select {
+					case out <- item:
+					default:
+					}
 				}
 				return
 			}
@@ -221,7 +230,11 @@ func (t *grpcTransport) SubmitSignedClaimStream(ctx context.Context, in <-chan s
 				}
 				item.Result = submitResultFromGRPC(*resp.Result, signed)
 			}
-			out <- item
+			select {
+			case out <- item:
+			case <-callCtx.Done():
+				return
+			}
 		}
 	}()
 	go func() {
