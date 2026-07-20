@@ -574,12 +574,72 @@ func TestSubmitLogBatchRejectsSharedDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClientWithTransport: %v", err)
 	}
-	_, err = client.SubmitLogBatch(context.Background(), []LogEntry{
+	result, err := client.SubmitLogBatch(context.Background(), []LogEntry{
 		{Body: []byte(`{"n":1}`)},
 		{Body: []byte(`{"n":2}`)},
 	}, Identity{}, LogSubmitOptions{Claim: LogClaimOptions{IdempotencyKey: "same"}})
 	if err == nil {
 		t.Fatal("expected shared idempotency key error")
+	}
+	if result.Results == nil || len(result.Results) != 2 {
+		t.Fatalf("results = %#v, want two allocated result slots", result.Results)
+	}
+}
+
+func TestSubmitLogBatchEmptyReturnsNonNilResults(t *testing.T) {
+	t.Parallel()
+
+	client, err := NewClientWithTransport(stubTransport{})
+	if err != nil {
+		t.Fatalf("NewClientWithTransport: %v", err)
+	}
+	result, err := client.SubmitLogBatch(context.Background(), nil, Identity{}, LogSubmitOptions{})
+	if err != nil {
+		t.Fatalf("SubmitLogBatch: %v", err)
+	}
+	if result.Results == nil || len(result.Results) != 0 {
+		t.Fatalf("results = %#v, want non-nil empty slice", result.Results)
+	}
+}
+
+func TestSubmitLogBatchFallbackTransportPreservesResults(t *testing.T) {
+	t.Parallel()
+
+	_, privateKey, err := trustcrypto.GenerateEd25519Key()
+	if err != nil {
+		t.Fatalf("GenerateEd25519Key: %v", err)
+	}
+	client, err := NewClientWithTransport(stubTransport{})
+	if err != nil {
+		t.Fatalf("NewClientWithTransport: %v", err)
+	}
+	entries := make([]LogEntry, 2)
+	for index := range entries {
+		entries[index] = LogEntry{
+			Body: []byte(`{"level":"info"}`),
+			Options: LogClaimOptions{
+				ProducedAt:     time.Unix(20, int64(index)),
+				Nonce:          bytes.Repeat([]byte{byte(index + 1)}, 16),
+				IdempotencyKey: "fallback-" + string(rune('a'+index)),
+			},
+		}
+	}
+	result, err := client.SubmitLogBatch(context.Background(), entries, Identity{
+		TenantID:   "tenant-test",
+		ClientID:   "client-test",
+		KeyID:      "key-test",
+		PrivateKey: privateKey,
+	}, LogSubmitOptions{Concurrency: 2})
+	if err != nil {
+		t.Fatalf("SubmitLogBatch: %v", err)
+	}
+	if result.Submitted != len(entries) || result.Failed != 0 || len(result.Results) != len(entries) {
+		t.Fatalf("result = %+v", result)
+	}
+	for index, item := range result.Results {
+		if item.Index != index || item.Err != nil || item.Result.SignedClaim.Claim.IdempotencyKey == "" {
+			t.Fatalf("result[%d] = %+v", index, item)
+		}
 	}
 }
 

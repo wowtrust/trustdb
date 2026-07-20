@@ -246,18 +246,18 @@ func (c *Client) SubmitJSONLog(ctx context.Context, v any, id Identity, opts Log
 
 // SubmitLogBatch submits log entries concurrently and returns per-entry results.
 func (c *Client) SubmitLogBatch(ctx context.Context, entries []LogEntry, id Identity, opts LogSubmitOptions) (LogBatchResult, error) {
-	result := LogBatchResult{Results: make([]LogSubmitItemResult, len(entries))}
 	if len(entries) == 0 {
-		return result, nil
+		return LogBatchResult{Results: make([]LogSubmitItemResult, 0)}, nil
 	}
 	if len(entries) > 1 {
 		if err := validateMultiLogDefaults("batch", opts.Claim); err != nil {
-			return result, err
+			return LogBatchResult{Results: make([]LogSubmitItemResult, len(entries))}, err
 		}
 	}
 	if native, ok := c.transport.(signedClaimBatchTransport); ok {
 		return c.submitLogBatchNative(ctx, entries, id, opts, native)
 	}
+	result := LogBatchResult{Results: make([]LogSubmitItemResult, len(entries))}
 	workerCount := normalizeLogConcurrency(opts.Concurrency)
 	if workerCount > len(entries) {
 		workerCount = len(entries)
