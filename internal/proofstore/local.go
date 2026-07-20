@@ -215,23 +215,16 @@ func (s LocalStore) ListRoots(ctx context.Context, limit int) ([]model.BatchRoot
 		}
 		return nil, trusterr.Wrap(trusterr.CodeDataLoss, "read root directory", err)
 	}
-	names := make([]string, 0, len(entries))
-	for _, entry := range entries {
+	roots := make([]model.BatchRoot, 0, min(limit, len(entries)))
+	for i := len(entries) - 1; i >= 0 && len(roots) < limit; i-- {
+		entry := entries[i]
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".tdroot") {
 			continue
 		}
-		names = append(names, entry.Name())
-	}
-	sort.Sort(sort.Reverse(sort.StringSlice(names)))
-	if len(names) > limit {
-		names = names[:limit]
-	}
-	roots := make([]model.BatchRoot, 0, len(names))
-	for _, name := range names {
 		if err := ctx.Err(); err != nil {
 			return nil, trusterr.Wrap(trusterr.CodeDeadlineExceeded, "proofstore list roots canceled", err)
 		}
-		data, err := readStoredFile(filepath.Join(s.rootDir(), name))
+		data, err := readStoredFile(filepath.Join(s.rootDir(), entry.Name()))
 		if err != nil {
 			return nil, trusterr.Wrap(trusterr.CodeDataLoss, "read batch root", err)
 		}
@@ -258,20 +251,15 @@ func (s LocalStore) ListRootsAfter(ctx context.Context, afterClosedAtUnixN int64
 		}
 		return nil, trusterr.Wrap(trusterr.CodeDataLoss, "read root directory", err)
 	}
-	names := make([]string, 0, len(entries))
+	roots := make([]model.BatchRoot, 0, limit)
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".tdroot") {
 			continue
 		}
-		names = append(names, entry.Name())
-	}
-	sort.Strings(names)
-	roots := make([]model.BatchRoot, 0, limit)
-	for _, name := range names {
 		if err := ctx.Err(); err != nil {
 			return nil, trusterr.Wrap(trusterr.CodeDeadlineExceeded, "proofstore list roots after canceled", err)
 		}
-		data, err := readStoredFile(filepath.Join(s.rootDir(), name))
+		data, err := readStoredFile(filepath.Join(s.rootDir(), entry.Name()))
 		if err != nil {
 			return nil, trusterr.Wrap(trusterr.CodeDataLoss, "read batch root", err)
 		}
@@ -423,20 +411,15 @@ func (s LocalStore) ListBatchTreeLeaves(ctx context.Context, opts model.BatchTre
 		}
 		return nil, trusterr.Wrap(trusterr.CodeDataLoss, "read batch tree leaf directory", err)
 	}
-	names := make([]string, 0, len(entries))
+	leaves := make([]model.BatchTreeLeaf, 0, limit)
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".tdbtleaf") {
 			continue
 		}
-		names = append(names, entry.Name())
-	}
-	sort.Strings(names)
-	leaves := make([]model.BatchTreeLeaf, 0, limit)
-	for _, name := range names {
 		if err := ctx.Err(); err != nil {
 			return nil, trusterr.Wrap(trusterr.CodeDeadlineExceeded, "proofstore list batch tree leaves canceled", err)
 		}
-		data, err := readStoredFile(filepath.Join(s.batchTreeLeafDir(opts.BatchID), name))
+		data, err := readStoredFile(filepath.Join(s.batchTreeLeafDir(opts.BatchID), entry.Name()))
 		if err != nil {
 			return nil, trusterr.Wrap(trusterr.CodeDataLoss, "read batch tree leaf", err)
 		}
@@ -487,20 +470,15 @@ func (s LocalStore) ListBatchTreeNodes(ctx context.Context, opts model.BatchTree
 		}
 		return nil, trusterr.Wrap(trusterr.CodeDataLoss, "read batch tree node directory", err)
 	}
-	names := make([]string, 0, len(entries))
+	nodes := make([]model.BatchTreeNode, 0, limit)
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".tdbtnode") {
 			continue
 		}
-		names = append(names, entry.Name())
-	}
-	sort.Strings(names)
-	nodes := make([]model.BatchTreeNode, 0, limit)
-	for _, name := range names {
 		if err := ctx.Err(); err != nil {
 			return nil, trusterr.Wrap(trusterr.CodeDeadlineExceeded, "proofstore list batch tree nodes canceled", err)
 		}
-		data, err := readStoredFile(filepath.Join(s.batchTreeNodeLevelDir(opts.BatchID, opts.Level), name))
+		data, err := readStoredFile(filepath.Join(s.batchTreeNodeLevelDir(opts.BatchID, opts.Level), entry.Name()))
 		if err != nil {
 			return nil, trusterr.Wrap(trusterr.CodeDataLoss, "read batch tree node", err)
 		}
@@ -573,20 +551,15 @@ func (s LocalStore) ListManifests(ctx context.Context) ([]model.BatchManifest, e
 		}
 		return nil, trusterr.Wrap(trusterr.CodeDataLoss, "read manifest directory", err)
 	}
-	names := make([]string, 0, len(entries))
+	manifests := make([]model.BatchManifest, 0, len(entries))
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".tdmanifest") {
 			continue
 		}
-		names = append(names, entry.Name())
-	}
-	sort.Strings(names)
-	manifests := make([]model.BatchManifest, 0, len(names))
-	for _, name := range names {
 		if err := ctx.Err(); err != nil {
 			return nil, trusterr.Wrap(trusterr.CodeDeadlineExceeded, "proofstore list manifests canceled", err)
 		}
-		data, err := readStoredFile(filepath.Join(s.manifestDir(), name))
+		data, err := readStoredFile(filepath.Join(s.manifestDir(), entry.Name()))
 		if err != nil {
 			return nil, trusterr.Wrap(trusterr.CodeDataLoss, "read batch manifest", err)
 		}
@@ -613,20 +586,15 @@ func (s LocalStore) ListManifestsAfter(ctx context.Context, afterBatchID string,
 		}
 		return nil, trusterr.Wrap(trusterr.CodeDataLoss, "read manifest directory", err)
 	}
-	names := make([]string, 0, len(entries))
+	manifests := make([]model.BatchManifest, 0, limit)
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".tdmanifest") {
 			continue
 		}
-		names = append(names, entry.Name())
-	}
-	sort.Strings(names)
-	manifests := make([]model.BatchManifest, 0, limit)
-	for _, name := range names {
 		if err := ctx.Err(); err != nil {
 			return nil, trusterr.Wrap(trusterr.CodeDeadlineExceeded, "proofstore list manifests after canceled", err)
 		}
-		data, err := readStoredFile(filepath.Join(s.manifestDir(), name))
+		data, err := readStoredFile(filepath.Join(s.manifestDir(), entry.Name()))
 		if err != nil {
 			return nil, trusterr.Wrap(trusterr.CodeDataLoss, "read batch manifest", err)
 		}
@@ -809,20 +777,15 @@ func (s LocalStore) ListGlobalLogNodesAfter(ctx context.Context, afterLevel, aft
 		}
 		return nil, trusterr.Wrap(trusterr.CodeDataLoss, "read global node directory", err)
 	}
-	names := make([]string, 0, len(entries))
+	nodes := make([]model.GlobalLogNode, 0, limit)
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".tdgnode") {
 			continue
 		}
-		names = append(names, entry.Name())
-	}
-	sort.Strings(names)
-	nodes := make([]model.GlobalLogNode, 0, limit)
-	for _, name := range names {
 		if err := ctx.Err(); err != nil {
 			return nil, trusterr.Wrap(trusterr.CodeDeadlineExceeded, "proofstore list global nodes after canceled", err)
 		}
-		data, err := readStoredFile(filepath.Join(s.globalNodeDir(), name))
+		data, err := readStoredFile(filepath.Join(s.globalNodeDir(), entry.Name()))
 		if err != nil {
 			return nil, trusterr.Wrap(trusterr.CodeDataLoss, "read global log node", err)
 		}
@@ -887,17 +850,12 @@ func (s LocalStore) ListGlobalLeaves(ctx context.Context) ([]model.GlobalLogLeaf
 		}
 		return nil, trusterr.Wrap(trusterr.CodeDataLoss, "read global leaf directory", err)
 	}
-	names := make([]string, 0, len(entries))
+	leaves := make([]model.GlobalLogLeaf, 0, len(entries))
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".tdgleaf") {
 			continue
 		}
-		names = append(names, entry.Name())
-	}
-	sort.Strings(names)
-	leaves := make([]model.GlobalLogLeaf, 0, len(names))
-	for _, name := range names {
-		data, err := readStoredFile(filepath.Join(s.globalLeafDir(), name))
+		data, err := readStoredFile(filepath.Join(s.globalLeafDir(), entry.Name()))
 		if err != nil {
 			return nil, trusterr.Wrap(trusterr.CodeDataLoss, "read global log leaf", err)
 		}
@@ -1118,18 +1076,18 @@ func (s LocalStore) LatestSignedTreeHead(ctx context.Context) (model.SignedTreeH
 		}
 		return model.SignedTreeHead{}, false, trusterr.Wrap(trusterr.CodeDataLoss, "read sth directory", err)
 	}
-	names := make([]string, 0, len(entries))
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".tdsth") {
-			continue
+	latestName := ""
+	for i := len(entries) - 1; i >= 0; i-- {
+		entry := entries[i]
+		if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".tdsth") {
+			latestName = entry.Name()
+			break
 		}
-		names = append(names, entry.Name())
 	}
-	if len(names) == 0 {
+	if latestName == "" {
 		return model.SignedTreeHead{}, false, nil
 	}
-	sort.Strings(names)
-	data, err := readStoredFile(filepath.Join(s.sthDir(), names[len(names)-1]))
+	data, err := readStoredFile(filepath.Join(s.sthDir(), latestName))
 	if err != nil {
 		return model.SignedTreeHead{}, false, trusterr.Wrap(trusterr.CodeDataLoss, "read latest signed tree head", err)
 	}
@@ -1170,17 +1128,12 @@ func (s LocalStore) ListGlobalLogTiles(ctx context.Context) ([]model.GlobalLogTi
 		}
 		return nil, trusterr.Wrap(trusterr.CodeDataLoss, "read global tile directory", err)
 	}
-	names := make([]string, 0, len(entries))
+	tiles := make([]model.GlobalLogTile, 0, len(entries))
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".tdgtile") {
 			continue
 		}
-		names = append(names, entry.Name())
-	}
-	sort.Strings(names)
-	tiles := make([]model.GlobalLogTile, 0, len(names))
-	for _, name := range names {
-		data, err := readStoredFile(filepath.Join(s.globalTileDir(), name))
+		data, err := readStoredFile(filepath.Join(s.globalTileDir(), entry.Name()))
 		if err != nil {
 			return nil, trusterr.Wrap(trusterr.CodeDataLoss, "read global log tile", err)
 		}
@@ -1207,20 +1160,15 @@ func (s LocalStore) ListGlobalLogTilesAfter(ctx context.Context, afterLevel, aft
 		}
 		return nil, trusterr.Wrap(trusterr.CodeDataLoss, "read global tile directory", err)
 	}
-	names := make([]string, 0, len(entries))
+	tiles := make([]model.GlobalLogTile, 0, limit)
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".tdgtile") {
 			continue
 		}
-		names = append(names, entry.Name())
-	}
-	sort.Strings(names)
-	tiles := make([]model.GlobalLogTile, 0, limit)
-	for _, name := range names {
 		if err := ctx.Err(); err != nil {
 			return nil, trusterr.Wrap(trusterr.CodeDeadlineExceeded, "proofstore list global tiles after canceled", err)
 		}
-		data, err := readStoredFile(filepath.Join(s.globalTileDir(), name))
+		data, err := readStoredFile(filepath.Join(s.globalTileDir(), entry.Name()))
 		if err != nil {
 			return nil, trusterr.Wrap(trusterr.CodeDataLoss, "read global log tile", err)
 		}
@@ -1293,20 +1241,15 @@ func (s LocalStore) ListGlobalLogOutboxItemsAfter(ctx context.Context, afterBatc
 		}
 		return nil, trusterr.Wrap(trusterr.CodeDataLoss, "read global log outbox directory", err)
 	}
-	names := make([]string, 0, len(entries))
+	items := make([]model.GlobalLogOutboxItem, 0, limit)
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".tdgoutbox") {
 			continue
 		}
-		names = append(names, entry.Name())
-	}
-	sort.Strings(names)
-	items := make([]model.GlobalLogOutboxItem, 0, limit)
-	for _, name := range names {
 		if err := ctx.Err(); err != nil {
 			return nil, trusterr.Wrap(trusterr.CodeDeadlineExceeded, "proofstore list global log outbox after canceled", err)
 		}
-		data, err := readStoredFile(filepath.Join(s.globalOutboxDir(), name))
+		data, err := readStoredFile(filepath.Join(s.globalOutboxDir(), entry.Name()))
 		if err != nil {
 			return nil, trusterr.Wrap(trusterr.CodeDataLoss, "read global log outbox item", err)
 		}
@@ -1510,20 +1453,15 @@ func (s LocalStore) ListSTHAnchorOutboxItemsAfter(ctx context.Context, afterTree
 		}
 		return nil, trusterr.Wrap(trusterr.CodeDataLoss, "read sth anchor outbox directory", err)
 	}
-	names := make([]string, 0, len(entries))
+	items := make([]model.STHAnchorOutboxItem, 0, limit)
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".tdsth-anchor") {
 			continue
 		}
-		names = append(names, entry.Name())
-	}
-	sort.Strings(names)
-	items := make([]model.STHAnchorOutboxItem, 0, limit)
-	for _, name := range names {
 		if err := ctx.Err(); err != nil {
 			return nil, trusterr.Wrap(trusterr.CodeDeadlineExceeded, "proofstore list sth anchor outbox after canceled", err)
 		}
-		data, err := readStoredFile(filepath.Join(s.sthAnchorOutboxDir(), name))
+		data, err := readStoredFile(filepath.Join(s.sthAnchorOutboxDir(), entry.Name()))
 		if err != nil {
 			return nil, trusterr.Wrap(trusterr.CodeDataLoss, "read sth anchor outbox item", err)
 		}
