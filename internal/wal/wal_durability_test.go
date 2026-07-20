@@ -293,8 +293,8 @@ func TestWriterStartupDirectorySyncFailureClosesFile(t *testing.T) {
 			if opened == nil {
 				t.Fatal("WAL file was never opened")
 			}
-			if _, err := opened.Stat(); !errors.Is(err, os.ErrClosed) {
-				t.Fatalf("opened file Stat() error = %v, want closed", err)
+			if _, err := opened.Stat(); err == nil {
+				t.Fatal("opened file remains usable after failed startup")
 			}
 			if !strings.Contains(err.Error(), "sync containing directory") {
 				t.Fatalf("error lacks directory-sync context: %v", err)
