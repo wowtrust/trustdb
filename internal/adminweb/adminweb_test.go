@@ -225,6 +225,55 @@ func TestReadBodyLimitRejectsOversizedBody(t *testing.T) {
 	}
 }
 
+func TestGetConfigRawRejectsOversizedFile(t *testing.T) {
+	t.Parallel()
+
+	configPath := filepath.Join(t.TempDir(), "trustdb.yaml")
+	if err := os.WriteFile(configPath, []byte("x"), 0o600); err != nil {
+		t.Fatalf("WriteFile(config): %v", err)
+	}
+	if err := os.Truncate(configPath, maxConfigBodyBytes+1); err != nil {
+		t.Fatalf("Truncate(config): %v", err)
+	}
+	h := &handler{opts: Options{ConfigPath: configPath, Logger: testLogger()}}
+	req := httptest.NewRequest(http.MethodGet, "/api/config/raw", nil)
+	rec := httptest.NewRecorder()
+
+	h.getConfigRaw(rec, req)
+
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("getConfigRaw status = %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestPutConfigRejectsOversizedExistingFile(t *testing.T) {
+	t.Parallel()
+
+	configPath := filepath.Join(t.TempDir(), "trustdb.yaml")
+	if err := os.WriteFile(configPath, []byte("x"), 0o600); err != nil {
+		t.Fatalf("WriteFile(config): %v", err)
+	}
+	if err := os.Truncate(configPath, maxConfigBodyBytes+1); err != nil {
+		t.Fatalf("Truncate(config): %v", err)
+	}
+	h := &handler{opts: Options{ConfigPath: configPath, Logger: testLogger()}}
+	req := httptest.NewRequest(http.MethodPut, "/api/config", strings.NewReader(trustconfig.DefaultYAML))
+	rec := httptest.NewRecorder()
+
+	h.putConfig(rec, req)
+
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("putConfig status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	info, err := os.Stat(configPath)
+	if err != nil {
+		t.Fatalf("Stat(config): %v", err)
+	}
+	if info.Size() != maxConfigBodyBytes+1 {
+		t.Fatalf("config size = %d, want %d", info.Size(), maxConfigBodyBytes+1)
+	}
+}
+
 func TestPutConfigIgnoresStaleFixedTempPathAndWritesBackup(t *testing.T) {
 	t.Parallel()
 

@@ -199,8 +199,12 @@ func (h *handler) getConfigRaw(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "no --config path; raw file API disabled"})
 		return
 	}
-	b, err := os.ReadFile(h.opts.ConfigPath)
+	b, err := readConfigFile(h.opts.ConfigPath)
 	if err != nil {
+		if errors.Is(err, errRequestBodyTooLarge) {
+			writeJSON(w, http.StatusRequestEntityTooLarge, map[string]any{"ok": false, "error": "config file too large"})
+			return
+		}
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": err.Error()})
 		return
 	}
@@ -235,7 +239,7 @@ func (h *handler) putConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	backup := ""
-	prev, err := os.ReadFile(h.opts.ConfigPath)
+	prev, err := readConfigFile(h.opts.ConfigPath)
 	switch {
 	case err == nil && len(prev) > 0:
 		backup, err = writeConfigBackup(h.opts.ConfigPath, prev)
@@ -243,6 +247,9 @@ func (h *handler) putConfig(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": fmt.Sprintf("backup: %v", err)})
 			return
 		}
+	case errors.Is(err, errRequestBodyTooLarge):
+		writeJSON(w, http.StatusRequestEntityTooLarge, map[string]any{"ok": false, "error": "existing config file too large"})
+		return
 	case err != nil && !os.IsNotExist(err):
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": fmt.Sprintf("read existing config: %v", err)})
 		return
@@ -253,6 +260,15 @@ func (h *handler) putConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	h.opts.Logger.Info().Str("path", h.opts.ConfigPath).Str("backup", backup).Msg("admin wrote config file")
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "backup": backup})
+}
+
+func readConfigFile(path string) ([]byte, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	return readBodyLimit(f, maxConfigBodyBytes)
 }
 
 func writeConfigBackup(configPath string, data []byte) (string, error) {
