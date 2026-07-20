@@ -111,6 +111,47 @@ func BenchmarkPebbleGetBundleV2(b *testing.B) {
 	}
 }
 
+func TestStageSetRecordKeyMatchesKeyBuilders(t *testing.T) {
+	t.Parallel()
+
+	store, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	const recordID = "tr1-stage-record-key"
+	value := []byte("value")
+	tests := []struct {
+		name   string
+		prefix string
+		key    []byte
+	}{
+		{name: "bundle", prefix: prefixBundleV2, key: bundleV2Key(recordID)},
+		{name: "record index", prefix: prefixRecordByID, key: recordByIDKey(recordID)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			batch := store.db.NewBatch()
+			defer batch.Close()
+			if err := stageSetRecordKey(batch, tt.prefix, recordID, value); err != nil {
+				t.Fatal(err)
+			}
+			if err := batch.Commit(pdb.NoSync); err != nil {
+				t.Fatal(err)
+			}
+			got, closer, err := store.db.Get(tt.key)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer closer.Close()
+			if !bytes.Equal(got, value) {
+				t.Fatalf("value = %q, want %q", got, value)
+			}
+		})
+	}
+}
+
 func TestStorePutBundleWritesCompressedV2AndRoundTrips(t *testing.T) {
 	t.Parallel()
 

@@ -703,6 +703,14 @@ func stageSet(batch *pdb.Batch, key, value []byte) error {
 	return op.Finish()
 }
 
+func stageSetRecordKey(batch *pdb.Batch, prefix, recordID string, value []byte) error {
+	op := batch.SetDeferred(len(prefix)+len(recordID), len(value))
+	n := copy(op.Key, prefix)
+	copy(op.Key[n:], recordID)
+	copy(op.Value, value)
+	return op.Finish()
+}
+
 func stageRecordIndexRef(batch *pdb.Batch, key []byte, recordID string) error {
 	op := batch.SetDeferred(len(key), len(recordIndexRefPrefix)+len(recordID))
 	copy(op.Key, key)
@@ -764,7 +772,7 @@ func (s *Store) PutBundle(ctx context.Context, bundle model.ProofBundle) error {
 	}
 	batch := s.db.NewBatch()
 	defer batch.Close()
-	if err := stageSet(batch, bundleV2Key(bundle.RecordID), artifact.bundleValue); err != nil {
+	if err := stageSetRecordKey(batch, prefixBundleV2, bundle.RecordID, artifact.bundleValue); err != nil {
 		return trusterr.Wrap(trusterr.CodeDataLoss, "stage proof bundle", err)
 	}
 	if err := s.stageEncodedRecordIndexReplace(batch, artifact.index, old, oldFound); err != nil {
@@ -970,17 +978,17 @@ func (s *Store) stageNewBundle(batch *pdb.Batch, bundle model.ProofBundle) error
 }
 
 func (s *Store) stageEncodedBatchArtifact(batch *pdb.Batch, artifact encodedBatchArtifact) error {
-	if err := stageSet(batch, bundleV2Key(artifact.recordID), artifact.bundleValue); err != nil {
+	if err := stageSetRecordKey(batch, prefixBundleV2, artifact.recordID, artifact.bundleValue); err != nil {
 		return trusterr.Wrap(trusterr.CodeDataLoss, "stage proof bundle", err)
 	}
 	return s.stageEncodedRecordIndexSetForMode(batch, artifact.index)
 }
 
 func (s *Store) stageEncodedMaterializedBatchArtifact(batch *pdb.Batch, artifact encodedBatchArtifact) error {
-	if err := stageSet(batch, bundleV2Key(artifact.recordID), artifact.bundleValue); err != nil {
+	if err := stageSetRecordKey(batch, prefixBundleV2, artifact.recordID, artifact.bundleValue); err != nil {
 		return trusterr.Wrap(trusterr.CodeDataLoss, "stage proof bundle", err)
 	}
-	if err := stageSet(batch, recordByIDKey(artifact.recordID), artifact.index.value); err != nil {
+	if err := stageSetRecordKey(batch, prefixRecordByID, artifact.recordID, artifact.index.value); err != nil {
 		return trusterr.Wrap(trusterr.CodeDataLoss, "stage materialized record index", err)
 	}
 	if s.recordIndexMode == RecordIndexModeTimeOnly {
