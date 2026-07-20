@@ -2,11 +2,11 @@
 
 ![CI](https://github.com/ryan-wong-coder/trustdb/actions/workflows/ci.yml/badge.svg)
 
-[Official Website](https://ryan-wong-coder.github.io/trustdb-website/) | [中文说明](README.zh-CN.md) | [Contributing](CONTRIBUTING.md) | [`.sproof` format](formats/SPROOF_V1.md)
+[Official Website](https://www.trustdb.ryan-wong.cn/) | [中文说明](README.zh-CN.md) | [Contributing](CONTRIBUTING.md) | [`.sproof` format](formats/SPROOF_V1.md)
 
 TrustDB is a verifiable evidence database for file claims and proof exchange. It turns a local file hash into a signed claim, a durable server receipt, a batch Merkle proof, a global transparency-log proof, and optionally an externally anchored Signed Tree Head (STH).
 
-Documentation, quick start guides, releases, and feedback channels are available on the [TrustDB official website](https://ryan-wong-coder.github.io/trustdb-website/).
+Documentation, quick start guides, releases, and feedback channels are available on the [TrustDB official website](https://www.trustdb.ryan-wong.cn/).
 
 ![TrustDB system architecture](assets/readme/system-architecture.png)
 
@@ -84,7 +84,7 @@ Core paths:
 
 Download the prebuilt Server/CLI archive for your operating system from the [v1.0.0-beta release](https://github.com/ryan-wong-coder/trustdb/releases/tag/v1.0.0-beta), extract it, and run the commands below from the extracted directory. No Go toolchain is required. The examples use `./bin/trustdb`; on Windows use `.\bin\trustdb.exe`.
 
-Use [`SHA256SUMS`](https://github.com/ryan-wong-coder/trustdb/releases/download/v1.0.0-beta/SHA256SUMS) to verify the archive before running it. Source builds are documented separately in the [Build from source guide](https://ryan-wong-coder.github.io/trustdb-website/docs/source-build).
+Use [`SHA256SUMS`](https://github.com/ryan-wong-coder/trustdb/releases/download/v1.0.0-beta/SHA256SUMS) to verify the archive before running it. Source builds are documented separately in the [Build from source guide](https://www.trustdb.ryan-wong.cn/docs/source-build).
 
 Generate client and server keys:
 

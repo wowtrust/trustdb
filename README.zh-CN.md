@@ -2,11 +2,11 @@
 
 ![CI](https://github.com/ryan-wong-coder/trustdb/actions/workflows/ci.yml/badge.svg)
 
-[官方网站](https://ryan-wong-coder.github.io/trustdb-website/) | [English README](README.md) | [贡献指南](CONTRIBUTING.md) | [`.sproof` 格式](formats/SPROOF_V1.md)
+[官方网站](https://www.trustdb.ryan-wong.cn/) | [English README](README.md) | [贡献指南](CONTRIBUTING.md) | [`.sproof` 格式](formats/SPROOF_V1.md)
 
 TrustDB 是一个面向文件存证和证明交换的可验证证据数据库。它把本地文件哈希转换为客户端签名声明、服务端持久化收据、批次 Merkle 证明、Global Transparency Log 证明，以及可选的外部 Signed Tree Head（STH）锚定结果。
 
-文档、快速开始、版本发布和反馈渠道统一维护在 [TrustDB 官方网站](https://ryan-wong-coder.github.io/trustdb-website/)。
+文档、快速开始、版本发布和反馈渠道统一维护在 [TrustDB 官方网站](https://www.trustdb.ryan-wong.cn/)。
 
 ![TrustDB 系统架构](assets/readme/system-architecture.png)
 
@@ -85,7 +85,7 @@ TrustDB 默认可按单节点服务运行。启用 TiKV proofstore 后，多个 
 
 从 [v1.0.0-beta 发布页](https://github.com/ryan-wong-coder/trustdb/releases/tag/v1.0.0-beta)下载与你的系统和处理器相符的服务器 / CLI 压缩包，解压后在发布目录运行下列命令，不需要安装 Go 工具链。示例使用 `./bin/trustdb`；Windows 请改为 `.\bin\trustdb.exe`。
 
-运行前请用 [`SHA256SUMS`](https://github.com/ryan-wong-coder/trustdb/releases/download/v1.0.0-beta/SHA256SUMS)核对下载文件。源码编译步骤见单独的[从源码构建](https://ryan-wong-coder.github.io/trustdb-website/docs/source-build)章节。
+运行前请用 [`SHA256SUMS`](https://github.com/ryan-wong-coder/trustdb/releases/download/v1.0.0-beta/SHA256SUMS)核对下载文件。源码编译步骤见单独的[从源码构建](https://www.trustdb.ryan-wong.cn/docs/source-build)章节。
 
 生成客户端和服务端密钥：
 
