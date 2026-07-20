@@ -17,7 +17,7 @@ const (
 )
 
 var (
-	encMode cbor.EncMode
+	encMode cbor.UserBufferEncMode
 	decMode cbor.DecMode
 )
 
@@ -27,7 +27,7 @@ func init() {
 	encOpts.IndefLength = cbor.IndefLengthForbidden
 
 	var err error
-	encMode, err = encOpts.EncMode()
+	encMode, err = encOpts.UserBufferEncMode()
 	if err != nil {
 		panic(fmt.Sprintf("trustdb cbor enc mode: %v", err))
 	}
@@ -68,7 +68,7 @@ func MarshalBuffer(buf *bytes.Buffer, v any) error {
 		return errors.New("cborx: nil buffer")
 	}
 	before := buf.Len()
-	if err := encMode.NewEncoder(buf).Encode(v); err != nil {
+	if err := encMode.MarshalToBuffer(v, buf); err != nil {
 		buf.Truncate(before)
 		return fmt.Errorf("cborx: marshal: %w", err)
 	}
