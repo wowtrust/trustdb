@@ -47,7 +47,7 @@ func Build(records []model.ServerRecord) (Tree, error) {
 	}
 	leaves := make([][sha256.Size]byte, len(records))
 	for i := range records {
-		leaf, err := hashLeafArray(records[i])
+		leaf, err := hashLeafArray(&records[i])
 		if err != nil {
 			return Tree{}, fmt.Errorf("merkle: hash leaf %d: %w", i, err)
 		}
@@ -57,14 +57,14 @@ func Build(records []model.ServerRecord) (Tree, error) {
 }
 
 func HashLeaf(record model.ServerRecord) ([]byte, error) {
-	leaf, err := hashLeafArray(record)
+	leaf, err := hashLeafArray(&record)
 	if err != nil {
 		return nil, err
 	}
 	return cloneHash(leaf), nil
 }
 
-func hashLeafArray(record model.ServerRecord) ([sha256.Size]byte, error) {
+func hashLeafArray(record *model.ServerRecord) ([sha256.Size]byte, error) {
 	buf := leafBufferPool.Get().(*bytes.Buffer)
 	buf.Reset()
 	buf.WriteByte(0)

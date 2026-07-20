@@ -2,11 +2,34 @@ package merkle
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"fmt"
 	"testing"
 
+	"github.com/ryan-wong-coder/trustdb/internal/cborx"
 	"github.com/ryan-wong-coder/trustdb/internal/model"
 )
+
+func TestHashLeafMatchesCanonicalRecordEncoding(t *testing.T) {
+	t.Parallel()
+
+	record := record("canonical-record")
+	encoded, err := cborx.Marshal(record)
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	h := sha256.New()
+	h.Write([]byte{0})
+	h.Write(encoded)
+	want := h.Sum(nil)
+	got, err := HashLeaf(record)
+	if err != nil {
+		t.Fatalf("HashLeaf() error = %v", err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("HashLeaf() = %x, want canonical hash %x", got, want)
+	}
+}
 
 func TestBuildProofAndVerify(t *testing.T) {
 	t.Parallel()
