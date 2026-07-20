@@ -69,19 +69,11 @@ func (t *loadBalancedTransport) Close() error {
 	return joined
 }
 
-func (t *loadBalancedTransport) order() []Transport {
-	out := make([]Transport, 0, len(t.transports))
-	if len(t.transports) == 0 {
-		return out
+func (t *loadBalancedTransport) startIndex() int {
+	if len(t.transports) == 0 || t.mode == LoadBalanceFailover {
+		return 0
 	}
-	start := 0
-	if t.mode != LoadBalanceFailover {
-		start = int(t.next.Add(1)-1) % len(t.transports)
-	}
-	for i := range t.transports {
-		out = append(out, t.transports[(start+i)%len(t.transports)])
-	}
-	return out
+	return int((t.next.Add(1) - 1) % uint64(len(t.transports)))
 }
 
 func tryEndpoints[T any](ctx context.Context, t *loadBalancedTransport, op string, fn func(context.Context, Transport) (T, error)) (T, error) {
@@ -90,7 +82,13 @@ func tryEndpoints[T any](ctx context.Context, t *loadBalancedTransport, op strin
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	for _, transport := range t.order() {
+	start := t.startIndex()
+	for offset := range len(t.transports) {
+		index := start + offset
+		if index >= len(t.transports) {
+			index -= len(t.transports)
+		}
+		transport := t.transports[index]
 		if err := ctx.Err(); err != nil {
 			return zero, err
 		}
@@ -105,7 +103,13 @@ func tryEndpoints[T any](ctx context.Context, t *loadBalancedTransport, op strin
 
 func (t *loadBalancedTransport) CheckHealth(ctx context.Context) HealthStatus {
 	var last HealthStatus
-	for _, transport := range t.order() {
+	start := t.startIndex()
+	for offset := range len(t.transports) {
+		index := start + offset
+		if index >= len(t.transports) {
+			index -= len(t.transports)
+		}
+		transport := t.transports[index]
 		last = transport.CheckHealth(ctx)
 		if last.OK {
 			return last
