@@ -8,6 +8,7 @@ const navItems = [
   ["性能", "/performance"],
   [".sproof", "/sproof"],
   ["版本", "/changelog"],
+  ["下载", "/downloads"],
 ];
 
 export function Logo() {
@@ -44,7 +45,6 @@ export function SiteHeader({ route }) {
       {open && (
         <nav className="mobile-menu" aria-label="移动导航">
           {navItems.map(([label, href], index) => <Link key={href} href={href}><span>0{index + 1}</span>{label}</Link>)}
-          <Link href="/downloads"><span>06</span>下载</Link>
         </nav>
       )}
     </>

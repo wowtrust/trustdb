@@ -6,7 +6,7 @@ import { ArrowRight } from "@phosphor-icons/react";
 import { SiteFooter, SiteHeader, PageHero } from "./components/SiteChrome";
 import { useRoute, Link } from "./router";
 import { HomePage } from "./pages/HomePage";
-import { CliDocsPage, DesktopDocsPage, DocsIndexPage, MissingDocsPage, QuickStartPage, SdkDocsPage, ServerDocsPage } from "./pages/DocsPages";
+import { CliDocsPage, DesktopDocsPage, DesktopInstallPage, DocsIndexPage, MissingDocsPage, QuickStartPage, SdkDocsPage, ServerDocsPage, SourceBuildPage } from "./pages/DocsPages";
 import { PerformancePage } from "./pages/PerformancePage";
 import { SproofPage } from "./pages/SproofPage";
 import { ChangelogPage, DownloadsPage } from "./pages/ReleasePages";
@@ -21,6 +21,8 @@ const titles = {
   "/docs/cli": "CLI · TrustDB 文档",
   "/docs/sdk": "Go SDK · TrustDB 文档",
   "/docs/desktop": "桌面客户端 · TrustDB 文档",
+  "/docs/desktop-install": "安装桌面客户端 · TrustDB 文档",
+  "/docs/source-build": "从源码构建 · TrustDB 文档",
   "/performance": "性能基线 · TrustDB",
   "/sproof": ".sproof v1 · TrustDB",
   "/changelog": "版本与开发日志 · TrustDB",
@@ -35,6 +37,8 @@ function RouteView({ route }) {
   if (route === "/docs/cli") return <CliDocsPage route={route} />;
   if (route === "/docs/sdk") return <SdkDocsPage route={route} />;
   if (route === "/docs/desktop") return <DesktopDocsPage route={route} />;
+  if (route === "/docs/desktop-install") return <DesktopInstallPage route={route} />;
+  if (route === "/docs/source-build") return <SourceBuildPage route={route} />;
   if (route.startsWith("/docs/")) return <MissingDocsPage />;
   if (route === "/performance") return <PerformancePage />;
   if (route === "/sproof") return <SproofPage />;
@@ -54,26 +58,45 @@ export function App() {
   useLayoutEffect(() => {
     const rootElement = document.documentElement;
     const previousBehavior = rootElement.style.scrollBehavior;
+    let cancelled = false;
+    let userMoved = false;
     rootElement.style.scrollBehavior = "auto";
     ScrollTrigger.clearScrollMemory("manual");
 
-    const placePage = () => {
+    const markUserMoved = () => { userMoved = true; };
+    const placePage = (force = false) => {
+      if (cancelled || (!force && userMoved)) return;
       const targetId = decodeURIComponent(window.location.hash.slice(1));
       if (targetId) document.getElementById(targetId)?.scrollIntoView({ block: "start" });
       else window.scrollTo(0, 0);
     };
 
-    placePage();
-    const frame = window.requestAnimationFrame(placePage);
+    ["wheel", "touchstart", "pointerdown", "keydown"].forEach((eventName) => window.addEventListener(eventName, markUserMoved, { passive: true }));
+    placePage(true);
+    const frame = window.requestAnimationFrame(() => placePage(true));
     const settle = window.setTimeout(placePage, 140);
     const restore = window.setTimeout(() => {
       placePage();
       rootElement.style.scrollBehavior = previousBehavior;
     }, 260);
+
+    const images = Array.from(root.current?.querySelectorAll("img") || []);
+    const imagesReady = Promise.allSettled(images.map((image) => {
+      if (image.complete) return image.decode?.() || Promise.resolve();
+      return new Promise((resolve) => {
+        image.addEventListener("load", resolve, { once: true });
+        image.addEventListener("error", resolve, { once: true });
+      });
+    }));
+    imagesReady.then(() => window.requestAnimationFrame(() => placePage()));
+    document.fonts?.ready.then(() => window.requestAnimationFrame(() => placePage()));
+
     return () => {
+      cancelled = true;
       window.cancelAnimationFrame(frame);
       window.clearTimeout(settle);
       window.clearTimeout(restore);
+      ["wheel", "touchstart", "pointerdown", "keydown"].forEach((eventName) => window.removeEventListener(eventName, markUserMoved));
       rootElement.style.scrollBehavior = previousBehavior;
     };
   }, [route, navigationKey]);

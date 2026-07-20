@@ -35,7 +35,7 @@ docker pull wsy19990317/trustdb:1.0.0-beta
 docker run --name trustdb -p 8080:8080 -v trustdb-data:/var/lib/trustdb wsy19990317/trustdb:1.0.0-beta
 ```
 
-桌面包使用本次发版临时生成的自签名证书，并附带公开 `.cer` 文件。自签名可以校验安装包是否被改动，但不会取得 Apple 或 Microsoft 的系统信任；Gatekeeper 或 SmartScreen 仍可能提示未知开发者。安装前请先核对 `SHA256SUMS`。
+桌面包使用本次发版临时生成的自签名证书，并附带公开 `.cer` 文件，可供用户核对本次发布所用的签名证书。它不会取得 Apple 或 Microsoft 的系统信任；Gatekeeper 或 SmartScreen 仍可能提示未知开发者。安装前请用 `SHA256SUMS` 核对下载文件。
 
 ## 能力概览
 
@@ -83,18 +83,22 @@ TrustDB 默认可按单节点服务运行。启用 TiKV proofstore 后，多个 
 
 ## 快速开始
 
+从 [v1.0.0-beta 发布页](https://github.com/ryan-wong-coder/trustdb/releases/tag/v1.0.0-beta)下载与你的系统和处理器相符的服务器 / CLI 压缩包，解压后在发布目录运行下列命令，不需要安装 Go 工具链。示例使用 `./bin/trustdb`；Windows 请改为 `.\bin\trustdb.exe`。
+
+运行前请用 [`SHA256SUMS`](https://github.com/ryan-wong-coder/trustdb/releases/download/v1.0.0-beta/SHA256SUMS)核对下载文件。源码编译步骤见单独的[从源码构建](https://ryan-wong-coder.github.io/trustdb-website/docs/source-build)章节。
+
 生成客户端和服务端密钥：
 
 ```powershell
-go run ./cmd/trustdb keygen --out .trustdb-dev --prefix client
-go run ./cmd/trustdb keygen --out .trustdb-dev --prefix server
+./bin/trustdb keygen --out .trustdb-dev --prefix client
+./bin/trustdb keygen --out .trustdb-dev --prefix server
 ```
 
 启动本地开发服务：
 
 ```powershell
-go run ./cmd/trustdb serve `
-  --config configs/development.yaml `
+./bin/trustdb serve `
+  --config config/production.yaml `
   --server-private-key .trustdb-dev/server.key `
   --client-public-key .trustdb-dev/client.pub `
   --listen 127.0.0.1:8080
@@ -103,7 +107,7 @@ go run ./cmd/trustdb serve `
 创建并签名文件 claim：
 
 ```powershell
-go run ./cmd/trustdb claim-file `
+./bin/trustdb claim-file `
   --file .\example.txt `
   --private-key .trustdb-dev/client.key `
   --tenant default `
@@ -115,7 +119,7 @@ go run ./cmd/trustdb claim-file `
 把 claim 本地提交为 proof bundle：
 
 ```powershell
-go run ./cmd/trustdb commit `
+./bin/trustdb commit `
   --claim .trustdb-dev/example.tdclaim `
   --server-private-key .trustdb-dev/server.key `
   --client-public-key .trustdb-dev/client.pub `
@@ -125,7 +129,7 @@ go run ./cmd/trustdb commit `
 验证本地文件和 proof：
 
 ```powershell
-go run ./cmd/trustdb verify `
+./bin/trustdb verify `
   --file .\example.txt `
   --proof .trustdb-dev/example.tdproof `
   --server-public-key .trustdb-dev/server.pub `
@@ -135,7 +139,7 @@ go run ./cmd/trustdb verify `
 验证推荐的 `.sproof` 单文件证明：
 
 ```powershell
-go run ./cmd/trustdb verify `
+./bin/trustdb verify `
   --file .\example.txt `
   --sproof .trustdb-dev/example.sproof `
   --server-public-key .trustdb-dev/server.pub `
@@ -145,12 +149,12 @@ go run ./cmd/trustdb verify `
 创建并校验便携备份：
 
 ```powershell
-go run ./cmd/trustdb backup create `
+./bin/trustdb backup create `
   --metastore file `
   --metastore-path .trustdb-dev/proofs `
   --out .trustdb-dev/trustdb.tdbackup
 
-go run ./cmd/trustdb backup verify --file .trustdb-dev/trustdb.tdbackup
+./bin/trustdb backup verify --file .trustdb-dev/trustdb.tdbackup
 ```
 
 ## HTTP 和 gRPC

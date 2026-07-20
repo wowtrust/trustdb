@@ -35,7 +35,7 @@ docker pull wsy19990317/trustdb:1.0.0-beta
 docker run --name trustdb -p 8080:8080 -v trustdb-data:/var/lib/trustdb wsy19990317/trustdb:1.0.0-beta
 ```
 
-Desktop packages carry a release-specific self-signed certificate and its public `.cer` file. Self-signing verifies package integrity but does not establish Apple or Microsoft trust, so Gatekeeper or SmartScreen may still show an unknown-developer warning. Compare the download with `SHA256SUMS` before installing.
+Desktop packages carry a release-specific self-signed certificate and its public `.cer` file. The certificate lets you inspect the signer used for this release, but does not establish Apple or Microsoft trust, so Gatekeeper or SmartScreen may still show an unknown-developer warning. Verify the downloaded file against `SHA256SUMS` before installing.
 
 ## What It Provides
 
@@ -82,18 +82,22 @@ Core paths:
 
 ## Quick Start
 
+Download the prebuilt Server/CLI archive for your operating system from the [v1.0.0-beta release](https://github.com/ryan-wong-coder/trustdb/releases/tag/v1.0.0-beta), extract it, and run the commands below from the extracted directory. No Go toolchain is required. The examples use `./bin/trustdb`; on Windows use `.\bin\trustdb.exe`.
+
+Use [`SHA256SUMS`](https://github.com/ryan-wong-coder/trustdb/releases/download/v1.0.0-beta/SHA256SUMS) to verify the archive before running it. Source builds are documented separately in the [Build from source guide](https://ryan-wong-coder.github.io/trustdb-website/docs/source-build).
+
 Generate client and server keys:
 
 ```powershell
-go run ./cmd/trustdb keygen --out .trustdb-dev --prefix client
-go run ./cmd/trustdb keygen --out .trustdb-dev --prefix server
+./bin/trustdb keygen --out .trustdb-dev --prefix client
+./bin/trustdb keygen --out .trustdb-dev --prefix server
 ```
 
 Start a local development server:
 
 ```powershell
-go run ./cmd/trustdb serve `
-  --config configs/development.yaml `
+./bin/trustdb serve `
+  --config config/production.yaml `
   --server-private-key .trustdb-dev/server.key `
   --client-public-key .trustdb-dev/client.pub `
   --listen 127.0.0.1:8080
@@ -102,7 +106,7 @@ go run ./cmd/trustdb serve `
 Create and sign a file claim:
 
 ```powershell
-go run ./cmd/trustdb claim-file `
+./bin/trustdb claim-file `
   --file .\example.txt `
   --private-key .trustdb-dev/client.key `
   --tenant default `
@@ -114,7 +118,7 @@ go run ./cmd/trustdb claim-file `
 Commit a claim locally into a proof bundle:
 
 ```powershell
-go run ./cmd/trustdb commit `
+./bin/trustdb commit `
   --claim .trustdb-dev/example.tdclaim `
   --server-private-key .trustdb-dev/server.key `
   --client-public-key .trustdb-dev/client.pub `
@@ -124,7 +128,7 @@ go run ./cmd/trustdb commit `
 Verify a local file with a proof:
 
 ```powershell
-go run ./cmd/trustdb verify `
+./bin/trustdb verify `
   --file .\example.txt `
   --proof .trustdb-dev/example.tdproof `
   --server-public-key .trustdb-dev/server.pub `
@@ -134,7 +138,7 @@ go run ./cmd/trustdb verify `
 Verify the recommended single-file `.sproof` artifact:
 
 ```powershell
-go run ./cmd/trustdb verify `
+./bin/trustdb verify `
   --file .\example.txt `
   --sproof .trustdb-dev/example.sproof `
   --server-public-key .trustdb-dev/server.pub `
@@ -144,12 +148,12 @@ go run ./cmd/trustdb verify `
 Create and verify a portable backup:
 
 ```powershell
-go run ./cmd/trustdb backup create `
+./bin/trustdb backup create `
   --metastore file `
   --metastore-path .trustdb-dev/proofs `
   --out .trustdb-dev/trustdb.tdbackup
 
-go run ./cmd/trustdb backup verify --file .trustdb-dev/trustdb.tdbackup
+./bin/trustdb backup verify --file .trustdb-dev/trustdb.tdbackup
 ```
 
 ## HTTP And gRPC
