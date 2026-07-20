@@ -2,10 +2,10 @@ import { useEffect, useRef, useState } from "react";
 import { ArrowRight, Check, Copy, DownloadSimple, GithubLogo, Package, ShieldCheck } from "@phosphor-icons/react";
 import { Link } from "../router";
 import { checksumsAsset, homeDownloadGroups, release } from "../lib/release";
-import heroLandscape from "../assets/generated/trustdb-hero-landscape.png";
-import evidenceField from "../assets/generated/trustdb-evidence-field.png";
-import terminalLandscape from "../assets/generated/trustdb-terminal-landscape.png";
-import evidenceProblemLineart from "../assets/generated/trustdb-evidence-problem-lineart.png";
+import heroLandscape from "../assets/generated/trustdb-hero-landscape.webp";
+import evidenceField from "../assets/generated/trustdb-evidence-field.webp";
+import terminalLandscape from "../assets/generated/trustdb-terminal-landscape.webp";
+import evidenceProblemLineart from "../assets/generated/trustdb-evidence-problem-lineart.webp";
 import desktopZh from "../assets/client-locales/desktop-zh-CN.png";
 import desktopEn from "../assets/client-locales/desktop-en.png";
 import desktopRu from "../assets/client-locales/desktop-ru.png";
@@ -169,7 +169,7 @@ export function HomePage() {
           </div>
         </div>
         <figure className="why-trustdb__art section-shell" data-reveal>
-          <img src={evidenceProblemLineart} alt="三个线稿场景：交付后的文件版本不一致、管理员可以单方修改日志、争议双方缺少独立证据" />
+          <img src={evidenceProblemLineart} width="1979" height="795" loading="lazy" decoding="async" alt="三个线稿场景：交付后的文件版本不一致、管理员可以单方修改日志、争议双方缺少独立证据" />
           <figcaption><span>文件版本不一致</span><span>日志由单方保管</span><span>争议发生时无据可查</span></figcaption>
         </figure>
         <div className="why-trustdb__answer section-shell" data-reveal>
@@ -201,7 +201,7 @@ export function HomePage() {
       </section>
 
       <section className="journey" aria-labelledby="journey-title">
-        <img className="journey__image" src={evidenceField} alt="由稀疏文件粒子汇入透明日志并汇聚到外部锚点的抽象数据场" />
+        <img className="journey__image" src={evidenceField} width="2048" height="1024" loading="lazy" decoding="async" alt="由稀疏文件粒子汇入透明日志并汇聚到外部锚点的抽象数据场" />
         <FlowCanvas mode="journey" />
         <div className="journey__heading" data-reveal>
           <p>Independent verification</p>
@@ -217,7 +217,7 @@ export function HomePage() {
 
       <section className="ecosystem section-shell">
         <div className="ecosystem__heading" data-reveal><p>CLI · SDK · Desktop</p><h2>一套证据链，<br />适合不同用法。</h2><span>CLI 用于自动化，Go SDK 接入业务系统，桌面客户端处理日常文件。无论从哪里提交，都用同样的方法验证。</span></div>
-        <div className="product-shot product-shot--desktop" data-reveal><div className="product-shot__bar"><span />TrustDB Desktop / Local proof workspace</div><img src={desktopProducts[locale] || desktopZh} alt="TrustDB Desktop 客户端概览界面" /></div>
+        <div className="product-shot product-shot--desktop" data-reveal><div className="product-shot__bar"><span />TrustDB Desktop / Local proof workspace</div><img src={desktopProducts[locale] || desktopZh} width="1280" height="720" loading="lazy" decoding="async" alt="TrustDB Desktop 客户端概览界面" /></div>
         <div className="ecosystem__lower">
           <div className="ecosystem__tools">
             <article data-reveal><span>CLI</span><h3>自动化与离线验证</h3><p>密钥、声明、提交、验证、备份、诊断与性能测试，适合脚本和受控环境。</p><Link href="/docs/cli">CLI 文档 <ArrowRight /></Link></article>
