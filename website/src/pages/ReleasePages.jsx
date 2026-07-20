@@ -84,8 +84,8 @@ export function DownloadsPage() {
         </div>
       </section>
       <section className="source-build section-shell">
-        <div data-reveal><p>Build from source</p><h2>需要改代码，<br />再从源码构建。</h2></div>
-        <div className="source-build__steps" data-reveal><p><span>01</span><strong>直接使用</strong><code>下载对应系统的发布包</code></p><p><span>02</span><strong>核对文件</strong><code>SHA256SUMS</code></p><p><span>03</span><strong>参与开发</strong><code>查看独立构建章节</code></p></div>
+        <div data-reveal><p>Build from source</p><h2>源码构建</h2></div>
+        <div className="source-build__steps" data-reveal><p><span>01</span><strong>服务器与 CLI</strong><code>Go 1.26.2</code></p><p><span>02</span><strong>桌面客户端</strong><code>Wails 2.12.0 · Node.js 24</code></p><p><span>03</span><strong>测试</strong><code>go test ./...</code></p></div>
         <div className="source-build__note"><Check /><span>公开测试版尚未取得 Apple 或 Microsoft 商业签名。请用 SHA256SUMS 核对下载文件；随包提供的证书和指纹可用于核对本次发布所用的签名证书。</span></div>
         <div className="source-build__links"><InlineLink href="/docs/quick-start">快速开始</InlineLink><InlineLink href="/docs/desktop-install">安装桌面客户端</InlineLink><InlineLink href="/docs/source-build">从源码构建</InlineLink><InlineLink href="/changelog">开发日志</InlineLink></div>
       </section>

@@ -214,7 +214,7 @@ export function HomePage() {
       <section className="home-downloads" id="downloads">
         <div className="section-shell">
           <header className="home-downloads__heading" data-reveal>
-            <div><p>Release / {release.version}</p><h2>选好系统，<br />直接使用。</h2></div>
+            <div><p>Release / {release.version}</p><h2>各平台<br />发布文件。</h2></div>
             <div><Package weight="duotone" /><p>桌面客户端、服务器与 CLI 已为常用系统和架构打包。所有文件来自同一次发布，并提供统一的 SHA-256 校验清单。</p></div>
           </header>
           <div className="home-downloads__grid">
@@ -243,7 +243,7 @@ export function HomePage() {
       <section className="knowledge section-shell">
         <div className="knowledge__heading" data-reveal>
           <p>Learn more</p>
-          <h2>按你的需要，<br />继续了解。</h2>
+          <h2>文档、格式<br />与性能数据。</h2>
         </div>
         <div className="knowledge__grid">
           {knowledgeItems.map(([index, title, description, href]) => (

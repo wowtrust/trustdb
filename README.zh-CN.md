@@ -85,7 +85,7 @@ TrustDB 默认可按单节点服务运行。启用 TiKV proofstore 后，多个 
 
 从 [v1.0.0-beta 发布页](https://github.com/ryan-wong-coder/trustdb/releases/tag/v1.0.0-beta)下载与你的系统和处理器相符的服务器 / CLI 压缩包，解压后在发布目录运行下列命令，不需要安装 Go 工具链。示例使用 `./bin/trustdb`；Windows 请改为 `.\bin\trustdb.exe`。
 
-运行前请用 [`SHA256SUMS`](https://github.com/ryan-wong-coder/trustdb/releases/download/v1.0.0-beta/SHA256SUMS)核对下载文件。需要修改代码时，再阅读单独的[从源码构建](https://ryan-wong-coder.github.io/trustdb-website/docs/source-build)章节。
+运行前请用 [`SHA256SUMS`](https://github.com/ryan-wong-coder/trustdb/releases/download/v1.0.0-beta/SHA256SUMS)核对下载文件。源码编译步骤见单独的[从源码构建](https://ryan-wong-coder.github.io/trustdb-website/docs/source-build)章节。
 
 生成客户端和服务端密钥：
 

@@ -190,10 +190,10 @@ export function DesktopInstallPage({ route }) {
 export function SourceBuildPage({ route }) {
   return (
     <DocsShell route={route}>
-      <ArticleTitle index="07" title="从源码构建" lead="发布包已经能直接运行。只有需要修改代码、审计构建过程或参与开发时，才需要这一章。" version="适用于 v1.0.0-beta 源码标签" />
+      <ArticleTitle index="07" title="从源码构建" lead="服务器、CLI 与桌面客户端的构建环境和命令。" version="适用于 v1.0.0-beta 源码标签" />
       <section className="doc-section"><h2>服务器与 CLI</h2><p>需要 Git 与 Go 1.26.2 或更高的兼容版本。固定源码标签，先测试，再生成单个 <code>trustdb</code> 二进制文件。</p><CodeBlock>git clone --branch v1.0.0-beta --depth 1 https://github.com/ryan-wong-coder/trustdb.git{"\n"}cd trustdb{"\n"}go test ./...{"\n"}go build -trimpath -o ./bin/trustdb ./cmd/trustdb{"\n"}./bin/trustdb version</CodeBlock></section>
       <section className="doc-section"><h2>桌面客户端</h2><p>桌面端还需要 Node.js 24、平台原生编译工具和 Wails 2.12.0。先安装当前系统的 Wails 依赖，再构建前端与原生壳。</p><CodeBlock>go install github.com/wailsapp/wails/v2/cmd/wails@v2.12.0{"\n"}cd clients/desktop/frontend{"\n"}npm ci{"\n"}npm run build{"\n"}cd ..{"\n"}wails doctor{"\n"}wails build</CodeBlock><InlineLink href="https://wails.io/docs/gettingstarted/installation/">Wails 平台依赖</InlineLink></section>
-      <section className="doc-section"><h2>开发运行</h2><p>从 <code>clients/desktop</code> 运行 <code>wails dev</code> 才能使用签名、文件选择和本地数据库等原生能力。只启动 Vite 适合检查界面，不等同于完整客户端。</p><CodeBlock>cd clients/desktop{"\n"}go test ./...{"\n"}wails dev</CodeBlock><Note title="不想编译">直接使用时，请回到下载页选择预编译包。源码构建不是安装客户端的前置步骤。</Note><InlineLink href="/downloads">下载预编译版本</InlineLink></section>
+      <section className="doc-section"><h2>开发运行</h2><p>从 <code>clients/desktop</code> 运行 <code>wails dev</code> 才能使用签名、文件选择和本地数据库等原生能力。只启动 Vite 适合检查界面，不等同于完整客户端。</p><CodeBlock>cd clients/desktop{"\n"}go test ./...{"\n"}wails dev</CodeBlock><InlineLink href="/downloads">下载预编译版本</InlineLink></section>
       <div className="doc-next"><span>继续阅读</span><Link href="/sproof">.sproof v1 格式 <ArrowRight /></Link></div>
     </DocsShell>
   );
