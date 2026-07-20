@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -230,7 +231,7 @@ func (s LocalStore) ListRoots(ctx context.Context, limit int) ([]model.BatchRoot
 		if err := ctx.Err(); err != nil {
 			return nil, trusterr.Wrap(trusterr.CodeDeadlineExceeded, "proofstore list roots canceled", err)
 		}
-		data, err := os.ReadFile(filepath.Join(s.rootDir(), name))
+		data, err := readStoredFile(filepath.Join(s.rootDir(), name))
 		if err != nil {
 			return nil, trusterr.Wrap(trusterr.CodeDataLoss, "read batch root", err)
 		}
@@ -270,7 +271,7 @@ func (s LocalStore) ListRootsAfter(ctx context.Context, afterClosedAtUnixN int64
 		if err := ctx.Err(); err != nil {
 			return nil, trusterr.Wrap(trusterr.CodeDeadlineExceeded, "proofstore list roots after canceled", err)
 		}
-		data, err := os.ReadFile(filepath.Join(s.rootDir(), name))
+		data, err := readStoredFile(filepath.Join(s.rootDir(), name))
 		if err != nil {
 			return nil, trusterr.Wrap(trusterr.CodeDataLoss, "read batch root", err)
 		}
@@ -309,7 +310,7 @@ func (s LocalStore) ListRootsPage(ctx context.Context, opts model.RootListOption
 		if err := ctx.Err(); err != nil {
 			return nil, trusterr.Wrap(trusterr.CodeDeadlineExceeded, "proofstore list roots page canceled", err)
 		}
-		data, err := os.ReadFile(filepath.Join(s.rootDir(), entry.Name()))
+		data, err := readStoredFile(filepath.Join(s.rootDir(), entry.Name()))
 		if err != nil {
 			return nil, trusterr.Wrap(trusterr.CodeDataLoss, "read batch root", err)
 		}
@@ -435,7 +436,7 @@ func (s LocalStore) ListBatchTreeLeaves(ctx context.Context, opts model.BatchTre
 		if err := ctx.Err(); err != nil {
 			return nil, trusterr.Wrap(trusterr.CodeDeadlineExceeded, "proofstore list batch tree leaves canceled", err)
 		}
-		data, err := os.ReadFile(filepath.Join(s.batchTreeLeafDir(opts.BatchID), name))
+		data, err := readStoredFile(filepath.Join(s.batchTreeLeafDir(opts.BatchID), name))
 		if err != nil {
 			return nil, trusterr.Wrap(trusterr.CodeDataLoss, "read batch tree leaf", err)
 		}
@@ -499,7 +500,7 @@ func (s LocalStore) ListBatchTreeNodes(ctx context.Context, opts model.BatchTree
 		if err := ctx.Err(); err != nil {
 			return nil, trusterr.Wrap(trusterr.CodeDeadlineExceeded, "proofstore list batch tree nodes canceled", err)
 		}
-		data, err := os.ReadFile(filepath.Join(s.batchTreeNodeLevelDir(opts.BatchID, opts.Level), name))
+		data, err := readStoredFile(filepath.Join(s.batchTreeNodeLevelDir(opts.BatchID, opts.Level), name))
 		if err != nil {
 			return nil, trusterr.Wrap(trusterr.CodeDataLoss, "read batch tree node", err)
 		}
@@ -585,7 +586,7 @@ func (s LocalStore) ListManifests(ctx context.Context) ([]model.BatchManifest, e
 		if err := ctx.Err(); err != nil {
 			return nil, trusterr.Wrap(trusterr.CodeDeadlineExceeded, "proofstore list manifests canceled", err)
 		}
-		data, err := os.ReadFile(filepath.Join(s.manifestDir(), name))
+		data, err := readStoredFile(filepath.Join(s.manifestDir(), name))
 		if err != nil {
 			return nil, trusterr.Wrap(trusterr.CodeDataLoss, "read batch manifest", err)
 		}
@@ -625,7 +626,7 @@ func (s LocalStore) ListManifestsAfter(ctx context.Context, afterBatchID string,
 		if err := ctx.Err(); err != nil {
 			return nil, trusterr.Wrap(trusterr.CodeDeadlineExceeded, "proofstore list manifests after canceled", err)
 		}
-		data, err := os.ReadFile(filepath.Join(s.manifestDir(), name))
+		data, err := readStoredFile(filepath.Join(s.manifestDir(), name))
 		if err != nil {
 			return nil, trusterr.Wrap(trusterr.CodeDataLoss, "read batch manifest", err)
 		}
@@ -674,7 +675,7 @@ func (s LocalStore) GetCheckpoint(ctx context.Context) (model.WALCheckpoint, boo
 	if err := ctx.Err(); err != nil {
 		return model.WALCheckpoint{}, false, trusterr.Wrap(trusterr.CodeDeadlineExceeded, "proofstore get checkpoint canceled", err)
 	}
-	data, err := os.ReadFile(s.checkpointPath())
+	data, err := readStoredFile(s.checkpointPath())
 	if err != nil {
 		if os.IsNotExist(err) {
 			return model.WALCheckpoint{}, false, nil
@@ -722,7 +723,7 @@ func (s LocalStore) GetGlobalLeaf(ctx context.Context, index uint64) (model.Glob
 	if err := ctx.Err(); err != nil {
 		return model.GlobalLogLeaf{}, false, trusterr.Wrap(trusterr.CodeDeadlineExceeded, "proofstore get global leaf canceled", err)
 	}
-	data, err := os.ReadFile(s.globalLeafPath(index))
+	data, err := readStoredFile(s.globalLeafPath(index))
 	if err != nil {
 		if os.IsNotExist(err) {
 			return model.GlobalLogLeaf{}, false, nil
@@ -780,7 +781,7 @@ func (s LocalStore) GetGlobalLogNode(ctx context.Context, level, startIndex uint
 	if err := ctx.Err(); err != nil {
 		return model.GlobalLogNode{}, false, trusterr.Wrap(trusterr.CodeDeadlineExceeded, "proofstore get global node canceled", err)
 	}
-	data, err := os.ReadFile(s.globalNodePath(level, startIndex))
+	data, err := readStoredFile(s.globalNodePath(level, startIndex))
 	if err != nil {
 		if os.IsNotExist(err) {
 			return model.GlobalLogNode{}, false, nil
@@ -821,7 +822,7 @@ func (s LocalStore) ListGlobalLogNodesAfter(ctx context.Context, afterLevel, aft
 		if err := ctx.Err(); err != nil {
 			return nil, trusterr.Wrap(trusterr.CodeDeadlineExceeded, "proofstore list global nodes after canceled", err)
 		}
-		data, err := os.ReadFile(filepath.Join(s.globalNodeDir(), name))
+		data, err := readStoredFile(filepath.Join(s.globalNodeDir(), name))
 		if err != nil {
 			return nil, trusterr.Wrap(trusterr.CodeDataLoss, "read global log node", err)
 		}
@@ -861,7 +862,7 @@ func (s LocalStore) GetGlobalLogState(ctx context.Context) (model.GlobalLogState
 	if err := ctx.Err(); err != nil {
 		return model.GlobalLogState{}, false, trusterr.Wrap(trusterr.CodeDeadlineExceeded, "proofstore get global state canceled", err)
 	}
-	data, err := os.ReadFile(s.globalStatePath())
+	data, err := readStoredFile(s.globalStatePath())
 	if err != nil {
 		if os.IsNotExist(err) {
 			return model.GlobalLogState{}, false, nil
@@ -896,7 +897,7 @@ func (s LocalStore) ListGlobalLeaves(ctx context.Context) ([]model.GlobalLogLeaf
 	sort.Strings(names)
 	leaves := make([]model.GlobalLogLeaf, 0, len(names))
 	for _, name := range names {
-		data, err := os.ReadFile(filepath.Join(s.globalLeafDir(), name))
+		data, err := readStoredFile(filepath.Join(s.globalLeafDir(), name))
 		if err != nil {
 			return nil, trusterr.Wrap(trusterr.CodeDataLoss, "read global log leaf", err)
 		}
@@ -950,7 +951,7 @@ func (s LocalStore) ListGlobalLeavesPage(ctx context.Context, opts model.GlobalL
 		if err := ctx.Err(); err != nil {
 			return nil, trusterr.Wrap(trusterr.CodeDeadlineExceeded, "proofstore list global leaves page canceled", err)
 		}
-		data, err := os.ReadFile(filepath.Join(s.globalLeafDir(), entry.Name()))
+		data, err := readStoredFile(filepath.Join(s.globalLeafDir(), entry.Name()))
 		if err != nil {
 			return nil, trusterr.Wrap(trusterr.CodeDataLoss, "read global log leaf", err)
 		}
@@ -1031,7 +1032,7 @@ func (s LocalStore) GetSignedTreeHead(ctx context.Context, treeSize uint64) (mod
 	if treeSize == 0 {
 		return model.SignedTreeHead{}, false, trusterr.New(trusterr.CodeInvalidArgument, "sth tree_size is required")
 	}
-	data, err := os.ReadFile(s.sthPath(treeSize))
+	data, err := readStoredFile(s.sthPath(treeSize))
 	if err != nil {
 		if os.IsNotExist(err) {
 			return model.SignedTreeHead{}, false, nil
@@ -1086,7 +1087,7 @@ func (s LocalStore) ListSignedTreeHeadsPage(ctx context.Context, opts model.Tree
 		if err := ctx.Err(); err != nil {
 			return nil, trusterr.Wrap(trusterr.CodeDeadlineExceeded, "proofstore list signed tree heads page canceled", err)
 		}
-		data, err := os.ReadFile(filepath.Join(s.sthDir(), entry.Name()))
+		data, err := readStoredFile(filepath.Join(s.sthDir(), entry.Name()))
 		if err != nil {
 			return nil, trusterr.Wrap(trusterr.CodeDataLoss, "read signed tree head", err)
 		}
@@ -1128,7 +1129,7 @@ func (s LocalStore) LatestSignedTreeHead(ctx context.Context) (model.SignedTreeH
 		return model.SignedTreeHead{}, false, nil
 	}
 	sort.Strings(names)
-	data, err := os.ReadFile(filepath.Join(s.sthDir(), names[len(names)-1]))
+	data, err := readStoredFile(filepath.Join(s.sthDir(), names[len(names)-1]))
 	if err != nil {
 		return model.SignedTreeHead{}, false, trusterr.Wrap(trusterr.CodeDataLoss, "read latest signed tree head", err)
 	}
@@ -1179,7 +1180,7 @@ func (s LocalStore) ListGlobalLogTiles(ctx context.Context) ([]model.GlobalLogTi
 	sort.Strings(names)
 	tiles := make([]model.GlobalLogTile, 0, len(names))
 	for _, name := range names {
-		data, err := os.ReadFile(filepath.Join(s.globalTileDir(), name))
+		data, err := readStoredFile(filepath.Join(s.globalTileDir(), name))
 		if err != nil {
 			return nil, trusterr.Wrap(trusterr.CodeDataLoss, "read global log tile", err)
 		}
@@ -1219,7 +1220,7 @@ func (s LocalStore) ListGlobalLogTilesAfter(ctx context.Context, afterLevel, aft
 		if err := ctx.Err(); err != nil {
 			return nil, trusterr.Wrap(trusterr.CodeDeadlineExceeded, "proofstore list global tiles after canceled", err)
 		}
-		data, err := os.ReadFile(filepath.Join(s.globalTileDir(), name))
+		data, err := readStoredFile(filepath.Join(s.globalTileDir(), name))
 		if err != nil {
 			return nil, trusterr.Wrap(trusterr.CodeDataLoss, "read global log tile", err)
 		}
@@ -1305,7 +1306,7 @@ func (s LocalStore) ListGlobalLogOutboxItemsAfter(ctx context.Context, afterBatc
 		if err := ctx.Err(); err != nil {
 			return nil, trusterr.Wrap(trusterr.CodeDeadlineExceeded, "proofstore list global log outbox after canceled", err)
 		}
-		data, err := os.ReadFile(filepath.Join(s.globalOutboxDir(), name))
+		data, err := readStoredFile(filepath.Join(s.globalOutboxDir(), name))
 		if err != nil {
 			return nil, trusterr.Wrap(trusterr.CodeDataLoss, "read global log outbox item", err)
 		}
@@ -1409,7 +1410,7 @@ func (s LocalStore) listGlobalLogOutbox(ctx context.Context, limit int, include 
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".tdgoutbox") {
 			continue
 		}
-		data, err := os.ReadFile(filepath.Join(s.globalOutboxDir(), entry.Name()))
+		data, err := readStoredFile(filepath.Join(s.globalOutboxDir(), entry.Name()))
 		if err != nil {
 			return nil, trusterr.Wrap(trusterr.CodeDataLoss, "read global log outbox item", err)
 		}
@@ -1481,7 +1482,7 @@ func (s LocalStore) GetSTHAnchorOutboxItem(ctx context.Context, treeSize uint64)
 	if treeSize == 0 {
 		return model.STHAnchorOutboxItem{}, false, trusterr.New(trusterr.CodeInvalidArgument, "tree_size is required")
 	}
-	data, err := os.ReadFile(s.sthAnchorOutboxPath(treeSize))
+	data, err := readStoredFile(s.sthAnchorOutboxPath(treeSize))
 	if err != nil {
 		if os.IsNotExist(err) {
 			return model.STHAnchorOutboxItem{}, false, nil
@@ -1522,7 +1523,7 @@ func (s LocalStore) ListSTHAnchorOutboxItemsAfter(ctx context.Context, afterTree
 		if err := ctx.Err(); err != nil {
 			return nil, trusterr.Wrap(trusterr.CodeDeadlineExceeded, "proofstore list sth anchor outbox after canceled", err)
 		}
-		data, err := os.ReadFile(filepath.Join(s.sthAnchorOutboxDir(), name))
+		data, err := readStoredFile(filepath.Join(s.sthAnchorOutboxDir(), name))
 		if err != nil {
 			return nil, trusterr.Wrap(trusterr.CodeDataLoss, "read sth anchor outbox item", err)
 		}
@@ -1561,7 +1562,7 @@ func (s LocalStore) ListSTHAnchorsPage(ctx context.Context, opts model.AnchorLis
 		if err := ctx.Err(); err != nil {
 			return nil, trusterr.Wrap(trusterr.CodeDeadlineExceeded, "proofstore list sth anchors page canceled", err)
 		}
-		data, err := os.ReadFile(filepath.Join(s.sthAnchorOutboxDir(), entry.Name()))
+		data, err := readStoredFile(filepath.Join(s.sthAnchorOutboxDir(), entry.Name()))
 		if err != nil {
 			return nil, trusterr.Wrap(trusterr.CodeDataLoss, "read sth anchor outbox item", err)
 		}
@@ -1667,7 +1668,7 @@ func (s LocalStore) GetSTHAnchorResult(ctx context.Context, treeSize uint64) (mo
 	if treeSize == 0 {
 		return model.STHAnchorResult{}, false, trusterr.New(trusterr.CodeInvalidArgument, "tree_size is required")
 	}
-	data, err := os.ReadFile(s.sthAnchorResultPath(treeSize))
+	data, err := readStoredFile(s.sthAnchorResultPath(treeSize))
 	if err != nil {
 		if os.IsNotExist(err) {
 			return model.STHAnchorResult{}, false, nil
@@ -1700,7 +1701,7 @@ func (s LocalStore) listSTHAnchors(ctx context.Context, limit int, include func(
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".tdsth-anchor") {
 			continue
 		}
-		data, err := os.ReadFile(filepath.Join(s.sthAnchorOutboxDir(), entry.Name()))
+		data, err := readStoredFile(filepath.Join(s.sthAnchorOutboxDir(), entry.Name()))
 		if err != nil {
 			return nil, trusterr.Wrap(trusterr.CodeDataLoss, "read sth anchor outbox item", err)
 		}
@@ -1977,7 +1978,11 @@ func rejectDirectoryTarget(path string) error {
 }
 
 func readFileWithFallback(primary string, fallbacks ...string) ([]byte, error) {
-	data, err := os.ReadFile(primary)
+	return readFileWithFallbackLimit(maxStoredObjectBytes, primary, fallbacks...)
+}
+
+func readFileWithFallbackLimit(maxBytes int64, primary string, fallbacks ...string) ([]byte, error) {
+	data, err := readStoredFileLimit(primary, maxBytes)
 	if err == nil || !os.IsNotExist(err) {
 		return data, err
 	}
@@ -1985,12 +1990,35 @@ func readFileWithFallback(primary string, fallbacks ...string) ([]byte, error) {
 		if fallback == "" || fallback == primary {
 			continue
 		}
-		data, fallbackErr := os.ReadFile(fallback)
+		data, fallbackErr := readStoredFileLimit(fallback, maxBytes)
 		if fallbackErr == nil || !os.IsNotExist(fallbackErr) {
 			return data, fallbackErr
 		}
 	}
 	return nil, err
+}
+
+func readStoredFile(path string) ([]byte, error) {
+	return readStoredFileLimit(path, maxStoredObjectBytes)
+}
+
+func readStoredFileLimit(path string, maxBytes int64) ([]byte, error) {
+	if maxBytes <= 0 {
+		return nil, fmt.Errorf("max stored object bytes must be positive")
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	data, err := io.ReadAll(io.LimitReader(f, maxBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > maxBytes {
+		return nil, fmt.Errorf("stored object too large: %d > %d", len(data), maxBytes)
+	}
+	return data, nil
 }
 
 func removeFallbackPath(primary, fallback string) {
@@ -2183,7 +2211,7 @@ func (s LocalStore) promoteBatchRecords(ctx context.Context, batchID, proofLevel
 		if err := ctx.Err(); err != nil {
 			return trusterr.Wrap(trusterr.CodeDeadlineExceeded, "promote batch record indexes canceled", err)
 		}
-		data, err := os.ReadFile(filepath.Join(s.recordByBatchDir(batchID), entry.Name()))
+		data, err := readStoredFile(filepath.Join(s.recordByBatchDir(batchID), entry.Name()))
 		if err != nil {
 			return trusterr.Wrap(trusterr.CodeDataLoss, "read batch record index", err)
 		}

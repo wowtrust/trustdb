@@ -31,6 +31,42 @@ func TestLocalStoreBundleRoundTrip(t *testing.T) {
 	}
 }
 
+func TestReadStoredFileLimitBoundsPrimaryAndFallback(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	primary := filepath.Join(dir, "primary")
+	fallback := filepath.Join(dir, "fallback")
+	data := bytes.Repeat([]byte{0x42}, 32)
+	if err := os.WriteFile(primary, data, 0o600); err != nil {
+		t.Fatalf("WriteFile(primary) error = %v", err)
+	}
+	got, err := readStoredFileLimit(primary, int64(len(data)))
+	if err != nil {
+		t.Fatalf("readStoredFileLimit(exact boundary) error = %v", err)
+	}
+	if !bytes.Equal(got, data) {
+		t.Fatalf("readStoredFileLimit() = %x, want %x", got, data)
+	}
+
+	if err := os.WriteFile(primary, append(data, 0x43), 0o600); err != nil {
+		t.Fatalf("WriteFile(oversized primary) error = %v", err)
+	}
+	if _, err := readStoredFileLimit(primary, int64(len(data))); err == nil {
+		t.Fatal("readStoredFileLimit(oversized primary) error = nil")
+	}
+
+	if err := os.Remove(primary); err != nil {
+		t.Fatalf("Remove(primary) error = %v", err)
+	}
+	if err := os.WriteFile(fallback, append(data, 0x44), 0o600); err != nil {
+		t.Fatalf("WriteFile(oversized fallback) error = %v", err)
+	}
+	if _, err := readFileWithFallbackLimit(int64(len(data)), primary, fallback); err == nil {
+		t.Fatal("readFileWithFallbackLimit(oversized fallback) error = nil")
+	}
+}
+
 func TestWriteCBORAtomicRejectsDirectoryTarget(t *testing.T) {
 	t.Parallel()
 
