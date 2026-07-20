@@ -273,6 +273,7 @@ type tikvIter struct {
 	lower          []byte
 	upper          []byte
 	scanner        tikvclient.Iterator
+	reverse        bool
 	key            []byte
 	value          []byte
 	err            error
@@ -309,10 +310,20 @@ func (it *tikvIter) Next() bool {
 }
 
 func (it *tikvIter) Prev() bool {
-	if len(it.key) == 0 {
+	if !it.reverse {
+		if len(it.key) == 0 {
+			return false
+		}
+		return it.openReverse(it.physicalKey(it.key))
+	}
+	if it.scanner == nil || !it.scanner.Valid() {
 		return false
 	}
-	return it.openReverse(it.physicalKey(it.key))
+	if err := it.scanner.Next(); err != nil {
+		it.err = err
+		return false
+	}
+	return it.captureReverse()
 }
 
 func (it *tikvIter) Value() []byte { return it.value }
@@ -336,6 +347,7 @@ func (it *tikvIter) openForward(start []byte) bool {
 		return false
 	}
 	it.scanner = scanner
+	it.reverse = false
 	return it.captureForward()
 }
 
@@ -347,6 +359,7 @@ func (it *tikvIter) openReverse(end []byte) bool {
 		return false
 	}
 	it.scanner = scanner
+	it.reverse = true
 	return it.captureReverse()
 }
 

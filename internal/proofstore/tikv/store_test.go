@@ -6,9 +6,15 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"fmt"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/golang/snappy"
+	"github.com/tikv/client-go/v2/testutils"
+	tikvclient "github.com/tikv/client-go/v2/tikv"
+	"github.com/tikv/client-go/v2/tikvrpc"
+	"github.com/tikv/client-go/v2/txnkv"
 
 	"github.com/ryan-wong-coder/trustdb/internal/cborx"
 	"github.com/ryan-wong-coder/trustdb/internal/model"
@@ -71,6 +77,197 @@ func TestNamespaceKeyPrefix(t *testing.T) {
 	if !bytes.HasSuffix(got, []byte(wantSuffix)) {
 		t.Fatalf("namespace prefix %q does not end with encoded namespace %q", got, wantSuffix)
 	}
+}
+
+func TestTiKVIterPrevAdvancesExistingScanner(t *testing.T) {
+	t.Parallel()
+
+	namespace := []byte("tenant/")
+	scanner := &scriptedTiKVIterator{entries: []scriptedTiKVEntry{
+		{key: []byte("tenant/c"), value: []byte("three")},
+		{key: []byte("tenant/b"), value: []byte("two")},
+		{key: []byte("tenant/a"), value: []byte("one")},
+	}}
+	iter := &tikvIter{
+		namespace:      namespace,
+		stripNamespace: true,
+		lower:          []byte("tenant/b"),
+		scanner:        scanner,
+		reverse:        true,
+	}
+	defer iter.Close()
+
+	if !iter.captureReverse() || !bytes.Equal(iter.key, []byte("c")) {
+		t.Fatalf("initial key = %q", iter.key)
+	}
+	if !iter.Prev() || !bytes.Equal(iter.key, []byte("b")) || !bytes.Equal(iter.value, []byte("two")) {
+		t.Fatalf("previous item = key %q value %q", iter.key, iter.value)
+	}
+	if iter.Prev() {
+		t.Fatalf("Prev crossed lower bound with key %q", iter.key)
+	}
+	if scanner.nextCalls != 2 {
+		t.Fatalf("scanner Next calls = %d, want 2", scanner.nextCalls)
+	}
+	if scanner.closeCalls != 0 {
+		t.Fatalf("scanner was reopened during reverse iteration: close calls = %d", scanner.closeCalls)
+	}
+}
+
+func TestTiKVIterPrevPreservesScannerError(t *testing.T) {
+	t.Parallel()
+
+	wantErr := fmt.Errorf("reverse scan failed")
+	scanner := &scriptedTiKVIterator{
+		entries: []scriptedTiKVEntry{{key: []byte("b"), value: []byte("value")}},
+		nextErr: wantErr,
+	}
+	iter := &tikvIter{scanner: scanner, reverse: true}
+	defer iter.Close()
+
+	if !iter.captureReverse() {
+		t.Fatal("initial reverse item is invalid")
+	}
+	if iter.Prev() {
+		t.Fatal("Prev succeeded after scanner error")
+	}
+	if iter.Error() != wantErr {
+		t.Fatalf("iterator error = %v, want %v", iter.Error(), wantErr)
+	}
+}
+
+func TestTiKVIterPrevReusesReverseScanBatches(t *testing.T) {
+	client, cluster, pdClient, err := testutils.NewMockTiKV("", nil)
+	if err != nil {
+		t.Fatalf("NewMockTiKV: %v", err)
+	}
+	testutils.BootstrapWithSingleStore(cluster)
+	countingClient := &countingTiKVClient{}
+	kvStore, err := tikvclient.NewTestTiKVStore(client, pdClient, func(client tikvclient.Client) tikvclient.Client {
+		countingClient.Client = client
+		return countingClient
+	}, nil, 0)
+	if err != nil {
+		t.Fatalf("NewTestTiKVStore: %v", err)
+	}
+	txnClient := &txnkv.Client{KVStore: kvStore}
+	t.Cleanup(func() {
+		if err := txnClient.Close(); err != nil {
+			t.Errorf("Close: %v", err)
+		}
+	})
+
+	db := &tikvDB{client: txnClient, namespace: []byte("reverse-scan/")}
+	batch := db.NewBatch()
+	defer batch.Close()
+	const recordCount = 1000
+	for index := range recordCount {
+		key := []byte(fmt.Sprintf("record/%04d", index))
+		if err := batch.Set(key, key, nil); err != nil {
+			t.Fatalf("Set(%d): %v", index, err)
+		}
+	}
+	if err := batch.Commit(syncWrite); err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+	countingClient.scanRequests.Store(0)
+
+	lower, upper := prefixBounds("record/")
+	iter, err := db.NewIter(&iterOptions{LowerBound: lower, UpperBound: upper})
+	if err != nil {
+		t.Fatalf("NewIter: %v", err)
+	}
+	defer iter.Close()
+	count := 0
+	for ok := iter.Last(); ok; ok = iter.Prev() {
+		want := fmt.Sprintf("record/%04d", recordCount-1-count)
+		if string(iter.key) != want || string(iter.value) != want {
+			t.Fatalf("item %d = key %q value %q, want %q", count, iter.key, iter.value, want)
+		}
+		count++
+	}
+	if err := iter.Error(); err != nil {
+		t.Fatalf("iterator error: %v", err)
+	}
+	if count != recordCount {
+		t.Fatalf("record count = %d, want %d", count, recordCount)
+	}
+	requests := countingClient.scanRequests.Load()
+	const wantScanRequests = 4 // 1000 records at client-go's default batch size of 256.
+	if requests != wantScanRequests {
+		t.Fatalf("reverse scan requests = %d, want %d batched requests", requests, wantScanRequests)
+	}
+	t.Logf("reused the reverse scanner across %d records with %d scan requests", count, requests)
+
+	forwardIter, err := db.NewIter(&iterOptions{LowerBound: lower, UpperBound: upper})
+	if err != nil {
+		t.Fatalf("NewIter for direction switch: %v", err)
+	}
+	defer forwardIter.Close()
+	if !forwardIter.First() || !forwardIter.Next() || string(forwardIter.key) != "record/0001" {
+		t.Fatalf("forward item before Prev = %q", forwardIter.key)
+	}
+	if !forwardIter.Prev() || string(forwardIter.key) != "record/0000" {
+		t.Fatalf("Prev after forward scan = %q, want record/0000", forwardIter.key)
+	}
+}
+
+type scriptedTiKVEntry struct {
+	key   []byte
+	value []byte
+}
+
+type scriptedTiKVIterator struct {
+	entries    []scriptedTiKVEntry
+	index      int
+	nextCalls  int
+	closeCalls int
+	nextErr    error
+	closed     bool
+}
+
+type countingTiKVClient struct {
+	tikvclient.Client
+	scanRequests atomic.Int64
+}
+
+func (client *countingTiKVClient) SendRequest(ctx context.Context, address string, request *tikvrpc.Request, timeout time.Duration) (*tikvrpc.Response, error) {
+	if request.Type == tikvrpc.CmdScan {
+		client.scanRequests.Add(1)
+	}
+	return client.Client.SendRequest(ctx, address, request, timeout)
+}
+
+func (it *scriptedTiKVIterator) Valid() bool {
+	return it != nil && !it.closed && it.index >= 0 && it.index < len(it.entries)
+}
+
+func (it *scriptedTiKVIterator) Key() []byte {
+	if !it.Valid() {
+		return nil
+	}
+	return it.entries[it.index].key
+}
+
+func (it *scriptedTiKVIterator) Value() []byte {
+	if !it.Valid() {
+		return nil
+	}
+	return it.entries[it.index].value
+}
+
+func (it *scriptedTiKVIterator) Next() error {
+	it.nextCalls++
+	if it.nextErr != nil {
+		return it.nextErr
+	}
+	it.index++
+	return nil
+}
+
+func (it *scriptedTiKVIterator) Close() {
+	it.closeCalls++
+	it.closed = true
 }
 
 func TestDeferredSetFinishTransfersBuffers(t *testing.T) {
