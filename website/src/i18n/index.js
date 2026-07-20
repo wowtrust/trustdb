@@ -1,5 +1,4 @@
 import { useSyncExternalStore } from "react";
-import generatedMessages from "./messages.generated";
 
 export const localeOptions = [
   { code: "zh-CN", label: "简体中文", short: "中" },
@@ -96,6 +95,13 @@ const manualMessages = {
 const storageKey = "trustdb.locale";
 const supported = new Set(localeOptions.map(({ code }) => code));
 const listeners = new Set();
+const generatedMessageLoaders = {
+  en: () => import("virtual:trustdb-messages/en"),
+  ru: () => import("virtual:trustdb-messages/ru"),
+  ja: () => import("virtual:trustdb-messages/ja"),
+  fr: () => import("virtual:trustdb-messages/fr"),
+  ko: () => import("virtual:trustdb-messages/ko"),
+};
 
 function normalizeLocale(value) {
   const locale = String(value || "").toLowerCase();
@@ -119,10 +125,9 @@ function initialLocale() {
 let currentLocale = initialLocale();
 document.documentElement.lang = currentLocale;
 
-const messages = Object.fromEntries(localeOptions.map(({ code }) => [
-  code,
-  { ...(generatedMessages[code] || {}), ...(manualMessages[code] || {}) },
-]));
+const messages = Object.fromEntries(localeOptions.map(({ code }) => [code, { ...(manualMessages[code] || {}) }]));
+const loadedLocales = new Set(["zh-CN"]);
+const localeLoads = new Map();
 let sortedEntries = [];
 
 function rebuildEntries() {
@@ -130,13 +135,51 @@ function rebuildEntries() {
 }
 rebuildEntries();
 
+async function loadLocaleMessages(locale) {
+  if (loadedLocales.has(locale)) return;
+  let pending = localeLoads.get(locale);
+  if (!pending) {
+    const loader = generatedMessageLoaders[locale];
+    pending = loader().then(({ default: generated }) => {
+      messages[locale] = { ...(generated || {}), ...(manualMessages[locale] || {}) };
+      loadedLocales.add(locale);
+    });
+    localeLoads.set(locale, pending);
+  }
+  try {
+    await pending;
+  } catch (error) {
+    localeLoads.delete(locale);
+    throw error;
+  }
+}
+
+export async function initializeLocaleMessages() {
+  try {
+    await loadLocaleMessages(currentLocale);
+  } catch {
+    currentLocale = "zh-CN";
+    document.documentElement.lang = currentLocale;
+  }
+  rebuildEntries();
+}
+
 export function getLocale() { return currentLocale; }
 export function subscribeLocale(listener) { listeners.add(listener); return () => listeners.delete(listener); }
 export function useLocale() { return useSyncExternalStore(subscribeLocale, getLocale, getLocale); }
 
-export function setLocale(locale) {
+let localeRequest = 0;
+
+export async function setLocale(locale) {
   const next = normalizeLocale(locale);
+  const request = ++localeRequest;
   if (next === currentLocale) return;
+  try {
+    await loadLocaleMessages(next);
+  } catch {
+    return;
+  }
+  if (request !== localeRequest) return;
   currentLocale = next;
   rebuildEntries();
   document.documentElement.lang = next;
