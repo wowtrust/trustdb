@@ -21,13 +21,14 @@ import (
 )
 
 const (
-	magic           uint32 = 0x54445731
-	version         uint16 = 1
-	typeAccepted    uint16 = 1
-	headerSize             = 4 + 2 + 2 + 8 + 8 + 8 + 32 + 4
-	crcSize                = 4
-	recordHashSize         = 32
-	maxPayloadBytes        = 64 << 20
+	magic                  uint32 = 0x54445731
+	version                uint16 = 1
+	typeAccepted           uint16 = 1
+	headerSize                    = 4 + 2 + 2 + 8 + 8 + 8 + 32 + 4
+	crcSize                       = 4
+	recordHashSize                = 32
+	maxPayloadBytes               = 64 << 20
+	maxReusableRecordBytes        = 1 << 20
 )
 
 var crcTable = crc32.MakeTable(crc32.Castagnoli)
@@ -95,6 +96,7 @@ type Writer struct {
 	lastSync   time.Time
 	appendHook func(string, time.Duration)
 	fsyncHook  func(string, time.Duration)
+	recordBuf  []byte
 }
 
 type Record struct {
@@ -282,13 +284,18 @@ func (w *Writer) AppendAt(ctx context.Context, payload []byte, at time.Time) (mo
 	// an oversized record still makes forward progress instead of looping
 	// forever between rotations.
 	nextSeq := w.sequence + 1
-	encoded, recordHash := encodeRecord(w.segmentID, nextSeq, at.UTC().UnixNano(), w.prevHash, payload)
+	encoded, recordHash := encodeRecordInto(w.recordBuf, w.segmentID, nextSeq, at.UTC().UnixNano(), w.prevHash, payload)
 	if w.dir != "" && w.maxBytes > 0 && w.offset > 0 && w.offset+int64(len(encoded)) > w.maxBytes {
 		if err := w.rotateLocked(); err != nil {
 			return model.WALPosition{}, [32]byte{}, err
 		}
 		nextSeq = w.sequence + 1
-		encoded, recordHash = encodeRecord(w.segmentID, nextSeq, at.UTC().UnixNano(), w.prevHash, payload)
+		encoded, recordHash = encodeRecordInto(encoded[:0], w.segmentID, nextSeq, at.UTC().UnixNano(), w.prevHash, payload)
+	}
+	if cap(encoded) <= maxReusableRecordBytes {
+		w.recordBuf = encoded[:0]
+	} else {
+		w.recordBuf = nil
 	}
 	pos := model.WALPosition{
 		SegmentID: w.segmentID,
@@ -933,8 +940,16 @@ func scanFileVisit(path string, tolerateTail bool, startPrev [32]byte, visit fun
 }
 
 func encodeRecord(segmentID, sequence uint64, unixNano int64, prevHash [32]byte, payload []byte) ([]byte, [32]byte) {
+	return encodeRecordInto(nil, segmentID, sequence, unixNano, prevHash, payload)
+}
+
+func encodeRecordInto(buf []byte, segmentID, sequence uint64, unixNano int64, prevHash [32]byte, payload []byte) ([]byte, [32]byte) {
 	total := headerSize + len(payload) + crcSize + recordHashSize
-	buf := make([]byte, total)
+	if cap(buf) < total {
+		buf = make([]byte, total)
+	} else {
+		buf = buf[:total]
+	}
 	binary.BigEndian.PutUint32(buf[0:4], magic)
 	binary.BigEndian.PutUint16(buf[4:6], version)
 	binary.BigEndian.PutUint16(buf[6:8], typeAccepted)
