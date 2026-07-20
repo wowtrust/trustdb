@@ -141,9 +141,15 @@ func (t *httpTransport) ListRecords(ctx context.Context, opts ListRecordsOptions
 	if err := t.getJSON(ctx, "/v1/records", values, &env); err != nil {
 		return RecordPage{}, err
 	}
-	records := make([]RecordIndex, 0, len(env.Records))
-	records = append(records, env.Records...)
-	return RecordPage{Records: records, Limit: env.Limit, Direction: env.Direction, NextCursor: env.NextCursor}, nil
+	return recordPageFromEnvelope(env), nil
+}
+
+func recordPageFromEnvelope(env recordsEnvelope) RecordPage {
+	records := env.Records
+	if records == nil {
+		records = []RecordIndex{}
+	}
+	return RecordPage{Records: records, Limit: env.Limit, Direction: env.Direction, NextCursor: env.NextCursor}
 }
 
 func (t *httpTransport) ListRootsPage(ctx context.Context, opts ListPageOptions) (RootPage, error) {
