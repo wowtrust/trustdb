@@ -104,23 +104,55 @@ func RecordStorageQueryToken(query string) string {
 }
 
 func RecordIndexStorageTokens(idx RecordIndex) []string {
-	rawTokens := append(recordSearchTokens(idx.FileName), recordSearchTokens(idx.StorageURI)...)
+	rawTokens := make([]string, 0, 16)
+	rawTokens = appendRecordSearchTokens(rawTokens, idx.FileName)
+	rawTokens = appendRecordSearchTokens(rawTokens, idx.StorageURI)
 	if len(rawTokens) == 0 {
 		return nil
 	}
-	seen := make(map[string]struct{}, len(rawTokens)*3)
-	out := make([]string, 0, len(rawTokens)*3)
+	out := make([]string, 0, maxRecordStorageIndexTokens)
+	// The token count is tightly bounded, so a small open-addressed table avoids
+	// the per-record allocations of a map while retaining exact deduplication.
+	var tokenSlots [maxRecordStorageIndexTokens * 2]uint8
 	add := func(token string) {
 		if token == "" {
 			return
 		}
-		if _, ok := seen[token]; ok {
-			return
+		slot := int(recordStorageTokenHash(token) & uint64(len(tokenSlots)-1))
+		for {
+			entry := tokenSlots[slot]
+			if entry == 0 {
+				out = append(out, token)
+				tokenSlots[slot] = uint8(len(out))
+				return
+			}
+			if out[int(entry)-1] == token {
+				return
+			}
+			slot = (slot + 1) & (len(tokenSlots) - 1)
 		}
-		seen[token] = struct{}{}
-		out = append(out, token)
 	}
 	for _, token := range rawTokens {
+		if isASCII(token) {
+			if len(token) < 2 {
+				continue
+			}
+			if len(token) <= 4 {
+				add(token)
+			}
+			for width := 2; width <= 3; width++ {
+				if len(token) < width {
+					continue
+				}
+				for i := 0; i+width <= len(token); i++ {
+					add(token[i : i+width])
+					if len(out) >= maxRecordStorageIndexTokens {
+						return out
+					}
+				}
+			}
+			continue
+		}
 		runes := []rune(token)
 		if len(runes) < 2 {
 			continue
@@ -154,26 +186,51 @@ func recordSearchProbe(token string) string {
 }
 
 func recordSearchTokens(value string) []string {
+	return appendRecordSearchTokens(nil, value)
+}
+
+func appendRecordSearchTokens(tokens []string, value string) []string {
 	value = strings.ToLower(strings.TrimSpace(value))
 	if value == "" {
-		return nil
+		return tokens
 	}
-	tokens := make([]string, 0, 8)
-	var b strings.Builder
-	flush := func() {
-		if b.Len() == 0 {
-			return
-		}
-		tokens = append(tokens, b.String())
-		b.Reset()
-	}
-	for _, r := range value {
+	start := -1
+	for i, r := range value {
 		if unicode.IsLetter(r) || unicode.IsDigit(r) {
-			b.WriteRune(r)
+			if start < 0 {
+				start = i
+			}
 			continue
 		}
-		flush()
+		if start >= 0 {
+			tokens = append(tokens, value[start:i])
+			start = -1
+		}
 	}
-	flush()
+	if start >= 0 {
+		tokens = append(tokens, value[start:])
+	}
 	return tokens
+}
+
+func isASCII(value string) bool {
+	for i := 0; i < len(value); i++ {
+		if value[i] >= utf8.RuneSelf {
+			return false
+		}
+	}
+	return true
+}
+
+func recordStorageTokenHash(value string) uint64 {
+	const (
+		offset64 = 14695981039346656037
+		prime64  = 1099511628211
+	)
+	hash := uint64(offset64)
+	for i := 0; i < len(value); i++ {
+		hash ^= uint64(value[i])
+		hash *= prime64
+	}
+	return hash
 }
