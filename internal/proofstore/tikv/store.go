@@ -515,6 +515,11 @@ type Store struct {
 	closeErr  error
 }
 
+// WALCheckpointPruneSafe remains false until checkpoints are keyed by node.
+// The TiKV namespace is shared while each server owns a local WAL, so a single
+// global pointer cannot safely authorize any node to skip or prune records.
+func (*Store) WALCheckpointPruneSafe() bool { return false }
+
 // Open connects to a TiKV cluster using PD addresses and wraps it in a Store.
 func Open(pdAddresses []string) (*Store, error) {
 	return OpenWithOptions(Options{

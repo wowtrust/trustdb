@@ -61,10 +61,18 @@ type Metrics struct {
 	// Should drift toward zero as time passes; a stuck non-zero
 	// value means the upgrader cannot reach calendars.
 	OtsPendingBatches prometheus.Gauge
-	// WALCheckpointLastSequence is the highest WAL sequence that is known
-	// to be covered by a committed batch. Alerting on a stalled value flags
-	// a batcher that is no longer advancing.
+	// WALCheckpointLastSequence is the highest contiguous WAL sequence for
+	// which every earlier record is covered by a committed batch. Alerting on
+	// a stalled value flags a batcher that is no longer closing the next gap.
 	WALCheckpointLastSequence prometheus.Gauge
+	// WALCheckpointCoverageDropped counts far-future committed coverage islands
+	// discarded from the bounded in-memory frontier tracker. A non-zero rate
+	// means a long-lived gap is forcing startup replay to rebuild distant runs.
+	WALCheckpointCoverageDropped prometheus.Counter
+	// WALCheckpointFailures counts checkpoint load, merge, and persistence
+	// failures. Unlike the service's latest-error snapshot, this counter cannot
+	// be erased by a later successful batch and is therefore safe for alerting.
+	WALCheckpointFailures prometheus.Counter
 	// WALReplayRecords reports what happened to each WAL record during the
 	// last startup replay, broken down by outcome (recovered = prepared
 	// manifest finalized; replayed = re-enqueued into batcher; skipped =
@@ -222,6 +230,14 @@ func NewMetrics() *Metrics {
 			Name: "trustdb_wal_checkpoint_last_sequence",
 			Help: "Highest WAL sequence that a committed batch has advanced the checkpoint to.",
 		}),
+		WALCheckpointCoverageDropped: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "trustdb_wal_checkpoint_coverage_dropped_total",
+			Help: "Far-future committed WAL coverage islands discarded from the bounded frontier tracker.",
+		}),
+		WALCheckpointFailures: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "trustdb_wal_checkpoint_failures_total",
+			Help: "WAL checkpoint load, merge, and persistence failures.",
+		}),
 		WALReplayRecords: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "trustdb_wal_replay_records_total",
 			Help: "WAL records handled during startup replay, broken down by outcome.",
@@ -272,6 +288,8 @@ func (m *Metrics) Collectors() []prometheus.Collector {
 		m.OtsUpgradeCalendarHits,
 		m.OtsPendingBatches,
 		m.WALCheckpointLastSequence,
+		m.WALCheckpointCoverageDropped,
+		m.WALCheckpointFailures,
 		m.WALReplayRecords,
 		m.WALActiveSegmentID,
 		m.WALSegmentsTotal,

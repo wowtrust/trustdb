@@ -11,6 +11,16 @@ import (
 	"github.com/ryan-wong-coder/trustdb/internal/trusterr"
 )
 
+func TestWALCheckpointPruneSafetyFailsClosedForFileAndUnknownStores(t *testing.T) {
+	t.Parallel()
+	if WALCheckpointPruneSafe(LocalStore{Root: t.TempDir()}) {
+		t.Fatal("LocalStore reported crash-safe WAL checkpoint pruning")
+	}
+	if WALCheckpointPruneSafe(struct{}{}) {
+		t.Fatal("unknown store reported crash-safe WAL checkpoint pruning")
+	}
+}
+
 func TestLocalStoreBundleRoundTrip(t *testing.T) {
 	t.Parallel()
 

@@ -174,6 +174,10 @@ func TestReplayKeepsFailedManifestTerminal(t *testing.T) {
 	t.Parallel()
 
 	env := newRecoveryEnv(t, 2)
+	// Async proof modes persist L2 record indexes before materialization. Even
+	// with those indexes present, a terminal failed manifest is not committed
+	// coverage and must never advance the WAL checkpoint.
+	env.writeBundles(t, len(env.bundles))
 	env.manifest.State = model.BatchStateFailed
 	env.manifest.MaterializeLastError = "deterministic data loss"
 	if err := env.store.PutManifest(context.Background(), env.manifest); err != nil {
@@ -187,6 +191,9 @@ func TestReplayKeepsFailedManifestTerminal(t *testing.T) {
 	manifest, err := env.store.GetManifest(context.Background(), env.batchID)
 	if err != nil || manifest.State != model.BatchStateFailed {
 		t.Fatalf("manifest=%+v err=%v", manifest, err)
+	}
+	if cp, found, err := env.store.GetCheckpoint(context.Background()); err != nil || found {
+		t.Fatalf("failed manifest checkpoint=%+v found=%v err=%v, want none", cp, found, err)
 	}
 }
 
@@ -772,11 +779,49 @@ func TestReplayRebuildsIdempotencyIndex(t *testing.T) {
 	}
 }
 
+func TestReplayRejectsDuplicateRecordIDWithEmptyIdempotencyKey(t *testing.T) {
+	t.Parallel()
+
+	env := newIdempotencyEnv(t)
+	seed := env.signClaim(t, "temporary-key", []byte("duplicate-empty-idempotency"), 7)
+	seed.Claim.IdempotencyKey = ""
+	signed, err := claim.Sign(seed.Claim, env.clientKey)
+	if err != nil {
+		t.Fatalf("Sign(empty idempotency) error = %v", err)
+	}
+	first, _, _, err := env.engine.Submit(context.Background(), signed)
+	if err != nil {
+		t.Fatalf("Submit(first) error = %v", err)
+	}
+	second, _, _, err := env.engine.Submit(context.Background(), signed)
+	if err != nil {
+		t.Fatalf("Submit(second) error = %v", err)
+	}
+	if first.RecordID != second.RecordID || first.WAL == second.WAL {
+		t.Fatalf("duplicate records = first:%+v second:%+v", first, second)
+	}
+	env.closeWAL(t)
+
+	reopened := env.reopen(t)
+	defer reopened.Close()
+	restarted := env.engine
+	restarted.WAL = reopened
+	restarted.Idempotency = app.NewIdempotencyIndex()
+	store := proofstore.LocalStore{Root: filepath.Join(env.dir, "proofs")}
+	svc := batch.New(restarted, store, batch.Options{QueueSize: 2, MaxRecords: 2, MaxDelay: time.Hour}, nil)
+	defer svc.Shutdown(context.Background())
+
+	_, _, _, err = replayWALAccepted(context.Background(), env.walPath, restarted, svc, store, nil)
+	if trusterr.CodeOf(err) != trusterr.CodeDataLoss {
+		t.Fatalf("replayWALAccepted() code=%s err=%v, want data_loss", trusterr.CodeOf(err), err)
+	}
+}
+
 // TestReplaySkipsRecordsBelowCheckpoint verifies that when a WAL checkpoint
 // covers every record in the WAL, replay short-circuits: no ReplayAccepted
 // invocations happen, no records are enqueued, and the skipped counter
-// reflects the full WAL. Observability is tied to the idempotency index,
-// which is only populated as a side effect of ReplayAccepted.
+// reflects the full WAL. Built-in stores do not enable this path until a
+// durable keyed idempotency projection is available.
 func TestReplaySkipsRecordsBelowCheckpoint(t *testing.T) {
 	t.Parallel()
 
@@ -787,7 +832,7 @@ func TestReplaySkipsRecordsBelowCheckpoint(t *testing.T) {
 
 	top := env.items[len(env.items)-1].Record.WAL
 	if err := env.store.PutCheckpoint(context.Background(), model.WALCheckpoint{
-		SchemaVersion: model.SchemaWALCheckpoint,
+		SchemaVersion: model.SchemaWALCheckpointContiguous,
 		SegmentID:     top.SegmentID,
 		LastSequence:  top.Sequence,
 		LastOffset:    top.Offset,
@@ -798,28 +843,24 @@ func TestReplaySkipsRecordsBelowCheckpoint(t *testing.T) {
 
 	restarted, reopened := env.restartedEngine(t)
 	defer reopened.Close()
-	restarted.Idempotency = app.NewIdempotencyIndex()
+	store := checkpointSafeLocalStore{LocalStore: env.store}
 
 	svc := batch.New(
 		restarted,
-		env.store,
+		store,
 		batch.Options{QueueSize: len(env.items), MaxRecords: len(env.items), MaxDelay: time.Hour},
 		nil,
 	)
 	defer svc.Shutdown(context.Background())
 
 	_, metrics := observability.NewRegistry()
-	recovered, replayed, skipped, err := replayWALAccepted(context.Background(), env.walPath, restarted, svc, env.store, metrics)
+	recovered, replayed, skipped, err := replayWALAccepted(context.Background(), env.walPath, restarted, svc, store, metrics)
 	if err != nil {
 		t.Fatalf("replayWALAccepted() error = %v", err)
 	}
 	if recovered != 0 || replayed != 0 || skipped != len(env.items) {
 		t.Fatalf("replayWALAccepted() recovered=%d replayed=%d skipped=%d, want 0/0/%d", recovered, replayed, skipped, len(env.items))
 	}
-	if size := restarted.Idempotency.Size(); size != 0 {
-		t.Fatalf("idempotency index populated with %d entries, want 0 (checkpoint should bypass ReplayAccepted)", size)
-	}
-
 	if got := testutil.ToFloat64(metrics.WALReplayRecords.WithLabelValues("skipped")); int(got) != len(env.items) {
 		t.Fatalf("wal_replay_records_total{result=skipped} = %v, want %d", got, len(env.items))
 	}
@@ -890,10 +931,11 @@ func TestReplaySkipsStalePreparedManifestBelowCheckpoint(t *testing.T) {
 
 	env := newRecoveryEnv(t, 2)
 	env.writePreparedManifest(t)
+	writeCommittedRecoverySubset(t, env, "newer-batch-that-already-committed", 0, 1)
 
 	top := env.items[len(env.items)-1].Record.WAL
 	if err := env.store.PutCheckpoint(context.Background(), model.WALCheckpoint{
-		SchemaVersion: model.SchemaWALCheckpoint,
+		SchemaVersion: model.SchemaWALCheckpointContiguous,
 		SegmentID:     top.SegmentID,
 		LastSequence:  top.Sequence,
 		LastOffset:    top.Offset,
@@ -904,17 +946,17 @@ func TestReplaySkipsStalePreparedManifestBelowCheckpoint(t *testing.T) {
 
 	restarted, reopened := env.restartedEngine(t)
 	defer reopened.Close()
-	restarted.Idempotency = app.NewIdempotencyIndex()
+	store := checkpointSafeLocalStore{LocalStore: env.store}
 
 	svc := batch.New(
 		restarted,
-		env.store,
+		store,
 		batch.Options{QueueSize: len(env.items), MaxRecords: len(env.items), MaxDelay: time.Hour},
 		nil,
 	)
 	defer svc.Shutdown(context.Background())
 
-	recovered, replayed, skipped, err := replayWALAccepted(context.Background(), env.walPath, restarted, svc, env.store, nil)
+	recovered, replayed, skipped, err := replayWALAccepted(context.Background(), env.walPath, restarted, svc, store, nil)
 	if err != nil {
 		t.Fatalf("replayWALAccepted() error = %v", err)
 	}
@@ -929,8 +971,9 @@ func TestReplaySkipsStalePreparedManifestBelowCheckpoint(t *testing.T) {
 	if manifest.State != model.BatchStatePrepared {
 		t.Fatalf("stale prepared manifest promoted to %s, want prepared", manifest.State)
 	}
-	if _, err := env.store.GetBundle(context.Background(), env.bundles[0].RecordID); trusterr.CodeOf(err) != trusterr.CodeNotFound {
-		t.Fatalf("GetBundle() should be NotFound after stale manifest skip; got err=%v", err)
+	bundle, err := env.store.GetBundle(context.Background(), env.bundles[0].RecordID)
+	if err != nil || bundle.CommittedReceipt.BatchID != "newer-batch-that-already-committed" {
+		t.Fatalf("committed replacement bundle = %+v err=%v", bundle, err)
 	}
 }
 
@@ -1189,6 +1232,8 @@ func TestReplayDirectoryModeSkipsEarlySegments(t *testing.T) {
 
 	const totalRecords = 6
 	records := make([]model.ServerRecord, 0, totalRecords)
+	signedClaims := make([]model.SignedClaim, 0, totalRecords)
+	acceptedReceipts := make([]model.AcceptedReceipt, 0, totalRecords)
 	for i := 0; i < totalRecords; i++ {
 		raw := bytes.Repeat([]byte{byte('a' + i)}, 120)
 		contentHash, err := trustcrypto.HashBytes(model.DefaultHashAlg, raw)
@@ -1212,11 +1257,13 @@ func TestReplayDirectoryModeSkipsEarlySegments(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Sign() error = %v", err)
 		}
-		rec, _, _, err := engine.Submit(context.Background(), signed)
+		rec, accepted, _, err := engine.Submit(context.Background(), signed)
 		if err != nil {
 			t.Fatalf("Submit(%d) error = %v", i, err)
 		}
 		records = append(records, rec)
+		signedClaims = append(signedClaims, signed)
+		acceptedReceipts = append(acceptedReceipts, accepted)
 	}
 	if err := writer.Close(); err != nil {
 		t.Fatalf("Close() error = %v", err)
@@ -1241,13 +1288,40 @@ func TestReplayDirectoryModeSkipsEarlySegments(t *testing.T) {
 			segmentsFor(records))
 	}
 
-	store := proofstore.LocalStore{Root: filepath.Join(dir, "proofs")}
+	store := checkpointSafeLocalStore{LocalStore: proofstore.LocalStore{Root: filepath.Join(dir, "proofs")}}
+	const checkpointBatchID = "batch-checkpoint-skip"
+	closedAt := time.Unix(700, 0).UTC()
+	bundles, err := engine.CommitBatch(checkpointBatchID, closedAt, signedClaims, records, acceptedReceipts)
+	if err != nil {
+		t.Fatalf("CommitBatch() error = %v", err)
+	}
+	recordIDs := make([]string, len(bundles))
+	for i := range bundles {
+		recordIDs[i] = bundles[i].RecordID
+		if err := store.PutBundle(context.Background(), bundles[i]); err != nil {
+			t.Fatalf("PutBundle(%d) error = %v", i, err)
+		}
+	}
+	if err := store.PutManifest(context.Background(), model.BatchManifest{
+		SchemaVersion:    model.SchemaBatchManifest,
+		BatchID:          checkpointBatchID,
+		State:            model.BatchStateCommitted,
+		TreeAlg:          model.DefaultMerkleTreeAlg,
+		TreeSize:         uint64(len(recordIDs)),
+		BatchRoot:        bundles[0].CommittedReceipt.BatchRoot,
+		RecordIDs:        recordIDs,
+		WALRange:         model.WALRange{From: records[0].WAL, To: records[len(records)-1].WAL},
+		ClosedAtUnixN:    closedAt.UnixNano(),
+		CommittedAtUnixN: closedAt.Add(time.Nanosecond).UnixNano(),
+	}); err != nil {
+		t.Fatalf("PutManifest() error = %v", err)
+	}
 	if err := store.PutCheckpoint(context.Background(), model.WALCheckpoint{
-		SchemaVersion: model.SchemaWALCheckpoint,
+		SchemaVersion: model.SchemaWALCheckpointContiguous,
 		SegmentID:     last.SegmentID,
 		LastSequence:  last.Sequence,
 		LastOffset:    last.Offset,
-		BatchID:       "batch-checkpoint-skip",
+		BatchID:       checkpointBatchID,
 	}); err != nil {
 		t.Fatalf("PutCheckpoint() error = %v", err)
 	}
@@ -1263,7 +1337,6 @@ func TestReplayDirectoryModeSkipsEarlySegments(t *testing.T) {
 		ClientPublicKey:  clientPub,
 		ServerPrivateKey: serverPriv,
 		WAL:              reopened,
-		Idempotency:      app.NewIdempotencyIndex(),
 		Now:              func() time.Time { return time.Unix(600, 0) },
 	}
 	svc := batch.New(
@@ -1288,11 +1361,6 @@ func TestReplayDirectoryModeSkipsEarlySegments(t *testing.T) {
 	if got := testutil.ToFloat64(metrics.WALReplayRecords.WithLabelValues("skipped")); int(got) != atOrAboveCutoff {
 		t.Fatalf("wal_replay_records_total{result=skipped} = %v, want %d", got, atOrAboveCutoff)
 	}
-	if restarted.Idempotency.Size() != 0 {
-		t.Fatalf("idempotency index populated with %d entries, want 0 (all records covered by checkpoint)",
-			restarted.Idempotency.Size())
-	}
-
 	// PruneSegmentsBefore is safe to call with the checkpoint cutoff: it
 	// deletes exactly the segments that the checkpoint already covers and
 	// leaves the active segment intact.

@@ -60,6 +60,8 @@ func TestWALCheckpointAndReplayMetrics(t *testing.T) {
 
 	reg, metrics := NewRegistry()
 	metrics.WALCheckpointLastSequence.Set(42)
+	metrics.WALCheckpointCoverageDropped.Add(2)
+	metrics.WALCheckpointFailures.Inc()
 	metrics.WALReplayRecords.WithLabelValues("skipped").Add(5)
 	metrics.WALReplayRecords.WithLabelValues("replayed").Add(2)
 	metrics.WALReplayRecords.WithLabelValues("recovered").Add(1)
@@ -68,6 +70,12 @@ func TestWALCheckpointAndReplayMetrics(t *testing.T) {
 # HELP trustdb_wal_checkpoint_last_sequence Highest WAL sequence that a committed batch has advanced the checkpoint to.
 # TYPE trustdb_wal_checkpoint_last_sequence gauge
 trustdb_wal_checkpoint_last_sequence 42
+# HELP trustdb_wal_checkpoint_coverage_dropped_total Far-future committed WAL coverage islands discarded from the bounded frontier tracker.
+# TYPE trustdb_wal_checkpoint_coverage_dropped_total counter
+trustdb_wal_checkpoint_coverage_dropped_total 2
+# HELP trustdb_wal_checkpoint_failures_total WAL checkpoint load, merge, and persistence failures.
+# TYPE trustdb_wal_checkpoint_failures_total counter
+trustdb_wal_checkpoint_failures_total 1
 # HELP trustdb_wal_replay_records_total WAL records handled during startup replay, broken down by outcome.
 # TYPE trustdb_wal_replay_records_total counter
 trustdb_wal_replay_records_total{result="recovered"} 1
@@ -78,6 +86,8 @@ trustdb_wal_replay_records_total{result="skipped"} 5
 		reg,
 		strings.NewReader(expected),
 		"trustdb_wal_checkpoint_last_sequence",
+		"trustdb_wal_checkpoint_coverage_dropped_total",
+		"trustdb_wal_checkpoint_failures_total",
 		"trustdb_wal_replay_records_total",
 	); err != nil {
 		t.Fatalf("GatherAndCompare() error = %v", err)

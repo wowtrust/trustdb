@@ -95,11 +95,21 @@ func benchmarkBatchItems(n int) []Accepted {
 				ClientID:        "bench-client",
 				KeyID:           "bench-key",
 				ReceivedAtUnixN: int64(1_000 + i),
+				WAL: model.WALPosition{
+					SegmentID: 1,
+					Offset:    int64(i) * 1024,
+					Sequence:  uint64(i + 1),
+				},
 			},
 			Accepted: model.AcceptedReceipt{
 				SchemaVersion: model.SchemaAcceptedReceipt,
 				RecordID:      recordID,
 				Status:        "accepted",
+				WAL: model.WALPosition{
+					SegmentID: 1,
+					Offset:    int64(i) * 1024,
+					Sequence:  uint64(i + 1),
+				},
 			},
 		}
 	}
@@ -119,6 +129,8 @@ func splitBenchmarkBatchItems(items []Accepted) ([]model.SignedClaim, []model.Se
 }
 
 type benchmarkBatchStore struct{}
+
+func (benchmarkBatchStore) WALCheckpointPruneSafe() bool { return true }
 
 func (benchmarkBatchStore) PutBundle(context.Context, model.ProofBundle) error { return nil }
 

@@ -222,6 +222,33 @@ func TestIdempotencyIndexRememberedInstallsEntry(t *testing.T) {
 	}
 }
 
+func TestIdempotencyIndexRestoreRejectsConflictingWALPosition(t *testing.T) {
+	t.Parallel()
+
+	idx := NewIdempotencyIndex()
+	firstRecord := model.ServerRecord{RecordID: "r-replay", WAL: model.WALPosition{SegmentID: 1, Offset: 10, Sequence: 1}}
+	firstAccepted := model.AcceptedReceipt{RecordID: "r-replay", WAL: firstRecord.WAL}
+	if !idx.Restore("k", firstRecord, firstAccepted, []byte{0x09}) {
+		t.Fatal("first Restore() = false, want true")
+	}
+	if !idx.Restore("k", firstRecord, firstAccepted, []byte{0x09}) {
+		t.Fatal("identical Restore() = false, want true")
+	}
+	duplicate := firstRecord
+	duplicate.WAL = model.WALPosition{SegmentID: 1, Offset: 20, Sequence: 2}
+	duplicateAccepted := firstAccepted
+	duplicateAccepted.WAL = duplicate.WAL
+	if idx.Restore("k", duplicate, duplicateAccepted, []byte{0x09}) {
+		t.Fatal("conflicting WAL Restore() = true, want false")
+	}
+	if idx.Restore("k", firstRecord, firstAccepted, []byte{0x0a}) {
+		t.Fatal("conflicting claim Restore() = true, want false")
+	}
+	if idx.Size() != 1 {
+		t.Fatalf("Size() = %d, want 1", idx.Size())
+	}
+}
+
 func TestIdempotencyKeyFormat(t *testing.T) {
 	t.Parallel()
 

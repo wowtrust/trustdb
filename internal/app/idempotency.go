@@ -133,10 +133,33 @@ func (i *IdempotencyIndex) Remember(
 // Remembered lets replay paths repopulate the index without going through the
 // build callback. Replays are single-threaded so no key lock is required.
 func (i *IdempotencyIndex) Remembered(key string, record model.ServerRecord, accepted model.AcceptedReceipt, claimHash []byte) {
+	_ = i.Restore(key, record, accepted, claimHash)
+}
+
+// Restore repopulates one durable idempotency decision during startup. It
+// returns false when the key was already restored with a different claim or
+// WAL position, allowing recovery to fail closed instead of silently letting
+// scan order choose which duplicate survives. An empty key needs no entry and
+// is always consistent.
+func (i *IdempotencyIndex) Restore(key string, record model.ServerRecord, accepted model.AcceptedReceipt, claimHash []byte) bool {
 	if key == "" {
-		return
+		return true
 	}
-	i.put(key, idempotencyEntry{record: record, accepted: accepted, claimHash: claimHash})
+	i.entriesMu.Lock()
+	defer i.entriesMu.Unlock()
+	if existing, ok := i.entries[key]; ok {
+		return bytes.Equal(existing.claimHash, claimHash) &&
+			existing.record.RecordID == record.RecordID &&
+			existing.record.WAL == record.WAL &&
+			existing.accepted.RecordID == accepted.RecordID &&
+			existing.accepted.WAL == accepted.WAL
+	}
+	i.entries[key] = idempotencyEntry{
+		record:    record,
+		accepted:  accepted,
+		claimHash: append([]byte(nil), claimHash...),
+	}
+	return true
 }
 
 // Size reports the number of stored entries; exposed for tests and metrics.

@@ -82,6 +82,10 @@ Core paths:
 
 `wal.fsync_mode=strict` waits for each accepted record's WAL file fsync before returning. `group` bounds the asynchronous dirty window by `wal.group_commit_interval`; `batch` defers accepted-record data fsync until rotation or close. Writer startup and the namespace barriers used for WAL directory creation, file publication, rotation, and pruning are independent of that append policy. On Windows, TrustDB fails closed when the underlying filesystem rejects its best-available directory flush. Choose `strict` when the receipt contract requires a per-record fsync; end-to-end crash durability still depends on the filesystem and storage guarantees.
 
+Automatic WAL checkpoint skipping and segment pruning are enabled only when the proofstore can durably order committed artifacts and restart-idempotency decisions before a checkpoint, then scope that checkpoint to the node-local WAL. All built-in backends currently retain and replay WAL: Pebble is waiting for a durable idempotency projection, the development file backend lacks a complete crash-durability barrier, and shared TiKV checkpoints are not yet keyed per node.
+
+During upgrade, a legacy v1 checkpoint is rebuilt only from a complete retained WAL beginning at sequence 1. If an older deployment already pruned that prefix, startup fails closed with `DataLoss`; restore the complete WAL from a trusted backup rather than deleting the checkpoint marker, which cannot prove the missing records were committed.
+
 ## Quick Start
 
 Download the prebuilt Server/CLI archive for your operating system from the [v1.0.0-beta.1 release](https://github.com/ryan-wong-coder/trustdb/releases/tag/v1.0.0-beta.1), extract it, and run the commands below from the extracted directory. No Go toolchain is required. The examples use `./bin/trustdb`; on Windows use `.\bin\trustdb.exe`.

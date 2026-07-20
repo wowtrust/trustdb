@@ -99,6 +99,24 @@ type Store interface {
 // set of the pointer, so we pin the pointer form here.
 var _ Store = (*LocalStore)(nil)
 
+// WALCheckpointPruneSafety is an optional capability for stores that can make
+// a local WAL checkpoint safe to trust after a crash. Returning true certifies
+// all committed batch artifacts and restart-idempotency decisions become
+// durable before the checkpoint, and that the checkpoint is scoped to the
+// same node-local WAL. Stores that do not implement this interface fail closed:
+// replay scans retained WAL and batch commits never invoke automatic pruning.
+type WALCheckpointPruneSafety interface {
+	WALCheckpointPruneSafe() bool
+}
+
+// WALCheckpointPruneSafe deliberately defaults to false for wrappers and new
+// backends. Opting in without satisfying the durability and scoping contract
+// can turn a recovery optimization into permanent data loss.
+func WALCheckpointPruneSafe(store any) bool {
+	capability, ok := store.(WALCheckpointPruneSafety)
+	return ok && capability.WALCheckpointPruneSafe()
+}
+
 // BatchArtifactWriter is an optional fast path for stores that can persist all
 // proof bundles, record indexes, and the batch root in chunked transactional
 // writes. Callers must still write the prepared/committed manifest around this

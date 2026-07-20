@@ -665,6 +665,12 @@ func (s LocalStore) Close() error {
 	return nil
 }
 
+// WALCheckpointPruneSafe is false because writeCBORAtomic guarantees atomic
+// visibility but does not fsync every artifact and newly-created parent
+// directory before checkpoint publication. Keeping the WAL is the safe crash
+// recovery source for this development backend.
+func (LocalStore) WALCheckpointPruneSafe() bool { return false }
+
 func (s LocalStore) PutGlobalLeaf(ctx context.Context, leaf model.GlobalLogLeaf) error {
 	if err := ctx.Err(); err != nil {
 		return trusterr.Wrap(trusterr.CodeDeadlineExceeded, "proofstore put global leaf canceled", err)

@@ -97,26 +97,26 @@ func TestServiceRejectsFullQueue(t *testing.T) {
 }
 
 // TestServiceAdvancesCheckpointAfterCommit verifies that a successful batch
-// commit persists a WAL checkpoint whose LastSequence equals the maximum
-// sequence among the committed records, so future restarts can skip those
-// records when replaying the WAL.
+// commit persists a WAL checkpoint whose LastSequence equals the contiguous
+// committed frontier, so future restarts can skip those records when replaying
+// the WAL.
 func TestServiceAdvancesCheckpointAfterCommit(t *testing.T) {
 	t.Parallel()
 
-	store := proofstore.LocalStore{Root: t.TempDir()}
+	store := checkpointSafeLocalStore{LocalStore: proofstore.LocalStore{Root: t.TempDir()}}
 	svc := New(fakeEngine{}, store, Options{QueueSize: 4, MaxRecords: 2, MaxDelay: time.Hour}, nil)
 	defer svc.Shutdown(context.Background())
 
-	if err := svc.Enqueue(context.Background(), signed("rec-1"), recordWithWAL("rec-1", 10), accepted("rec-1")); err != nil {
+	if err := svc.Enqueue(context.Background(), signed("rec-1"), recordWithWAL("rec-1", 1), accepted("rec-1")); err != nil {
 		t.Fatalf("Enqueue(a) error = %v", err)
 	}
-	if err := svc.Enqueue(context.Background(), signed("rec-2"), recordWithWAL("rec-2", 42), accepted("rec-2")); err != nil {
+	if err := svc.Enqueue(context.Background(), signed("rec-2"), recordWithWAL("rec-2", 2), accepted("rec-2")); err != nil {
 		t.Fatalf("Enqueue(b) error = %v", err)
 	}
 	waitForProof(t, svc, "rec-2")
 
-	cp := waitForCheckpoint(t, store, 42)
-	if cp.SegmentID != 1 || cp.LastOffset != 42*128 {
+	cp := waitForCheckpoint(t, store, 2)
+	if cp.SegmentID != 1 || cp.LastOffset != 2*128 {
 		t.Fatalf("GetCheckpoint() = %+v", cp)
 	}
 }
@@ -129,7 +129,16 @@ func TestServiceAdvancesCheckpointAfterCommit(t *testing.T) {
 func TestServiceCheckpointMonotonic(t *testing.T) {
 	t.Parallel()
 
-	store := proofstore.LocalStore{Root: t.TempDir()}
+	store := checkpointSafeLocalStore{LocalStore: proofstore.LocalStore{Root: t.TempDir()}}
+	if err := store.PutCheckpoint(context.Background(), model.WALCheckpoint{
+		SchemaVersion: model.SchemaWALCheckpointContiguous,
+		SegmentID:     1,
+		LastSequence:  98,
+		LastOffset:    98 * 128,
+		BatchID:       "seed",
+	}); err != nil {
+		t.Fatalf("PutCheckpoint(seed) error = %v", err)
+	}
 	svc := New(fakeEngine{}, store, Options{QueueSize: 4, MaxRecords: 1, MaxDelay: time.Hour}, nil)
 	defer svc.Shutdown(context.Background())
 
@@ -191,28 +200,28 @@ func TestServiceUpdatesCheckpointGauge(t *testing.T) {
 	t.Parallel()
 
 	_, metrics := observability.NewRegistry()
-	store := proofstore.LocalStore{Root: t.TempDir()}
+	store := checkpointSafeLocalStore{LocalStore: proofstore.LocalStore{Root: t.TempDir()}}
 	svc := New(fakeEngine{}, store, Options{QueueSize: 4, MaxRecords: 1, MaxDelay: time.Hour}, metrics)
 	defer svc.Shutdown(context.Background())
 
-	if err := svc.Enqueue(context.Background(), signed("rec-gauge"), recordWithWAL("rec-gauge", 77), accepted("rec-gauge")); err != nil {
+	if err := svc.Enqueue(context.Background(), signed("rec-gauge"), recordWithWAL("rec-gauge", 1), accepted("rec-gauge")); err != nil {
 		t.Fatalf("Enqueue() error = %v", err)
 	}
 	waitForProof(t, svc, "rec-gauge")
-	waitForCheckpoint(t, store, 77)
+	waitForCheckpoint(t, store, 1)
 
 	// The gauge is updated inside advanceCheckpoint after the proof store
 	// persist succeeds, so a post-proof poll may race. Give the batch
 	// worker a short window to publish before asserting.
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		if testutil.ToFloat64(metrics.WALCheckpointLastSequence) == 77 {
+		if testutil.ToFloat64(metrics.WALCheckpointLastSequence) == 1 {
 			break
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	if got := testutil.ToFloat64(metrics.WALCheckpointLastSequence); got != 77 {
-		t.Fatalf("wal_checkpoint_last_sequence = %v, want 77", got)
+	if got := testutil.ToFloat64(metrics.WALCheckpointLastSequence); got != 1 {
+		t.Fatalf("wal_checkpoint_last_sequence = %v, want 1", got)
 	}
 }
 
@@ -228,7 +237,7 @@ func TestServiceInvokesOnCheckpointAdvanced(t *testing.T) {
 		hookCPs  []model.WALCheckpoint
 		hookFire = make(chan struct{}, 8)
 	)
-	store := proofstore.LocalStore{Root: t.TempDir()}
+	store := checkpointSafeLocalStore{LocalStore: proofstore.LocalStore{Root: t.TempDir()}}
 	svc := New(fakeEngine{}, store, Options{
 		QueueSize:  4,
 		MaxRecords: 1,
@@ -242,24 +251,24 @@ func TestServiceInvokesOnCheckpointAdvanced(t *testing.T) {
 	}, nil)
 	defer svc.Shutdown(context.Background())
 
-	if err := svc.Enqueue(context.Background(), signed("rec-a"), recordWithWAL("rec-a", 10), accepted("rec-a")); err != nil {
+	if err := svc.Enqueue(context.Background(), signed("rec-a"), recordWithWAL("rec-a", 1), accepted("rec-a")); err != nil {
 		t.Fatalf("Enqueue(a) error = %v", err)
 	}
 	waitForProof(t, svc, "rec-a")
-	waitForCheckpoint(t, store, 10)
+	waitForCheckpoint(t, store, 1)
 	<-hookFire
 
-	if err := svc.Enqueue(context.Background(), signed("rec-b"), recordWithWAL("rec-b", 20), accepted("rec-b")); err != nil {
+	if err := svc.Enqueue(context.Background(), signed("rec-b"), recordWithWAL("rec-b", 2), accepted("rec-b")); err != nil {
 		t.Fatalf("Enqueue(b) error = %v", err)
 	}
 	waitForProof(t, svc, "rec-b")
-	waitForCheckpoint(t, store, 20)
+	waitForCheckpoint(t, store, 2)
 	<-hookFire
 
 	// rec-regress has a lower sequence than the existing checkpoint: the
 	// service must not invoke the hook for a no-op advance so the prune
 	// side does not observe a phantom checkpoint advance.
-	if err := svc.Enqueue(context.Background(), signed("rec-regress"), recordWithWAL("rec-regress", 5), accepted("rec-regress")); err != nil {
+	if err := svc.Enqueue(context.Background(), signed("rec-regress"), recordWithWAL("rec-regress", 1), accepted("rec-regress")); err != nil {
 		t.Fatalf("Enqueue(regress) error = %v", err)
 	}
 	waitForProof(t, svc, "rec-regress")
@@ -270,8 +279,50 @@ func TestServiceInvokesOnCheckpointAdvanced(t *testing.T) {
 	if len(hookCPs) != 2 {
 		t.Fatalf("hook fired %d times, want 2 (regress must not advance)", len(hookCPs))
 	}
-	if hookCPs[0].LastSequence != 10 || hookCPs[1].LastSequence != 20 {
-		t.Fatalf("hook checkpoints = %+v, want [10,20]", hookCPs)
+	if hookCPs[0].LastSequence != 1 || hookCPs[1].LastSequence != 2 {
+		t.Fatalf("hook checkpoints = %+v, want [1,2]", hookCPs)
+	}
+}
+
+func TestServiceKeepsWorkerCheckpointFailureVisible(t *testing.T) {
+	store := &checkpointRecordingStore{
+		LocalStore: proofstore.LocalStore{Root: t.TempDir()},
+		failPuts:   1,
+	}
+	_, metrics := observability.NewRegistry()
+	svc := New(fakeEngine{}, store, Options{QueueSize: 2, MaxRecords: 1, MaxDelay: time.Hour}, metrics)
+	defer svc.Shutdown(context.Background())
+
+	if err := svc.Enqueue(context.Background(), signed("checkpoint-error"), recordWithWAL("checkpoint-error", 1), accepted("checkpoint-error")); err != nil {
+		t.Fatalf("Enqueue() error = %v", err)
+	}
+	waitForProof(t, svc, "checkpoint-error")
+	deadline := time.Now().Add(5 * time.Second)
+	var checkpointErr error
+	for time.Now().Before(deadline) {
+		if err := svc.LastError(); err != nil {
+			if !strings.Contains(err.Error(), "injected checkpoint write failure") {
+				t.Fatalf("LastError() = %v, want checkpoint failure", err)
+			}
+			if got := testutil.ToFloat64(metrics.WALCheckpointFailures); got != 1 {
+				t.Fatalf("wal_checkpoint_failures_total = %v, want 1", got)
+			}
+			checkpointErr = err
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if checkpointErr == nil {
+		t.Fatal("checkpoint write failure was not published through LastError")
+	}
+
+	if err := svc.Enqueue(context.Background(), signed("checkpoint-retry"), recordWithWAL("checkpoint-retry", 2), accepted("checkpoint-retry")); err != nil {
+		t.Fatalf("Enqueue(retry) error = %v", err)
+	}
+	waitForProof(t, svc, "checkpoint-retry")
+	waitForCheckpoint(t, store, 2)
+	if got := svc.LastError(); got != checkpointErr {
+		t.Fatalf("LastError() after successful retry = %v, want sticky error %v", got, checkpointErr)
 	}
 }
 
@@ -441,7 +492,9 @@ func TestServiceOnDemandRecoverManifestKeepsBundleLazy(t *testing.T) {
 	waitForManifestState(t, store, "recover-batch", model.BatchStateCommitted)
 }
 
-func waitForCheckpoint(t *testing.T, store proofstore.LocalStore, wantSeq uint64) model.WALCheckpoint {
+func waitForCheckpoint(t *testing.T, store interface {
+	GetCheckpoint(context.Context) (model.WALCheckpoint, bool, error)
+}, wantSeq uint64) model.WALCheckpoint {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {

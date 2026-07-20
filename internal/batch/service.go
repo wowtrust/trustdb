@@ -73,6 +73,12 @@ type Options struct {
 	MaterializerPollInterval time.Duration
 	MaterializerNodeID       string
 	DeferMaterializerScan    bool
+	// DeferCheckpointAdvance keeps committed WAL coverage in memory without
+	// persisting a checkpoint or invoking OnCheckpointAdvanced. Startup replay
+	// uses this to prevent a concurrently recovered batch from pruning WAL
+	// segments while the replay scanner still has them open. Call
+	// StartCheckpointAdvance after replay and prepared-manifest recovery finish.
+	DeferCheckpointAdvance bool
 	// InitialSeq seeds the in-memory batch sequence counter so that
 	// batch_id suffixes keep increasing across restarts. Callers
 	// typically derive it from the latest persisted BatchRoot via
@@ -88,11 +94,14 @@ type Options struct {
 	// unrelated batches share an ID.
 	InitialSeq uint64
 	// OnCheckpointAdvanced is called after a successful advanceCheckpoint
-	// step with the newly persisted checkpoint. It runs on the batch
-	// worker goroutine so it must not block on IO that could stall
-	// subsequent batches — wire async prune or metric updates here, not
-	// synchronous network calls. Errors from the hook are not returned
-	// because checkpoint advancement is a best-effort optimization.
+	// step with the newly persisted checkpoint. Callbacks are serialized in
+	// increasing checkpoint order but run outside the frontier lock, so they may
+	// call the checkpoint APIs reentrantly without deadlocking or blocking
+	// unrelated persistence. If the hook falls behind, intermediate pending
+	// checkpoints coalesce to the newest value because pruning that boundary
+	// subsumes every earlier one. The elected drainer still runs synchronously,
+	// so slow network IO belongs in a separate worker. Hook errors are not
+	// returned because checkpoint advancement is a best-effort optimization.
 	OnCheckpointAdvanced func(context.Context, model.WALCheckpoint)
 	// OnBatchCommitted fires after a batch is fully persisted (manifest
 	// committed, bundles + root written, checkpoint advanced) with the
@@ -133,12 +142,44 @@ type Service struct {
 	pendingMu           sync.Mutex
 	pending             map[string][]Accepted
 	pendingOrder        []string
+
+	checkpointMu               sync.Mutex
+	checkpointCoverage         []walCoverageRun
+	checkpointLoaded           bool
+	checkpointFrontier         model.WALCheckpoint
+	checkpointPersistedSeq     uint64
+	checkpointDeferred         bool
+	checkpointMigrationPending bool
+	checkpointEnabled          bool
+	checkpointCallbacks        []walCheckpointCallback
+	checkpointCallbackDraining bool
 }
 
 type materializeJob struct {
 	manifest model.BatchManifest
 	items    []Accepted
 }
+
+// walCoverageRun is an exact, contiguous run of committed WAL sequences. The
+// full position and batch ID belong to the final sequence so a checkpoint that
+// lands on the run also has the correct segment/offset metadata.
+type walCoverageRun struct {
+	from    uint64
+	to      model.WALPosition
+	batchID string
+}
+
+type walCheckpointCallback struct {
+	ctx        context.Context
+	checkpoint model.WALCheckpoint
+}
+
+// Cap best-effort coverage metadata behind long-lived gaps. Dropping the
+// farthest islands is safe because their WAL records remain unpruned and the
+// next startup replay rebuilds coverage; keeping an unbounded island per
+// intermittent queue rejection would turn a recovery optimization into a
+// memory leak.
+const maxCheckpointCoverageRuns = 4096
 
 func New(engine Engine, store Store, opts Options, metrics *observability.Metrics) *Service {
 	if opts.QueueSize <= 0 {
@@ -175,6 +216,8 @@ func New(engine Engine, store Store, opts Options, metrics *observability.Metric
 		scannerDone:          make(chan struct{}),
 		materializeInFlight:  make(map[string]struct{}),
 		pending:              make(map[string][]Accepted),
+		checkpointDeferred:   opts.DeferCheckpointAdvance,
+		checkpointEnabled:    proofstore.WALCheckpointPruneSafe(store),
 	}
 	s.wg.Add(1)
 	go s.worker()
@@ -383,6 +426,9 @@ func (s *Service) Manifests(ctx context.Context) ([]model.BatchManifest, error) 
 	return s.store.ListManifests(ctx)
 }
 
+// LastError returns the most recently reported background failure. It is
+// intentionally sticky until a newer failure replaces it; successful workers
+// never clear another concurrent worker's diagnostic.
 func (s *Service) LastError() error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -492,7 +538,6 @@ func (s *Service) commit(items []Accepted) {
 		s.metrics.BatchSizeRecords.Observe(float64(len(items)))
 		s.metrics.BatchCommitLatency.Observe(time.Since(start).Seconds())
 	}
-	s.setLastError(nil)
 }
 
 // persistBatch writes a batch using the prepared -> bundles/root -> committed
@@ -603,7 +648,7 @@ func (s *Service) persistBatch(ctx context.Context, batchID string, closedAt tim
 	// restart. A failed write here never breaks correctness: replay can
 	// always fall back to scanning the whole WAL and consulting manifests.
 	stageStart = time.Now()
-	err = s.advanceCheckpoint(ctx, manifest)
+	err = s.advanceCheckpoint(ctx, manifest, items)
 	s.observeBatchStage("checkpoint", stageStart)
 	if err != nil {
 		s.setLastError(err)
@@ -934,7 +979,6 @@ func (s *Service) runMaterializationJob(job materializeJob) {
 	if s.metrics != nil {
 		s.metrics.MaterializedRecords.Add(float64(len(items)))
 	}
-	s.setLastError(nil)
 }
 
 func (s *Service) materializerScanner() {
@@ -1135,7 +1179,7 @@ func (s *Service) materializeManifest(ctx context.Context, manifest model.BatchM
 	if err := s.store.PutManifest(ctx, manifest); err != nil {
 		return model.BatchRoot{}, err
 	}
-	if err := s.advanceCheckpoint(ctx, manifest); err != nil {
+	if err := s.advanceCheckpoint(ctx, manifest, items); err != nil {
 		s.setLastError(err)
 	}
 	s.forgetPending(manifest.BatchID)
@@ -1257,51 +1301,431 @@ func (s *Service) fireOnBatchCommitted(ctx context.Context, root model.BatchRoot
 	s.opts.OnBatchCommitted(ctx, root)
 }
 
-// advanceCheckpoint moves the WAL checkpoint forward to cover every record
-// inside manifest. The checkpoint is always advanced monotonically, so a
-// stale read (concurrent commits, retries, recovery passes) never regresses
-// it. Persisting the checkpoint is a best-effort optimization and a failure
-// is surfaced as LastError so operators can investigate without rolling back
-// the commit.
-func (s *Service) advanceCheckpoint(ctx context.Context, manifest model.BatchManifest) error {
-	to := manifest.WALRange.To
-	if to.Sequence == 0 {
+// DeferCheckpointAdvance pauses checkpoint persistence and callbacks while
+// retaining exact committed coverage in memory. It is safe to call more than
+// once before startup replay begins.
+func (s *Service) DeferCheckpointAdvance() {
+	if !s.checkpointEnabled {
+		return
+	}
+	s.checkpointMu.Lock()
+	s.checkpointDeferred = true
+	s.checkpointMu.Unlock()
+}
+
+// StartCheckpointAdvance ends startup replay deferral and flushes the highest
+// contiguous committed WAL frontier. Coverage observed while deferred stays
+// compressed in memory and cannot invoke the prune hook before this call.
+func (s *Service) StartCheckpointAdvance(ctx context.Context) error {
+	if !s.checkpointEnabled {
 		return nil
 	}
-	existing, found, err := s.store.GetCheckpoint(ctx)
+	s.checkpointMu.Lock()
+	s.checkpointDeferred = false
+	drainCallbacks, err := s.flushCheckpointLocked(ctx)
+	s.checkpointMu.Unlock()
+	if drainCallbacks {
+		s.drainCheckpointCallbacks()
+	}
 	if err != nil {
-		return trusterr.Wrap(trusterr.CodeDataLoss, "load wal checkpoint", err)
+		s.observeCheckpointFailure()
+		s.setLastError(err)
 	}
-	if found && existing.LastSequence >= to.Sequence {
+	return err
+}
+
+// RecordCommittedWALRange records an exact contiguous run discovered by the
+// startup WAL scanner. Callers must only join positions after visiting every
+// sequence in the run and confirming that each record belongs to a committed
+// manifest. The range is kept in memory while checkpoint advancement is
+// deferred and is flushed by StartCheckpointAdvance.
+func (s *Service) RecordCommittedWALRange(ctx context.Context, from, to model.WALPosition, batchID string) error {
+	if !s.checkpointEnabled {
 		return nil
 	}
-	cp := model.WALCheckpoint{
-		SchemaVersion:   model.SchemaWALCheckpoint,
-		SegmentID:       to.SegmentID,
-		LastSequence:    to.Sequence,
-		LastOffset:      to.Offset,
-		BatchID:         manifest.BatchID,
-		RecordedAtUnixN: time.Now().UTC().UnixNano(),
+	if from.Sequence == 0 || to.Sequence == 0 {
+		return nil
 	}
-	if err := s.store.PutCheckpoint(ctx, cp); err != nil {
+	if from.Sequence > to.Sequence {
+		return trusterr.New(trusterr.CodeInvalidArgument, "committed wal range is reversed")
+	}
+	return s.addCheckpointCoverage(ctx, []walCoverageRun{{
+		from:    from.Sequence,
+		to:      to,
+		batchID: batchID,
+	}})
+}
+
+// advanceCheckpoint records the exact WAL positions committed by one batch.
+// A manifest's min/max WALRange is intentionally insufficient here: normal
+// enqueue and async-materialization ordering can leave uncommitted sequences
+// between those endpoints. Only adjacent exact positions form one coverage
+// run, and the persisted checkpoint may move across runs only when they join
+// the existing frontier without a gap.
+func (s *Service) advanceCheckpoint(ctx context.Context, manifest model.BatchManifest, items []Accepted) error {
+	if !s.checkpointEnabled {
+		return nil
+	}
+	if err := validateCheckpointRecordIDs(items); err != nil {
+		s.observeCheckpointFailure()
 		return err
 	}
+	if acceptedWALPositionsSorted(items) {
+		var runs []walCoverageRun
+		for i := range items {
+			if err := appendWALCoveragePosition(&runs, items[i].Record.WAL, manifest.BatchID); err != nil {
+				s.observeCheckpointFailure()
+				return err
+			}
+		}
+		return s.addCheckpointCoverage(ctx, runs)
+	}
+	positions := make([]model.WALPosition, 0, len(items))
+	for i := range items {
+		if items[i].Record.WAL.Sequence > 0 {
+			positions = append(positions, items[i].Record.WAL)
+		}
+	}
+	runs, err := walCoverageRuns(positions, manifest.BatchID)
+	if err != nil {
+		s.observeCheckpointFailure()
+		return err
+	}
+	return s.addCheckpointCoverage(ctx, runs)
+}
+
+func validateCheckpointRecordIDs(items []Accepted) error {
+	var recordIDs map[string]struct{}
+	for i := range items {
+		// A non-empty idempotency key is serialized by IdempotencyIndex before a
+		// WAL append. Empty keys deliberately bypass that index, so only that
+		// uncommon path needs an allocation-backed duplicate guard here.
+		if items[i].Signed.Claim.IdempotencyKey != "" {
+			continue
+		}
+		if recordIDs == nil {
+			recordIDs = make(map[string]struct{})
+		}
+		recordID := items[i].Record.RecordID
+		if _, exists := recordIDs[recordID]; exists {
+			return trusterr.New(trusterr.CodeDataLoss, "batch contains a duplicate record id without idempotency protection")
+		}
+		recordIDs[recordID] = struct{}{}
+	}
+	return nil
+}
+
+func acceptedWALPositionsSorted(items []Accepted) bool {
+	var previous model.WALPosition
+	havePrevious := false
+	for i := range items {
+		position := items[i].Record.WAL
+		if position.Sequence == 0 {
+			continue
+		}
+		if havePrevious && walPositionLess(position, previous) {
+			return false
+		}
+		previous = position
+		havePrevious = true
+	}
+	return true
+}
+
+func walCoverageRuns(positions []model.WALPosition, batchID string) ([]walCoverageRun, error) {
+	if len(positions) == 0 {
+		return nil, nil
+	}
+	// advanceCheckpoint owns positions, so avoid a second full-slice copy. Most
+	// batches already arrive in WAL order and can also skip the O(n log n) sort.
+	sorted := true
+	for i := 1; i < len(positions); i++ {
+		if walPositionLess(positions[i], positions[i-1]) {
+			sorted = false
+			break
+		}
+	}
+	if !sorted {
+		sort.Slice(positions, func(i, j int) bool {
+			return walPositionLess(positions[i], positions[j])
+		})
+	}
+	var runs []walCoverageRun
+	for _, pos := range positions {
+		if err := appendWALCoveragePosition(&runs, pos, batchID); err != nil {
+			return nil, err
+		}
+	}
+	return runs, nil
+}
+
+func appendWALCoveragePosition(runs *[]walCoverageRun, pos model.WALPosition, batchID string) error {
+	if pos.Sequence == 0 {
+		return nil
+	}
+	if len(*runs) == 0 {
+		*runs = append(*runs, walCoverageRun{from: pos.Sequence, to: pos, batchID: batchID})
+		return nil
+	}
+	current := &(*runs)[len(*runs)-1]
+	if pos.Sequence == current.to.Sequence {
+		if pos.SegmentID != current.to.SegmentID || pos.Offset != current.to.Offset {
+			return trusterr.New(trusterr.CodeDataLoss, "wal sequence maps to conflicting positions")
+		}
+		return nil
+	}
+	if pos.Sequence == current.to.Sequence+1 {
+		current.to = pos
+		current.batchID = batchID
+		return nil
+	}
+	*runs = append(*runs, walCoverageRun{from: pos.Sequence, to: pos, batchID: batchID})
+	return nil
+}
+
+func walPositionLess(left, right model.WALPosition) bool {
+	if left.Sequence != right.Sequence {
+		return left.Sequence < right.Sequence
+	}
+	if left.SegmentID != right.SegmentID {
+		return left.SegmentID < right.SegmentID
+	}
+	return left.Offset < right.Offset
+}
+
+func (s *Service) addCheckpointCoverage(ctx context.Context, runs []walCoverageRun) error {
+	if len(runs) == 0 {
+		return nil
+	}
+	s.checkpointMu.Lock()
+	for _, run := range runs {
+		if run.from == 0 || run.to.Sequence < run.from {
+			continue
+		}
+		if err := s.mergeCheckpointCoverageLocked(run); err != nil {
+			s.checkpointMu.Unlock()
+			s.observeCheckpointFailure()
+			return err
+		}
+	}
+	drainCallbacks, err := s.flushCheckpointLocked(ctx)
+	s.checkpointMu.Unlock()
+	if drainCallbacks {
+		s.drainCheckpointCallbacks()
+	}
+	if err != nil {
+		s.observeCheckpointFailure()
+	}
+	return err
+}
+
+// mergeCheckpointCoverageLocked keeps maximal disjoint runs sorted by their
+// first sequence. Adjacent commits on the far side of a long-lived gap extend
+// one run instead of retaining one heap entry per batch, so memory is bounded
+// by the number of coverage islands rather than the number of commits.
+func (s *Service) mergeCheckpointCoverageLocked(run walCoverageRun) error {
+	coverage := s.checkpointCoverage
+	first := sort.Search(len(coverage), func(i int) bool {
+		return sequencesTouch(coverage[i].to.Sequence, run.from)
+	})
+	last := first
+	for last < len(coverage) && sequencesTouch(run.to.Sequence, coverage[last].from) {
+		existing := coverage[last]
+		if existing.from < run.from {
+			run.from = existing.from
+		}
+		switch {
+		case existing.to.Sequence > run.to.Sequence:
+			run.to = existing.to
+			run.batchID = existing.batchID
+		case existing.to.Sequence == run.to.Sequence:
+			if existing.to.SegmentID != run.to.SegmentID || existing.to.Offset != run.to.Offset {
+				return trusterr.New(trusterr.CodeDataLoss, "wal sequence maps to conflicting positions")
+			}
+		}
+		last++
+	}
+	if first == last {
+		coverage = append(coverage, walCoverageRun{})
+		copy(coverage[first+1:], coverage[first:])
+		coverage[first] = run
+		if len(coverage) > maxCheckpointCoverageRuns {
+			s.observeCheckpointCoverageDrop(len(coverage) - maxCheckpointCoverageRuns)
+			coverage[len(coverage)-1] = walCoverageRun{}
+			coverage = coverage[:maxCheckpointCoverageRuns]
+		}
+		s.checkpointCoverage = coverage
+		return nil
+	}
+	coverage[first] = run
+	removed := last - first - 1
+	if removed > 0 {
+		copy(coverage[first+1:], coverage[last:])
+		newLen := len(coverage) - removed
+		for i := newLen; i < len(coverage); i++ {
+			coverage[i] = walCoverageRun{}
+		}
+		coverage = coverage[:newLen]
+	}
+	if len(coverage) > maxCheckpointCoverageRuns {
+		s.observeCheckpointCoverageDrop(len(coverage) - maxCheckpointCoverageRuns)
+		for i := maxCheckpointCoverageRuns; i < len(coverage); i++ {
+			coverage[i] = walCoverageRun{}
+		}
+		coverage = coverage[:maxCheckpointCoverageRuns]
+	}
+	s.checkpointCoverage = coverage
+	return nil
+}
+
+func sequencesTouch(leftEnd, rightStart uint64) bool {
+	return leftEnd >= rightStart || (leftEnd != ^uint64(0) && leftEnd+1 >= rightStart)
+}
+
+func (s *Service) flushCheckpointLocked(ctx context.Context) (bool, error) {
+	if !s.checkpointLoaded {
+		existing, found, err := s.store.GetCheckpoint(ctx)
+		if err != nil {
+			return false, trusterr.Wrap(trusterr.CodeDataLoss, "load wal checkpoint", err)
+		}
+		if found {
+			switch existing.SchemaVersion {
+			case model.SchemaWALCheckpointContiguous:
+				if existing.LastSequence > 0 && (existing.SegmentID == 0 || existing.LastOffset < 0) {
+					return false, trusterr.New(trusterr.CodeDataLoss, "contiguous wal checkpoint has an invalid position")
+				}
+				s.checkpointFrontier = existing
+				s.checkpointPersistedSeq = existing.LastSequence
+			case "", model.SchemaWALCheckpoint:
+				// v1 checkpoints were derived from batch min/max envelopes and
+				// may cross uncommitted gaps. Rebuild from exact WAL coverage and
+				// replace even a safe zero frontier so an unsafe legacy value is
+				// never resurrected by a later rollback.
+				s.checkpointMigrationPending = true
+			default:
+				return false, trusterr.New(trusterr.CodeFailedPrecondition, "unsupported wal checkpoint schema: "+existing.SchemaVersion)
+			}
+		}
+		s.checkpointLoaded = true
+	}
+
+	s.consumeCheckpointCoverageLocked()
+	if s.checkpointDeferred || (!s.checkpointMigrationPending && s.checkpointFrontier.LastSequence <= s.checkpointPersistedSeq) {
+		return false, nil
+	}
+	cp := s.checkpointFrontier
+	cp.SchemaVersion = model.SchemaWALCheckpointContiguous
+	cp.RecordedAtUnixN = time.Now().UTC().UnixNano()
+	advanced := cp.LastSequence > s.checkpointPersistedSeq
+	if err := s.store.PutCheckpoint(ctx, cp); err != nil {
+		return false, err
+	}
+	s.checkpointFrontier = cp
+	s.checkpointPersistedSeq = cp.LastSequence
+	s.checkpointMigrationPending = false
 	if s.metrics != nil {
 		s.metrics.WALCheckpointLastSequence.Set(float64(cp.LastSequence))
 	}
-	if s.opts.OnCheckpointAdvanced != nil {
-		// Hook runs synchronously on the batch worker; see Options doc
-		// for the tradeoff. Panics are recovered so a buggy prune hook
-		// cannot take down the batcher.
-		defer func() {
-			if r := recover(); r != nil {
-				s.setLastError(trusterr.New(trusterr.CodeInternal,
-					fmt.Sprintf("OnCheckpointAdvanced panic: %v", r)))
-			}
-		}()
-		s.opts.OnCheckpointAdvanced(ctx, cp)
+	drainCallbacks := false
+	if advanced && s.opts.OnCheckpointAdvanced != nil {
+		callback := walCheckpointCallback{
+			ctx:        ctx,
+			checkpoint: cp,
+		}
+		if !s.checkpointCallbackDraining {
+			s.checkpointCallbacks = append(s.checkpointCallbacks, callback)
+			s.checkpointCallbackDraining = true
+			drainCallbacks = true
+		} else if len(s.checkpointCallbacks) == 0 {
+			s.checkpointCallbacks = append(s.checkpointCallbacks, callback)
+		} else {
+			// Only the latest pending boundary matters to a monotonic prune hook.
+			// Replacing it bounds memory while the currently active callback is
+			// slow; the persisted frontier and gauge still record every advance.
+			s.checkpointCallbacks[len(s.checkpointCallbacks)-1] = callback
+		}
 	}
-	return nil
+	return drainCallbacks, nil
+}
+
+func (s *Service) observeCheckpointCoverageDrop(count int) {
+	if count > 0 && s.metrics != nil {
+		s.metrics.WALCheckpointCoverageDropped.Add(float64(count))
+	}
+}
+
+func (s *Service) observeCheckpointFailure() {
+	if s.metrics != nil {
+		s.metrics.WALCheckpointFailures.Inc()
+	}
+}
+
+func (s *Service) consumeCheckpointCoverageLocked() {
+	consumed := 0
+	for consumed < len(s.checkpointCoverage) {
+		run := s.checkpointCoverage[consumed]
+		if run.to.Sequence <= s.checkpointFrontier.LastSequence {
+			consumed++
+			continue
+		}
+		if s.checkpointFrontier.LastSequence == ^uint64(0) {
+			break
+		}
+		next := s.checkpointFrontier.LastSequence + 1
+		if run.from > next {
+			break
+		}
+		consumed++
+		s.checkpointFrontier.SegmentID = run.to.SegmentID
+		s.checkpointFrontier.LastSequence = run.to.Sequence
+		s.checkpointFrontier.LastOffset = run.to.Offset
+		s.checkpointFrontier.BatchID = run.batchID
+	}
+	if consumed > 0 {
+		remaining := len(s.checkpointCoverage) - consumed
+		if remaining > 0 {
+			copy(s.checkpointCoverage, s.checkpointCoverage[consumed:])
+		}
+		clear(s.checkpointCoverage[remaining:])
+		s.checkpointCoverage = s.checkpointCoverage[:remaining]
+	}
+}
+
+// drainCheckpointCallbacks preserves durable-checkpoint order without holding
+// checkpointMu while an observer performs pruning or other IO. Producers that
+// advance the frontier while a callback is running retain only the latest
+// pending boundary; the elected drainer consumes it before returning. Keeping
+// the draining flag set across invocation also makes reentrant checkpoint
+// calls safe: the outer drain loop picks up the nested callback.
+func (s *Service) drainCheckpointCallbacks() {
+	for {
+		s.checkpointMu.Lock()
+		if len(s.checkpointCallbacks) == 0 {
+			s.checkpointCallbackDraining = false
+			s.checkpointMu.Unlock()
+			return
+		}
+		callback := s.checkpointCallbacks[0]
+		s.checkpointCallbacks[0] = walCheckpointCallback{}
+		s.checkpointCallbacks = s.checkpointCallbacks[1:]
+		s.checkpointMu.Unlock()
+		s.fireOnCheckpointAdvanced(callback.ctx, callback.checkpoint)
+	}
+}
+
+func (s *Service) fireOnCheckpointAdvanced(ctx context.Context, cp model.WALCheckpoint) {
+	if s.opts.OnCheckpointAdvanced == nil {
+		return
+	}
+	// The callback drain queue preserves order across async materializers. The
+	// hook is panic-isolated so a buggy observer cannot take down the batcher.
+	defer func() {
+		if r := recover(); r != nil {
+			s.setLastError(trusterr.New(trusterr.CodeInternal,
+				fmt.Sprintf("OnCheckpointAdvanced panic: %v", r)))
+		}
+	}()
+	s.opts.OnCheckpointAdvanced(ctx, cp)
 }
 
 func walRangeFor(items []Accepted) model.WALRange {

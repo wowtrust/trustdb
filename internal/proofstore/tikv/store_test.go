@@ -44,6 +44,14 @@ func TestOpenWithOptionsRequiresPDEndpoints(t *testing.T) {
 	}
 }
 
+func TestTiKVDoesNotUseSharedCheckpointForLocalWALPruning(t *testing.T) {
+	t.Parallel()
+	var store *Store
+	if store.WALCheckpointPruneSafe() {
+		t.Fatal("TiKV store reported a shared checkpoint safe for a node-local WAL")
+	}
+}
+
 func TestNormalizeNamespace(t *testing.T) {
 	t.Parallel()
 

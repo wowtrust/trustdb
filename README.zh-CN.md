@@ -83,6 +83,10 @@ TrustDB 默认可按单节点服务运行。启用 TiKV proofstore 后，多个 
 
 `wal.fsync_mode=strict` 会在每条 accepted record 的 WAL 文件完成 fsync 后才返回。`group` 通过 `wal.group_commit_interval` 限制异步未刷盘窗口；`batch` 会把 accepted record 数据的 fsync 延后到 segment 轮转或关闭。Writer 启动，以及 WAL 目录创建、文件发布、轮转与裁剪所需的命名空间屏障，不受该追加策略影响。在 Windows 上，如果底层文件系统拒绝当前可用的最强目录刷新操作，TrustDB 会直接失败而不会静默降级。回执契约要求逐条 fsync 时应选择 `strict`；端到端崩溃耐久性仍取决于文件系统与存储设备保证。
 
+只有当 proofstore 能在 checkpoint 之前持久化排序 committed artifacts 与重启幂等决策，并把 checkpoint 限定到同一份节点本地 WAL 时，TrustDB 才会自动跳过 checkpoint 覆盖的记录并裁剪 WAL segment。当前所有内置后端都会保留并重放 WAL：Pebble 仍在等待持久化幂等投影，开发用 file 后端缺少完整的崩溃耐久屏障，共享 TiKV 的 checkpoint 也尚未按节点划分。
+
+升级时，旧版 v1 checkpoint 只能基于从 sequence 1 开始的完整保留 WAL 重建。如果旧部署已经裁掉该前缀，启动会以 `DataLoss` 失败关闭；应从可信备份恢复完整 WAL，而不是删除 checkpoint 标记，因为删除标记无法证明缺失记录已经提交。
+
 ## 快速开始
 
 从 [v1.0.0-beta.1 发布页](https://github.com/ryan-wong-coder/trustdb/releases/tag/v1.0.0-beta.1)下载与你的系统和处理器相符的服务器 / CLI 压缩包，解压后在发布目录运行下列命令，不需要安装 Go 工具链。示例使用 `./bin/trustdb`；Windows 请改为 `.\bin\trustdb.exe`。

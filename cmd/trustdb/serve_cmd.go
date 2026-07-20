@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"net"
@@ -18,14 +19,17 @@ import (
 	"github.com/ryan-wong-coder/trustdb/internal/anchor"
 	"github.com/ryan-wong-coder/trustdb/internal/app"
 	"github.com/ryan-wong-coder/trustdb/internal/batch"
+	"github.com/ryan-wong-coder/trustdb/internal/claim"
 	trustconfig "github.com/ryan-wong-coder/trustdb/internal/config"
 	"github.com/ryan-wong-coder/trustdb/internal/globallog"
 	"github.com/ryan-wong-coder/trustdb/internal/grpcapi"
 	"github.com/ryan-wong-coder/trustdb/internal/httpapi"
 	"github.com/ryan-wong-coder/trustdb/internal/ingest"
+	"github.com/ryan-wong-coder/trustdb/internal/merkle"
 	"github.com/ryan-wong-coder/trustdb/internal/model"
 	"github.com/ryan-wong-coder/trustdb/internal/observability"
 	"github.com/ryan-wong-coder/trustdb/internal/proofstore"
+	"github.com/ryan-wong-coder/trustdb/internal/trustcrypto"
 	"github.com/ryan-wong-coder/trustdb/internal/trusterr"
 	"github.com/ryan-wong-coder/trustdb/internal/wal"
 	"github.com/spf13/cobra"
@@ -412,6 +416,7 @@ func newServeCommand(rt *runtimeConfig) *cobra.Command {
 				MaterializerPollInterval: batchMaterializerPollInterval,
 				MaterializerNodeID:       nodeID,
 				DeferMaterializerScan:    true,
+				DeferCheckpointAdvance:   true,
 				InitialSeq:               restoreBatchSeq(context.Background(), rt, proofStore),
 				LoadBatchItems: func(ctx context.Context, manifest model.BatchManifest) ([]batch.Accepted, error) {
 					return loadManifestItemsFromWAL(ctx, walPath, engine, manifest)
@@ -421,8 +426,10 @@ func newServeCommand(rt *runtimeConfig) *cobra.Command {
 			// deployments have no notion of "older segments to delete" so
 			// firing PruneSegmentsBefore against them is both pointless
 			// and confusing in the logs.
-			if walMode == "directory" {
+			if walMode == "directory" && proofstore.WALCheckpointPruneSafe(proofStore) {
 				batchOpts.OnCheckpointAdvanced = newPruneHook(rt, walPath, walKeepSegments, metrics)
+			} else if walMode == "directory" {
+				rt.logger.Warn().Str("metastore", metaKind).Msg("automatic WAL checkpoint pruning disabled: proofstore cannot yet durably bind committed artifacts and restart idempotency to this node-local WAL")
 			}
 			// Build the anchor sink + worker before constructing the batch
 			// service so the OnBatchCommitted hook can close over a live
@@ -1276,12 +1283,214 @@ func scanWALRecords(walPath string, minSegmentID uint64, visit func(wal.Record) 
 	return wal.Scan(walPath, visit)
 }
 
+func inspectWALSequenceBounds(walPath string) (uint64, uint64, error) {
+	info, err := os.Stat(walPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return 0, 0, nil
+		}
+		return 0, 0, err
+	}
+	if info.IsDir() {
+		inspection, err := wal.InspectDir(walPath)
+		if err != nil {
+			return 0, 0, err
+		}
+		return inspection.FirstSequence, inspection.LastSequence, nil
+	}
+	inspection, err := wal.Inspect(walPath)
+	if err != nil {
+		return 0, 0, err
+	}
+	return inspection.FirstSequence, inspection.LastSequence, nil
+}
+
 type preparedReplay struct {
 	manifest model.BatchManifest
 	items    []batch.Accepted
 	index    map[string]int
 	seen     map[string]struct{}
 	count    int
+}
+
+const replayManifestStateCacheLimit = 256
+
+// replayManifestCache bounds startup memory while avoiding one proofstore
+// point read per WAL record. It is populated on demand in WAL order rather
+// than preloaded from the manifest listing, which prevents a full replay with
+// more than one cache window from evicting exactly the manifests needed next.
+// Full manifests are retained because a committed state alone does not prove
+// that an index points at the current record's leaf.
+type replayManifestCache struct {
+	manifests map[string]model.BatchManifest
+	order     []string
+	next      int
+}
+
+func newReplayManifestCache() *replayManifestCache {
+	return &replayManifestCache{
+		manifests: make(map[string]model.BatchManifest, replayManifestStateCacheLimit),
+		order:     make([]string, 0, replayManifestStateCacheLimit),
+	}
+}
+
+func (c *replayManifestCache) remember(manifest model.BatchManifest) {
+	if manifest.BatchID == "" {
+		return
+	}
+	if _, exists := c.manifests[manifest.BatchID]; exists {
+		c.manifests[manifest.BatchID] = manifest
+		return
+	}
+	if len(c.order) < replayManifestStateCacheLimit {
+		c.order = append(c.order, manifest.BatchID)
+		c.manifests[manifest.BatchID] = manifest
+		return
+	}
+	evicted := c.order[c.next]
+	delete(c.manifests, evicted)
+	c.order[c.next] = manifest.BatchID
+	c.next = (c.next + 1) % replayManifestStateCacheLimit
+	c.manifests[manifest.BatchID] = manifest
+}
+
+func (c *replayManifestCache) lookup(ctx context.Context, store proofstore.Store, batchID string) (model.BatchManifest, error) {
+	if manifest, ok := c.manifests[batchID]; ok {
+		return manifest, nil
+	}
+	manifest, err := store.GetManifest(ctx, batchID)
+	if err != nil {
+		return model.BatchManifest{}, err
+	}
+	c.remember(manifest)
+	return manifest, nil
+}
+
+func validateCommittedReplayIndex(ctx context.Context, store proofstore.Store, manifests *replayManifestCache, recordID string, idx model.RecordIndex) (model.BatchManifest, error) {
+	if idx.RecordID != recordID || idx.BatchID == "" {
+		return model.BatchManifest{}, trusterr.New(trusterr.CodeDataLoss, "record index does not identify its committed batch")
+	}
+	manifest, err := manifests.lookup(ctx, store, idx.BatchID)
+	if err != nil {
+		return model.BatchManifest{}, trusterr.Wrap(trusterr.CodeDataLoss, "load indexed batch manifest", err)
+	}
+	if manifest.BatchID != idx.BatchID || manifest.State != model.BatchStateCommitted {
+		return model.BatchManifest{}, trusterr.New(trusterr.CodeDataLoss, "record index is not covered by its committed batch manifest")
+	}
+	if idx.BatchLeafIndex >= uint64(len(manifest.RecordIDs)) || manifest.RecordIDs[idx.BatchLeafIndex] != recordID {
+		return model.BatchManifest{}, trusterr.New(trusterr.CodeDataLoss, "record index leaf does not match its committed batch manifest")
+	}
+	if manifest.TreeSize != uint64(len(manifest.RecordIDs)) {
+		return model.BatchManifest{}, trusterr.New(trusterr.CodeDataLoss, "committed batch manifest tree size does not match its record membership")
+	}
+	return manifest, nil
+}
+
+func validateCommittedReplayRecord(ctx context.Context, store proofstore.Store, manifests *replayManifestCache, record wal.Record, item app.ReplayedAccepted, idx model.RecordIndex) (string, error) {
+	recordID := item.Record.RecordID
+	manifest, err := validateCommittedReplayIndex(ctx, store, manifests, recordID, idx)
+	if err != nil {
+		return "", err
+	}
+	bundle, err := store.GetBundle(ctx, recordID)
+	if err != nil {
+		return "", trusterr.Wrap(trusterr.CodeDataLoss, "load indexed proof bundle", err)
+	}
+	if bundle.RecordID != recordID || bundle.ServerRecord.RecordID != recordID ||
+		bundle.AcceptedReceipt.RecordID != recordID || bundle.CommittedReceipt.RecordID != recordID {
+		return "", trusterr.New(trusterr.CodeDataLoss, "proof bundle record identity does not match the wal record")
+	}
+	if bundle.CommittedReceipt.BatchID != idx.BatchID || bundle.CommittedReceipt.LeafIndex != idx.BatchLeafIndex {
+		return "", trusterr.New(trusterr.CodeDataLoss, "proof bundle commitment does not match the record index")
+	}
+	if bundle.BatchProof.LeafIndex != idx.BatchLeafIndex || bundle.BatchProof.TreeSize != manifest.TreeSize ||
+		!bytes.Equal(bundle.CommittedReceipt.BatchRoot, manifest.BatchRoot) {
+		return "", trusterr.New(trusterr.CodeDataLoss, "proof bundle commitment does not match its committed batch manifest")
+	}
+	if bundle.ServerRecord.WAL != record.Position || bundle.AcceptedReceipt.WAL != record.Position || item.Record.WAL != record.Position || item.Accepted.WAL != record.Position {
+		return "", trusterr.New(trusterr.CodeDataLoss, "proof bundle wal position does not match the replayed record")
+	}
+	if bundle.ServerRecord.TenantID != item.Record.TenantID ||
+		bundle.ServerRecord.ClientID != item.Record.ClientID ||
+		bundle.ServerRecord.KeyID != item.Record.KeyID ||
+		bundle.ServerRecord.ReceivedAtUnixN != item.Record.ReceivedAtUnixN ||
+		!bytes.Equal(bundle.ServerRecord.ClaimHash, item.Record.ClaimHash) {
+		return "", trusterr.New(trusterr.CodeDataLoss, "proof bundle server record does not match the replayed claim")
+	}
+	if err := validateProofBundleClaim(bundle); err != nil {
+		return "", err
+	}
+	leafHash, err := merkle.HashLeaf(bundle.ServerRecord)
+	if err != nil {
+		return "", trusterr.Wrap(trusterr.CodeDataLoss, "hash replay proof bundle leaf", err)
+	}
+	if !bytes.Equal(leafHash, bundle.CommittedReceipt.LeafHash) ||
+		!merkle.Verify(leafHash, idx.BatchLeafIndex, manifest.TreeSize, bundle.BatchProof.AuditPath, manifest.BatchRoot) {
+		return "", trusterr.New(trusterr.CodeDataLoss, "proof bundle merkle path does not match its committed batch manifest")
+	}
+	return idx.BatchID, nil
+}
+
+func validateTrustedCheckpointBoundaryRecord(ctx context.Context, engine app.LocalEngine, store proofstore.Store, manifests *replayManifestCache, checkpoint model.WALCheckpoint, record wal.Record) error {
+	if record.Position.Sequence != checkpoint.LastSequence ||
+		record.Position.SegmentID != checkpoint.SegmentID ||
+		record.Position.Offset != checkpoint.LastOffset {
+		return trusterr.New(trusterr.CodeDataLoss, "contiguous wal checkpoint does not match the retained wal boundary")
+	}
+	item, err := engine.ReplayAccepted(record)
+	if err != nil {
+		return trusterr.Wrap(trusterr.CodeDataLoss, "decode contiguous wal checkpoint boundary", err)
+	}
+	idx, ok, err := store.GetRecordIndex(ctx, item.Record.RecordID)
+	if err != nil {
+		return trusterr.Wrap(trusterr.CodeDataLoss, "load contiguous wal checkpoint boundary index", err)
+	}
+	if !ok {
+		return trusterr.New(trusterr.CodeDataLoss, "contiguous wal checkpoint boundary has no committed record index")
+	}
+	batchID, err := validateCommittedReplayRecord(ctx, store, manifests, record, item, idx)
+	if err != nil {
+		return err
+	}
+	if checkpoint.BatchID != "" && checkpoint.BatchID != batchID {
+		return trusterr.New(trusterr.CodeDataLoss, "contiguous wal checkpoint batch does not match its boundary proof")
+	}
+	return nil
+}
+
+func validateProofBundleClaim(bundle model.ProofBundle) error {
+	signed := bundle.SignedClaim
+	record := bundle.ServerRecord
+	accepted := bundle.AcceptedReceipt
+	if signed.SchemaVersion != model.SchemaSignedClaim ||
+		signed.Claim.SchemaVersion != model.SchemaClientClaim ||
+		record.SchemaVersion != model.SchemaServerRecord ||
+		accepted.SchemaVersion != model.SchemaAcceptedReceipt ||
+		signed.Signature.KeyID != signed.Claim.KeyID ||
+		record.TenantID != signed.Claim.TenantID ||
+		record.ClientID != signed.Claim.ClientID ||
+		record.KeyID != signed.Claim.KeyID ||
+		accepted.ReceivedAtUnixN != record.ReceivedAtUnixN {
+		return trusterr.New(trusterr.CodeDataLoss, "checkpointed proof claim metadata does not match its server record")
+	}
+	claimCBOR, err := claim.Canonical(signed.Claim)
+	if err != nil {
+		return trusterr.Wrap(trusterr.CodeDataLoss, "canonicalize checkpointed proof claim", err)
+	}
+	claimHash, err := trustcrypto.HashBytes(model.DefaultHashAlg, claimCBOR)
+	if err != nil {
+		return trusterr.Wrap(trusterr.CodeDataLoss, "hash checkpointed proof claim", err)
+	}
+	signatureHash, err := trustcrypto.HashBytes(model.DefaultHashAlg, signed.Signature.Signature)
+	if err != nil {
+		return trusterr.Wrap(trusterr.CodeDataLoss, "hash checkpointed proof signature", err)
+	}
+	if claim.RecordID(claimCBOR, signed.Signature) != record.RecordID ||
+		!bytes.Equal(claimHash, record.ClaimHash) ||
+		!bytes.Equal(signatureHash, record.ClientSignatureHash) {
+		return trusterr.New(trusterr.CodeDataLoss, "checkpointed proof claim is not bound to its server record")
+	}
+	return nil
 }
 
 func newPreparedReplay(manifest model.BatchManifest) *preparedReplay {
@@ -1376,9 +1585,48 @@ var errStopManifestScan = errors.New("stop manifest scan")
 //  3. Enqueue records that are not yet covered by any committed manifest into
 //     the live batch service so they can be included in a fresh batch.
 func replayWALAccepted(ctx context.Context, walPath string, engine app.LocalEngine, batchSvc *batch.Service, store proofstore.Store, metrics *observability.Metrics) (int, int, int, error) {
-	checkpoint, hasCheckpoint, err := store.GetCheckpoint(ctx)
+	// Recovered batches can commit on the live worker while this function is
+	// still scanning. Defer checkpoint persistence (and therefore pruning)
+	// across the entire scan and prepared-manifest recovery window.
+	batchSvc.DeferCheckpointAdvance()
+	checkpointSafe := proofstore.WALCheckpointPruneSafe(store)
+	checkpoint, foundCheckpoint, err := store.GetCheckpoint(ctx)
 	if err != nil {
 		return 0, 0, 0, err
+	}
+	if foundCheckpoint && checkpoint.SchemaVersion != "" &&
+		checkpoint.SchemaVersion != model.SchemaWALCheckpoint &&
+		checkpoint.SchemaVersion != model.SchemaWALCheckpointContiguous {
+		return 0, 0, 0, trusterr.New(trusterr.CodeFailedPrecondition, "unsupported wal checkpoint schema: "+checkpoint.SchemaVersion)
+	}
+	// v1 checkpoints were derived from batch min/max envelopes and could leap
+	// across gaps. Only a positive v2 value certifies a skippable committed
+	// prefix. A v2 zero marker is valid migration state, but still requires the
+	// retained WAL to begin at sequence one.
+	trustedCheckpoint := checkpointSafe && foundCheckpoint && checkpoint.SchemaVersion == model.SchemaWALCheckpointContiguous
+	hasCheckpoint := trustedCheckpoint && checkpoint.LastSequence > 0
+	legacyCheckpoint := checkpointSafe && foundCheckpoint && checkpoint.SchemaVersion != model.SchemaWALCheckpointContiguous
+	requireFullPrefix := !hasCheckpoint
+	if hasCheckpoint && checkpoint.LastSequence > 0 && (checkpoint.SegmentID == 0 || checkpoint.LastOffset < 0) {
+		return 0, 0, 0, trusterr.New(trusterr.CodeDataLoss, "contiguous wal checkpoint has an invalid position")
+	}
+	// A non-zero legacy marker needs tail validation before replay can enqueue
+	// anything. This intentionally rare migration path may inspect the WAL
+	// twice; normal no-checkpoint and checkpoint-unsafe startup stay single-pass.
+	if legacyCheckpoint && checkpoint.LastSequence > 0 {
+		firstSequence, lastSequence, err := inspectWALSequenceBounds(walPath)
+		if err != nil {
+			return 0, 0, 0, trusterr.Wrap(trusterr.CodeDataLoss, "inspect wal before legacy checkpoint migration", err)
+		}
+		if firstSequence > 1 {
+			return 0, 0, 0, trusterr.New(trusterr.CodeDataLoss, "legacy wal checkpoint cannot be revalidated because the retained wal prefix is missing")
+		}
+		if firstSequence == 0 {
+			return 0, 0, 0, trusterr.New(trusterr.CodeDataLoss, "legacy wal checkpoint cannot be revalidated because the retained wal is empty")
+		}
+		if checkpoint.LastSequence > lastSequence {
+			return 0, 0, 0, trusterr.New(trusterr.CodeDataLoss, "legacy wal checkpoint cannot be revalidated beyond the retained wal tail")
+		}
 	}
 	// In directory mode we can skip entire segments that a committed
 	// checkpoint already covers. Legacy single-file WALs still go through
@@ -1386,7 +1634,7 @@ func replayWALAccepted(ctx context.Context, walPath string, engine app.LocalEngi
 	// Reading the checkpoint before the WAL also means a crash while
 	// appending a new segment cannot trick us into scanning deleted files.
 	var minSegmentID uint64
-	if hasCheckpoint {
+	if hasCheckpoint && checkpoint.LastSequence > 0 {
 		minSegmentID = checkpoint.SegmentID
 	}
 	if metrics != nil && hasCheckpoint {
@@ -1397,6 +1645,7 @@ func replayWALAccepted(ctx context.Context, walPath string, engine app.LocalEngi
 
 	preparedByRecordID := make(map[string]*preparedReplay)
 	failedByRecordID := make(map[string]struct{})
+	manifestCache := newReplayManifestCache()
 	var preparedManifests []*preparedReplay
 	var recovered int
 	for afterBatchID := ""; ; {
@@ -1451,39 +1700,124 @@ func replayWALAccepted(ctx context.Context, walPath string, engine app.LocalEngi
 
 	var replayed int
 	var skipped int
+	var firstRetainedSequence uint64
+	var lastRetainedSequence uint64
+	var committedRunFrom model.WALPosition
+	var committedRunTo model.WALPosition
+	var committedRunBatchID string
+	var localRecordIDs map[string]struct{}
+	checkpointBoundaryValidated := !hasCheckpoint
+	flushCommittedRun := func() error {
+		if committedRunFrom.Sequence == 0 {
+			return nil
+		}
+		err := batchSvc.RecordCommittedWALRange(ctx, committedRunFrom, committedRunTo, committedRunBatchID)
+		committedRunFrom = model.WALPosition{}
+		committedRunTo = model.WALPosition{}
+		committedRunBatchID = ""
+		return err
+	}
 	if err := scanWALRecords(walPath, minSegmentID, func(record wal.Record) error {
+		if firstRetainedSequence == 0 {
+			firstRetainedSequence = record.Position.Sequence
+			if requireFullPrefix && firstRetainedSequence != 1 {
+				return trusterr.New(trusterr.CodeDataLoss, "wal cannot be fully replayed because the retained prefix is missing")
+			}
+		}
+		lastRetainedSequence = record.Position.Sequence
 		// Records at or below the checkpoint are guaranteed to be covered
 		// by a committed manifest, so ReplayAccepted (CBOR decode + receipt
-		// re-signing) and idempotency-index population can both be skipped.
-		// The idempotency entries for those records are also safely lost:
-		// any future submit that collides with them will hit the committed
-		// batch path via the proof store instead of producing duplicates.
+		// re-signing) can be skipped. Durable restart idempotency is handled
+		// separately from this recovery optimization.
 		if hasCheckpoint && record.Position.Sequence <= checkpoint.LastSequence {
+			if record.Position.Sequence == checkpoint.LastSequence {
+				if err := validateTrustedCheckpointBoundaryRecord(ctx, engine, store, manifestCache, checkpoint, record); err != nil {
+					return err
+				}
+				checkpointBoundaryValidated = true
+			}
 			skipped++
 			return nil
+		}
+		if !checkpointBoundaryValidated {
+			return trusterr.New(trusterr.CodeDataLoss, "contiguous wal checkpoint boundary is missing from the retained wal")
 		}
 		item, err := engine.ReplayAccepted(record)
 		if err != nil {
 			return err
 		}
 		accepted := batch.Accepted{Signed: item.Signed, Record: item.Record, Accepted: item.Accepted}
+		idempotencyKey := app.IdempotencyKey(item.Signed.Claim.TenantID, item.Signed.Claim.ClientID, item.Signed.Claim.IdempotencyKey)
+		if engine.Idempotency == nil || idempotencyKey == "" {
+			if localRecordIDs == nil {
+				localRecordIDs = make(map[string]struct{})
+			}
+			if _, exists := localRecordIDs[item.Record.RecordID]; exists {
+				return trusterr.New(trusterr.CodeDataLoss, "record id appears at conflicting local wal positions")
+			}
+			localRecordIDs[item.Record.RecordID] = struct{}{}
+		}
 		if engine.Idempotency != nil {
-			key := app.IdempotencyKey(item.Signed.Claim.TenantID, item.Signed.Claim.ClientID, item.Signed.Claim.IdempotencyKey)
-			engine.Idempotency.Remembered(key, item.Record, item.Accepted, item.Record.ClaimHash)
+			if !engine.Idempotency.Restore(idempotencyKey, item.Record, item.Accepted, item.Record.ClaimHash) {
+				return trusterr.New(trusterr.CodeDataLoss, "wal idempotency key maps to conflicting accepted records")
+			}
 		}
 		if prepared := preparedByRecordID[item.Record.RecordID]; prepared != nil {
+			if err := flushCommittedRun(); err != nil {
+				return err
+			}
 			prepared.add(accepted)
 			return nil
 		}
 		if _, failed := failedByRecordID[item.Record.RecordID]; failed {
+			if err := flushCommittedRun(); err != nil {
+				return err
+			}
 			skipped++
 			return nil
 		}
-		if _, ok, err := store.GetRecordIndex(ctx, item.Record.RecordID); err != nil {
+		if idx, ok, err := store.GetRecordIndex(ctx, item.Record.RecordID); err != nil {
 			return err
 		} else if ok {
+			if idx.RecordID != item.Record.RecordID || idx.BatchID == "" {
+				return trusterr.New(trusterr.CodeDataLoss, "record index does not identify its committed batch")
+			}
+			batchID := idx.BatchID
+			if checkpointSafe {
+				batchID, err = validateCommittedReplayRecord(ctx, store, manifestCache, record, item, idx)
+				if err != nil {
+					return err
+				}
+			} else if _, err := validateCommittedReplayIndex(ctx, store, manifestCache, item.Record.RecordID, idx); err != nil {
+				return err
+			}
+			if !checkpointSafe {
+				skipped++
+				return nil
+			}
+			if committedRunFrom.Sequence == 0 {
+				committedRunFrom = record.Position
+				committedRunTo = record.Position
+				committedRunBatchID = batchID
+			} else if committedRunTo.Sequence != ^uint64(0) && record.Position.Sequence == committedRunTo.Sequence+1 {
+				committedRunTo = record.Position
+				committedRunBatchID = batchID
+			} else {
+				if record.Position.Sequence <= committedRunTo.Sequence {
+					return trusterr.New(trusterr.CodeDataLoss, "wal replay sequence is not strictly increasing")
+				}
+				if err := flushCommittedRun(); err != nil {
+					return err
+				}
+				committedRunFrom = record.Position
+				committedRunTo = record.Position
+				committedRunBatchID = batchID
+			}
 			skipped++
 			return nil
+		}
+		if err := flushCommittedRun(); err != nil {
+			return err
 		}
 		if err := batchSvc.EnqueueRecovered(ctx, accepted); err != nil {
 			return err
@@ -1492,6 +1826,18 @@ func replayWALAccepted(ctx context.Context, walPath string, engine app.LocalEngi
 		return nil
 	}); err != nil {
 		return recovered, replayed, skipped, err
+	}
+	if err := flushCommittedRun(); err != nil {
+		return recovered, replayed, skipped, err
+	}
+	if !checkpointBoundaryValidated {
+		return recovered, replayed, skipped, trusterr.New(trusterr.CodeDataLoss, "contiguous wal checkpoint boundary is missing from the retained wal")
+	}
+	if requireFullPrefix && firstRetainedSequence == 0 && foundCheckpoint && checkpoint.LastSequence > 0 {
+		return recovered, replayed, skipped, trusterr.New(trusterr.CodeDataLoss, "wal cannot be fully replayed because the retained wal is empty")
+	}
+	if legacyCheckpoint && checkpoint.LastSequence > lastRetainedSequence {
+		return recovered, replayed, skipped, trusterr.New(trusterr.CodeDataLoss, "legacy wal checkpoint cannot be revalidated beyond the retained wal tail")
 	}
 
 	for _, prepared := range preparedManifests {
@@ -1503,6 +1849,12 @@ func replayWALAccepted(ctx context.Context, walPath string, engine app.LocalEngi
 		}
 		skipped += len(prepared.manifest.RecordIDs)
 		recovered++
+	}
+	// Checkpoint persistence is best-effort. A failed flush remains dirty in
+	// the service and is retried by the next committed batch; replayed records
+	// are still correct and the unpruned WAL remains the recovery source.
+	if err := batchSvc.StartCheckpointAdvance(ctx); err != nil && legacyCheckpoint {
+		return recovered, replayed, skipped, trusterr.Wrap(trusterr.CodeDataLoss, "persist migrated wal checkpoint", err)
 	}
 	if metrics != nil {
 		if skipped > 0 {

@@ -30,6 +30,13 @@ const (
 	DefaultValidationPolicy = "trustdb.policy.v1"
 )
 
+// SchemaWALCheckpointContiguous uses the same fields as the legacy v1
+// checkpoint, but certifies that LastSequence covers every WAL sequence from
+// one through the stored boundary. Keeping the wire shape unchanged preserves
+// rollback decoding. Generic proofstore writes still default to v1 so they
+// cannot accidentally claim contiguous coverage.
+const SchemaWALCheckpointContiguous = "trustdb.wal-checkpoint.v2"
+
 const (
 	KeyEventRegister   = "KEY_REGISTERED"
 	KeyEventRevoke     = "KEY_REVOKED"
@@ -361,18 +368,20 @@ type BatchRoot struct {
 	ClosedAtUnixN int64  `cbor:"closed_at_unix_nano" json:"closed_at_unix_nano"`
 }
 
+// WALRange is the smallest sequence envelope containing a batch's WAL
+// positions. It does not imply that every sequence between From and To belongs
+// to the batch; checkpoint code must use the exact committed record positions.
 type WALRange struct {
 	From WALPosition `cbor:"from" json:"from"`
 	To   WALPosition `cbor:"to" json:"to"`
 }
 
-// WALCheckpoint marks a safe-to-skip boundary inside the WAL. Any record
-// whose WAL sequence is less than or equal to LastSequence has already been
-// covered by a committed batch, so replay on startup can ignore it instead of
-// rebuilding an Accepted entry. The checkpoint is advanced monotonically
-// after a BatchManifest reaches the committed state and is kept as
-// best-effort metadata: losing it never causes data loss because replay can
-// always fall back to scanning the full WAL.
+// WALCheckpoint stores a recovery boundary inside the WAL. A v2 checkpoint
+// certifies that every record through LastSequence belongs to the contiguous
+// prefix covered by committed batches, so startup replay may skip it. Legacy
+// v1 checkpoints were derived from min/max batch envelopes and must be rebuilt
+// before they are trusted. Checkpoints remain best-effort metadata: losing one
+// only forces a retained-WAL scan.
 type WALCheckpoint struct {
 	SchemaVersion   string `cbor:"schema_version" json:"schema_version"`
 	SegmentID       uint64 `cbor:"segment_id" json:"segment_id"`

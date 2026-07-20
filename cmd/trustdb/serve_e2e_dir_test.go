@@ -90,7 +90,7 @@ func TestServeDirectoryModeEndToEnd(t *testing.T) {
 		Idempotency:      app.NewIdempotencyIndex(),
 		Now:              func() time.Time { return time.Unix(200, 0) },
 	}
-	proofStore := proofstore.LocalStore{Root: proofDir}
+	proofStore := checkpointSafeLocalStore{LocalStore: proofstore.LocalStore{Root: proofDir}}
 	ingestSvc := ingest.New(engine, ingest.Options{QueueSize: 16, Workers: 2}, metrics)
 	defer ingestSvc.Shutdown(context.Background())
 

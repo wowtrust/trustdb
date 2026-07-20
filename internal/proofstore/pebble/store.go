@@ -167,6 +167,12 @@ type Store struct {
 	closeErr  error
 }
 
+// WALCheckpointPruneSafe remains false until Pebble persists a keyed
+// restart-idempotency projection before publishing the checkpoint. Its
+// synchronous manifest/artifact ordering is otherwise sufficient, but pruning
+// the accepted WAL first would let a retry append a duplicate after restart.
+func (*Store) WALCheckpointPruneSafe() bool { return false }
+
 // Open creates or opens a Pebble database at path and wraps it in a
 // Store. The caller owns the returned *Store and must call Close to
 // release the underlying file locks; Pebble refuses a second Open at
