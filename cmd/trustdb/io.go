@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -16,7 +17,10 @@ import (
 	"github.com/spf13/cobra"
 )
 
-const encodedOutputNamePrefix = "~"
+const (
+	encodedOutputNamePrefix = "~"
+	maxEncodedKeyFileBytes  = 1 << 10
+)
 
 type multiFlag []string
 
@@ -72,7 +76,7 @@ func isPlainOutputFileName(value string) bool {
 }
 
 func readCBORFile(path string, v any) error {
-	data, err := os.ReadFile(path)
+	data, err := readFileLimit(path, int64(cborx.DefaultMaxBytes))
 	if err != nil {
 		return err
 	}
@@ -232,7 +236,7 @@ func readPrivateKey(path string) (ed25519.PrivateKey, error) {
 }
 
 func readKey(path string) ([]byte, error) {
-	data, err := os.ReadFile(path)
+	data, err := readFileLimit(path, maxEncodedKeyFileBytes)
 	if err != nil {
 		return nil, err
 	}
@@ -243,6 +247,25 @@ func readKey(path string) ([]byte, error) {
 		return nil, err
 	}
 	return key[:n], nil
+}
+
+func readFileLimit(path string, maxBytes int64) ([]byte, error) {
+	if maxBytes <= 0 {
+		return nil, fmt.Errorf("max bytes must be positive")
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	data, err := io.ReadAll(io.LimitReader(f, maxBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > maxBytes {
+		return nil, fmt.Errorf("input file too large: %d > %d", len(data), maxBytes)
+	}
+	return data, nil
 }
 
 func stringOrConfig(cmd *cobra.Command, rt *runtimeConfig, flagName, flagValue, key string) string {

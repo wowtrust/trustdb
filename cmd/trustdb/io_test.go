@@ -1,10 +1,58 @@
 package main
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/ryan-wong-coder/trustdb/internal/cborx"
 )
+
+func TestReadFileLimitBoundsInputBeforeDecode(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "input.bin")
+	data := bytes.Repeat([]byte{0x42}, 32)
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatalf("WriteFile(input) error = %v", err)
+	}
+	got, err := readFileLimit(path, int64(len(data)))
+	if err != nil {
+		t.Fatalf("readFileLimit(exact boundary) error = %v", err)
+	}
+	if !bytes.Equal(got, data) {
+		t.Fatalf("readFileLimit() = %x, want %x", got, data)
+	}
+
+	if err := os.WriteFile(path, append(data, 0x43), 0o600); err != nil {
+		t.Fatalf("WriteFile(oversized) error = %v", err)
+	}
+	if _, err := readFileLimit(path, int64(len(data))); err == nil {
+		t.Fatal("readFileLimit(oversized) error = nil")
+	}
+}
+
+func TestCLIInputHelpersRejectOversizedFiles(t *testing.T) {
+	t.Parallel()
+
+	cborPath := filepath.Join(t.TempDir(), "oversized.tdproof")
+	if err := os.WriteFile(cborPath, bytes.Repeat([]byte{0x42}, cborx.DefaultMaxBytes+1), 0o600); err != nil {
+		t.Fatalf("WriteFile(CBOR) error = %v", err)
+	}
+	var decoded map[string]any
+	if err := readCBORFile(cborPath, &decoded); err == nil {
+		t.Fatal("readCBORFile(oversized) error = nil")
+	}
+
+	keyPath := filepath.Join(t.TempDir(), "oversized.key")
+	if err := os.WriteFile(keyPath, bytes.Repeat([]byte{'A'}, maxEncodedKeyFileBytes+1), 0o600); err != nil {
+		t.Fatalf("WriteFile(key) error = %v", err)
+	}
+	if _, err := readKey(keyPath); err == nil {
+		t.Fatal("readKey(oversized) error = nil")
+	}
+}
 
 func TestWriteFileAtomicReplacesFileAndCleansTemp(t *testing.T) {
 	t.Parallel()
