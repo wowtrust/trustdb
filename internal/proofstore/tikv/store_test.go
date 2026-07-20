@@ -4,9 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/binary"
 	"fmt"
 	"testing"
 
+	"github.com/golang/snappy"
+
+	"github.com/ryan-wong-coder/trustdb/internal/cborx"
 	"github.com/ryan-wong-coder/trustdb/internal/model"
 	"github.com/ryan-wong-coder/trustdb/internal/trusterr"
 )
@@ -128,6 +132,33 @@ func TestEncodeBatchArtifactIntoMatchesWrapper(t *testing.T) {
 	}
 }
 
+func TestDecodeStoredProofBundleRejectsInvalidEnvelopePayloads(t *testing.T) {
+	t.Parallel()
+
+	oversized := make([]byte, binary.MaxVarintLen64)
+	oversized = oversized[:binary.PutUvarint(oversized, uint64(maxStoredObjectBytes+1))]
+	tests := []struct {
+		name     string
+		envelope storedProofBundleEnvelope
+	}{
+		{name: "unsupported codec", envelope: storedProofBundleEnvelope{SchemaVersion: schemaStoredProofBundleV2, Codec: "unknown"}},
+		{name: "corrupt snappy", envelope: storedProofBundleEnvelope{SchemaVersion: schemaStoredProofBundleV2, Codec: storedBundleCodecSnappy, Data: []byte{0xff}}},
+		{name: "oversized decoded payload", envelope: storedProofBundleEnvelope{SchemaVersion: schemaStoredProofBundleV2, Codec: storedBundleCodecSnappy, Data: oversized}},
+		{name: "malformed decoded cbor", envelope: storedProofBundleEnvelope{SchemaVersion: schemaStoredProofBundleV2, Codec: storedBundleCodecSnappy, Data: snappy.Encode(nil, []byte{0xff})}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			data, err := cborx.Marshal(tt.envelope)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := decodeStoredProofBundle(data); err == nil {
+				t.Fatal("decodeStoredProofBundle error = nil")
+			}
+		})
+	}
+}
+
 func BenchmarkTiKVEncodeBatchArtifacts1024(b *testing.B) {
 	bundles := syntheticTiKVProofBundles(1024)
 	b.ReportAllocs()
@@ -153,6 +184,37 @@ func BenchmarkTiKVStageDeferredSets1024(b *testing.B) {
 			}
 		}
 		_ = batch.Close()
+	}
+}
+
+func BenchmarkTiKVDecodeStoredProofBundleV2(b *testing.B) {
+	bundle := syntheticTiKVProofBundles(1)[0]
+	for i := range 256 {
+		bundle.BatchProof.AuditPath = append(bundle.BatchProof.AuditPath, bytes.Repeat([]byte{byte(i % 8)}, 32))
+	}
+	data, buf, err := encodeStoredProofBundle(&bundle)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer putArtifactBuffer(buf)
+	var envelope storedProofBundleEnvelope
+	if err := cborx.UnmarshalLimit(data, &envelope, maxStoredObjectBytes); err != nil {
+		b.Fatal(err)
+	}
+	if envelope.Codec != storedBundleCodecSnappy {
+		b.Fatalf("codec = %q, want %q", envelope.Codec, storedBundleCodecSnappy)
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		got, err := decodeStoredProofBundle(data)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if got.RecordID != bundle.RecordID {
+			b.Fatalf("record_id = %q, want %q", got.RecordID, bundle.RecordID)
+		}
 	}
 }
 

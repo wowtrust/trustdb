@@ -567,7 +567,10 @@ func decodeStoredProofBundle(data []byte) (model.ProofBundle, error) {
 		if decodedLen > maxStoredObjectBytes {
 			return model.ProofBundle{}, trusterr.New(trusterr.CodeDataLoss, "proof bundle envelope payload too large")
 		}
-		raw, err := snappy.Decode(nil, envelope.Data)
+		decodeBuf := getArtifactBuffer()
+		defer putArtifactBuffer(decodeBuf)
+		decodeBuf.Grow(decodedLen)
+		raw, err := snappy.Decode(decodeBuf.Bytes()[:decodedLen], envelope.Data)
 		if err != nil {
 			return model.ProofBundle{}, trusterr.Wrap(trusterr.CodeDataLoss, "decompress proof bundle", err)
 		}

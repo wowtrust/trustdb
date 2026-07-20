@@ -3,10 +3,12 @@ package pebble
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"fmt"
 	"testing"
 
 	pdb "github.com/cockroachdb/pebble"
+	"github.com/golang/snappy"
 
 	"github.com/ryan-wong-coder/trustdb/internal/cborx"
 	"github.com/ryan-wong-coder/trustdb/internal/model"
@@ -232,6 +234,33 @@ func TestStoreGetBundleReadsLegacyBundle(t *testing.T) {
 	}
 	if got.RecordID != bundle.RecordID || got.CommittedReceipt.BatchID != bundle.CommittedReceipt.BatchID {
 		t.Fatalf("legacy round trip = %+v", got)
+	}
+}
+
+func TestDecodeStoredProofBundleRejectsInvalidEnvelopePayloads(t *testing.T) {
+	t.Parallel()
+
+	oversized := make([]byte, binary.MaxVarintLen64)
+	oversized = oversized[:binary.PutUvarint(oversized, uint64(maxStoredObjectBytes+1))]
+	tests := []struct {
+		name     string
+		envelope storedProofBundleEnvelope
+	}{
+		{name: "unsupported codec", envelope: storedProofBundleEnvelope{SchemaVersion: schemaStoredProofBundleV2, Codec: "unknown"}},
+		{name: "corrupt snappy", envelope: storedProofBundleEnvelope{SchemaVersion: schemaStoredProofBundleV2, Codec: storedBundleCodecSnappy, Data: []byte{0xff}}},
+		{name: "oversized decoded payload", envelope: storedProofBundleEnvelope{SchemaVersion: schemaStoredProofBundleV2, Codec: storedBundleCodecSnappy, Data: oversized}},
+		{name: "malformed decoded cbor", envelope: storedProofBundleEnvelope{SchemaVersion: schemaStoredProofBundleV2, Codec: storedBundleCodecSnappy, Data: snappy.Encode(nil, []byte{0xff})}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			data, err := cborx.Marshal(tt.envelope)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := decodeStoredProofBundle(data); err == nil {
+				t.Fatal("decodeStoredProofBundle error = nil")
+			}
+		})
 	}
 }
 
