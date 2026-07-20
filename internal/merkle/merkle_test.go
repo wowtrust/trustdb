@@ -105,6 +105,81 @@ func TestVerifyRejectsWrongRoot(t *testing.T) {
 	}
 }
 
+func TestVerifyDoesNotAllocate(t *testing.T) {
+	records := make([]model.ServerRecord, 1024)
+	for i := range records {
+		records[i] = record(fmt.Sprintf("rec-%04d", i))
+	}
+	tree, err := Build(records)
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	leaf, err := tree.LeafHash(777)
+	if err != nil {
+		t.Fatalf("LeafHash() error = %v", err)
+	}
+	proof, err := tree.Proof(777)
+	if err != nil {
+		t.Fatalf("Proof() error = %v", err)
+	}
+	root := tree.Root()
+
+	allocs := testing.AllocsPerRun(1_000, func() {
+		if !Verify(leaf, 777, uint64(len(records)), proof, root) {
+			panic("Verify() = false")
+		}
+	})
+	if allocs != 0 {
+		t.Fatalf("Verify() allocations = %v, want 0", allocs)
+	}
+}
+
+func TestVerifyRejectsMalformedInputs(t *testing.T) {
+	t.Parallel()
+
+	records := []model.ServerRecord{record("a"), record("b"), record("c"), record("d")}
+	tree, err := Build(records)
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	leaf, err := tree.LeafHash(2)
+	if err != nil {
+		t.Fatalf("LeafHash() error = %v", err)
+	}
+	proof, err := tree.Proof(2)
+	if err != nil {
+		t.Fatalf("Proof() error = %v", err)
+	}
+	root := tree.Root()
+	shortNodeProof := append([][]byte(nil), proof...)
+	shortNodeProof[0] = shortNodeProof[0][:len(shortNodeProof[0])-1]
+
+	tests := []struct {
+		name     string
+		leaf     []byte
+		index    uint64
+		treeSize uint64
+		proof    [][]byte
+		root     []byte
+	}{
+		{name: "short leaf", leaf: leaf[:len(leaf)-1], index: 2, treeSize: 4, proof: proof, root: root},
+		{name: "short root", leaf: leaf, index: 2, treeSize: 4, proof: proof, root: root[:len(root)-1]},
+		{name: "empty tree", leaf: leaf, index: 0, treeSize: 0, proof: nil, root: root},
+		{name: "index out of range", leaf: leaf, index: 4, treeSize: 4, proof: proof, root: root},
+		{name: "extra proof node", leaf: leaf, index: 2, treeSize: 4, proof: append(append([][]byte(nil), proof...), bytes.Repeat([]byte{1}, 32)), root: root},
+		{name: "short proof node", leaf: leaf, index: 2, treeSize: 4, proof: shortNodeProof, root: root},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			if Verify(test.leaf, test.index, test.treeSize, test.proof, test.root) {
+				t.Fatal("Verify() = true, want false")
+			}
+		})
+	}
+}
+
 func TestTreeLeavesAndNodesExposeStableSnapshot(t *testing.T) {
 	t.Parallel()
 

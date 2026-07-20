@@ -227,7 +227,7 @@ func Verify(leafHash []byte, index, treeSize uint64, auditPath [][]byte, root []
 	if !ok || pos != len(auditPath) {
 		return false
 	}
-	return bytes.Equal(got, root)
+	return bytes.Equal(got[:], root)
 }
 
 func HashNode(left, right []byte) ([]byte, error) {
@@ -305,43 +305,36 @@ func (t Tree) appendAuditPathRanges(path *[]nodeRange, start, size, index int) {
 	*path = append(*path, nodeRange{start: start, size: k})
 }
 
-func rebuild(leafHash []byte, index, treeSize int, path [][]byte, pos *int) ([]byte, bool) {
+func rebuild(leafHash []byte, index, treeSize int, path [][]byte, pos *int) ([sha256.Size]byte, bool) {
 	if treeSize == 1 {
-		return append([]byte(nil), leafHash...), true
+		return bytesToHash(leafHash), true
 	}
 	if *pos >= len(path) {
-		return nil, false
+		return [sha256.Size]byte{}, false
 	}
 	k := largestPowerOfTwoLessThan(treeSize)
 	if index < k {
 		left, ok := rebuild(leafHash, index, k, path, pos)
 		if !ok {
-			return nil, false
+			return [sha256.Size]byte{}, false
 		}
 		right := path[*pos]
 		*pos = *pos + 1
 		if len(right) != sha256.Size {
-			return nil, false
+			return [sha256.Size]byte{}, false
 		}
-		return hashNodeBytes(left, right), true
+		return hashNode(left, bytesToHash(right)), true
 	}
 	right, ok := rebuild(leafHash, index-k, treeSize-k, path, pos)
 	if !ok {
-		return nil, false
+		return [sha256.Size]byte{}, false
 	}
 	left := path[*pos]
 	*pos = *pos + 1
 	if len(left) != sha256.Size {
-		return nil, false
+		return [sha256.Size]byte{}, false
 	}
-	return hashNodeBytes(left, right), true
-}
-
-func hashNodeBytes(left, right []byte) []byte {
-	leftHash := bytesToHash(left)
-	rightHash := bytesToHash(right)
-	node := hashNode(leftHash, rightHash)
-	return cloneHash(node)
+	return hashNode(bytesToHash(left), right), true
 }
 
 func hashNode(left, right [sha256.Size]byte) [sha256.Size]byte {
