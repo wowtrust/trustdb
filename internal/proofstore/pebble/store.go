@@ -3476,6 +3476,7 @@ func (s *Store) promoteBatchRecords(ctx context.Context, batchID, proofLevel str
 	prefix := prefixRecordByBatch + recordSecondaryPart(batchID) + "/"
 	updates := make([]recordIndexPromotion, 0, 16)
 	err := s.scanPrefix(ctx, prefix, func(value []byte) error {
+		_, isReference := decodeRecordIndexRef(value)
 		idx, err := s.readRecordIndexScanValue(value)
 		if err != nil {
 			return err
@@ -3485,7 +3486,7 @@ func (s *Store) promoteBatchRecords(ctx context.Context, batchID, proofLevel str
 		}
 		next := idx
 		next.ProofLevel = proofLevel
-		updates = append(updates, recordIndexPromotion{old: idx, next: next})
+		updates = append(updates, recordIndexPromotion{old: idx, next: next, replaceAll: !isReference})
 		return nil
 	})
 	if err != nil {
@@ -3495,8 +3496,48 @@ func (s *Store) promoteBatchRecords(ctx context.Context, batchID, proofLevel str
 }
 
 type recordIndexPromotion struct {
-	old  model.RecordIndex
-	next model.RecordIndex
+	old        model.RecordIndex
+	next       model.RecordIndex
+	replaceAll bool
+}
+
+func (s *Store) stageRecordIndexPromotion(batch *pdb.Batch, promotion recordIndexPromotion) error {
+	encoded, err := encodeRecordIndexArtifact(promotion.next)
+	if err != nil {
+		return err
+	}
+	defer encoded.release()
+	mode := RecordIndexModeFull
+	if s != nil {
+		mode = normalizeRecordIndexMode(Options{RecordIndexMode: s.recordIndexMode})
+	}
+	if promotion.replaceAll || mode != RecordIndexModeFull {
+		return s.stageEncodedRecordIndexReplace(batch, encoded, promotion.old, true)
+	}
+	if err := stageSetRecordKey(batch, prefixRecordByID, encoded.idx.RecordID, encoded.value); err != nil {
+		return trusterr.Wrap(trusterr.CodeDataLoss, "stage record index", err)
+	}
+	if promotion.old.ProofLevel != "" {
+		oldLevelKey := appendRecordIndexEncodedPrefix(nil, prefixRecordByLevel, promotion.old.ProofLevel, promotion.old.ReceivedAtUnixN, promotion.old.RecordID)
+		if err := batch.Delete(oldLevelKey, nil); err != nil {
+			return trusterr.Wrap(trusterr.CodeDataLoss, "stage old record index delete", err)
+		}
+	}
+	// Re-set every secondary as a canonical reference without deleting the
+	// unchanged keys first. Besides reducing writes, this preserves the old
+	// path's repair of mixed legacy layouts and reduced-to-full transitions.
+	if err := visitRecordIndexKeys(encoded.idx, RecordIndexModeFull, func(key []byte) error {
+		if isRecordByIDKey(key) {
+			return nil
+		}
+		if err := stageRecordIndexRef(batch, key, encoded.idx.RecordID); err != nil {
+			return trusterr.Wrap(trusterr.CodeDataLoss, "stage secondary record index", err)
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (s *Store) commitRecordIndexPromotions(ctx context.Context, updates []recordIndexPromotion) error {
@@ -3510,7 +3551,7 @@ func (s *Store) commitRecordIndexPromotions(ctx context.Context, updates []recor
 		}
 		batch := s.db.NewBatch()
 		for i := start; i < end; i++ {
-			if err := s.stageRecordIndexReplace(batch, updates[i].next, updates[i].old, true); err != nil {
+			if err := s.stageRecordIndexPromotion(batch, updates[i]); err != nil {
 				_ = batch.Close()
 				return err
 			}

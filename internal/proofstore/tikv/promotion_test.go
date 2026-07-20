@@ -1,0 +1,323 @@
+package tikv
+
+import (
+	"bytes"
+	"context"
+	"fmt"
+	"strings"
+	"testing"
+
+	"github.com/ryan-wong-coder/trustdb/internal/cborx"
+	"github.com/ryan-wong-coder/trustdb/internal/model"
+)
+
+func TestStageRecordIndexPromotionMutationCounts(t *testing.T) {
+	t.Parallel()
+
+	const namespace = "promotion-count/"
+	store := &Store{
+		db:              &tikvDB{namespace: []byte(namespace)},
+		recordIndexMode: RecordIndexModeFull,
+	}
+	for _, test := range []struct {
+		name            string
+		idx             model.RecordIndex
+		wantTokens      int
+		wantSpecialized int
+		wantFullReplace int
+	}{
+		{name: "without storage tokens", idx: promotionRecordIndex(false), wantTokens: 0, wantSpecialized: 8, wantFullReplace: 14},
+		{name: "with maximum storage tokens", idx: promotionRecordIndex(true), wantTokens: 64, wantSpecialized: 72, wantFullReplace: 142},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			next := test.idx
+			next.ProofLevel = "L4"
+			tokenCount := len(model.RecordIndexStorageTokens(test.idx))
+			if tokenCount != test.wantTokens {
+				t.Fatalf("storage token count = %d, want %d", tokenCount, test.wantTokens)
+			}
+
+			batch := store.db.NewBatch()
+			if err := store.stageRecordIndexPromotion(batch, recordIndexPromotion{old: test.idx, next: next}); err != nil {
+				t.Fatalf("stageRecordIndexPromotion: %v", err)
+			}
+			if got := len(batch.ops); got != test.wantSpecialized {
+				t.Fatalf("specialized mutation count = %d, want %d", got, test.wantSpecialized)
+			}
+			assertTiKVPromotionCoreOps(t, batch.ops, []byte(namespace), test.idx, next)
+
+			batch = store.db.NewBatch()
+			if err := store.stageRecordIndexPromotion(batch, recordIndexPromotion{old: test.idx, next: next, replaceAll: true}); err != nil {
+				t.Fatalf("stage legacy promotion: %v", err)
+			}
+			if got := len(batch.ops); got != test.wantFullReplace {
+				t.Fatalf("full replacement mutation count = %d, want %d", got, test.wantFullReplace)
+			}
+		})
+	}
+
+	rich := promotionRecordIndex(true)
+	next := rich
+	next.ProofLevel = "L4"
+	for _, test := range []struct {
+		mode string
+		want int
+	}{
+		{mode: RecordIndexModeNoStorageTokens, want: 78},
+		{mode: RecordIndexModeTimeOnly, want: 73},
+	} {
+		t.Run(test.mode+" fallback", func(t *testing.T) {
+			store.recordIndexMode = test.mode
+			batch := store.db.NewBatch()
+			if err := store.stageRecordIndexPromotion(batch, recordIndexPromotion{old: rich, next: next}); err != nil {
+				t.Fatalf("stageRecordIndexPromotion: %v", err)
+			}
+			if got := len(batch.ops); got != test.want {
+				t.Fatalf("fallback mutation count = %d, want %d", got, test.want)
+			}
+		})
+	}
+}
+
+func TestPromoteBatchRecordsPreservesIndexModeTransitions(t *testing.T) {
+	t.Run("no storage tokens to full backfills tokens", func(t *testing.T) {
+		db, _ := newMockTiKVDB(t, "promotion-backfill/")
+		store := &Store{db: db, recordIndexMode: RecordIndexModeNoStorageTokens}
+		idx := promotionRecordIndex(true)
+		if err := store.PutRecordIndex(context.Background(), idx); err != nil {
+			t.Fatalf("PutRecordIndex: %v", err)
+		}
+		if got := countKeysWithPrefix(t, store, prefixRecordByToken); got != 0 {
+			t.Fatalf("initial token keys = %d, want 0", got)
+		}
+
+		store.recordIndexMode = RecordIndexModeFull
+		if err := store.promoteBatchRecords(context.Background(), idx.BatchID, "L4"); err != nil {
+			t.Fatalf("promoteBatchRecords: %v", err)
+		}
+		if got, want := countKeysWithPrefix(t, store, prefixRecordByToken), len(model.RecordIndexStorageTokens(idx)); got != want {
+			t.Fatalf("backfilled token keys = %d, want %d", got, want)
+		}
+		assertPromotedRecordQueries(t, store, idx, "L4")
+	})
+
+	for _, mode := range []string{RecordIndexModeNoStorageTokens, RecordIndexModeTimeOnly} {
+		t.Run("full to "+mode+" cleans stale indexes", func(t *testing.T) {
+			db, _ := newMockTiKVDB(t, "promotion-cleanup-"+mode+"/")
+			store := &Store{db: db, recordIndexMode: RecordIndexModeFull}
+			idx := promotionRecordIndex(true)
+			if err := store.PutRecordIndex(context.Background(), idx); err != nil {
+				t.Fatalf("PutRecordIndex: %v", err)
+			}
+
+			store.recordIndexMode = mode
+			if err := store.promoteBatchRecords(context.Background(), idx.BatchID, "L4"); err != nil {
+				t.Fatalf("promoteBatchRecords: %v", err)
+			}
+			if got := countKeysWithPrefix(t, store, prefixRecordByToken); got != 0 {
+				t.Fatalf("token keys after transition = %d, want 0", got)
+			}
+			if mode == RecordIndexModeTimeOnly {
+				for _, prefix := range []string{prefixRecordByBatch, prefixRecordByLevel, prefixRecordByTenant, prefixRecordByClient, prefixRecordByHash} {
+					if got := countKeysWithPrefix(t, store, prefix); got != 0 {
+						t.Fatalf("%s keys after time-only transition = %d, want 0", prefix, got)
+					}
+				}
+			}
+			got, found, err := store.GetRecordIndex(context.Background(), idx.RecordID)
+			if err != nil || !found || got.ProofLevel != "L4" {
+				t.Fatalf("promoted record found=%v level=%q err=%v", found, got.ProofLevel, err)
+			}
+		})
+	}
+}
+
+func TestPromoteBatchRecordsMigratesLegacyInlineIndexes(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		mixed bool
+	}{
+		{name: "all inline"},
+		{name: "canonical batch with mixed and missing secondaries", mixed: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			db, _ := newMockTiKVDB(t, "promotion-legacy-"+strings.ReplaceAll(test.name, " ", "-")+"/")
+			store := &Store{db: db, recordIndexMode: RecordIndexModeFull}
+			idx := promotionRecordIndex(true)
+			value, err := cborx.Marshal(idx)
+			if err != nil {
+				t.Fatalf("marshal legacy record index: %v", err)
+			}
+			batchKey := appendRecordIndexEncodedPrefix(nil, prefixRecordByBatch, idx.BatchID, idx.ReceivedAtUnixN, idx.RecordID)
+			missingKey := appendRecordIndexEncodedPrefix(nil, prefixRecordByClient, idx.ClientID, idx.ReceivedAtUnixN, idx.RecordID)
+			batch := store.db.NewBatch()
+			if err := visitRecordIndexKeys(idx, RecordIndexModeFull, func(key []byte) error {
+				if isRecordByIDKey(key) {
+					if test.mixed {
+						return batch.Set(key, value, nil)
+					}
+					return nil
+				}
+				if test.mixed && bytes.Equal(key, batchKey) {
+					return stageRecordIndexRef(batch, key, idx.RecordID)
+				}
+				if test.mixed && bytes.Equal(key, missingKey) {
+					return nil
+				}
+				return batch.Set(key, value, nil)
+			}); err != nil {
+				t.Fatalf("stage legacy indexes: %v", err)
+			}
+			if err := batch.Commit(syncWrite); err != nil {
+				t.Fatalf("commit legacy indexes: %v", err)
+			}
+
+			if err := store.promoteBatchRecords(context.Background(), idx.BatchID, "L4"); err != nil {
+				t.Fatalf("promoteBatchRecords: %v", err)
+			}
+			next := idx
+			next.ProofLevel = "L4"
+			if err := visitRecordIndexKeys(next, RecordIndexModeFull, func(key []byte) error {
+				value, closer, err := store.db.Get(key)
+				if err != nil {
+					return fmt.Errorf("get %q: %w", key, err)
+				}
+				defer closer.Close()
+				if isRecordByIDKey(key) {
+					var got model.RecordIndex
+					if err := cborx.UnmarshalLimit(value, &got, maxStoredObjectBytes); err != nil {
+						return err
+					}
+					if got.ProofLevel != "L4" {
+						return fmt.Errorf("primary proof level = %q, want L4", got.ProofLevel)
+					}
+					return nil
+				}
+				if recordID, ok := decodeRecordIndexRef(value); !ok || recordID != idx.RecordID {
+					return fmt.Errorf("secondary %q is not a canonical reference", key)
+				}
+				return nil
+			}); err != nil {
+				t.Fatalf("verify migrated indexes: %v", err)
+			}
+			assertPromotedRecordQueries(t, store, idx, "L4")
+		})
+	}
+}
+
+func promotionRecordIndex(withTokens bool) model.RecordIndex {
+	idx := model.RecordIndex{
+		SchemaVersion:   model.SchemaRecordIndex,
+		RecordID:        "tr-promotion-0001",
+		BatchID:         "batch-promotion",
+		ProofLevel:      "L3",
+		TenantID:        "tenant-promotion",
+		ClientID:        "client-promotion",
+		ContentHash:     []byte("promotion-content-hash"),
+		ReceivedAtUnixN: 1_000,
+	}
+	if withTokens {
+		parts := make([]string, 80)
+		for index := range parts {
+			parts[index] = fmt.Sprintf("segment%03d", index)
+		}
+		idx.FileName = strings.Join(parts, "-") + ".bin"
+	}
+	return idx
+}
+
+func assertTiKVPromotionCoreOps(t *testing.T, ops []batchOp, namespace []byte, old, next model.RecordIndex) {
+	t.Helper()
+	if len(ops) < 3 {
+		t.Fatalf("promotion ops = %d, want at least 3", len(ops))
+	}
+	logicalKey := func(op batchOp) []byte {
+		return bytes.TrimPrefix(op.key, namespace)
+	}
+	if ops[0].delete || !bytes.Equal(logicalKey(ops[0]), recordByIDKey(next.RecordID)) {
+		t.Fatalf("primary op = key %q delete=%v", logicalKey(ops[0]), ops[0].delete)
+	}
+	var stored model.RecordIndex
+	if err := cborx.UnmarshalLimit(ops[0].value, &stored, maxStoredObjectBytes); err != nil {
+		t.Fatalf("decode primary op: %v", err)
+	}
+	if stored.ProofLevel != next.ProofLevel {
+		t.Fatalf("primary proof level = %q, want %q", stored.ProofLevel, next.ProofLevel)
+	}
+	wantOldLevel := appendRecordIndexEncodedPrefix(nil, prefixRecordByLevel, old.ProofLevel, old.ReceivedAtUnixN, old.RecordID)
+	if !ops[1].delete || !bytes.Equal(logicalKey(ops[1]), wantOldLevel) {
+		t.Fatalf("old level op = key %q delete=%v", logicalKey(ops[1]), ops[1].delete)
+	}
+	wantNewLevel := appendRecordIndexEncodedPrefix(nil, prefixRecordByLevel, next.ProofLevel, next.ReceivedAtUnixN, next.RecordID)
+	foundNewLevel := false
+	for index := 2; index < len(ops); index++ {
+		if ops[index].delete {
+			t.Fatalf("secondary op %d unexpectedly deletes %q", index, logicalKey(ops[index]))
+		}
+		if recordID, ok := decodeRecordIndexRef(ops[index].value); !ok || recordID != next.RecordID {
+			t.Fatalf("secondary op %d is not a reference: id=%q ok=%v", index, recordID, ok)
+		}
+		if bytes.Equal(logicalKey(ops[index]), wantNewLevel) {
+			foundNewLevel = true
+		}
+	}
+	if !foundNewLevel {
+		t.Fatalf("new proof-level key %q was not staged", wantNewLevel)
+	}
+}
+
+func countKeysWithPrefix(t *testing.T, store *Store, prefix string) int {
+	t.Helper()
+	lower, upper := prefixBounds(prefix)
+	iter, err := store.db.NewIter(&iterOptions{LowerBound: lower, UpperBound: upper})
+	if err != nil {
+		t.Fatalf("NewIter(%s): %v", prefix, err)
+	}
+	defer iter.Close()
+	count := 0
+	for ok := iter.First(); ok; ok = iter.Next() {
+		count++
+	}
+	if err := iter.Error(); err != nil {
+		t.Fatalf("iterate %s: %v", prefix, err)
+	}
+	return count
+}
+
+func assertPromotedRecordQueries(t *testing.T, store *Store, idx model.RecordIndex, level string) {
+	t.Helper()
+	got, found, err := store.GetRecordIndex(context.Background(), idx.RecordID)
+	if err != nil || !found || got.ProofLevel != level {
+		t.Fatalf("promoted record found=%v level=%q err=%v", found, got.ProofLevel, err)
+	}
+	for name, opts := range map[string]model.RecordListOptions{
+		"time":          {},
+		"batch":         {BatchID: idx.BatchID},
+		"tenant":        {TenantID: idx.TenantID},
+		"client":        {ClientID: idx.ClientID},
+		"content hash":  {ContentHash: idx.ContentHash},
+		"proof level":   {ProofLevel: level},
+		"storage token": {Query: idx.FileName},
+	} {
+		records, err := store.ListRecordIndexes(context.Background(), opts)
+		if err != nil {
+			t.Fatalf("ListRecordIndexes(%s): %v", name, err)
+		}
+		if len(records) != 1 || records[0].RecordID != idx.RecordID {
+			t.Fatalf("ListRecordIndexes(%s) = %+v", name, records)
+		}
+	}
+	records, err := store.ListRecordIndexes(context.Background(), model.RecordListOptions{ProofLevel: idx.ProofLevel})
+	if err != nil {
+		t.Fatalf("ListRecordIndexes(old proof level): %v", err)
+	}
+	if len(records) != 0 {
+		t.Fatalf("old proof-level records = %+v, want empty", records)
+	}
+	if got := countKeysWithPrefix(t, store, prefixRecordByLevel+recordSecondaryPart(idx.ProofLevel)+"/"); got != 0 {
+		t.Fatalf("old proof-level physical keys = %d, want 0", got)
+	}
+	if got := countKeysWithPrefix(t, store, prefixRecordByLevel+recordSecondaryPart(level)+"/"); got != 1 {
+		t.Fatalf("new proof-level physical keys = %d, want 1", got)
+	}
+}
