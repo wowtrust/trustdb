@@ -1027,6 +1027,20 @@ func testGlobalLeafListPagePaginates(t *testing.T, newStore Factory) {
 	if len(next) != 1 || next[0].LeafIndex != 0 {
 		t.Fatalf("next global leaf page = %+v", next)
 	}
+	ascending, err := store.ListGlobalLeavesPage(ctx, model.GlobalLeafListOptions{Limit: 2, Direction: model.RecordListDirectionAsc})
+	if err != nil {
+		t.Fatalf("ListGlobalLeavesPage ascending: %v", err)
+	}
+	if len(ascending) != 2 || ascending[0].LeafIndex != 0 || ascending[1].LeafIndex != 1 {
+		t.Fatalf("ascending global leaf page = %+v", ascending)
+	}
+	ascendingNext, err := store.ListGlobalLeavesPage(ctx, model.GlobalLeafListOptions{Limit: 2, Direction: model.RecordListDirectionAsc, AfterLeafIndex: ascending[1].LeafIndex})
+	if err != nil {
+		t.Fatalf("ListGlobalLeavesPage ascending next: %v", err)
+	}
+	if len(ascendingNext) != 1 || ascendingNext[0].LeafIndex != 2 {
+		t.Fatalf("ascending next global leaf page = %+v", ascendingNext)
+	}
 }
 
 func testSignedTreeHeadListPagePaginates(t *testing.T, newStore Factory) {
@@ -1061,6 +1075,20 @@ func testSignedTreeHeadListPagePaginates(t *testing.T, newStore Factory) {
 	}
 	if len(next) != 1 || next[0].TreeSize != 1 {
 		t.Fatalf("next sth page = %+v", next)
+	}
+	ascending, err := store.ListSignedTreeHeadsPage(ctx, model.TreeHeadListOptions{Limit: 2, Direction: model.RecordListDirectionAsc})
+	if err != nil {
+		t.Fatalf("ListSignedTreeHeadsPage ascending: %v", err)
+	}
+	if len(ascending) != 2 || ascending[0].TreeSize != 1 || ascending[1].TreeSize != 2 {
+		t.Fatalf("ascending sth page = %+v", ascending)
+	}
+	ascendingNext, err := store.ListSignedTreeHeadsPage(ctx, model.TreeHeadListOptions{Limit: 2, Direction: model.RecordListDirectionAsc, AfterTreeSize: ascending[1].TreeSize})
+	if err != nil {
+		t.Fatalf("ListSignedTreeHeadsPage ascending next: %v", err)
+	}
+	if len(ascendingNext) != 1 || ascendingNext[0].TreeSize != 3 {
+		t.Fatalf("ascending next sth page = %+v", ascendingNext)
 	}
 }
 
@@ -1197,6 +1225,20 @@ func testSTHAnchorListPagePaginates(t *testing.T, newStore Factory) {
 	}
 	if len(next) != 1 || next[0].TreeSize != 1 {
 		t.Fatalf("next anchor page = %+v", next)
+	}
+	ascending, err := store.ListSTHAnchorsPage(ctx, model.AnchorListOptions{Limit: 2, Direction: model.RecordListDirectionAsc})
+	if err != nil {
+		t.Fatalf("ListSTHAnchorsPage ascending: %v", err)
+	}
+	if len(ascending) != 2 || ascending[0].TreeSize != 1 || ascending[1].TreeSize != 2 {
+		t.Fatalf("ascending anchor page = %+v", ascending)
+	}
+	ascendingNext, err := store.ListSTHAnchorsPage(ctx, model.AnchorListOptions{Limit: 2, Direction: model.RecordListDirectionAsc, AfterTreeSize: ascending[1].TreeSize})
+	if err != nil {
+		t.Fatalf("ListSTHAnchorsPage ascending next: %v", err)
+	}
+	if len(ascendingNext) != 1 || ascendingNext[0].TreeSize != 3 {
+		t.Fatalf("ascending next anchor page = %+v", ascendingNext)
 	}
 }
 

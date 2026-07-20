@@ -901,8 +901,10 @@ func (s LocalStore) ListGlobalLeavesPage(ctx context.Context, opts model.GlobalL
 		}
 		return nil, trusterr.Wrap(trusterr.CodeDataLoss, "read global leaf directory", err)
 	}
-	leaves := make([]model.GlobalLogLeaf, 0, len(entries))
-	for _, entry := range entries {
+	leaves := make([]model.GlobalLogLeaf, 0, min(limit, len(entries)))
+	start, end, step := sortedDirectoryPageRange(len(entries), opts.Direction)
+	for i := start; i != end && len(leaves) < limit; i += step {
+		entry := entries[i]
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".tdgleaf") {
 			continue
 		}
@@ -921,10 +923,6 @@ func (s LocalStore) ListGlobalLeavesPage(ctx context.Context, opts model.GlobalL
 			continue
 		}
 		leaves = append(leaves, leaf)
-	}
-	sortGlobalLeaves(leaves, opts.Direction)
-	if len(leaves) > limit {
-		leaves = leaves[:limit]
 	}
 	return leaves, nil
 }
@@ -1037,8 +1035,10 @@ func (s LocalStore) ListSignedTreeHeadsPage(ctx context.Context, opts model.Tree
 		}
 		return nil, trusterr.Wrap(trusterr.CodeDataLoss, "read signed tree head directory", err)
 	}
-	sths := make([]model.SignedTreeHead, 0, len(entries))
-	for _, entry := range entries {
+	sths := make([]model.SignedTreeHead, 0, min(limit, len(entries)))
+	start, end, step := sortedDirectoryPageRange(len(entries), opts.Direction)
+	for i := start; i != end && len(sths) < limit; i += step {
+		entry := entries[i]
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".tdsth") {
 			continue
 		}
@@ -1057,10 +1057,6 @@ func (s LocalStore) ListSignedTreeHeadsPage(ctx context.Context, opts model.Tree
 			continue
 		}
 		sths = append(sths, sth)
-	}
-	sortSignedTreeHeads(sths, opts.Direction)
-	if len(sths) > limit {
-		sths = sths[:limit]
 	}
 	return sths, nil
 }
@@ -1492,8 +1488,10 @@ func (s LocalStore) ListSTHAnchorsPage(ctx context.Context, opts model.AnchorLis
 		}
 		return nil, trusterr.Wrap(trusterr.CodeDataLoss, "read sth anchor outbox directory", err)
 	}
-	items := make([]model.STHAnchorOutboxItem, 0, len(entries))
-	for _, entry := range entries {
+	items := make([]model.STHAnchorOutboxItem, 0, min(limit, len(entries)))
+	start, end, step := sortedDirectoryPageRange(len(entries), opts.Direction)
+	for i := start; i != end && len(items) < limit; i += step {
+		entry := entries[i]
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".tdsth-anchor") {
 			continue
 		}
@@ -1512,10 +1510,6 @@ func (s LocalStore) ListSTHAnchorsPage(ctx context.Context, opts model.AnchorLis
 			continue
 		}
 		items = append(items, item)
-	}
-	sortSTHAnchorsByTreeSize(items, opts.Direction)
-	if len(items) > limit {
-		items = items[:limit]
 	}
 	return items, nil
 }
@@ -2076,6 +2070,13 @@ func normaliseRecordLimit(limit int) int {
 	return limit
 }
 
+func sortedDirectoryPageRange(length int, direction string) (start, end, step int) {
+	if strings.EqualFold(direction, model.RecordListDirectionAsc) {
+		return 0, length, 1
+	}
+	return length - 1, -1, -1
+}
+
 func sortBatchRoots(roots []model.BatchRoot, direction string) {
 	desc := !strings.EqualFold(direction, model.RecordListDirectionAsc)
 	sort.Slice(roots, func(i, j int) bool {
@@ -2091,39 +2092,6 @@ func sortRecordIndexes(indexes []model.RecordIndex, direction string) {
 	desc := !strings.EqualFold(direction, model.RecordListDirectionAsc)
 	sort.Slice(indexes, func(i, j int) bool {
 		cmp := model.CompareRecordPosition(indexes[i].ReceivedAtUnixN, indexes[i].RecordID, indexes[j].ReceivedAtUnixN, indexes[j].RecordID)
-		if desc {
-			return cmp > 0
-		}
-		return cmp < 0
-	})
-}
-
-func sortSignedTreeHeads(sths []model.SignedTreeHead, direction string) {
-	desc := !strings.EqualFold(direction, model.RecordListDirectionAsc)
-	sort.Slice(sths, func(i, j int) bool {
-		cmp := model.CompareUint64Position(sths[i].TreeSize, sths[j].TreeSize)
-		if desc {
-			return cmp > 0
-		}
-		return cmp < 0
-	})
-}
-
-func sortGlobalLeaves(leaves []model.GlobalLogLeaf, direction string) {
-	desc := !strings.EqualFold(direction, model.RecordListDirectionAsc)
-	sort.Slice(leaves, func(i, j int) bool {
-		cmp := model.CompareUint64Position(leaves[i].LeafIndex, leaves[j].LeafIndex)
-		if desc {
-			return cmp > 0
-		}
-		return cmp < 0
-	})
-}
-
-func sortSTHAnchorsByTreeSize(items []model.STHAnchorOutboxItem, direction string) {
-	desc := !strings.EqualFold(direction, model.RecordListDirectionAsc)
-	sort.Slice(items, func(i, j int) bool {
-		cmp := model.CompareUint64Position(items[i].TreeSize, items[j].TreeSize)
 		if desc {
 			return cmp > 0
 		}

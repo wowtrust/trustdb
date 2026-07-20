@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/ryan-wong-coder/trustdb/internal/cborx"
 	"github.com/ryan-wong-coder/trustdb/internal/model"
 )
 
@@ -41,6 +42,40 @@ func BenchmarkLocalStoreLatestRoot4096(b *testing.B) {
 		}
 		if got.BatchID != latest.BatchID {
 			b.Fatalf("latest root = %q, want %q", got.BatchID, latest.BatchID)
+		}
+	}
+}
+
+func BenchmarkLocalStoreGlobalLeafFirstPage4096(b *testing.B) {
+	store := LocalStore{Root: b.TempDir()}
+	if err := os.MkdirAll(store.globalLeafDir(), 0o755); err != nil {
+		b.Fatal(err)
+	}
+	for i := range 4096 {
+		leaf := model.GlobalLogLeaf{
+			SchemaVersion: model.SchemaGlobalLogLeaf,
+			LeafIndex:     uint64(i),
+			BatchID:       fmt.Sprintf("batch-%04d", i),
+			BatchRoot:     make([]byte, 32),
+		}
+		data, err := cborx.Marshal(leaf)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if err := os.WriteFile(store.globalLeafPath(leaf.LeafIndex), data, 0o600); err != nil {
+			b.Fatal(err)
+		}
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		got, err := store.ListGlobalLeavesPage(context.Background(), model.GlobalLeafListOptions{Limit: 100})
+		if err != nil {
+			b.Fatal(err)
+		}
+		if len(got) != 100 || got[0].LeafIndex != 4095 || got[99].LeafIndex != 3996 {
+			b.Fatalf("unexpected page bounds: len=%d first=%d last=%d", len(got), got[0].LeafIndex, got[len(got)-1].LeafIndex)
 		}
 	}
 }
