@@ -42,6 +42,7 @@ func RunConformance(t *testing.T, newStore Factory) {
 	t.Run("CheckpointMissing", func(t *testing.T) { testCheckpointMissing(t, newStore) })
 	t.Run("ConcurrentPutBundle", func(t *testing.T) { testConcurrentPutBundle(t, newStore) })
 	t.Run("GlobalLogRoundTrip", func(t *testing.T) { testGlobalLogRoundTrip(t, newStore) })
+	t.Run("GlobalLogListPendingRespectsBackoff", func(t *testing.T) { testGlobalLogListPendingRespectsBackoff(t, newStore) })
 	t.Run("GlobalLogAppendCommitRoundTrip", func(t *testing.T) { testGlobalLogAppendCommitRoundTrip(t, newStore) })
 	t.Run("GlobalLogPublishedBatchWithAnchorsOptional", func(t *testing.T) { testGlobalLogPublishedBatchWithAnchorsOptional(t, newStore) })
 	t.Run("GlobalLogAppendCommitRejectsInvalidNodeWithoutPartialWrite", func(t *testing.T) {
@@ -702,6 +703,43 @@ func testGlobalLogRoundTrip(t *testing.T, newStore Factory) {
 	}
 	if latest.TreeSize != 1 {
 		t.Fatalf("LatestSignedTreeHead tree_size = %d, want 1", latest.TreeSize)
+	}
+}
+
+func testGlobalLogListPendingRespectsBackoff(t *testing.T, newStore Factory) {
+	t.Parallel()
+	store, cleanup := newStore(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	for _, item := range []model.GlobalLogOutboxItem{
+		{BatchID: "batch-ready", EnqueuedAtUnixN: 100, NextAttemptUnixN: 100},
+		{BatchID: "batch-future", EnqueuedAtUnixN: 200, NextAttemptUnixN: 200},
+	} {
+		if err := store.EnqueueGlobalLog(ctx, item); err != nil {
+			t.Fatalf("EnqueueGlobalLog %s: %v", item.BatchID, err)
+		}
+	}
+	empty, err := store.ListPendingGlobalLog(ctx, 50, 10)
+	if err != nil {
+		t.Fatalf("ListPendingGlobalLog before backoff: %v", err)
+	}
+	if len(empty) != 0 {
+		t.Fatalf("ListPendingGlobalLog before backoff = %+v, want empty", empty)
+	}
+	ready, err := store.ListPendingGlobalLog(ctx, 150, 10)
+	if err != nil {
+		t.Fatalf("ListPendingGlobalLog ready: %v", err)
+	}
+	if len(ready) != 1 || ready[0].BatchID != "batch-ready" {
+		t.Fatalf("ListPendingGlobalLog ready = %+v, want batch-ready", ready)
+	}
+	all, err := store.ListPendingGlobalLog(ctx, 300, 10)
+	if err != nil {
+		t.Fatalf("ListPendingGlobalLog all: %v", err)
+	}
+	if len(all) != 2 || all[0].BatchID != "batch-ready" || all[1].BatchID != "batch-future" {
+		t.Fatalf("ListPendingGlobalLog all = %+v", all)
 	}
 }
 

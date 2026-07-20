@@ -2876,7 +2876,7 @@ func (s *Store) ListPendingGlobalLog(ctx context.Context, nowUnixN int64, limit 
 	if limit <= 0 {
 		limit = 100
 	}
-	items := make([]model.GlobalLogOutboxItem, 0, limit)
+	items := make([]model.GlobalLogOutboxItem, 0)
 	err := s.scanPrefix(ctx, globalStatusPrefix(model.AnchorStatePending), func(value []byte) error {
 		if len(items) >= limit {
 			return errStopScan
@@ -2887,6 +2887,9 @@ func (s *Store) ListPendingGlobalLog(ctx context.Context, nowUnixN int64, limit 
 		}
 		if item.NextAttemptUnixN > nowUnixN {
 			return errStopScan
+		}
+		if len(items) == 0 {
+			items = make([]model.GlobalLogOutboxItem, 0, limit)
 		}
 		items = append(items, item)
 		return nil
@@ -3199,7 +3202,7 @@ func (s *Store) ListPendingSTHAnchors(ctx context.Context, nowUnixN int64, limit
 	if limit <= 0 {
 		limit = 100
 	}
-	items := make([]model.STHAnchorOutboxItem, 0, limit)
+	items := make([]model.STHAnchorOutboxItem, 0)
 	err := s.scanPrefix(ctx, anchorStatusPrefix(model.AnchorStatePending), func(value []byte) error {
 		if len(items) >= limit {
 			return errStopScan
@@ -3210,6 +3213,9 @@ func (s *Store) ListPendingSTHAnchors(ctx context.Context, nowUnixN int64, limit
 		}
 		if item.NextAttemptUnixN > nowUnixN {
 			return errStopScan
+		}
+		if len(items) == 0 {
+			items = make([]model.STHAnchorOutboxItem, 0, limit)
 		}
 		items = append(items, item)
 		return nil
@@ -3224,7 +3230,7 @@ func (s *Store) ListPublishedSTHAnchors(ctx context.Context, limit int) ([]model
 	if limit <= 0 {
 		limit = 100
 	}
-	items := make([]model.STHAnchorOutboxItem, 0, limit)
+	items := make([]model.STHAnchorOutboxItem, 0)
 	err := s.scanPrefix(ctx, anchorStatusPrefix(model.AnchorStatePublished), func(value []byte) error {
 		if len(items) >= limit {
 			return errStopScan
@@ -3232,6 +3238,9 @@ func (s *Store) ListPublishedSTHAnchors(ctx context.Context, limit int) ([]model
 		var item model.STHAnchorOutboxItem
 		if err := cborx.UnmarshalLimit(value, &item, maxStoredObjectBytes); err != nil {
 			return err
+		}
+		if len(items) == 0 {
+			items = make([]model.STHAnchorOutboxItem, 0, limit)
 		}
 		items = append(items, item)
 		return nil

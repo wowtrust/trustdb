@@ -113,6 +113,81 @@ func BenchmarkPebbleGetBundleV2(b *testing.B) {
 	}
 }
 
+func BenchmarkPebbleEmptyOutboxPoll128(b *testing.B) {
+	store, err := Open(b.TempDir())
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.Cleanup(func() { _ = store.Close() })
+	ctx := context.Background()
+
+	b.Run("pending-global", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			items, err := store.ListPendingGlobalLog(ctx, 1, 128)
+			if err != nil {
+				b.Fatal(err)
+			}
+			if items == nil || len(items) != 0 {
+				b.Fatalf("items = %#v, want non-nil empty slice", items)
+			}
+		}
+	})
+	b.Run("pending-anchor", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			items, err := store.ListPendingSTHAnchors(ctx, 1, 128)
+			if err != nil {
+				b.Fatal(err)
+			}
+			if items == nil || len(items) != 0 {
+				b.Fatalf("items = %#v, want non-nil empty slice", items)
+			}
+		}
+	})
+	b.Run("published-anchor", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			items, err := store.ListPublishedSTHAnchors(ctx, 128)
+			if err != nil {
+				b.Fatal(err)
+			}
+			if items == nil || len(items) != 0 {
+				b.Fatalf("items = %#v, want non-nil empty slice", items)
+			}
+		}
+	})
+}
+
+func BenchmarkPebblePendingGlobalLog128(b *testing.B) {
+	store, err := Open(b.TempDir())
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.Cleanup(func() { _ = store.Close() })
+	ctx := context.Background()
+	for index := range 128 {
+		if err := store.EnqueueGlobalLog(ctx, model.GlobalLogOutboxItem{
+			BatchID:         fmt.Sprintf("batch-%03d", index),
+			EnqueuedAtUnixN: int64(index + 1),
+		}); err != nil {
+			b.Fatal(err)
+		}
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		items, err := store.ListPendingGlobalLog(ctx, 128, 128)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if len(items) != 128 {
+			b.Fatalf("items = %d, want 128", len(items))
+		}
+	}
+}
+
 func TestStageSetRecordKeyMatchesKeyBuilders(t *testing.T) {
 	t.Parallel()
 

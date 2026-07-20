@@ -1344,7 +1344,7 @@ func (s LocalStore) listGlobalLogOutbox(ctx context.Context, limit int, include 
 		}
 		return nil, trusterr.Wrap(trusterr.CodeDataLoss, "read global log outbox directory", err)
 	}
-	items := make([]model.GlobalLogOutboxItem, 0, len(entries))
+	items := make([]model.GlobalLogOutboxItem, 0)
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".tdgoutbox") {
 			continue
@@ -1358,6 +1358,9 @@ func (s LocalStore) listGlobalLogOutbox(ctx context.Context, limit int, include 
 			return nil, trusterr.Wrap(trusterr.CodeDataLoss, "decode global log outbox item", err)
 		}
 		if include(item) {
+			if len(items) == 0 {
+				items = make([]model.GlobalLogOutboxItem, 0, len(entries))
+			}
 			items = append(items, item)
 		}
 	}
@@ -1628,7 +1631,7 @@ func (s LocalStore) listSTHAnchors(ctx context.Context, limit int, include func(
 		}
 		return nil, trusterr.Wrap(trusterr.CodeDataLoss, "read sth anchor outbox directory", err)
 	}
-	items := make([]model.STHAnchorOutboxItem, 0, len(entries))
+	items := make([]model.STHAnchorOutboxItem, 0)
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".tdsth-anchor") {
 			continue
@@ -1642,6 +1645,9 @@ func (s LocalStore) listSTHAnchors(ctx context.Context, limit int, include func(
 			return nil, trusterr.Wrap(trusterr.CodeDataLoss, "decode sth anchor outbox item", err)
 		}
 		if include(item) {
+			if len(items) == 0 {
+				items = make([]model.STHAnchorOutboxItem, 0, len(entries))
+			}
 			items = append(items, item)
 		}
 	}
