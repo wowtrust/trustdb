@@ -137,27 +137,8 @@ func TestTiKVIterPrevPreservesScannerError(t *testing.T) {
 }
 
 func TestTiKVIterPrevReusesReverseScanBatches(t *testing.T) {
-	client, cluster, pdClient, err := testutils.NewMockTiKV("", nil)
-	if err != nil {
-		t.Fatalf("NewMockTiKV: %v", err)
-	}
-	testutils.BootstrapWithSingleStore(cluster)
-	countingClient := &countingTiKVClient{}
-	kvStore, err := tikvclient.NewTestTiKVStore(client, pdClient, func(client tikvclient.Client) tikvclient.Client {
-		countingClient.Client = client
-		return countingClient
-	}, nil, 0)
-	if err != nil {
-		t.Fatalf("NewTestTiKVStore: %v", err)
-	}
-	txnClient := &txnkv.Client{KVStore: kvStore}
-	t.Cleanup(func() {
-		if err := txnClient.Close(); err != nil {
-			t.Errorf("Close: %v", err)
-		}
-	})
+	db, countingClient := newMockTiKVDB(t, "reverse-scan/")
 
-	db := &tikvDB{client: txnClient, namespace: []byte("reverse-scan/")}
 	batch := db.NewBatch()
 	defer batch.Close()
 	const recordCount = 1000
@@ -170,7 +151,7 @@ func TestTiKVIterPrevReusesReverseScanBatches(t *testing.T) {
 	if err := batch.Commit(syncWrite); err != nil {
 		t.Fatalf("Commit: %v", err)
 	}
-	countingClient.scanRequests.Store(0)
+	countingClient.resetReadRequests()
 
 	lower, upper := prefixBounds("record/")
 	iter, err := db.NewIter(&iterOptions{LowerBound: lower, UpperBound: upper})
@@ -212,6 +193,322 @@ func TestTiKVIterPrevReusesReverseScanBatches(t *testing.T) {
 	}
 }
 
+func TestListRecordIndexesBatchesReferences(t *testing.T) {
+	db, countingClient := newMockTiKVDB(t, "record-list-batch/")
+	store := &Store{db: db, recordIndexMode: RecordIndexModeFull}
+
+	batch := db.NewBatch()
+	defer batch.Close()
+	const recordCount = 1000
+	for index := range recordCount {
+		idx := model.RecordIndex{
+			SchemaVersion:   model.SchemaRecordIndex,
+			RecordID:        fmt.Sprintf("tr1%04d", index),
+			ReceivedAtUnixN: int64(index + 1),
+			BatchID:         "batch-shared",
+			TenantID:        fmt.Sprintf("tenant-%d", index%2),
+		}
+		if err := store.stageRecordIndexSet(batch, idx); err != nil {
+			t.Fatalf("stageRecordIndexSet(%d): %v", index, err)
+		}
+	}
+	if err := batch.Commit(syncWrite); err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+	if _, err := store.ListRecordIndexes(context.Background(), model.RecordListOptions{
+		Limit:     recordCount,
+		Direction: model.RecordListDirectionAsc,
+	}); err != nil {
+		t.Fatalf("prime committed record indexes: %v", err)
+	}
+	for _, test := range []struct {
+		name      string
+		direction string
+		recordID  func(int) string
+	}{
+		{
+			name:      "ascending",
+			direction: model.RecordListDirectionAsc,
+			recordID:  func(index int) string { return fmt.Sprintf("tr1%04d", index) },
+		},
+		{
+			name:      "descending",
+			direction: model.RecordListDirectionDesc,
+			recordID:  func(index int) string { return fmt.Sprintf("tr1%04d", recordCount-1-index) },
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			countingClient.resetReadRequests()
+			records, err := store.ListRecordIndexes(context.Background(), model.RecordListOptions{
+				Limit:     recordCount,
+				Direction: test.direction,
+			})
+			if err != nil {
+				t.Fatalf("ListRecordIndexes: %v", err)
+			}
+			if len(records) != recordCount {
+				t.Fatalf("record count = %d, want %d", len(records), recordCount)
+			}
+			for index, record := range records {
+				if want := test.recordID(index); record.RecordID != want {
+					t.Fatalf("record %d ID = %q, want %q", index, record.RecordID, want)
+				}
+			}
+			if requests := countingClient.getRequests.Load(); requests != 0 {
+				t.Fatalf("point-get requests = %d, want 0", requests)
+			}
+			if requests := countingClient.batchGetRequests.Load(); requests != 1 {
+				t.Fatalf("batch-get requests = %d, want 1", requests)
+			}
+			if keys := countingClient.batchGetKeys.Load(); keys != recordCount {
+				t.Fatalf("batch-get keys = %d, want %d", keys, recordCount)
+			}
+			scanVersion := countingClient.scanVersion.Load()
+			batchGetVersion := countingClient.batchGetVersion.Load()
+			if scanVersion == 0 || batchGetVersion != scanVersion {
+				t.Fatalf("scan version = %d, batch-get version = %d; want one non-zero snapshot", scanVersion, batchGetVersion)
+			}
+			t.Logf("listed %d references with one batch-get at snapshot %d", len(records), scanVersion)
+		})
+	}
+
+	for _, direction := range []string{model.RecordListDirectionAsc, model.RecordListDirectionDesc} {
+		t.Run(direction+" narrow time range", func(t *testing.T) {
+			countingClient.resetReadRequests()
+			records, err := store.ListRecordIndexes(context.Background(), model.RecordListOptions{
+				Limit:             recordCount,
+				Direction:         direction,
+				ReceivedFromUnixN: 500,
+				ReceivedToUnixN:   500,
+			})
+			if err != nil {
+				t.Fatalf("ListRecordIndexes: %v", err)
+			}
+			if len(records) != 1 || records[0].RecordID != "tr10499" {
+				t.Fatalf("narrow time range records = %+v", records)
+			}
+			if keys := countingClient.batchGetKeys.Load(); keys != 1 {
+				t.Fatalf("narrow time range batch-get keys = %d, want 1", keys)
+			}
+			if requests := countingClient.batchGetRequests.Load(); requests != 1 {
+				t.Fatalf("narrow time range batch-get requests = %d, want 1", requests)
+			}
+		})
+	}
+
+	for _, test := range []struct {
+		name string
+		opts model.RecordListOptions
+	}{
+		{
+			name: "ascending cursor beyond range",
+			opts: model.RecordListOptions{
+				Limit:                recordCount,
+				Direction:            model.RecordListDirectionAsc,
+				ReceivedToUnixN:      500,
+				AfterReceivedAtUnixN: 600,
+				AfterRecordID:        "tr10599",
+			},
+		},
+		{
+			name: "descending cursor beyond range",
+			opts: model.RecordListOptions{
+				Limit:                recordCount,
+				Direction:            model.RecordListDirectionDesc,
+				ReceivedFromUnixN:    500,
+				AfterReceivedAtUnixN: 400,
+				AfterRecordID:        "tr10399",
+			},
+		},
+		{
+			name: "inverted time range",
+			opts: model.RecordListOptions{
+				Limit:             recordCount,
+				Direction:         model.RecordListDirectionAsc,
+				ReceivedFromUnixN: 501,
+				ReceivedToUnixN:   500,
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			countingClient.resetReadRequests()
+			records, err := store.ListRecordIndexes(context.Background(), test.opts)
+			if err != nil {
+				t.Fatalf("ListRecordIndexes: %v", err)
+			}
+			if len(records) != 0 {
+				t.Fatalf("records = %+v, want empty", records)
+			}
+			if scans := countingClient.scanRequests.Load(); scans != 0 {
+				t.Fatalf("scan requests = %d, want 0", scans)
+			}
+			if batchGets := countingClient.batchGetRequests.Load(); batchGets != 0 {
+				t.Fatalf("batch-get requests = %d, want 0", batchGets)
+			}
+		})
+	}
+
+	for _, test := range []struct {
+		name      string
+		direction string
+		afterTime int64
+		afterID   string
+		want      []string
+	}{
+		{
+			name:      "ascending composite filter",
+			direction: model.RecordListDirectionAsc,
+			want:      []string{"tr10000", "tr10002"},
+		},
+		{
+			name:      "descending composite filter",
+			direction: model.RecordListDirectionDesc,
+			want:      []string{"tr10998", "tr10996"},
+		},
+		{
+			name:      "ascending composite filter after cursor",
+			direction: model.RecordListDirectionAsc,
+			afterTime: 3,
+			afterID:   "tr10002",
+			want:      []string{"tr10004", "tr10006"},
+		},
+		{
+			name:      "descending composite filter after cursor",
+			direction: model.RecordListDirectionDesc,
+			afterTime: 997,
+			afterID:   "tr10996",
+			want:      []string{"tr10994", "tr10992"},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			records, err := store.ListRecordIndexes(context.Background(), model.RecordListOptions{
+				Limit:                len(test.want),
+				Direction:            test.direction,
+				BatchID:              "batch-shared",
+				TenantID:             "tenant-0",
+				AfterReceivedAtUnixN: test.afterTime,
+				AfterRecordID:        test.afterID,
+			})
+			if err != nil {
+				t.Fatalf("ListRecordIndexes: %v", err)
+			}
+			if len(records) != len(test.want) {
+				t.Fatalf("filtered record count = %d, want %d", len(records), len(test.want))
+			}
+			for index, record := range records {
+				if record.RecordID != test.want[index] {
+					t.Fatalf("filtered record %d ID = %q, want %q", index, record.RecordID, test.want[index])
+				}
+			}
+		})
+	}
+}
+
+func TestListRecordIndexesBatchGetPreservesPageBoundaryAndLegacyInline(t *testing.T) {
+	db, countingClient := newMockTiKVDB(t, "record-list-legacy/")
+	store := &Store{db: db, recordIndexMode: RecordIndexModeFull}
+	first := model.RecordIndex{
+		SchemaVersion:   model.SchemaRecordIndex,
+		RecordID:        "tr1-reference",
+		ReceivedAtUnixN: 1,
+	}
+	legacy := model.RecordIndex{
+		SchemaVersion:   model.SchemaRecordIndex,
+		RecordID:        "tr2-legacy-inline",
+		ReceivedAtUnixN: 2,
+	}
+	legacyValue, err := cborx.Marshal(legacy)
+	if err != nil {
+		t.Fatalf("marshal legacy record index: %v", err)
+	}
+
+	batch := db.NewBatch()
+	defer batch.Close()
+	if err := store.stageRecordIndexSet(batch, first); err != nil {
+		t.Fatalf("stage first record index: %v", err)
+	}
+	if err := batch.Set(recordIndexKey(prefixRecordByTime, legacy.ReceivedAtUnixN, legacy.RecordID), legacyValue, nil); err != nil {
+		t.Fatalf("stage legacy record index: %v", err)
+	}
+	if err := stageRecordIndexRef(batch, recordIndexKey(prefixRecordByTime, 3, "tr3-missing"), "tr3-missing"); err != nil {
+		t.Fatalf("stage dangling record index reference: %v", err)
+	}
+	if err := batch.Commit(syncWrite); err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+	if _, err := store.ListRecordIndexes(context.Background(), model.RecordListOptions{
+		Limit:     2,
+		Direction: model.RecordListDirectionAsc,
+	}); err != nil {
+		t.Fatalf("prime committed record indexes: %v", err)
+	}
+	countingClient.resetReadRequests()
+	cancelCtx, cancel := context.WithCancel(context.Background())
+	countingClient.batchGetHook = cancel
+	_, cancelErr := store.ListRecordIndexes(cancelCtx, model.RecordListOptions{
+		Limit:     1,
+		Direction: model.RecordListDirectionAsc,
+	})
+	countingClient.batchGetHook = nil
+	cancel()
+	if trusterr.CodeOf(cancelErr) != trusterr.CodeDeadlineExceeded {
+		t.Fatalf("canceled BatchGet error code = %s, want %s", trusterr.CodeOf(cancelErr), trusterr.CodeDeadlineExceeded)
+	}
+	countingClient.resetReadRequests()
+
+	records, err := store.ListRecordIndexes(context.Background(), model.RecordListOptions{
+		Limit:     2,
+		Direction: model.RecordListDirectionAsc,
+	})
+	if err != nil {
+		t.Fatalf("ListRecordIndexes(limit=2): %v", err)
+	}
+	if len(records) != 2 || records[0].RecordID != first.RecordID || records[1].RecordID != legacy.RecordID {
+		t.Fatalf("ListRecordIndexes(limit=2) = %+v", records)
+	}
+	if keys := countingClient.batchGetKeys.Load(); keys != 1 {
+		t.Fatalf("page batch-get keys = %d, want 1 without fetching the next page", keys)
+	}
+	if requests := countingClient.batchGetRequests.Load(); requests != 1 {
+		t.Fatalf("page batch-get requests = %d, want 1", requests)
+	}
+	if requests := countingClient.getRequests.Load(); requests != 0 {
+		t.Fatalf("page point-get requests = %d, want 0", requests)
+	}
+
+	countingClient.resetReadRequests()
+	if _, err := store.ListRecordIndexes(context.Background(), model.RecordListOptions{
+		Limit:     3,
+		Direction: model.RecordListDirectionAsc,
+	}); trusterr.CodeOf(err) != trusterr.CodeDataLoss {
+		t.Fatalf("ListRecordIndexes(limit=3) error code = %s, want %s", trusterr.CodeOf(err), trusterr.CodeDataLoss)
+	}
+}
+
+func newMockTiKVDB(t *testing.T, namespace string) (*tikvDB, *countingTiKVClient) {
+	t.Helper()
+	client, cluster, pdClient, err := testutils.NewMockTiKV("", nil)
+	if err != nil {
+		t.Fatalf("NewMockTiKV: %v", err)
+	}
+	testutils.BootstrapWithSingleStore(cluster)
+	countingClient := &countingTiKVClient{}
+	kvStore, err := tikvclient.NewTestTiKVStore(client, pdClient, func(client tikvclient.Client) tikvclient.Client {
+		countingClient.Client = client
+		return countingClient
+	}, nil, 0)
+	if err != nil {
+		t.Fatalf("NewTestTiKVStore: %v", err)
+	}
+	txnClient := &txnkv.Client{KVStore: kvStore}
+	t.Cleanup(func() {
+		if err := txnClient.Close(); err != nil {
+			t.Errorf("Close: %v", err)
+		}
+	})
+	return &tikvDB{client: txnClient, namespace: []byte(namespace)}, countingClient
+}
+
 type scriptedTiKVEntry struct {
 	key   []byte
 	value []byte
@@ -228,14 +525,40 @@ type scriptedTiKVIterator struct {
 
 type countingTiKVClient struct {
 	tikvclient.Client
-	scanRequests atomic.Int64
+	scanRequests     atomic.Int64
+	getRequests      atomic.Int64
+	batchGetRequests atomic.Int64
+	batchGetKeys     atomic.Int64
+	scanVersion      atomic.Uint64
+	batchGetVersion  atomic.Uint64
+	batchGetHook     func()
 }
 
 func (client *countingTiKVClient) SendRequest(ctx context.Context, address string, request *tikvrpc.Request, timeout time.Duration) (*tikvrpc.Response, error) {
-	if request.Type == tikvrpc.CmdScan {
+	switch request.Type {
+	case tikvrpc.CmdScan:
 		client.scanRequests.Add(1)
+		client.scanVersion.Store(request.Scan().Version)
+	case tikvrpc.CmdGet:
+		client.getRequests.Add(1)
+	case tikvrpc.CmdBatchGet:
+		client.batchGetRequests.Add(1)
+		client.batchGetKeys.Add(int64(len(request.BatchGet().Keys)))
+		client.batchGetVersion.Store(request.BatchGet().Version)
+		if client.batchGetHook != nil {
+			client.batchGetHook()
+		}
 	}
 	return client.Client.SendRequest(ctx, address, request, timeout)
+}
+
+func (client *countingTiKVClient) resetReadRequests() {
+	client.scanRequests.Store(0)
+	client.getRequests.Store(0)
+	client.batchGetRequests.Store(0)
+	client.batchGetKeys.Store(0)
+	client.scanVersion.Store(0)
+	client.batchGetVersion.Store(0)
 }
 
 func (it *scriptedTiKVIterator) Valid() bool {

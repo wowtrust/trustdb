@@ -1205,6 +1205,44 @@ func (s *Store) readRecordIndexScanValue(value []byte) (model.RecordIndex, error
 	return idx, nil
 }
 
+func (s *Store) visitRecordIndexRefs(ctx context.Context, iter *tikvIter, recordIDs []string, visit func(model.RecordIndex) bool) error {
+	if len(recordIDs) == 0 {
+		return nil
+	}
+	if s == nil || s.db == nil || iter == nil || iter.snapshot == nil {
+		return trusterr.New(trusterr.CodeFailedPrecondition, "tikv record index iterator is unavailable")
+	}
+	keys := make([][]byte, len(recordIDs))
+	for index, recordID := range recordIDs {
+		key := make([]byte, 0, len(s.db.namespace)+len(recordByIDPrefix)+len(recordID))
+		key = append(key, s.db.namespace...)
+		key = append(key, recordByIDPrefix...)
+		keys[index] = append(key, recordID...)
+	}
+	values, err := iter.snapshot.BatchGet(ctx, keys)
+	if err != nil {
+		return err
+	}
+	// BatchGet returns an unordered map, so consume values in scan order.
+	for _, key := range keys {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		value, found := values[string(key)]
+		if !found {
+			return trusterr.New(trusterr.CodeDataLoss, "record index reference target not found")
+		}
+		var idx model.RecordIndex
+		if err := cborx.UnmarshalLimit(value, &idx, maxStoredObjectBytes); err != nil {
+			return err
+		}
+		if !visit(idx) {
+			return nil
+		}
+	}
+	return nil
+}
+
 func (s *Store) PutBundle(ctx context.Context, bundle model.ProofBundle) error {
 	if err := ctx.Err(); err != nil {
 		return trusterr.Wrap(trusterr.CodeDeadlineExceeded, "proofstore put bundle canceled", err)
@@ -1507,14 +1545,36 @@ func (s *Store) ListRecordIndexes(ctx context.Context, opts model.RecordListOpti
 	limit := normaliseRecordLimit(opts.Limit)
 	prefix := s.recordListPrefix(opts)
 	lower, upper := prefixBounds(prefix)
+	if opts.ReceivedFromUnixN > 0 {
+		rangeLower := recordIndexKey(prefix, opts.ReceivedFromUnixN, "")
+		if bytes.Compare(rangeLower, lower) > 0 {
+			lower = rangeLower
+		}
+	}
+	if opts.ReceivedToUnixN > 0 {
+		rangeUpper := recordIndexUpperTimeKey(prefix, opts.ReceivedToUnixN)
+		if len(upper) == 0 || bytes.Compare(rangeUpper, upper) < 0 {
+			upper = rangeUpper
+		}
+	}
+	if len(upper) > 0 && bytes.Compare(lower, upper) >= 0 {
+		return make([]model.RecordIndex, 0, limit), nil
+	}
+	desc := !strings.EqualFold(opts.Direction, model.RecordListDirectionAsc)
+	hasCursor := opts.AfterReceivedAtUnixN != 0 || opts.AfterRecordID != ""
+	if hasCursor {
+		cursorKey := recordIndexKey(prefix, opts.AfterReceivedAtUnixN, opts.AfterRecordID)
+		if (!desc && len(upper) > 0 && bytes.Compare(cursorKey, upper) >= 0) ||
+			(desc && bytes.Compare(cursorKey, lower) <= 0) {
+			return make([]model.RecordIndex, 0, limit), nil
+		}
+	}
 	iter, err := s.db.NewIter(&iterOptions{LowerBound: lower, UpperBound: upper})
 	if err != nil {
 		return nil, trusterr.Wrap(trusterr.CodeDataLoss, "open record index iterator", err)
 	}
 	defer iter.Close()
 
-	desc := !strings.EqualFold(opts.Direction, model.RecordListDirectionAsc)
-	hasCursor := opts.AfterReceivedAtUnixN != 0 || opts.AfterRecordID != ""
 	var ok bool
 	if desc {
 		if hasCursor {
@@ -1533,31 +1593,81 @@ func (s *Store) ListRecordIndexes(ctx context.Context, opts model.RecordListOpti
 	}
 
 	records := make([]model.RecordIndex, 0, limit)
-	for ok {
-		if err := ctx.Err(); err != nil {
-			return nil, trusterr.Wrap(trusterr.CodeDeadlineExceeded, "proofstore list record indexes canceled", err)
-		}
-		if len(records) >= limit {
-			break
-		}
-		idx, err := s.readRecordIndexScanValue(iter.Value())
-		if err != nil {
-			return nil, trusterr.Wrap(trusterr.CodeDataLoss, "decode record index", err)
-		}
+	exhausted := false
+	consume := func(idx model.RecordIndex) bool {
 		if recordRangeExhausted(idx, opts, desc) {
-			break
+			exhausted = true
+			return false
 		}
 		if model.RecordIndexMatchesListOptions(idx, opts) && model.RecordIndexAfterCursor(idx, opts) {
 			records = append(records, idx)
 		}
+		return len(records) < limit
+	}
+	// Bound each request by the remaining page capacity. Filters may require
+	// multiple batches, but a complete page never prefetches the next one.
+	pendingRecordIDs := make([]string, 0, limit)
+	flushPending := func() error {
+		if len(pendingRecordIDs) == 0 {
+			return nil
+		}
+		err := s.visitRecordIndexRefs(ctx, iter, pendingRecordIDs, consume)
+		pendingRecordIDs = pendingRecordIDs[:0]
+		return err
+	}
+	readError := func(err error) error {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return trusterr.Wrap(trusterr.CodeDeadlineExceeded, "proofstore list record indexes canceled", ctxErr)
+		}
+		return trusterr.Wrap(trusterr.CodeDataLoss, "decode record index", err)
+	}
+	advance := func() {
 		if desc {
 			ok = iter.Prev()
 		} else {
 			ok = iter.Next()
 		}
 	}
-	if err := iter.Error(); err != nil {
-		return nil, trusterr.Wrap(trusterr.CodeDataLoss, "iterate record indexes", err)
+
+	for ok && !exhausted && len(records) < limit {
+		if err := ctx.Err(); err != nil {
+			return nil, trusterr.Wrap(trusterr.CodeDeadlineExceeded, "proofstore list record indexes canceled", err)
+		}
+		if recordID, isReference := decodeRecordIndexRef(iter.Value()); isReference {
+			pendingRecordIDs = append(pendingRecordIDs, recordID)
+			advance()
+			if len(pendingRecordIDs) >= limit-len(records) {
+				if err := flushPending(); err != nil {
+					return nil, readError(err)
+				}
+			}
+			continue
+		}
+		if err := flushPending(); err != nil {
+			return nil, readError(err)
+		}
+		if exhausted || len(records) >= limit {
+			break
+		}
+		var idx model.RecordIndex
+		if err := cborx.UnmarshalLimit(iter.Value(), &idx, maxStoredObjectBytes); err != nil {
+			return nil, readError(err)
+		}
+		consume(idx)
+		if exhausted {
+			break
+		}
+		advance()
+	}
+	if !exhausted && len(records) < limit {
+		if err := flushPending(); err != nil {
+			return nil, readError(err)
+		}
+	}
+	if !exhausted {
+		if err := iter.Error(); err != nil {
+			return nil, trusterr.Wrap(trusterr.CodeDataLoss, "iterate record indexes", err)
+		}
 	}
 	return records, nil
 }
