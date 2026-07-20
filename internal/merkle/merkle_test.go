@@ -166,6 +166,7 @@ func TestVerifyRejectsMalformedInputs(t *testing.T) {
 		{name: "short root", leaf: leaf, index: 2, treeSize: 4, proof: proof, root: root[:len(root)-1]},
 		{name: "empty tree", leaf: leaf, index: 0, treeSize: 0, proof: nil, root: root},
 		{name: "index out of range", leaf: leaf, index: 4, treeSize: 4, proof: proof, root: root},
+		{name: "short proof", leaf: leaf, index: 2, treeSize: 4, proof: proof[:len(proof)-1], root: root},
 		{name: "extra proof node", leaf: leaf, index: 2, treeSize: 4, proof: append(append([][]byte(nil), proof...), bytes.Repeat([]byte{1}, 32)), root: root},
 		{name: "short proof node", leaf: leaf, index: 2, treeSize: 4, proof: shortNodeProof, root: root},
 	}
