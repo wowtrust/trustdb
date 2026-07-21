@@ -2,10 +2,8 @@ package main
 
 import (
 	"context"
-	"strings"
 
 	"github.com/ryan-wong-coder/trustdb/internal/proofstore"
-	tikvstore "github.com/ryan-wong-coder/trustdb/internal/proofstore/tikv"
 	"github.com/ryan-wong-coder/trustdb/internal/trusterr"
 	"github.com/spf13/cobra"
 )
@@ -18,7 +16,6 @@ func newMetastoreCommand(rt *runtimeConfig) *cobra.Command {
 		Short: "Manage the trustdb proof/meta store",
 	}
 	cmd.AddCommand(newMetastoreMigrateCommand(rt))
-	cmd.AddCommand(newMetastoreTiKVMigrateLegacyCommand(rt))
 	return cmd
 }
 
@@ -40,65 +37,6 @@ type migrateReport struct {
 	AnchorOutboxes int    `json:"anchor_outboxes"`
 	AnchorResults  int    `json:"anchor_results"`
 	Skipped        int    `json:"skipped"`
-}
-
-func newMetastoreTiKVMigrateLegacyCommand(rt *runtimeConfig) *cobra.Command {
-	var pdText, keyspace, namespace string
-	var overwrite, deleteLegacy bool
-	cmd := &cobra.Command{
-		Use:   "tikv-migrate-legacy",
-		Short: "Copy legacy bare TiKV proofstore keys into the configured namespace",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			pdText = strings.TrimSpace(pdText)
-			if pdText == "" {
-				pdText = strings.Join(rt.cfg.Proofstore.TiKVPDAddresses, ",")
-			}
-			if pdText == "" {
-				return usageError("metastore tikv-migrate-legacy requires --pd-endpoints or proofstore.tikv_pd_endpoints")
-			}
-			keyspace = stringOrLiteral(cmd, "keyspace", keyspace, rt.cfg.Proofstore.TiKVKeyspace)
-			namespace = stringOrLiteral(cmd, "namespace", namespace, rt.cfg.Proofstore.TiKVNamespace)
-
-			store, err := tikvstore.OpenWithOptions(tikvstore.Options{
-				PDAddressText: pdText,
-				Keyspace:      keyspace,
-				Namespace:     namespace,
-			})
-			if err != nil {
-				return err
-			}
-			defer func() { _ = store.Close() }()
-
-			report, err := store.MigrateLegacyKeys(context.Background(), tikvstore.MigrationOptions{
-				Overwrite:    overwrite,
-				DeleteLegacy: deleteLegacy,
-			})
-			if err != nil {
-				return err
-			}
-			return rt.writeJSON(struct {
-				PDEndpoints  string                    `json:"pd_endpoints"`
-				Keyspace     string                    `json:"keyspace,omitempty"`
-				Namespace    string                    `json:"namespace"`
-				Overwrite    bool                      `json:"overwrite"`
-				DeleteLegacy bool                      `json:"delete_legacy"`
-				Report       tikvstore.MigrationReport `json:"report"`
-			}{
-				PDEndpoints:  pdText,
-				Keyspace:     keyspace,
-				Namespace:    tikvstore.NormalizeNamespace(namespace),
-				Overwrite:    overwrite,
-				DeleteLegacy: deleteLegacy,
-				Report:       report,
-			})
-		},
-	}
-	cmd.Flags().StringVar(&pdText, "pd-endpoints", "", "comma-separated TiKV PD endpoints")
-	cmd.Flags().StringVar(&keyspace, "keyspace", "", "TiKV keyspace")
-	cmd.Flags().StringVar(&namespace, "namespace", "", "destination TrustDB namespace inside TiKV")
-	cmd.Flags().BoolVar(&overwrite, "overwrite", false, "overwrite namespaced keys that already exist")
-	cmd.Flags().BoolVar(&deleteLegacy, "delete-legacy", false, "delete copied legacy bare keys after a successful copy")
-	return cmd
 }
 
 func newMetastoreMigrateCommand(rt *runtimeConfig) *cobra.Command {

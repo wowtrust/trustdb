@@ -31,9 +31,8 @@ import (
 )
 
 const (
-	defaultNamespace      = "default"
-	namespacePrefix       = "trustdb/proofstore/v1/ns/"
-	namespaceMetadataName = "trustdb/proofstore/v1/metadata"
+	defaultNamespace = "default"
+	namespacePrefix  = "trustdb/proofstore/v1/ns/"
 )
 
 // maxStoredObjectBytes caps decode input size to guard against corrupt
@@ -664,132 +663,6 @@ func namespaceKeyPrefix(namespace string) []byte {
 	out = append(out, namespacePrefix...)
 	out = append(out, encoded...)
 	return append(out, '/')
-}
-
-type MigrationOptions struct {
-	Overwrite    bool
-	DeleteLegacy bool
-}
-
-type MigrationReport struct {
-	Scanned int
-	Copied  int
-	Skipped int
-	Deleted int
-}
-
-// MigrateLegacyKeys copies keys written by the first TiKV backend, which used
-// Pebble-compatible bare keys, into this store's namespaced key prefix. It is
-// intentionally opt-in so operators can validate copied data before deleting
-// the legacy key range.
-func (s *Store) MigrateLegacyKeys(ctx context.Context, opts MigrationOptions) (MigrationReport, error) {
-	if s == nil || s.db == nil {
-		return MigrationReport{}, trusterr.New(trusterr.CodeFailedPrecondition, "tikv proofstore is closed")
-	}
-	var report MigrationReport
-	for _, key := range legacyScalarKeys() {
-		if err := ctx.Err(); err != nil {
-			return report, trusterr.Wrap(trusterr.CodeDeadlineExceeded, "tikv legacy migration canceled", err)
-		}
-		value, _, err := s.db.rawGet(key)
-		if err != nil {
-			if isNotFound(err) {
-				continue
-			}
-			return report, trusterr.Wrap(trusterr.CodeDataLoss, "read legacy tikv key", err)
-		}
-		if err := s.migrateLegacyKey(key, value, opts, &report); err != nil {
-			return report, err
-		}
-	}
-	for _, prefix := range legacyPrefixes() {
-		if err := ctx.Err(); err != nil {
-			return report, trusterr.Wrap(trusterr.CodeDeadlineExceeded, "tikv legacy migration canceled", err)
-		}
-		lower, upper := prefixBounds(prefix)
-		iter, err := s.db.rawNewIter(&iterOptions{LowerBound: lower, UpperBound: upper})
-		if err != nil {
-			return report, trusterr.Wrap(trusterr.CodeDataLoss, "open legacy tikv iterator", err)
-		}
-		for ok := iter.First(); ok; ok = iter.Next() {
-			if err := ctx.Err(); err != nil {
-				_ = iter.Close()
-				return report, trusterr.Wrap(trusterr.CodeDeadlineExceeded, "tikv legacy migration canceled", err)
-			}
-			key := append([]byte(nil), iter.key...)
-			value := append([]byte(nil), iter.Value()...)
-			if err := s.migrateLegacyKey(key, value, opts, &report); err != nil {
-				_ = iter.Close()
-				return report, err
-			}
-		}
-		if err := iter.Error(); err != nil {
-			_ = iter.Close()
-			return report, trusterr.Wrap(trusterr.CodeDataLoss, "iterate legacy tikv keys", err)
-		}
-		if err := iter.Close(); err != nil {
-			return report, trusterr.Wrap(trusterr.CodeDataLoss, "close legacy tikv iterator", err)
-		}
-	}
-	return report, nil
-}
-
-func (s *Store) migrateLegacyKey(key, value []byte, opts MigrationOptions, report *MigrationReport) error {
-	report.Scanned++
-	target := s.db.physicalKey(key)
-	if !opts.Overwrite {
-		if _, _, err := s.db.rawGet(target); err == nil {
-			report.Skipped++
-			return nil
-		} else if !isNotFound(err) {
-			return trusterr.Wrap(trusterr.CodeDataLoss, "check migrated tikv key", err)
-		}
-	}
-	if err := s.db.rawSet(target, value); err != nil {
-		return trusterr.Wrap(trusterr.CodeDataLoss, "write migrated tikv key", err)
-	}
-	report.Copied++
-	if opts.DeleteLegacy {
-		if err := s.db.rawDelete(key); err != nil {
-			return trusterr.Wrap(trusterr.CodeDataLoss, "delete legacy tikv key", err)
-		}
-		report.Deleted++
-	}
-	return nil
-}
-
-func legacyScalarKeys() [][]byte {
-	return [][]byte{
-		[]byte(globalStateKey),
-		[]byte(namespaceMetadataName),
-	}
-}
-
-func legacyPrefixes() []string {
-	return []string{
-		prefixBundle,
-		prefixBundleV2,
-		prefixRecordByID,
-		prefixRecordByTime,
-		prefixRecordByBatch,
-		prefixRecordByLevel,
-		prefixRecordByTenant,
-		prefixRecordByClient,
-		prefixRecordByHash,
-		prefixRecordByToken,
-		prefixManifest,
-		prefixRoot,
-		prefixGlobalLeaf,
-		prefixGlobalBatch,
-		prefixGlobalNode,
-		prefixSTH,
-		prefixGlobalTile,
-		prefixGlobalOutbox,
-		prefixGlobalStatus,
-		prefixAnchorOutbox,
-		prefixAnchorStatus,
-		prefixAnchorResult,
-	}
 }
 
 func normalizeRecordIndexMode(opts Options) string {
