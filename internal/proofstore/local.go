@@ -44,6 +44,8 @@ type localFileOps struct {
 
 var localDurableDirectories sync.Map
 
+var localLatestSTHLocks [64]sync.Mutex
+
 func defaultLocalFileOps() localFileOps {
 	return localFileOps{
 		stat:       os.Stat,
@@ -999,8 +1001,14 @@ func (s LocalStore) PutSignedTreeHead(ctx context.Context, sth model.SignedTreeH
 	if sth.TimestampUnixN == 0 {
 		sth.TimestampUnixN = time.Now().UTC().UnixNano()
 	}
+	lock := s.latestSignedTreeHeadLock()
+	lock.Lock()
+	defer lock.Unlock()
 	if err := writeCBORAtomic(s.sthPath(sth.TreeSize), sth); err != nil {
 		return trusterr.Wrap(trusterr.CodeDataLoss, "write signed tree head", err)
+	}
+	if err := s.promoteLatestSignedTreeHeadReferenceLocked(ctx, sth.TreeSize); err != nil {
+		return err
 	}
 	return nil
 }
@@ -1124,33 +1132,161 @@ func (s LocalStore) LatestSignedTreeHead(ctx context.Context) (model.SignedTreeH
 	if err := ctx.Err(); err != nil {
 		return model.SignedTreeHead{}, false, trusterr.Wrap(trusterr.CodeDeadlineExceeded, "proofstore latest sth canceled", err)
 	}
+	treeSize, ok, refErr := s.readLatestSignedTreeHeadReference()
+	if refErr == nil && ok {
+		sth, found, err := s.GetSignedTreeHead(ctx, treeSize)
+		if err != nil {
+			return model.SignedTreeHead{}, false, err
+		}
+		if found {
+			if sth.TreeSize != treeSize {
+				return model.SignedTreeHead{}, false, trusterr.New(trusterr.CodeDataLoss, "latest signed tree head reference does not match item")
+			}
+			state, stateFound, err := s.GetGlobalLogState(ctx)
+			if err != nil {
+				return model.SignedTreeHead{}, false, err
+			}
+			if !stateFound || state.TreeSize <= treeSize {
+				return sth, true, nil
+			}
+			newer, newerFound, err := s.GetSignedTreeHead(ctx, state.TreeSize)
+			if err != nil {
+				return model.SignedTreeHead{}, false, err
+			}
+			if !newerFound {
+				return sth, true, nil
+			}
+			if newer.TreeSize != state.TreeSize {
+				return model.SignedTreeHead{}, false, trusterr.New(trusterr.CodeDataLoss, "global state tree size does not match signed tree head")
+			}
+			if err := s.promoteLatestSignedTreeHeadReference(ctx, newer.TreeSize); err != nil {
+				return model.SignedTreeHead{}, false, err
+			}
+			return newer, true, nil
+		}
+	}
+	return s.rebuildLatestSignedTreeHeadReference(ctx)
+}
+
+func (s LocalStore) promoteLatestSignedTreeHeadReference(ctx context.Context, treeSize uint64) error {
+	lock := s.latestSignedTreeHeadLock()
+	lock.Lock()
+	defer lock.Unlock()
+	return s.promoteLatestSignedTreeHeadReferenceLocked(ctx, treeSize)
+}
+
+func (s LocalStore) promoteLatestSignedTreeHeadReferenceLocked(ctx context.Context, treeSize uint64) error {
+	if err := ctx.Err(); err != nil {
+		return trusterr.Wrap(trusterr.CodeDeadlineExceeded, "proofstore update latest sth reference canceled", err)
+	}
+	current, ok, err := s.readLatestSignedTreeHeadReference()
+	if err == nil && ok {
+		if current >= treeSize {
+			return nil
+		}
+		if err := writeCBORAtomic(s.latestSignedTreeHeadReferencePath(), treeSize); err != nil {
+			return trusterr.Wrap(trusterr.CodeDataLoss, "write latest signed tree head reference", err)
+		}
+		return nil
+	}
+	_, latest, found, rebuildErr := s.latestSignedTreeHeadFromHistory(ctx)
+	if rebuildErr != nil {
+		return rebuildErr
+	}
+	if found {
+		treeSize = latest.TreeSize
+	}
+	if err := writeCBORAtomic(s.latestSignedTreeHeadReferencePath(), treeSize); err != nil {
+		return trusterr.Wrap(trusterr.CodeDataLoss, "write latest signed tree head reference", err)
+	}
+	return nil
+}
+
+func (s LocalStore) rebuildLatestSignedTreeHeadReference(ctx context.Context) (model.SignedTreeHead, bool, error) {
+	lock := s.latestSignedTreeHeadLock()
+	lock.Lock()
+	defer lock.Unlock()
+
+	if treeSize, ok, err := s.readLatestSignedTreeHeadReference(); err == nil && ok {
+		sth, found, getErr := s.GetSignedTreeHead(ctx, treeSize)
+		if getErr != nil {
+			return model.SignedTreeHead{}, false, getErr
+		}
+		if found {
+			if sth.TreeSize != treeSize {
+				return model.SignedTreeHead{}, false, trusterr.New(trusterr.CodeDataLoss, "latest signed tree head reference does not match item")
+			}
+			return sth, true, nil
+		}
+	}
+	treeSize, sth, found, err := s.latestSignedTreeHeadFromHistory(ctx)
+	if err != nil || !found {
+		return sth, found, err
+	}
+	if err := writeCBORAtomic(s.latestSignedTreeHeadReferencePath(), treeSize); err != nil {
+		return model.SignedTreeHead{}, false, trusterr.Wrap(trusterr.CodeDataLoss, "rebuild latest signed tree head reference", err)
+	}
+	return sth, true, nil
+}
+
+func (s LocalStore) latestSignedTreeHeadFromHistory(ctx context.Context) (uint64, model.SignedTreeHead, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, model.SignedTreeHead{}, false, trusterr.Wrap(trusterr.CodeDeadlineExceeded, "proofstore scan latest sth canceled", err)
+	}
 	entries, err := os.ReadDir(s.sthDir())
 	if err != nil {
 		if os.IsNotExist(err) {
-			return model.SignedTreeHead{}, false, nil
+			return 0, model.SignedTreeHead{}, false, nil
 		}
-		return model.SignedTreeHead{}, false, trusterr.Wrap(trusterr.CodeDataLoss, "read sth directory", err)
+		return 0, model.SignedTreeHead{}, false, trusterr.Wrap(trusterr.CodeDataLoss, "read sth directory", err)
 	}
-	latestName := ""
 	for i := len(entries) - 1; i >= 0; i-- {
 		entry := entries[i]
-		if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".tdsth") {
-			latestName = entry.Name()
-			break
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".tdsth") {
+			continue
 		}
+		treeSize, err := decodeLocalUint64Filename(entry.Name(), ".tdsth")
+		if err != nil || treeSize == 0 {
+			return 0, model.SignedTreeHead{}, false, trusterr.New(trusterr.CodeDataLoss, "invalid signed tree head filename")
+		}
+		sth, found, err := s.GetSignedTreeHead(ctx, treeSize)
+		if err != nil {
+			return 0, model.SignedTreeHead{}, false, err
+		}
+		if !found || sth.TreeSize != treeSize {
+			return 0, model.SignedTreeHead{}, false, trusterr.New(trusterr.CodeDataLoss, "signed tree head path does not match item")
+		}
+		return treeSize, sth, true, nil
 	}
-	if latestName == "" {
-		return model.SignedTreeHead{}, false, nil
-	}
-	data, err := readStoredFile(filepath.Join(s.sthDir(), latestName))
+	return 0, model.SignedTreeHead{}, false, nil
+}
+
+func (s LocalStore) readLatestSignedTreeHeadReference() (uint64, bool, error) {
+	data, err := readStoredFile(s.latestSignedTreeHeadReferencePath())
 	if err != nil {
-		return model.SignedTreeHead{}, false, trusterr.Wrap(trusterr.CodeDataLoss, "read latest signed tree head", err)
+		if os.IsNotExist(err) {
+			return 0, false, nil
+		}
+		return 0, false, err
 	}
-	var sth model.SignedTreeHead
-	if err := cborx.UnmarshalLimit(data, &sth, maxStoredObjectBytes); err != nil {
-		return model.SignedTreeHead{}, false, trusterr.Wrap(trusterr.CodeDataLoss, "decode latest signed tree head", err)
+	var treeSize uint64
+	if err := cborx.UnmarshalLimit(data, &treeSize, maxStoredObjectBytes); err != nil {
+		return 0, false, err
 	}
-	return sth, true, nil
+	if treeSize == 0 {
+		return 0, false, trusterr.New(trusterr.CodeDataLoss, "latest signed tree head reference is zero")
+	}
+	return treeSize, true, nil
+}
+
+func (s LocalStore) latestSignedTreeHeadLock() *sync.Mutex {
+	value := s.root()
+	hash := uint64(14695981039346656037)
+	for i := 0; i < len(value); i++ {
+		hash ^= uint64(value[i])
+		hash *= 1099511628211
+	}
+	return &localLatestSTHLocks[hash%uint64(len(localLatestSTHLocks))]
 }
 
 func (s LocalStore) PutGlobalLogTile(ctx context.Context, tile model.GlobalLogTile) error {
@@ -1918,6 +2054,10 @@ func (s LocalStore) globalStatePath() string {
 
 func (s LocalStore) sthDir() string {
 	return filepath.Join(s.root(), "global", "sth")
+}
+
+func (s LocalStore) latestSignedTreeHeadReferencePath() string {
+	return filepath.Join(s.root(), "global", "latest-sth.tdref")
 }
 
 func (s LocalStore) globalTileDir() string {

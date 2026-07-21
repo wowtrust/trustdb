@@ -157,6 +157,9 @@ func TestBackupCreateVerifyRestoreRoundTrip(t *testing.T) {
 	if _, ok, err := dst.GetGlobalLogState(ctx); err != nil || !ok {
 		t.Fatalf("GetGlobalLogState restored ok=%v err=%v", ok, err)
 	}
+	if latest, ok, err := dst.LatestSignedTreeHead(ctx); err != nil || !ok || latest.TreeSize != sth.TreeSize {
+		t.Fatalf("LatestSignedTreeHead restored latest=%+v ok=%v err=%v", latest, ok, err)
+	}
 	if _, ok, err := dst.GetGlobalLogOutboxItem(ctx, root.BatchID); err != nil || !ok {
 		t.Fatalf("GetGlobalLogOutboxItem restored ok=%v err=%v", ok, err)
 	}
