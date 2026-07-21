@@ -131,6 +131,27 @@ func TestProjectPageWithoutAnchorLeavesL4(t *testing.T) {
 	}
 }
 
+func TestStopCancelsProjectionWithoutForcingCheckpoint(t *testing.T) {
+	key := projectorKey()
+	base := newProjectorStore(key, 1)
+	base.result = projectorResult(key, 1)
+	store := &blockingProjectorStore{projectorStore: base, started: make(chan struct{})}
+	service, err := New(Config{Store: store, Key: key, PollInterval: time.Hour})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	service.Start(context.Background())
+	select {
+	case <-store.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("projection did not start")
+	}
+	service.Stop()
+	if _, found, err := store.GetL5CoverageCheckpoint(context.Background(), key); err != nil || found {
+		t.Fatalf("checkpoint after canceled shutdown found=%v err=%v", found, err)
+	}
+}
+
 type projectorStore struct {
 	mu                sync.Mutex
 	key               model.STHAnchorScheduleKey
@@ -141,6 +162,18 @@ type projectorStore struct {
 	checkpointFound   bool
 	failBatch         string
 	failuresRemaining int
+}
+
+type blockingProjectorStore struct {
+	*projectorStore
+	started chan struct{}
+	once    sync.Once
+}
+
+func (s *blockingProjectorStore) PromoteBatchProofLevel(ctx context.Context, _, _ string) error {
+	s.once.Do(func() { close(s.started) })
+	<-ctx.Done()
+	return ctx.Err()
 }
 
 func newProjectorStore(key model.STHAnchorScheduleKey, leaves int) *projectorStore {
