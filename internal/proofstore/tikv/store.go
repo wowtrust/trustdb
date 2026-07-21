@@ -51,7 +51,9 @@ const (
 	checkpointCommitMaxAttempts  = 16
 	promotionCommitMaxAttempts   = 3
 	promotionReferenceBatchSize  = 1024
-	anchorScheduleCommitAttempts = 16
+	anchorScheduleCommitAttempts = 64
+	anchorScheduleInitialBackoff = 250 * time.Microsecond
+	anchorScheduleMaxBackoff     = 10 * time.Millisecond
 )
 
 var errStopScan = errors.New("stop scan")
@@ -5010,8 +5012,39 @@ func (s *Store) runAnchorScheduleTransaction(ctx context.Context, operation stri
 			}
 			return trusterr.Wrap(trusterr.CodeDataLoss, operation, err)
 		}
+		if attempt+1 < anchorScheduleCommitAttempts {
+			if err := waitAnchorScheduleRetry(ctx, attempt); err != nil {
+				return trusterr.Wrap(trusterr.CodeDeadlineExceeded, operation+" canceled", err)
+			}
+		}
 	}
 	return trusterr.Wrap(trusterr.CodeDataLoss, operation+" retry limit exceeded", lastErr)
+}
+
+func waitAnchorScheduleRetry(ctx context.Context, attempt int) error {
+	delay := anchorScheduleInitialBackoff
+	for i := 0; i < attempt && delay < anchorScheduleMaxBackoff; i++ {
+		if delay > anchorScheduleMaxBackoff/2 {
+			delay = anchorScheduleMaxBackoff
+			break
+		}
+		delay *= 2
+	}
+	if delay > anchorScheduleMaxBackoff {
+		delay = anchorScheduleMaxBackoff
+	}
+	// Concurrent servers otherwise retry the same hot schedule key in lockstep.
+	// A small wall-clock-derived jitter spreads the retries without maintaining
+	// process-global pseudo-random state or weakening the transactional CAS.
+	jitter := time.Duration(time.Now().UnixNano() % int64(delay+1))
+	timer := time.NewTimer(delay + jitter)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 func (s *Store) listSTHAnchors(ctx context.Context, limit int, include func(model.STHAnchorOutboxItem) bool) ([]model.STHAnchorOutboxItem, error) {
