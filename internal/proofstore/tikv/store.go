@@ -1551,13 +1551,6 @@ func (s *Store) GetBundle(ctx context.Context, recordID string) (model.ProofBund
 	if found {
 		return bundle, nil
 	}
-	found, err = s.readCBOR(bundleKey(recordID), &bundle)
-	if err != nil {
-		return model.ProofBundle{}, trusterr.Wrap(trusterr.CodeDataLoss, "read legacy proof bundle", err)
-	}
-	if found {
-		return bundle, nil
-	}
 	return model.ProofBundle{}, trusterr.New(trusterr.CodeNotFound, "proof bundle not found")
 }
 
