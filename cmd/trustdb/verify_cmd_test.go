@@ -418,12 +418,11 @@ func runServeForVerify(t *testing.T, ctx context.Context) (*httptest.Server, ed2
 		t.Fatalf("globallog.New: %v", err)
 	}
 	globalOutbox := globallog.NewOutboxWorker(globallog.OutboxConfig{
-		Store:        proofStore,
-		Global:       globalSvc,
-		PollInterval: 20 * time.Millisecond,
-		OnSTH: func(ctx context.Context, sth model.SignedTreeHead) {
-			enqueueSTHAnchor(ctx, rt, proofStore, anchorSvc, sth)
-		},
+		Store:          proofStore,
+		Global:         globalSvc,
+		PollInterval:   20 * time.Millisecond,
+		AnchorOutbox:   true,
+		OnAnchorsReady: anchorSvc.Trigger,
 	})
 	globalOutbox.Start(ctx)
 	t.Cleanup(globalOutbox.Stop)

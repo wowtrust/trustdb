@@ -106,12 +106,11 @@ func TestServeAnchorEndToEnd(t *testing.T) {
 		t.Fatalf("globallog.New: %v", err)
 	}
 	globalOutbox := globallog.NewOutboxWorker(globallog.OutboxConfig{
-		Store:        proofStore,
-		Global:       globalSvc,
-		PollInterval: 20 * time.Millisecond,
-		OnSTH: func(ctx context.Context, sth model.SignedTreeHead) {
-			enqueueSTHAnchor(ctx, rt, proofStore, anchorSvc, sth)
-		},
+		Store:          proofStore,
+		Global:         globalSvc,
+		PollInterval:   20 * time.Millisecond,
+		AnchorOutbox:   true,
+		OnAnchorsReady: anchorSvc.Trigger,
 	})
 	globalOutbox.Start(context.Background())
 	defer globalOutbox.Stop()
@@ -315,7 +314,6 @@ func TestBackfillGlobalLog(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
-	rt := &runtimeConfig{logger: silentLogger()}
 	n, err := backfillGlobalLogOutbox(ctx, proofStore)
 	if err != nil {
 		t.Fatalf("backfill: %v", err)
@@ -341,12 +339,11 @@ func TestBackfillGlobalLog(t *testing.T) {
 	}
 
 	worker := globallog.NewOutboxWorker(globallog.OutboxConfig{
-		Store:        proofStore,
-		Global:       globalSvc,
-		PollInterval: 10 * time.Millisecond,
-		OnSTH: func(ctx context.Context, sth model.SignedTreeHead) {
-			enqueueSTHAnchor(ctx, rt, proofStore, svc, sth)
-		},
+		Store:          proofStore,
+		Global:         globalSvc,
+		PollInterval:   10 * time.Millisecond,
+		AnchorOutbox:   true,
+		OnAnchorsReady: svc.Trigger,
 	})
 	worker.Start(ctx)
 	defer worker.Stop()

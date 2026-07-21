@@ -19,7 +19,6 @@ import (
 	"github.com/ryan-wong-coder/trustdb/internal/grpcapi"
 	"github.com/ryan-wong-coder/trustdb/internal/httpapi"
 	"github.com/ryan-wong-coder/trustdb/internal/ingest"
-	"github.com/ryan-wong-coder/trustdb/internal/model"
 	"github.com/ryan-wong-coder/trustdb/internal/observability"
 	"github.com/ryan-wong-coder/trustdb/internal/proofstore"
 	"github.com/ryan-wong-coder/trustdb/internal/trustcrypto"
@@ -196,12 +195,11 @@ func newTransportE2EEnv(t *testing.T) transportE2EEnv {
 		t.Fatalf("globallog.New: %v", err)
 	}
 	globalOutbox := globallog.NewOutboxWorker(globallog.OutboxConfig{
-		Store:        proofStore,
-		Global:       globalSvc,
-		PollInterval: 20 * time.Millisecond,
-		OnSTH: func(ctx context.Context, sth model.SignedTreeHead) {
-			enqueueSTHAnchor(ctx, rt, proofStore, anchorSvc, sth)
-		},
+		Store:          proofStore,
+		Global:         globalSvc,
+		PollInterval:   20 * time.Millisecond,
+		AnchorOutbox:   true,
+		OnAnchorsReady: anchorSvc.Trigger,
 	})
 	globalOutbox.Start(context.Background())
 	t.Cleanup(globalOutbox.Stop)

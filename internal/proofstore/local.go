@@ -1,6 +1,7 @@
 package proofstore
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/hex"
@@ -1746,6 +1747,94 @@ func (s LocalStore) MarkGlobalLogPublished(ctx context.Context, batchID string, 
 		return err
 	}
 	return nil
+}
+
+func (s LocalStore) MarkGlobalLogPublishedBatchWithAnchors(ctx context.Context, batchIDs []string, sths []model.SignedTreeHead, anchors []model.STHAnchorOutboxItem) error {
+	if err := ctx.Err(); err != nil {
+		return trusterr.Wrap(trusterr.CodeDeadlineExceeded, "proofstore mark global log batch published with anchors canceled", err)
+	}
+	if len(batchIDs) == 0 || len(batchIDs) != len(sths) || len(anchors) != len(sths) {
+		return trusterr.New(trusterr.CodeInvalidArgument, "global log published anchor batch inputs are inconsistent")
+	}
+
+	now := time.Now().UTC().UnixNano()
+	normalizedAnchors := make([]model.STHAnchorOutboxItem, len(anchors))
+	for i := range batchIDs {
+		if batchIDs[i] == "" || sths[i].TreeSize == 0 {
+			return trusterr.New(trusterr.CodeInvalidArgument, "global log published anchor batch item is invalid")
+		}
+		globalItem, ok, err := s.GetGlobalLogOutboxItem(ctx, batchIDs[i])
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return trusterr.New(trusterr.CodeNotFound, "global log outbox item not found")
+		}
+		if globalItem.Status == model.AnchorStatePublished && !sameLocalSignedTreeHead(globalItem.STH, sths[i]) {
+			return trusterr.New(trusterr.CodeDataLoss, "published global log outbox STH does not match retry")
+		}
+
+		anchorItem := anchors[i]
+		if anchorItem.TreeSize != sths[i].TreeSize || !sameLocalSignedTreeHead(anchorItem.STH, sths[i]) {
+			return trusterr.New(trusterr.CodeInvalidArgument, "sth anchor does not match published tree head")
+		}
+		if anchorItem.SchemaVersion == "" {
+			anchorItem.SchemaVersion = model.SchemaSTHAnchorOutbox
+		}
+		if anchorItem.Status == "" {
+			anchorItem.Status = model.AnchorStatePending
+		}
+		if anchorItem.Status != model.AnchorStatePending {
+			return trusterr.New(trusterr.CodeInvalidArgument, "new sth anchor must be pending")
+		}
+		if anchorItem.EnqueuedAtUnixN == 0 {
+			anchorItem.EnqueuedAtUnixN = now
+		}
+		existing, found, err := s.GetSTHAnchorOutboxItem(ctx, anchorItem.TreeSize)
+		if err != nil {
+			return err
+		}
+		if found && !sameLocalSignedTreeHead(existing.STH, anchorItem.STH) {
+			return trusterr.New(trusterr.CodeDataLoss, "existing sth anchor does not match publication retry")
+		}
+		normalizedAnchors[i] = anchorItem
+	}
+
+	// Persist anchor work first. A crash after this point leaves the Global Log
+	// outbox pending, so its retry can safely converge without losing L5 work.
+	for i := range normalizedAnchors {
+		if err := s.EnqueueSTHAnchor(ctx, normalizedAnchors[i]); err != nil {
+			if trusterr.CodeOf(err) != trusterr.CodeAlreadyExists {
+				return err
+			}
+			existing, ok, readErr := s.GetSTHAnchorOutboxItem(ctx, normalizedAnchors[i].TreeSize)
+			if readErr != nil {
+				return readErr
+			}
+			if !ok || !sameLocalSignedTreeHead(existing.STH, normalizedAnchors[i].STH) {
+				return trusterr.New(trusterr.CodeDataLoss, "existing sth anchor does not match publication retry")
+			}
+		}
+	}
+	for i := range batchIDs {
+		if err := s.MarkGlobalLogPublished(ctx, batchIDs[i], sths[i]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func sameLocalSignedTreeHead(left, right model.SignedTreeHead) bool {
+	return left.SchemaVersion == right.SchemaVersion &&
+		left.TreeAlg == right.TreeAlg &&
+		left.TreeSize == right.TreeSize &&
+		bytes.Equal(left.RootHash, right.RootHash) &&
+		left.TimestampUnixN == right.TimestampUnixN &&
+		left.NodeID == right.NodeID &&
+		left.LogID == right.LogID &&
+		left.Signature.Alg == right.Signature.Alg &&
+		left.Signature.KeyID == right.Signature.KeyID &&
+		bytes.Equal(left.Signature.Signature, right.Signature.Signature)
 }
 
 func (s LocalStore) RescheduleGlobalLog(ctx context.Context, batchID string, attempts int, nextAttemptUnixN int64, lastErrorMessage string) error {

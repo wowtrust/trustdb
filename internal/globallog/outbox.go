@@ -25,8 +25,6 @@ const (
 type OutboxConfig struct {
 	Store          proofstore.Store
 	Global         *Service
-	OnSTH          func(context.Context, model.SignedTreeHead)
-	OnSTHs         func(context.Context, []model.SignedTreeHead)
 	OnAnchorsReady func()
 	AnchorOutbox   bool
 	Metrics        *observability.Metrics
@@ -174,22 +172,25 @@ func (w *OutboxWorker) processBatch(ctx context.Context, items []model.GlobalLog
 	}
 	anchorsEnqueued := false
 	if w.cfg.AnchorOutbox {
-		if marker, ok := w.cfg.Store.(proofstore.GlobalLogPublishedBatchWithAnchorsMarker); ok {
-			anchors := make([]model.STHAnchorOutboxItem, len(sths))
-			for i := range sths {
-				anchors[i] = model.STHAnchorOutboxItem{
-					SchemaVersion: model.SchemaSTHAnchorOutbox,
-					TreeSize:      sths[i].TreeSize,
-					Status:        model.AnchorStatePending,
-					STH:           sths[i],
-				}
-			}
-			if err := marker.MarkGlobalLogPublishedBatchWithAnchors(ctx, batchIDs, sths, anchors); err != nil {
-				w.cfg.Logger.Error().Err(err).Int("count", len(items)).Msg("global log outbox: mark batch published with anchors failed")
-				return
-			}
-			anchorsEnqueued = true
+		marker, ok := w.cfg.Store.(proofstore.GlobalLogPublishedBatchWithAnchorsMarker)
+		if !ok {
+			w.cfg.Logger.Error().Msg("global log outbox: durable anchor publication is unsupported")
+			return
 		}
+		anchors := make([]model.STHAnchorOutboxItem, len(sths))
+		for i := range sths {
+			anchors[i] = model.STHAnchorOutboxItem{
+				SchemaVersion: model.SchemaSTHAnchorOutbox,
+				TreeSize:      sths[i].TreeSize,
+				Status:        model.AnchorStatePending,
+				STH:           sths[i],
+			}
+		}
+		if err := marker.MarkGlobalLogPublishedBatchWithAnchors(ctx, batchIDs, sths, anchors); err != nil {
+			w.cfg.Logger.Error().Err(err).Int("count", len(items)).Msg("global log outbox: mark batch published with anchors failed")
+			return
+		}
+		anchorsEnqueued = true
 	}
 	if !anchorsEnqueued {
 		if marker, ok := w.cfg.Store.(proofstore.GlobalLogPublishedBatchMarker); ok {
@@ -213,12 +214,6 @@ func (w *OutboxWorker) processBatch(ctx context.Context, items []model.GlobalLog
 		if w.cfg.OnAnchorsReady != nil {
 			w.cfg.OnAnchorsReady()
 		}
-	} else if w.cfg.OnSTHs != nil {
-		w.cfg.OnSTHs(ctx, sths)
-	} else if w.cfg.OnSTH != nil {
-		for i := range items {
-			w.cfg.OnSTH(ctx, sths[i])
-		}
 	}
 	for i := range items {
 		w.cfg.Logger.Debug().Str("batch_id", items[i].BatchID).Uint64("tree_size", sths[i].TreeSize).Msg("global log outbox: appended")
@@ -234,23 +229,6 @@ func (w *OutboxWorker) reschedule(ctx context.Context, item model.GlobalLogOutbo
 		return
 	}
 	w.cfg.Logger.Warn().Err(cause).Str("batch_id", item.BatchID).Int("attempts", nextAttempts).Dur("backoff", backoff).Msg("global log outbox: append failed")
-}
-
-func (w *OutboxWorker) processOne(ctx context.Context, item model.GlobalLogOutboxItem) {
-	sth, err := w.cfg.Global.AppendBatchRoot(ctx, item.BatchRoot)
-	if err == nil {
-		if err := w.cfg.Store.MarkGlobalLogPublished(ctx, item.BatchID, sth); err != nil {
-			w.cfg.Logger.Error().Err(err).Str("batch_id", item.BatchID).Msg("global log outbox: mark published failed")
-			return
-		}
-		if w.cfg.OnSTH != nil {
-			w.cfg.OnSTH(ctx, sth)
-		}
-		w.cfg.Logger.Debug().Str("batch_id", item.BatchID).Uint64("tree_size", sth.TreeSize).Msg("global log outbox: appended")
-		return
-	}
-
-	w.reschedule(ctx, item, err)
 }
 
 func outboxBackoff(initial, max time.Duration, attempts int) time.Duration {

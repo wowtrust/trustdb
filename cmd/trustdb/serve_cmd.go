@@ -506,11 +506,6 @@ func newServeCommand(rt *runtimeConfig) *cobra.Command {
 							anchorSvc.Trigger()
 						}
 					},
-					OnSTHs: func(ctx context.Context, sths []model.SignedTreeHead) {
-						if anchorSvc != nil {
-							enqueueSTHAnchors(ctx, rt, proofStore, anchorSvc, sths)
-						}
-					},
 					Logger: rt.logger,
 				})
 				defer globalOutbox.Stop()
@@ -954,49 +949,6 @@ func newGlobalLogEnqueueHook(rt *runtimeConfig, store proofstore.Store, worker *
 		if worker != nil {
 			worker.Trigger()
 		}
-	}
-}
-
-func enqueueSTHAnchor(ctx context.Context, rt *runtimeConfig, store proofstore.Store, svc *anchor.Service, sth model.SignedTreeHead) {
-	item := model.STHAnchorOutboxItem{
-		SchemaVersion: model.SchemaSTHAnchorOutbox,
-		TreeSize:      sth.TreeSize,
-		Status:        model.AnchorStatePending,
-		STH:           sth,
-	}
-	if err := store.EnqueueSTHAnchor(ctx, item); err != nil {
-		if trusterr.CodeOf(err) == trusterr.CodeAlreadyExists {
-			return
-		}
-		rt.logger.Warn().Err(err).Uint64("tree_size", sth.TreeSize).Msg("sth anchor enqueue failed")
-		return
-	}
-	svc.Trigger()
-}
-
-func enqueueSTHAnchors(ctx context.Context, rt *runtimeConfig, store proofstore.Store, svc *anchor.Service, sths []model.SignedTreeHead) {
-	if len(sths) == 0 {
-		return
-	}
-	items := make([]model.STHAnchorOutboxItem, len(sths))
-	for i := range sths {
-		items[i] = model.STHAnchorOutboxItem{
-			SchemaVersion: model.SchemaSTHAnchorOutbox,
-			TreeSize:      sths[i].TreeSize,
-			Status:        model.AnchorStatePending,
-			STH:           sths[i],
-		}
-	}
-	if batcher, ok := store.(proofstore.STHAnchorBatchEnqueuer); ok {
-		if err := batcher.EnqueueSTHAnchors(ctx, items); err != nil {
-			rt.logger.Warn().Err(err).Int("count", len(items)).Msg("sth anchor batch enqueue failed")
-			return
-		}
-		svc.Trigger()
-		return
-	}
-	for i := range sths {
-		enqueueSTHAnchor(ctx, rt, store, svc, sths[i])
 	}
 }
 

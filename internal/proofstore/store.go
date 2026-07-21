@@ -98,6 +98,7 @@ type Store interface {
 // value and pointer receivers on LocalStore resolve through the method
 // set of the pointer, so we pin the pointer form here.
 var _ Store = (*LocalStore)(nil)
+var _ GlobalLogPublishedBatchWithAnchorsMarker = (*LocalStore)(nil)
 
 // WALCheckpointPruneSafety is an optional capability for stores that can make
 // a local WAL checkpoint safe to trust after a crash. Returning true certifies

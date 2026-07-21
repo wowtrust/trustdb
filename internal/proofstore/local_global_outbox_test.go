@@ -135,6 +135,76 @@ func TestLocalStoreGlobalOutboxDuplicateTransitionConverges(t *testing.T) {
 	}
 }
 
+func TestLocalStoreGlobalOutboxPublishesAnchorsBeforeConverging(t *testing.T) {
+	t.Parallel()
+
+	store := LocalStore{Root: t.TempDir()}
+	ctx := context.Background()
+	batchIDs := []string{"batch-anchor-1", "batch-anchor-2"}
+	sths := []model.SignedTreeHead{
+		{SchemaVersion: model.SchemaSignedTreeHead, TreeSize: 1, RootHash: []byte{1}},
+		{SchemaVersion: model.SchemaSignedTreeHead, TreeSize: 2, RootHash: []byte{2}},
+	}
+	anchors := make([]model.STHAnchorOutboxItem, len(sths))
+	for i := range batchIDs {
+		if err := store.EnqueueGlobalLog(ctx, model.GlobalLogOutboxItem{BatchID: batchIDs[i], Status: model.AnchorStatePending}); err != nil {
+			t.Fatalf("EnqueueGlobalLog(%q): %v", batchIDs[i], err)
+		}
+		anchors[i] = model.STHAnchorOutboxItem{TreeSize: sths[i].TreeSize, Status: model.AnchorStatePending, STH: sths[i]}
+	}
+	// Simulate a crash after the first anchor became durable but before any
+	// Global Log outbox item moved to published.
+	if err := store.EnqueueSTHAnchor(ctx, anchors[0]); err != nil {
+		t.Fatalf("EnqueueSTHAnchor partial state: %v", err)
+	}
+
+	for attempt := 0; attempt < 2; attempt++ {
+		if err := store.MarkGlobalLogPublishedBatchWithAnchors(ctx, batchIDs, sths, anchors); err != nil {
+			t.Fatalf("MarkGlobalLogPublishedBatchWithAnchors attempt %d: %v", attempt+1, err)
+		}
+	}
+	for i := range batchIDs {
+		globalItem, ok, err := store.GetGlobalLogOutboxItem(ctx, batchIDs[i])
+		if err != nil || !ok || globalItem.Status != model.AnchorStatePublished || globalItem.STH.TreeSize != sths[i].TreeSize {
+			t.Fatalf("global item %q = %+v ok=%v err=%v", batchIDs[i], globalItem, ok, err)
+		}
+		anchorItem, ok, err := store.GetSTHAnchorOutboxItem(ctx, sths[i].TreeSize)
+		if err != nil || !ok || anchorItem.Status != model.AnchorStatePending || !sameLocalSignedTreeHead(anchorItem.STH, sths[i]) {
+			t.Fatalf("anchor item %d = %+v ok=%v err=%v", sths[i].TreeSize, anchorItem, ok, err)
+		}
+	}
+}
+
+func TestLocalStoreGlobalOutboxValidatesAnchorBatchBeforeMutation(t *testing.T) {
+	t.Parallel()
+
+	store := LocalStore{Root: t.TempDir()}
+	ctx := context.Background()
+	batchIDs := []string{"batch-valid-1", "batch-valid-2"}
+	sths := []model.SignedTreeHead{{TreeSize: 1, RootHash: []byte{1}}, {TreeSize: 2, RootHash: []byte{2}}}
+	for _, batchID := range batchIDs {
+		if err := store.EnqueueGlobalLog(ctx, model.GlobalLogOutboxItem{BatchID: batchID, Status: model.AnchorStatePending}); err != nil {
+			t.Fatalf("EnqueueGlobalLog(%q): %v", batchID, err)
+		}
+	}
+	anchors := []model.STHAnchorOutboxItem{
+		{TreeSize: 1, Status: model.AnchorStatePending, STH: sths[0]},
+		{TreeSize: 3, Status: model.AnchorStatePending, STH: sths[1]},
+	}
+	if err := store.MarkGlobalLogPublishedBatchWithAnchors(ctx, batchIDs, sths, anchors); trusterr.CodeOf(err) != trusterr.CodeInvalidArgument {
+		t.Fatalf("MarkGlobalLogPublishedBatchWithAnchors error = %v, want invalid argument", err)
+	}
+	for i, batchID := range batchIDs {
+		item, ok, err := store.GetGlobalLogOutboxItem(ctx, batchID)
+		if err != nil || !ok || item.Status != model.AnchorStatePending {
+			t.Fatalf("global item %q = %+v ok=%v err=%v", batchID, item, ok, err)
+		}
+		if _, ok, err := store.GetSTHAnchorOutboxItem(ctx, sths[i].TreeSize); err != nil || ok {
+			t.Fatalf("anchor item %d ok=%v err=%v, want absent", sths[i].TreeSize, ok, err)
+		}
+	}
+}
+
 func TestLocalStoreGlobalOutboxRejectsUnknownStatus(t *testing.T) {
 	t.Parallel()
 

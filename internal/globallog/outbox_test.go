@@ -59,7 +59,7 @@ func TestOutboxWorkerReschedulesAppendFailure(t *testing.T) {
 	}
 }
 
-func TestOutboxWorkerPublishesAndCallsSTHHook(t *testing.T) {
+func TestOutboxWorkerPublishesBatch(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	store := proofstore.LocalStore{Root: t.TempDir()}
@@ -92,13 +92,9 @@ func TestOutboxWorkerPublishesAndCallsSTHHook(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	var hookedTreeSize uint64
 	worker := NewOutboxWorker(OutboxConfig{
 		Store:  store,
 		Global: svc,
-		OnSTH: func(_ context.Context, sth model.SignedTreeHead) {
-			hookedTreeSize = sth.TreeSize
-		},
 	})
 	worker.tick(ctx)
 
@@ -108,9 +104,6 @@ func TestOutboxWorkerPublishesAndCallsSTHHook(t *testing.T) {
 	}
 	if item.Status != model.AnchorStatePublished || item.STH.TreeSize != 1 {
 		t.Fatalf("item not published correctly: %+v", item)
-	}
-	if hookedTreeSize != 1 {
-		t.Fatalf("OnSTH tree_size=%d, want 1", hookedTreeSize)
 	}
 	if _, ok, err := store.GetGlobalLeafByBatchID(ctx, root.BatchID); err != nil || !ok {
 		t.Fatalf("GetGlobalLeafByBatchID ok=%v err=%v", ok, err)
@@ -152,7 +145,6 @@ func TestOutboxWorkerAtomicAnchorPathTriggersExistingOutbox(t *testing.T) {
 	}
 	metrics := observability.NewMetrics()
 	anchorsReady := 0
-	legacyHookCalls := 0
 	worker := NewOutboxWorker(OutboxConfig{
 		Store:        store,
 		Global:       svc,
@@ -161,17 +153,11 @@ func TestOutboxWorkerAtomicAnchorPathTriggersExistingOutbox(t *testing.T) {
 		OnAnchorsReady: func() {
 			anchorsReady++
 		},
-		OnSTHs: func(context.Context, []model.SignedTreeHead) {
-			legacyHookCalls++
-		},
 	})
 	worker.tick(ctx)
 
 	if anchorsReady != 1 {
 		t.Fatalf("OnAnchorsReady calls = %d, want 1", anchorsReady)
-	}
-	if legacyHookCalls != 0 {
-		t.Fatalf("OnSTHs calls = %d, want 0", legacyHookCalls)
 	}
 	if got := testutil.ToFloat64(metrics.GlobalLogPublished); got != 1 {
 		t.Fatalf("published roots metric = %v, want 1", got)
@@ -179,6 +165,33 @@ func TestOutboxWorkerAtomicAnchorPathTriggersExistingOutbox(t *testing.T) {
 	anchorItem, ok, err := store.GetSTHAnchorOutboxItem(ctx, 1)
 	if err != nil || !ok || anchorItem.Status != model.AnchorStatePending {
 		t.Fatalf("anchor item ok=%v err=%v item=%+v", ok, err, anchorItem)
+	}
+}
+
+func TestOutboxWorkerAnchorPathFailsClosedWithoutDurableMarker(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	base := proofstore.LocalStore{Root: t.TempDir()}
+	store := struct{ proofstore.Store }{Store: base}
+	root := model.BatchRoot{BatchID: "batch-anchor-unsupported", BatchRoot: bytes.Repeat([]byte{0x61}, 32), TreeSize: 1, ClosedAtUnixN: 1}
+	if err := store.EnqueueGlobalLog(ctx, model.GlobalLogOutboxItem{BatchID: root.BatchID, BatchRoot: root, Status: model.AnchorStatePending}); err != nil {
+		t.Fatalf("EnqueueGlobalLog: %v", err)
+	}
+	_, priv, err := trustcrypto.GenerateEd25519Key()
+	if err != nil {
+		t.Fatalf("GenerateEd25519Key: %v", err)
+	}
+	svc, err := New(Options{Store: store, LogID: "unsupported-anchor", KeyID: "key", PrivateKey: priv})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	worker := NewOutboxWorker(OutboxConfig{Store: store, Global: svc, AnchorOutbox: true})
+	worker.tick(ctx)
+
+	item, ok, err := store.GetGlobalLogOutboxItem(ctx, root.BatchID)
+	if err != nil || !ok || item.Status != model.AnchorStatePending {
+		t.Fatalf("global item = %+v ok=%v err=%v, want pending", item, ok, err)
 	}
 }
 
