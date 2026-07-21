@@ -26,6 +26,7 @@ const (
 	SchemaSTHAnchorResult   = "trustdb.sth-anchor-result.v1"
 	SchemaSTHAnchorSchedule = "trustdb.sth-anchor-schedule.v1"
 	SchemaSTHAnchorLatest   = "trustdb.sth-anchor-latest.v1"
+	SchemaL5Coverage        = "trustdb.l5-coverage-checkpoint.v1"
 	DefaultHashAlg          = "sha256"
 	DefaultSignatureAlg     = "ed25519"
 	DefaultMerkleTreeAlg    = "rfc6962-sha256"
@@ -681,6 +682,17 @@ type STHAnchorSchedule struct {
 	NextGeneration uint64               `cbor:"next_generation" json:"next_generation"`
 	Pending        *STHAnchorWindow     `cbor:"pending,omitempty" json:"pending,omitempty"`
 	InFlight       *STHAnchorAttempt    `cbor:"in_flight,omitempty" json:"in_flight,omitempty"`
+}
+
+// L5CoverageCheckpoint is derived, rebuildable projection state. Every
+// Global Log leaf with index less than CoveredTreeSize has had its batch and
+// record indexes durably promoted to L5 for Key's anchor stream.
+type L5CoverageCheckpoint struct {
+	SchemaVersion   string               `cbor:"schema_version" json:"schema_version"`
+	Key             STHAnchorScheduleKey `cbor:"key" json:"key"`
+	CoveredTreeSize uint64               `cbor:"covered_tree_size" json:"covered_tree_size"`
+	Revision        uint64               `cbor:"revision" json:"revision"`
+	UpdatedAtUnixN  int64                `cbor:"updated_at_unix_nano" json:"updated_at_unix_nano"`
 }
 
 type KeyEvent struct {
