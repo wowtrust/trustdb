@@ -76,6 +76,35 @@ func TestWriteCBORAtomicFailsClosedAtDurabilityBarriers(t *testing.T) {
 	}
 }
 
+func TestRemoveLocalFileDurableSyncsContainingDirectory(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "object.cbor")
+	if err := os.WriteFile(path, []byte("value"), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	ops := defaultLocalFileOps()
+	baseRemove, baseSyncDir := ops.remove, ops.syncDir
+	var events []string
+	ops.remove = func(path string) error {
+		events = append(events, "remove")
+		return baseRemove(path)
+	}
+	ops.syncDir = func(path string) error {
+		if path == dir {
+			events = append(events, "directory-sync")
+		}
+		return baseSyncDir(path)
+	}
+	if err := removeLocalFileDurableWithOps(path, ops); err != nil {
+		t.Fatalf("removeLocalFileDurableWithOps: %v", err)
+	}
+	want := []string{"remove", "directory-sync"}
+	if fmt.Sprint(events) != fmt.Sprint(want) {
+		t.Fatalf("durability events = %v, want %v", events, want)
+	}
+}
+
 func TestEnsureLocalDurableDirectorySyncsNewAncestry(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()

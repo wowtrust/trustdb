@@ -165,6 +165,43 @@ func TestBackupCreateVerifyRestoreRoundTrip(t *testing.T) {
 	}
 }
 
+func TestBackupRoundTripPreservesGlobalOutboxStatuses(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	src := proofstore.LocalStore{Root: filepath.Join(t.TempDir(), "src")}
+	items := []model.GlobalLogOutboxItem{
+		{BatchID: "batch-pending", Status: model.AnchorStatePending, EnqueuedAtUnixN: 1},
+		{BatchID: "batch-published", Status: model.AnchorStatePublished, EnqueuedAtUnixN: 2, CompletedAtUnixN: 3},
+	}
+	for _, item := range items {
+		if err := src.EnqueueGlobalLog(ctx, item); err != nil {
+			t.Fatalf("EnqueueGlobalLog(%q): %v", item.BatchID, err)
+		}
+	}
+	path := filepath.Join(t.TempDir(), "global-outboxes.tdbackup")
+	report, err := Create(ctx, src, path, Options{Compression: "none"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if report.GlobalOutboxes != len(items) {
+		t.Fatalf("GlobalOutboxes = %d, want %d", report.GlobalOutboxes, len(items))
+	}
+	dst := proofstore.LocalStore{Root: filepath.Join(t.TempDir(), "dst")}
+	if _, err := Restore(ctx, dst, path); err != nil {
+		t.Fatalf("Restore: %v", err)
+	}
+	for _, want := range items {
+		got, ok, err := dst.GetGlobalLogOutboxItem(ctx, want.BatchID)
+		if err != nil || !ok || got.Status != want.Status {
+			t.Fatalf("restored outbox %q = %+v ok=%v err=%v", want.BatchID, got, ok, err)
+		}
+	}
+	pending, err := dst.ListPendingGlobalLog(ctx, 100, 10)
+	if err != nil || len(pending) != 1 || pending[0].BatchID != "batch-pending" {
+		t.Fatalf("restored pending = %+v err=%v", pending, err)
+	}
+}
+
 func TestCreateRejectsDirectoryTarget(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

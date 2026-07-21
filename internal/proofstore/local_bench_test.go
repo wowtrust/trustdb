@@ -238,3 +238,46 @@ func BenchmarkLocalStoreGlobalNodesAfterLateCursor4096(b *testing.B) {
 		}
 	}
 }
+
+func BenchmarkLocalStorePendingGlobalLogWithPublishedHistory4096(b *testing.B) {
+	store := LocalStore{Root: b.TempDir()}
+	if err := os.MkdirAll(store.globalOutboxStatusDir(model.AnchorStatePublished), 0o755); err != nil {
+		b.Fatal(err)
+	}
+	for index := range 4096 {
+		item := model.GlobalLogOutboxItem{
+			SchemaVersion:   model.SchemaGlobalLogOutbox,
+			BatchID:         fmt.Sprintf("batch-%08d", index),
+			Status:          model.AnchorStatePublished,
+			EnqueuedAtUnixN: int64(index + 1),
+		}
+		data, err := cborx.Marshal(item)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if err := os.WriteFile(store.globalOutboxPath(item.Status, item.BatchID), data, 0o600); err != nil {
+			b.Fatal(err)
+		}
+	}
+	pending := model.GlobalLogOutboxItem{
+		SchemaVersion:   model.SchemaGlobalLogOutbox,
+		BatchID:         "batch-pending",
+		Status:          model.AnchorStatePending,
+		EnqueuedAtUnixN: 4097,
+	}
+	if err := store.EnqueueGlobalLog(context.Background(), pending); err != nil {
+		b.Fatal(err)
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		items, err := store.ListPendingGlobalLog(context.Background(), 4098, 64)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if len(items) != 1 || items[0].BatchID != pending.BatchID {
+			b.Fatalf("pending items = %+v", items)
+		}
+	}
+}

@@ -1262,12 +1262,17 @@ func (s LocalStore) EnqueueGlobalLog(ctx context.Context, item model.GlobalLogOu
 	if item.EnqueuedAtUnixN == 0 {
 		item.EnqueuedAtUnixN = time.Now().UTC().UnixNano()
 	}
-	path := s.globalOutboxPath(item.BatchID)
-	if _, err := os.Stat(path); err == nil {
-		return trusterr.New(trusterr.CodeAlreadyExists, "global log outbox item already exists")
-	} else if !os.IsNotExist(err) {
-		return trusterr.Wrap(trusterr.CodeDataLoss, "stat global log outbox item", err)
+	if !isLocalGlobalOutboxStatus(item.Status) {
+		return trusterr.New(trusterr.CodeInvalidArgument, "global log outbox status is invalid")
 	}
+	for _, status := range localGlobalOutboxStatusOrder {
+		if _, err := os.Stat(s.globalOutboxPath(status, item.BatchID)); err == nil {
+			return trusterr.New(trusterr.CodeAlreadyExists, "global log outbox item already exists")
+		} else if !os.IsNotExist(err) {
+			return trusterr.Wrap(trusterr.CodeDataLoss, "stat global log outbox item", err)
+		}
+	}
+	path := s.globalOutboxPath(item.Status, item.BatchID)
 	if err := writeCBORAtomic(path, item); err != nil {
 		return trusterr.Wrap(trusterr.CodeDataLoss, "write global log outbox item", err)
 	}
@@ -1275,7 +1280,7 @@ func (s LocalStore) EnqueueGlobalLog(ctx context.Context, item model.GlobalLogOu
 }
 
 func (s LocalStore) ListPendingGlobalLog(ctx context.Context, nowUnixN int64, limit int) ([]model.GlobalLogOutboxItem, error) {
-	return s.listGlobalLogOutbox(ctx, limit, func(item model.GlobalLogOutboxItem) bool {
+	return s.listGlobalLogOutbox(ctx, model.AnchorStatePending, limit, func(item model.GlobalLogOutboxItem) bool {
 		return item.Status == model.AnchorStatePending && item.NextAttemptUnixN <= nowUnixN
 	})
 }
@@ -1287,22 +1292,19 @@ func (s LocalStore) ListGlobalLogOutboxItemsAfter(ctx context.Context, afterBatc
 	if limit <= 0 {
 		limit = 100
 	}
-	entries, err := os.ReadDir(s.globalOutboxDir())
+	entries, err := s.globalOutboxEntries(ctx)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
-		return nil, trusterr.Wrap(trusterr.CodeDataLoss, "read global log outbox directory", err)
+		return nil, err
 	}
 	items := make([]model.GlobalLogOutboxItem, 0, limit)
 	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".tdgoutbox") {
-			continue
-		}
 		if err := ctx.Err(); err != nil {
 			return nil, trusterr.Wrap(trusterr.CodeDeadlineExceeded, "proofstore list global log outbox after canceled", err)
 		}
-		data, err := readStoredFile(filepath.Join(s.globalOutboxDir(), entry.Name()))
+		if entry.batchID <= afterBatchID {
+			continue
+		}
+		data, err := readStoredFile(entry.path)
 		if err != nil {
 			return nil, trusterr.Wrap(trusterr.CodeDataLoss, "read global log outbox item", err)
 		}
@@ -1310,8 +1312,8 @@ func (s LocalStore) ListGlobalLogOutboxItemsAfter(ctx context.Context, afterBatc
 		if err := cborx.UnmarshalLimit(data, &item, maxStoredObjectBytes); err != nil {
 			return nil, trusterr.Wrap(trusterr.CodeDataLoss, "decode global log outbox item", err)
 		}
-		if item.BatchID <= afterBatchID {
-			continue
+		if item.BatchID != entry.batchID || item.Status != entry.status {
+			return nil, trusterr.New(trusterr.CodeDataLoss, "global log outbox path does not match item")
 		}
 		items = append(items, item)
 		if len(items) >= limit {
@@ -1328,18 +1330,16 @@ func (s LocalStore) GetGlobalLogOutboxItem(ctx context.Context, batchID string) 
 	if batchID == "" {
 		return model.GlobalLogOutboxItem{}, false, trusterr.New(trusterr.CodeInvalidArgument, "batch_id is required")
 	}
-	data, err := readStoredFile(s.globalOutboxPath(batchID))
-	if err != nil {
-		if os.IsNotExist(err) {
-			return model.GlobalLogOutboxItem{}, false, nil
+	for _, status := range []string{model.AnchorStatePublished, model.AnchorStatePending} {
+		item, ok, err := s.getGlobalLogOutboxItemAtStatus(batchID, status)
+		if err != nil {
+			return model.GlobalLogOutboxItem{}, false, err
 		}
-		return model.GlobalLogOutboxItem{}, false, trusterr.Wrap(trusterr.CodeDataLoss, "read global log outbox item", err)
+		if ok {
+			return item, true, nil
+		}
 	}
-	var item model.GlobalLogOutboxItem
-	if err := cborx.UnmarshalLimit(data, &item, maxStoredObjectBytes); err != nil {
-		return model.GlobalLogOutboxItem{}, false, trusterr.Wrap(trusterr.CodeDataLoss, "decode global log outbox item", err)
-	}
-	return item, true, nil
+	return model.GlobalLogOutboxItem{}, false, nil
 }
 
 func (s LocalStore) MarkGlobalLogPublished(ctx context.Context, batchID string, sth model.SignedTreeHead) error {
@@ -1357,8 +1357,11 @@ func (s LocalStore) MarkGlobalLogPublished(ctx context.Context, batchID string, 
 	item.LastAttemptUnixN = now
 	item.NextAttemptUnixN = 0
 	item.CompletedAtUnixN = now
-	if err := writeCBORAtomic(s.globalOutboxPath(batchID), item); err != nil {
+	if err := writeCBORAtomic(s.globalOutboxPath(model.AnchorStatePublished, batchID), item); err != nil {
 		return trusterr.Wrap(trusterr.CodeDataLoss, "update global log outbox item", err)
+	}
+	if err := removeLocalFileDurable(s.globalOutboxPath(model.AnchorStatePending, batchID)); err != nil {
+		return trusterr.Wrap(trusterr.CodeDataLoss, "remove pending global log outbox item", err)
 	}
 	if err := s.promoteBatchRecords(ctx, batchID, "L4"); err != nil {
 		return err
@@ -1367,7 +1370,13 @@ func (s LocalStore) MarkGlobalLogPublished(ctx context.Context, batchID string, 
 }
 
 func (s LocalStore) RescheduleGlobalLog(ctx context.Context, batchID string, attempts int, nextAttemptUnixN int64, lastErrorMessage string) error {
-	item, ok, err := s.GetGlobalLogOutboxItem(ctx, batchID)
+	if err := ctx.Err(); err != nil {
+		return trusterr.Wrap(trusterr.CodeDeadlineExceeded, "proofstore reschedule global log canceled", err)
+	}
+	if batchID == "" {
+		return trusterr.New(trusterr.CodeInvalidArgument, "batch_id is required")
+	}
+	item, ok, err := s.getGlobalLogOutboxItemAtStatus(batchID, model.AnchorStatePending)
 	if err != nil {
 		return err
 	}
@@ -1379,20 +1388,20 @@ func (s LocalStore) RescheduleGlobalLog(ctx context.Context, batchID string, att
 	item.NextAttemptUnixN = nextAttemptUnixN
 	item.LastErrorMessage = lastErrorMessage
 	item.LastAttemptUnixN = time.Now().UTC().UnixNano()
-	if err := writeCBORAtomic(s.globalOutboxPath(batchID), item); err != nil {
+	if err := writeCBORAtomic(s.globalOutboxPath(model.AnchorStatePending, batchID), item); err != nil {
 		return trusterr.Wrap(trusterr.CodeDataLoss, "update global log outbox item", err)
 	}
 	return nil
 }
 
-func (s LocalStore) listGlobalLogOutbox(ctx context.Context, limit int, include func(model.GlobalLogOutboxItem) bool) ([]model.GlobalLogOutboxItem, error) {
+func (s LocalStore) listGlobalLogOutbox(ctx context.Context, status string, limit int, include func(model.GlobalLogOutboxItem) bool) ([]model.GlobalLogOutboxItem, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, trusterr.Wrap(trusterr.CodeDeadlineExceeded, "proofstore list global log outbox canceled", err)
 	}
 	if limit <= 0 {
 		limit = 100
 	}
-	entries, err := os.ReadDir(s.globalOutboxDir())
+	entries, err := os.ReadDir(s.globalOutboxStatusDir(status))
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
@@ -1404,13 +1413,19 @@ func (s LocalStore) listGlobalLogOutbox(ctx context.Context, limit int, include 
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".tdgoutbox") {
 			continue
 		}
-		data, err := readStoredFile(filepath.Join(s.globalOutboxDir(), entry.Name()))
+		if err := ctx.Err(); err != nil {
+			return nil, trusterr.Wrap(trusterr.CodeDeadlineExceeded, "proofstore list global log outbox canceled", err)
+		}
+		data, err := readStoredFile(filepath.Join(s.globalOutboxStatusDir(status), entry.Name()))
 		if err != nil {
 			return nil, trusterr.Wrap(trusterr.CodeDataLoss, "read global log outbox item", err)
 		}
 		var item model.GlobalLogOutboxItem
 		if err := cborx.UnmarshalLimit(data, &item, maxStoredObjectBytes); err != nil {
 			return nil, trusterr.Wrap(trusterr.CodeDataLoss, "decode global log outbox item", err)
+		}
+		if item.Status != status {
+			return nil, trusterr.New(trusterr.CodeDataLoss, "global log outbox status directory does not match item")
 		}
 		if include(item) {
 			if len(items) == 0 {
@@ -1426,6 +1441,76 @@ func (s LocalStore) listGlobalLogOutbox(ctx context.Context, limit int, include 
 		items = items[:limit]
 	}
 	return items, nil
+}
+
+type localGlobalOutboxEntry struct {
+	batchID string
+	status  string
+	path    string
+}
+
+var localGlobalOutboxStatusOrder = [...]string{model.AnchorStatePending, model.AnchorStatePublished}
+
+func isLocalGlobalOutboxStatus(status string) bool {
+	return status == model.AnchorStatePending || status == model.AnchorStatePublished
+}
+
+func (s LocalStore) getGlobalLogOutboxItemAtStatus(batchID, status string) (model.GlobalLogOutboxItem, bool, error) {
+	data, err := readStoredFile(s.globalOutboxPath(status, batchID))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return model.GlobalLogOutboxItem{}, false, nil
+		}
+		return model.GlobalLogOutboxItem{}, false, trusterr.Wrap(trusterr.CodeDataLoss, "read global log outbox item", err)
+	}
+	var item model.GlobalLogOutboxItem
+	if err := cborx.UnmarshalLimit(data, &item, maxStoredObjectBytes); err != nil {
+		return model.GlobalLogOutboxItem{}, false, trusterr.Wrap(trusterr.CodeDataLoss, "decode global log outbox item", err)
+	}
+	if item.BatchID != batchID || item.Status != status {
+		return model.GlobalLogOutboxItem{}, false, trusterr.New(trusterr.CodeDataLoss, "global log outbox path does not match item")
+	}
+	return item, true, nil
+}
+
+func (s LocalStore) globalOutboxEntries(ctx context.Context) ([]localGlobalOutboxEntry, error) {
+	byBatchID := make(map[string]localGlobalOutboxEntry)
+	for _, status := range localGlobalOutboxStatusOrder {
+		if err := ctx.Err(); err != nil {
+			return nil, trusterr.Wrap(trusterr.CodeDeadlineExceeded, "proofstore list global log outbox canceled", err)
+		}
+		dir := s.globalOutboxStatusDir(status)
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return nil, trusterr.Wrap(trusterr.CodeDataLoss, "read global log outbox directory", err)
+		}
+		for _, entry := range entries {
+			if err := ctx.Err(); err != nil {
+				return nil, trusterr.Wrap(trusterr.CodeDeadlineExceeded, "proofstore list global log outbox canceled", err)
+			}
+			if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".tdgoutbox") {
+				continue
+			}
+			batchID, err := decodeLocalIDFilename(entry.Name(), ".tdgoutbox")
+			if err != nil {
+				return nil, trusterr.Wrap(trusterr.CodeDataLoss, "decode global log outbox filename", err)
+			}
+			byBatchID[batchID] = localGlobalOutboxEntry{
+				batchID: batchID,
+				status:  status,
+				path:    filepath.Join(dir, entry.Name()),
+			}
+		}
+	}
+	entries := make([]localGlobalOutboxEntry, 0, len(byBatchID))
+	for _, entry := range byBatchID {
+		entries = append(entries, entry)
+	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].batchID < entries[j].batchID })
+	return entries, nil
 }
 
 func (s LocalStore) EnqueueSTHAnchor(ctx context.Context, item model.STHAnchorOutboxItem) error {
@@ -1743,6 +1828,10 @@ func (s LocalStore) globalOutboxDir() string {
 	return filepath.Join(s.root(), "global", "outbox")
 }
 
+func (s LocalStore) globalOutboxStatusDir(status string) string {
+	return filepath.Join(s.globalOutboxDir(), status)
+}
+
 func (s LocalStore) sthAnchorOutboxDir() string {
 	return filepath.Join(s.root(), "anchor", "sth-outbox")
 }
@@ -1787,8 +1876,8 @@ func (s LocalStore) globalTilePath(level, start, width uint64) string {
 	return filepath.Join(s.globalTileDir(), fmt.Sprintf("%020d_%020d_%020d.tdgtile", level, start, width))
 }
 
-func (s LocalStore) globalOutboxPath(batchID string) string {
-	return filepath.Join(s.globalOutboxDir(), safeFileName(batchID)+".tdgoutbox")
+func (s LocalStore) globalOutboxPath(status, batchID string) string {
+	return filepath.Join(s.globalOutboxStatusDir(status), safeFileName(batchID)+".tdgoutbox")
 }
 
 func (s LocalStore) sthAnchorOutboxPath(treeSize uint64) string {
@@ -1872,6 +1961,23 @@ func (s LocalStore) root() string {
 
 func writeCBORAtomic(path string, value any) error {
 	return writeCBORAtomicWithOps(path, value, defaultLocalFileOps())
+}
+
+func removeLocalFileDurable(path string) error {
+	return removeLocalFileDurableWithOps(path, defaultLocalFileOps())
+}
+
+func removeLocalFileDurableWithOps(path string, ops localFileOps) error {
+	if err := ops.remove(path); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	if err := ops.syncDir(filepath.Dir(path)); err != nil {
+		return fmt.Errorf("sync proofstore directory after removing %q: %w", path, err)
+	}
+	return nil
 }
 
 func writeCBORAtomicWithOps(path string, value any, ops localFileOps) error {
