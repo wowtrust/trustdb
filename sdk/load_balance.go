@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"strings"
 	"sync/atomic"
+
+	"github.com/ryan-wong-coder/trustdb/internal/trusterr"
 )
 
 // LoadBalanceMode controls how a multi-endpoint client chooses the first
@@ -124,6 +126,21 @@ func (t *loadBalancedTransport) CheckHealth(ctx context.Context) HealthStatus {
 func (t *loadBalancedTransport) SubmitSignedClaim(ctx context.Context, claim SignedClaim) (SubmitResult, error) {
 	return tryEndpoints(ctx, t, "submit claim", func(ctx context.Context, transport Transport) (SubmitResult, error) {
 		return transport.SubmitSignedClaim(ctx, claim)
+	})
+}
+
+func (t *loadBalancedTransport) SubmitSignedClaims(ctx context.Context, claims []SignedClaim) ([]signedClaimBatchItemResult, error) {
+	return tryEndpoints(ctx, t, "submit claim batch", func(ctx context.Context, transport Transport) ([]signedClaimBatchItemResult, error) {
+		batch, ok := transport.(signedClaimBatchTransport)
+		if !ok {
+			return nil, &Error{
+				Op:      "submit claim batch",
+				URL:     transport.Endpoint(),
+				Code:    string(trusterr.CodeFailedPrecondition),
+				Message: "endpoint transport does not support native batch submission",
+			}
+		}
+		return batch.SubmitSignedClaims(ctx, claims)
 	})
 }
 
