@@ -499,6 +499,7 @@ const (
 	prefixCheckpoint     = "checkpoint/wal/v2/"
 	prefixIdempotency    = "idempotency/decision/"
 	idempotencyReadyKey  = "meta/idempotency-projection/ready"
+	idempotencyFenceKey  = "meta/idempotency-projection/fence"
 	globalStateKey       = "global/state/latest"
 	rootSortKeyWidth     = 20
 	idempotencyReadyV1   = "trustdb.idempotency-projection.ready.v1"
@@ -2242,9 +2243,6 @@ func (s *Store) PutManifest(ctx context.Context, manifest model.BatchManifest) e
 	if !model.ValidBatchManifestState(manifest.State) {
 		return trusterr.New(trusterr.CodeInvalidArgument, "invalid batch manifest state")
 	}
-	if manifest.State == model.BatchStateCommitted && s.idempotencyReady.Load() {
-		return trusterr.New(trusterr.CodeFailedPrecondition, "committed manifests require atomic idempotency publication")
-	}
 	if manifest.SchemaVersion == "" {
 		manifest.SchemaVersion = model.SchemaBatchManifest
 	}
@@ -2262,17 +2260,30 @@ func (s *Store) PutManifest(ctx context.Context, manifest model.BatchManifest) e
 			_ = txn.Rollback()
 		}
 	}()
+	readyOnDisk := false
+	readyData, err := txn.Get(ctx, s.db.physicalKey([]byte(idempotencyReadyKey)))
+	switch {
+	case err == nil:
+		if string(readyData) != idempotencyReadyV1 {
+			return trusterr.New(trusterr.CodeDataLoss, "invalid idempotency projection readiness marker")
+		}
+		readyOnDisk = true
+	case tikverr.IsErrNotFound(err):
+	case ctx.Err() != nil:
+		return trusterr.Wrap(trusterr.CodeDeadlineExceeded, "read idempotency projection readiness canceled", ctx.Err())
+	default:
+		return trusterr.Wrap(trusterr.CodeDataLoss, "read idempotency projection readiness", err)
+	}
 	physicalManifestKey := s.db.physicalKey(manifestKey(manifest.BatchID))
 	oldData, err := txn.Get(ctx, physicalManifestKey)
+	oldCommitted := false
 	switch {
 	case err == nil:
 		var old model.BatchManifest
 		if err := cborx.UnmarshalLimit(oldData, &old, maxStoredObjectBytes); err != nil {
 			return trusterr.Wrap(trusterr.CodeDataLoss, "decode old batch manifest", err)
 		}
-		if old.State == model.BatchStateCommitted && s.idempotencyReady.Load() {
-			return trusterr.New(trusterr.CodeFailedPrecondition, "committed manifests require atomic idempotency publication")
-		}
+		oldCommitted = old.State == model.BatchStateCommitted
 		if old.State == model.BatchStatePrepared {
 			if err := txn.Delete(s.db.physicalKey(preparedManifestKey(old))); err != nil {
 				return trusterr.Wrap(trusterr.CodeDataLoss, "delete old prepared manifest index", err)
@@ -2284,6 +2295,9 @@ func (s *Store) PutManifest(ctx context.Context, manifest model.BatchManifest) e
 	default:
 		return trusterr.Wrap(trusterr.CodeDataLoss, "read old batch manifest", err)
 	}
+	if readyOnDisk && (manifest.State == model.BatchStateCommitted || oldCommitted) {
+		return trusterr.New(trusterr.CodeFailedPrecondition, "committed manifests require atomic idempotency publication")
+	}
 	if err := txn.Set(physicalManifestKey, data); err != nil {
 		return trusterr.Wrap(trusterr.CodeDataLoss, "stage batch manifest", err)
 	}
@@ -2291,6 +2305,9 @@ func (s *Store) PutManifest(ctx context.Context, manifest model.BatchManifest) e
 		if err := txn.Set(s.db.physicalKey(preparedManifestKey(manifest)), data); err != nil {
 			return trusterr.Wrap(trusterr.CodeDataLoss, "stage prepared manifest index", err)
 		}
+	}
+	if err := txn.Set(s.db.physicalKey([]byte(idempotencyFenceKey)), []byte(idempotencyReadyV1)); err != nil {
+		return trusterr.Wrap(trusterr.CodeDataLoss, "stage idempotency projection fence", err)
 	}
 	if err := txn.Commit(ctx); err != nil {
 		if ctx.Err() != nil {
@@ -2444,64 +2461,72 @@ func (s *Store) EnsureIdempotencyProjection(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return trusterr.Wrap(trusterr.CodeDeadlineExceeded, "ensure idempotency projection canceled", err)
 	}
-	ready, err := s.idempotencyProjectionReady(ctx)
-	if err != nil {
-		return err
-	}
-	if ready {
-		s.idempotencyReady.Store(true)
-		return nil
-	}
 	s.idempotencyReady.Store(false)
+	for attempt := 0; attempt < checkpointCommitMaxAttempts; attempt++ {
+		ready, err := s.tryEnsureIdempotencyProjection(ctx)
+		if err == nil && ready {
+			s.idempotencyReady.Store(true)
+			return nil
+		}
+		if err == nil {
+			continue
+		}
+		if !isRetryablePromotionCommitError(err) {
+			return err
+		}
+	}
+	return trusterr.New(trusterr.CodeDataLoss, "publish idempotency projection readiness exhausted retries")
+}
+
+func (s *Store) tryEnsureIdempotencyProjection(ctx context.Context) (bool, error) {
+	txn, err := s.db.client.Begin()
+	if err != nil {
+		return false, trusterr.Wrap(trusterr.CodeDataLoss, "begin idempotency projection transaction", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = txn.Rollback()
+		}
+	}()
+	readyData, err := txn.Get(ctx, s.db.physicalKey([]byte(idempotencyReadyKey)))
+	switch {
+	case err == nil:
+		if string(readyData) != idempotencyReadyV1 {
+			return false, trusterr.New(trusterr.CodeDataLoss, "invalid idempotency projection readiness marker")
+		}
+		return true, nil
+	case tikverr.IsErrNotFound(err):
+	case ctx.Err() != nil:
+		return false, trusterr.Wrap(trusterr.CodeDeadlineExceeded, "read idempotency projection readiness canceled", ctx.Err())
+	default:
+		return false, trusterr.Wrap(trusterr.CodeDataLoss, "read idempotency projection readiness", err)
+	}
 	for afterBatchID := ""; ; {
 		manifests, err := s.ListManifestsAfter(ctx, afterBatchID, 128)
 		if err != nil {
-			return err
+			return false, err
 		}
 		if len(manifests) == 0 {
 			break
 		}
 		for i := range manifests {
 			if manifests[i].State == model.BatchStateCommitted {
-				return trusterr.New(trusterr.CodeFailedPrecondition, "tikv idempotency projection cannot initialize over committed history")
+				return false, trusterr.New(trusterr.CodeFailedPrecondition, "tikv idempotency projection cannot initialize over committed history")
 			}
 		}
 		afterBatchID = manifests[len(manifests)-1].BatchID
 	}
-	for attempt := 0; attempt < checkpointCommitMaxAttempts; attempt++ {
-		if err := s.db.Set([]byte(idempotencyReadyKey), []byte(idempotencyReadyV1), syncWrite); err == nil {
-			s.idempotencyReady.Store(true)
-			return nil
-		} else if !isRetryablePromotionCommitError(err) {
-			return trusterr.Wrap(trusterr.CodeDataLoss, "publish idempotency projection readiness", err)
-		}
-		ready, err = s.idempotencyProjectionReady(ctx)
-		if err != nil {
-			return err
-		}
-		if ready {
-			s.idempotencyReady.Store(true)
-			return nil
-		}
+	if err := txn.Set(s.db.physicalKey([]byte(idempotencyFenceKey)), []byte(idempotencyReadyV1)); err != nil {
+		return false, err
 	}
-	return trusterr.New(trusterr.CodeDataLoss, "publish idempotency projection readiness exhausted retries")
-}
-
-func (s *Store) idempotencyProjectionReady(ctx context.Context) (bool, error) {
-	if err := ctx.Err(); err != nil {
-		return false, trusterr.Wrap(trusterr.CodeDeadlineExceeded, "read idempotency projection readiness canceled", err)
+	if err := txn.Set(s.db.physicalKey([]byte(idempotencyReadyKey)), []byte(idempotencyReadyV1)); err != nil {
+		return false, err
 	}
-	value, closer, err := s.db.Get([]byte(idempotencyReadyKey))
-	if isNotFound(err) {
-		return false, nil
+	if err := txn.Commit(ctx); err != nil {
+		return false, err
 	}
-	if err != nil {
-		return false, trusterr.Wrap(trusterr.CodeDataLoss, "read idempotency projection readiness", err)
-	}
-	defer closer.Close()
-	if string(value) != idempotencyReadyV1 {
-		return false, trusterr.New(trusterr.CodeDataLoss, "invalid idempotency projection readiness marker")
-	}
+	committed = true
 	return true, nil
 }
 

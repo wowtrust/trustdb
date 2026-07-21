@@ -18,6 +18,7 @@ import (
 	"github.com/ryan-wong-coder/trustdb/internal/proofstore/proofstoretest"
 	tikvstore "github.com/ryan-wong-coder/trustdb/internal/proofstore/tikv"
 	"github.com/ryan-wong-coder/trustdb/internal/trustcrypto"
+	"github.com/ryan-wong-coder/trustdb/internal/trusterr"
 )
 
 func TestTiKVConformance(t *testing.T) {
@@ -106,6 +107,27 @@ func TestTiKVCheckpointConcurrentAdvancementIsMonotonic(t *testing.T) {
 	checkpoint, found, err := storeA.GetCheckpoint(ctx)
 	if err != nil || !found || checkpoint.LastSequence != 32 {
 		t.Fatalf("GetCheckpoint = %+v found=%v err=%v, want sequence 32", checkpoint, found, err)
+	}
+}
+
+func TestTiKVProjectionFenceAcrossStoreInstances(t *testing.T) {
+	requireTiKVIntegration(t)
+
+	ctx := context.Background()
+	namespace := integrationNamespace(t, "projection-fence")
+	initializer := openIntegrationStoreWithoutProjection(t, namespace, "node-a", "wal-a")
+	defer initializer.Close()
+	writer := openIntegrationStoreWithoutProjection(t, namespace, "node-b", "wal-b")
+	defer writer.Close()
+	if err := initializer.EnsureIdempotencyProjection(ctx); err != nil {
+		t.Fatalf("EnsureIdempotencyProjection: %v", err)
+	}
+	if err := writer.PutManifest(ctx, model.BatchManifest{
+		SchemaVersion: model.SchemaBatchManifest,
+		BatchID:       "generic-commit",
+		State:         model.BatchStateCommitted,
+	}); trusterr.CodeOf(err) != trusterr.CodeFailedPrecondition {
+		t.Fatalf("PutManifest(committed) error=%v, want failed_precondition", err)
 	}
 }
 

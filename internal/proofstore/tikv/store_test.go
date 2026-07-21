@@ -177,6 +177,61 @@ func TestTiKVIdempotencyProjectionRejectsCommittedHistoryWithoutMarker(t *testin
 	}
 }
 
+func TestTiKVGenericCommitChecksSharedProjectionReadiness(t *testing.T) {
+	db, _ := newMockTiKVDB(t, "idempotency-shared-readiness/")
+	initializer := &Store{db: db}
+	staleWriter := &Store{db: db}
+	ctx := context.Background()
+	if err := initializer.EnsureIdempotencyProjection(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := staleWriter.PutManifest(ctx, model.BatchManifest{
+		SchemaVersion: model.SchemaBatchManifest,
+		BatchID:       "generic-commit",
+		State:         model.BatchStateCommitted,
+	}); trusterr.CodeOf(err) != trusterr.CodeFailedPrecondition {
+		t.Fatalf("PutManifest(committed) error=%v, want failed_precondition", err)
+	}
+	if err := staleWriter.PutManifest(ctx, model.BatchManifest{
+		SchemaVersion: model.SchemaBatchManifest,
+		BatchID:       "prepared",
+		State:         model.BatchStatePrepared,
+	}); err != nil {
+		t.Fatalf("PutManifest(prepared): %v", err)
+	}
+}
+
+func TestTiKVProjectionInitializationFencesConcurrentGenericCommit(t *testing.T) {
+	for attempt := 0; attempt < 8; attempt++ {
+		db, _ := newMockTiKVDB(t, fmt.Sprintf("idempotency-fence-%d/", attempt))
+		initializer := &Store{db: db}
+		writer := &Store{db: db}
+		start := make(chan struct{})
+		var initializeErr, writeErr error
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			<-start
+			initializeErr = initializer.EnsureIdempotencyProjection(context.Background())
+		}()
+		go func() {
+			defer wg.Done()
+			<-start
+			writeErr = writer.PutManifest(context.Background(), model.BatchManifest{
+				SchemaVersion: model.SchemaBatchManifest,
+				BatchID:       "concurrent-commit",
+				State:         model.BatchStateCommitted,
+			})
+		}()
+		close(start)
+		wg.Wait()
+		if initializeErr == nil && writeErr == nil {
+			t.Fatal("projection readiness and generic committed manifest both succeeded")
+		}
+	}
+}
+
 func TestTiKVPreparedManifestIndexBoundsAndTransitions(t *testing.T) {
 	db, countingClient := newMockTiKVDB(t, "prepared-manifests/")
 	store := &Store{db: db}
