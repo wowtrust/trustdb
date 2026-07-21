@@ -249,6 +249,48 @@ func (b *tikvBatch) Commit(_ *writeOptions) error {
 	return nil
 }
 
+func (b *tikvBatch) commitWithGlobalLogFence(ctx context.Context, expectedTreeSize uint64) error {
+	if b == nil || b.db == nil || b.db.client == nil {
+		return trusterr.New(trusterr.CodeFailedPrecondition, "tikv proofstore is closed")
+	}
+	txn, err := b.db.client.Begin()
+	if err != nil {
+		return err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = txn.Rollback()
+		}
+	}()
+
+	var persisted model.GlobalLogState
+	stateData, err := txn.Get(ctx, b.db.physicalKey([]byte(globalStateKey)))
+	switch {
+	case err == nil:
+		if err := cborx.UnmarshalLimit(stateData, &persisted, maxStoredObjectBytes); err != nil {
+			return trusterr.Wrap(trusterr.CodeDataLoss, "decode global log state fence", err)
+		}
+	case tikverr.IsErrNotFound(err):
+		// A missing state is the initial empty tree.
+	case ctx.Err() != nil:
+		return trusterr.Wrap(trusterr.CodeDeadlineExceeded, "read global log state fence canceled", ctx.Err())
+	default:
+		return trusterr.Wrap(trusterr.CodeDataLoss, "read global log state fence", err)
+	}
+	if persisted.TreeSize != expectedTreeSize {
+		return trusterr.New(trusterr.CodeFailedPrecondition, "global log append is based on stale tree state")
+	}
+	if err := b.apply(txn); err != nil {
+		return err
+	}
+	if err := txn.Commit(ctx); err != nil {
+		return err
+	}
+	committed = true
+	return nil
+}
+
 func (b *tikvBatch) apply(txn *txnkv.KVTxn) error {
 	for _, op := range b.ops {
 		if op.delete {
@@ -2657,7 +2699,10 @@ func (s *Store) CommitGlobalLogAppend(ctx context.Context, entry model.GlobalLog
 	if err := batch.Set(sthKey(entry.STH.TreeSize), sthData, nil); err != nil {
 		return trusterr.Wrap(trusterr.CodeDataLoss, "stage global log append STH", err)
 	}
-	if err := batch.Commit(syncWrite); err != nil {
+	if err := batch.commitWithGlobalLogFence(ctx, entry.Leaf.LeafIndex); err != nil {
+		if trusterr.CodeOf(err) == trusterr.CodeFailedPrecondition {
+			return err
+		}
 		return trusterr.Wrap(trusterr.CodeDataLoss, "commit global log append", err)
 	}
 	return nil
@@ -2677,6 +2722,9 @@ func (s *Store) CommitGlobalLogAppends(ctx context.Context, entries []model.Glob
 		entry := entries[i]
 		if entry.Leaf.BatchID == "" || entry.STH.TreeSize == 0 || entry.Leaf.LeafIndex != entry.STH.TreeSize-1 || entry.State.TreeSize != entry.STH.TreeSize {
 			return trusterr.New(trusterr.CodeInvalidArgument, "invalid global log append")
+		}
+		if entry.Leaf.LeafIndex != entries[0].Leaf.LeafIndex+uint64(i) {
+			return trusterr.New(trusterr.CodeInvalidArgument, "global log appends must be contiguous")
 		}
 		if entry.Leaf.SchemaVersion == "" {
 			entry.Leaf.SchemaVersion = model.SchemaGlobalLogLeaf
@@ -2741,7 +2789,10 @@ func (s *Store) CommitGlobalLogAppends(ctx context.Context, entries []model.Glob
 	if err := batch.Set([]byte(globalStateKey), stateData, nil); err != nil {
 		return trusterr.Wrap(trusterr.CodeDataLoss, "stage global log append state", err)
 	}
-	if err := batch.Commit(syncWrite); err != nil {
+	if err := batch.commitWithGlobalLogFence(ctx, entries[0].Leaf.LeafIndex); err != nil {
+		if trusterr.CodeOf(err) == trusterr.CodeFailedPrecondition {
+			return err
+		}
 		return trusterr.Wrap(trusterr.CodeDataLoss, "commit global log appends", err)
 	}
 	return nil
