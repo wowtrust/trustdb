@@ -202,6 +202,50 @@ func TestBackupRoundTripPreservesGlobalOutboxStatuses(t *testing.T) {
 	}
 }
 
+func TestBackupRoundTripPreservesSTHAnchorStatuses(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	src := proofstore.LocalStore{Root: filepath.Join(t.TempDir(), "src")}
+	if err := src.EnqueueSTHAnchor(ctx, model.STHAnchorOutboxItem{TreeSize: 1, Status: model.AnchorStatePending, EnqueuedAtUnixN: 1}); err != nil {
+		t.Fatalf("EnqueueSTHAnchor pending: %v", err)
+	}
+	if err := src.EnqueueSTHAnchor(ctx, model.STHAnchorOutboxItem{TreeSize: 2, Status: model.AnchorStatePending, EnqueuedAtUnixN: 2}); err != nil {
+		t.Fatalf("EnqueueSTHAnchor published: %v", err)
+	}
+	if err := src.MarkSTHAnchorPublished(ctx, model.STHAnchorResult{TreeSize: 2, AnchorID: "anchor-2", PublishedAtUnixN: 3}); err != nil {
+		t.Fatalf("MarkSTHAnchorPublished: %v", err)
+	}
+	if err := src.EnqueueSTHAnchor(ctx, model.STHAnchorOutboxItem{TreeSize: 3, Status: model.AnchorStatePending, EnqueuedAtUnixN: 4}); err != nil {
+		t.Fatalf("EnqueueSTHAnchor failed: %v", err)
+	}
+	if err := src.MarkSTHAnchorFailed(ctx, 3, "permanent"); err != nil {
+		t.Fatalf("MarkSTHAnchorFailed: %v", err)
+	}
+
+	path := filepath.Join(t.TempDir(), "anchor-outboxes.tdbackup")
+	report, err := Create(ctx, src, path, Options{Compression: "none"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if report.AnchorOutboxes != 3 || report.AnchorResults != 1 {
+		t.Fatalf("backup report = %+v", report)
+	}
+	dst := proofstore.LocalStore{Root: filepath.Join(t.TempDir(), "dst")}
+	if _, err := Restore(ctx, dst, path); err != nil {
+		t.Fatalf("Restore: %v", err)
+	}
+	wantStatuses := map[uint64]string{1: model.AnchorStatePending, 2: model.AnchorStatePublished, 3: model.AnchorStateFailed}
+	for treeSize, wantStatus := range wantStatuses {
+		got, ok, err := dst.GetSTHAnchorOutboxItem(ctx, treeSize)
+		if err != nil || !ok || got.Status != wantStatus {
+			t.Fatalf("restored anchor %d = %+v ok=%v err=%v", treeSize, got, ok, err)
+		}
+	}
+	if result, ok, err := dst.GetSTHAnchorResult(ctx, 2); err != nil || !ok || result.AnchorID != "anchor-2" {
+		t.Fatalf("restored anchor result = %+v ok=%v err=%v", result, ok, err)
+	}
+}
+
 func TestCreateRejectsDirectoryTarget(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

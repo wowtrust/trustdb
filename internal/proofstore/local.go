@@ -1529,12 +1529,17 @@ func (s LocalStore) EnqueueSTHAnchor(ctx context.Context, item model.STHAnchorOu
 	if item.EnqueuedAtUnixN == 0 {
 		item.EnqueuedAtUnixN = time.Now().UTC().UnixNano()
 	}
-	path := s.sthAnchorOutboxPath(item.TreeSize)
-	if _, err := os.Stat(path); err == nil {
-		return trusterr.New(trusterr.CodeAlreadyExists, "sth anchor outbox item already exists")
-	} else if !os.IsNotExist(err) {
-		return trusterr.Wrap(trusterr.CodeDataLoss, "stat sth anchor outbox item", err)
+	if !isLocalSTHAnchorStatus(item.Status) {
+		return trusterr.New(trusterr.CodeInvalidArgument, "sth anchor outbox status is invalid")
 	}
+	for _, status := range localSTHAnchorStatusOrder {
+		if _, err := os.Stat(s.sthAnchorOutboxPath(status, item.TreeSize)); err == nil {
+			return trusterr.New(trusterr.CodeAlreadyExists, "sth anchor outbox item already exists")
+		} else if !os.IsNotExist(err) {
+			return trusterr.Wrap(trusterr.CodeDataLoss, "stat sth anchor outbox item", err)
+		}
+	}
+	path := s.sthAnchorOutboxPath(item.Status, item.TreeSize)
 	if err := writeCBORAtomic(path, item); err != nil {
 		return trusterr.Wrap(trusterr.CodeDataLoss, "write sth anchor outbox item", err)
 	}
@@ -1542,7 +1547,7 @@ func (s LocalStore) EnqueueSTHAnchor(ctx context.Context, item model.STHAnchorOu
 }
 
 func (s LocalStore) ListPendingSTHAnchors(ctx context.Context, nowUnixN int64, limit int) ([]model.STHAnchorOutboxItem, error) {
-	items, err := s.listSTHAnchors(ctx, limit, func(item model.STHAnchorOutboxItem) bool {
+	items, err := s.listSTHAnchors(ctx, model.AnchorStatePending, limit, func(item model.STHAnchorOutboxItem) bool {
 		return item.Status == model.AnchorStatePending && item.NextAttemptUnixN <= nowUnixN
 	})
 	if err != nil {
@@ -1552,7 +1557,7 @@ func (s LocalStore) ListPendingSTHAnchors(ctx context.Context, nowUnixN int64, l
 }
 
 func (s LocalStore) ListPublishedSTHAnchors(ctx context.Context, limit int) ([]model.STHAnchorOutboxItem, error) {
-	return s.listSTHAnchors(ctx, limit, func(item model.STHAnchorOutboxItem) bool {
+	return s.listSTHAnchors(ctx, model.AnchorStatePublished, limit, func(item model.STHAnchorOutboxItem) bool {
 		return item.Status == model.AnchorStatePublished
 	})
 }
@@ -1564,18 +1569,16 @@ func (s LocalStore) GetSTHAnchorOutboxItem(ctx context.Context, treeSize uint64)
 	if treeSize == 0 {
 		return model.STHAnchorOutboxItem{}, false, trusterr.New(trusterr.CodeInvalidArgument, "tree_size is required")
 	}
-	data, err := readStoredFile(s.sthAnchorOutboxPath(treeSize))
-	if err != nil {
-		if os.IsNotExist(err) {
-			return model.STHAnchorOutboxItem{}, false, nil
+	for _, status := range []string{model.AnchorStatePublished, model.AnchorStateFailed, model.AnchorStatePending} {
+		item, ok, err := s.getSTHAnchorOutboxItemAtStatus(treeSize, status)
+		if err != nil {
+			return model.STHAnchorOutboxItem{}, false, err
 		}
-		return model.STHAnchorOutboxItem{}, false, trusterr.Wrap(trusterr.CodeDataLoss, "read sth anchor outbox item", err)
+		if ok {
+			return item, true, nil
+		}
 	}
-	var item model.STHAnchorOutboxItem
-	if err := cborx.UnmarshalLimit(data, &item, maxStoredObjectBytes); err != nil {
-		return model.STHAnchorOutboxItem{}, false, trusterr.Wrap(trusterr.CodeDataLoss, "decode sth anchor outbox item", err)
-	}
-	return item, true, nil
+	return model.STHAnchorOutboxItem{}, false, nil
 }
 
 func (s LocalStore) ListSTHAnchorOutboxItemsAfter(ctx context.Context, afterTreeSize uint64, limit int) ([]model.STHAnchorOutboxItem, error) {
@@ -1585,22 +1588,19 @@ func (s LocalStore) ListSTHAnchorOutboxItemsAfter(ctx context.Context, afterTree
 	if limit <= 0 {
 		limit = 100
 	}
-	entries, err := os.ReadDir(s.sthAnchorOutboxDir())
+	entries, err := s.sthAnchorOutboxEntries(ctx)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
-		return nil, trusterr.Wrap(trusterr.CodeDataLoss, "read sth anchor outbox directory", err)
+		return nil, err
 	}
 	items := make([]model.STHAnchorOutboxItem, 0, limit)
 	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".tdsth-anchor") {
-			continue
-		}
 		if err := ctx.Err(); err != nil {
 			return nil, trusterr.Wrap(trusterr.CodeDeadlineExceeded, "proofstore list sth anchor outbox after canceled", err)
 		}
-		data, err := readStoredFile(filepath.Join(s.sthAnchorOutboxDir(), entry.Name()))
+		if entry.treeSize <= afterTreeSize {
+			continue
+		}
+		data, err := readStoredFile(entry.path)
 		if err != nil {
 			return nil, trusterr.Wrap(trusterr.CodeDataLoss, "read sth anchor outbox item", err)
 		}
@@ -1608,8 +1608,8 @@ func (s LocalStore) ListSTHAnchorOutboxItemsAfter(ctx context.Context, afterTree
 		if err := cborx.UnmarshalLimit(data, &item, maxStoredObjectBytes); err != nil {
 			return nil, trusterr.Wrap(trusterr.CodeDataLoss, "decode sth anchor outbox item", err)
 		}
-		if item.TreeSize <= afterTreeSize {
-			continue
+		if item.TreeSize != entry.treeSize || item.Status != entry.status {
+			return nil, trusterr.New(trusterr.CodeDataLoss, "sth anchor outbox path does not match item")
 		}
 		items = append(items, item)
 		if len(items) >= limit {
@@ -1624,24 +1624,18 @@ func (s LocalStore) ListSTHAnchorsPage(ctx context.Context, opts model.AnchorLis
 		return nil, trusterr.Wrap(trusterr.CodeDeadlineExceeded, "proofstore list sth anchors page canceled", err)
 	}
 	limit := normaliseRecordLimit(opts.Limit)
-	entries, err := os.ReadDir(s.sthAnchorOutboxDir())
+	entries, err := s.sthAnchorOutboxEntries(ctx)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
-		return nil, trusterr.Wrap(trusterr.CodeDataLoss, "read sth anchor outbox directory", err)
+		return nil, err
 	}
 	items := make([]model.STHAnchorOutboxItem, 0, min(limit, len(entries)))
-	start, end, step := sortedDirectoryPageRange(len(entries), opts.Direction)
+	start, end, step := sthAnchorPageRange(entries, opts)
 	for i := start; i != end && len(items) < limit; i += step {
 		entry := entries[i]
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".tdsth-anchor") {
-			continue
-		}
 		if err := ctx.Err(); err != nil {
 			return nil, trusterr.Wrap(trusterr.CodeDeadlineExceeded, "proofstore list sth anchors page canceled", err)
 		}
-		data, err := readStoredFile(filepath.Join(s.sthAnchorOutboxDir(), entry.Name()))
+		data, err := readStoredFile(entry.path)
 		if err != nil {
 			return nil, trusterr.Wrap(trusterr.CodeDataLoss, "read sth anchor outbox item", err)
 		}
@@ -1649,8 +1643,8 @@ func (s LocalStore) ListSTHAnchorsPage(ctx context.Context, opts model.AnchorLis
 		if err := cborx.UnmarshalLimit(data, &item, maxStoredObjectBytes); err != nil {
 			return nil, trusterr.Wrap(trusterr.CodeDataLoss, "decode sth anchor outbox item", err)
 		}
-		if !model.Uint64AfterCursor(item.TreeSize, opts.AfterTreeSize, opts.Direction) {
-			continue
+		if item.TreeSize != entry.treeSize || item.Status != entry.status {
+			return nil, trusterr.New(trusterr.CodeDataLoss, "sth anchor outbox path does not match item")
 		}
 		items = append(items, item)
 	}
@@ -1658,7 +1652,13 @@ func (s LocalStore) ListSTHAnchorsPage(ctx context.Context, opts model.AnchorLis
 }
 
 func (s LocalStore) RescheduleSTHAnchor(ctx context.Context, treeSize uint64, attempts int, nextAttemptUnixN int64, lastErrorMessage string) error {
-	item, ok, err := s.GetSTHAnchorOutboxItem(ctx, treeSize)
+	if err := ctx.Err(); err != nil {
+		return trusterr.Wrap(trusterr.CodeDeadlineExceeded, "proofstore reschedule sth anchor canceled", err)
+	}
+	if treeSize == 0 {
+		return trusterr.New(trusterr.CodeInvalidArgument, "tree_size is required")
+	}
+	item, ok, err := s.getSTHAnchorOutboxItemAtStatus(treeSize, model.AnchorStatePending)
 	if err != nil {
 		return err
 	}
@@ -1670,7 +1670,7 @@ func (s LocalStore) RescheduleSTHAnchor(ctx context.Context, treeSize uint64, at
 	item.NextAttemptUnixN = nextAttemptUnixN
 	item.LastErrorMessage = lastErrorMessage
 	item.LastAttemptUnixN = time.Now().UTC().UnixNano()
-	if err := writeCBORAtomic(s.sthAnchorOutboxPath(treeSize), item); err != nil {
+	if err := writeCBORAtomic(s.sthAnchorOutboxPath(model.AnchorStatePending, treeSize), item); err != nil {
 		return trusterr.Wrap(trusterr.CodeDataLoss, "update sth anchor outbox item", err)
 	}
 	return nil
@@ -1703,8 +1703,13 @@ func (s LocalStore) MarkSTHAnchorPublished(ctx context.Context, result model.STH
 	item.LastErrorMessage = ""
 	item.LastAttemptUnixN = result.PublishedAtUnixN
 	item.NextAttemptUnixN = 0
-	if err := writeCBORAtomic(s.sthAnchorOutboxPath(result.TreeSize), item); err != nil {
+	if err := writeCBORAtomic(s.sthAnchorOutboxPath(model.AnchorStatePublished, result.TreeSize), item); err != nil {
 		return trusterr.Wrap(trusterr.CodeDataLoss, "update sth anchor outbox item", err)
+	}
+	for _, status := range []string{model.AnchorStatePending, model.AnchorStateFailed} {
+		if err := removeLocalFileDurable(s.sthAnchorOutboxPath(status, result.TreeSize)); err != nil {
+			return trusterr.Wrap(trusterr.CodeDataLoss, "remove previous sth anchor outbox item", err)
+		}
 	}
 	leaf, ok, err := s.GetGlobalLeaf(ctx, result.TreeSize-1)
 	if err != nil {
@@ -1730,8 +1735,13 @@ func (s LocalStore) MarkSTHAnchorFailed(ctx context.Context, treeSize uint64, la
 	item.LastErrorMessage = lastErrorMessage
 	item.LastAttemptUnixN = time.Now().UTC().UnixNano()
 	item.NextAttemptUnixN = 0
-	if err := writeCBORAtomic(s.sthAnchorOutboxPath(treeSize), item); err != nil {
+	if err := writeCBORAtomic(s.sthAnchorOutboxPath(model.AnchorStateFailed, treeSize), item); err != nil {
 		return trusterr.Wrap(trusterr.CodeDataLoss, "update sth anchor outbox item", err)
+	}
+	for _, status := range []string{model.AnchorStatePending, model.AnchorStatePublished} {
+		if err := removeLocalFileDurable(s.sthAnchorOutboxPath(status, treeSize)); err != nil {
+			return trusterr.Wrap(trusterr.CodeDataLoss, "remove previous sth anchor outbox item", err)
+		}
 	}
 	return nil
 }
@@ -1757,14 +1767,14 @@ func (s LocalStore) GetSTHAnchorResult(ctx context.Context, treeSize uint64) (mo
 	return result, true, nil
 }
 
-func (s LocalStore) listSTHAnchors(ctx context.Context, limit int, include func(model.STHAnchorOutboxItem) bool) ([]model.STHAnchorOutboxItem, error) {
+func (s LocalStore) listSTHAnchors(ctx context.Context, status string, limit int, include func(model.STHAnchorOutboxItem) bool) ([]model.STHAnchorOutboxItem, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, trusterr.Wrap(trusterr.CodeDeadlineExceeded, "proofstore list sth anchors canceled", err)
 	}
 	if limit <= 0 {
 		limit = 100
 	}
-	entries, err := os.ReadDir(s.sthAnchorOutboxDir())
+	entries, err := os.ReadDir(s.sthAnchorOutboxStatusDir(status))
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
@@ -1776,13 +1786,19 @@ func (s LocalStore) listSTHAnchors(ctx context.Context, limit int, include func(
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".tdsth-anchor") {
 			continue
 		}
-		data, err := readStoredFile(filepath.Join(s.sthAnchorOutboxDir(), entry.Name()))
+		if err := ctx.Err(); err != nil {
+			return nil, trusterr.Wrap(trusterr.CodeDeadlineExceeded, "proofstore list sth anchors canceled", err)
+		}
+		data, err := readStoredFile(filepath.Join(s.sthAnchorOutboxStatusDir(status), entry.Name()))
 		if err != nil {
 			return nil, trusterr.Wrap(trusterr.CodeDataLoss, "read sth anchor outbox item", err)
 		}
 		var item model.STHAnchorOutboxItem
 		if err := cborx.UnmarshalLimit(data, &item, maxStoredObjectBytes); err != nil {
 			return nil, trusterr.Wrap(trusterr.CodeDataLoss, "decode sth anchor outbox item", err)
+		}
+		if item.Status != status {
+			return nil, trusterr.New(trusterr.CodeDataLoss, "sth anchor status directory does not match item")
 		}
 		if include(item) {
 			if len(items) == 0 {
@@ -1798,6 +1814,90 @@ func (s LocalStore) listSTHAnchors(ctx context.Context, limit int, include func(
 		items = items[:limit]
 	}
 	return items, nil
+}
+
+type localSTHAnchorOutboxEntry struct {
+	treeSize uint64
+	status   string
+	path     string
+}
+
+var localSTHAnchorStatusOrder = [...]string{model.AnchorStatePending, model.AnchorStateFailed, model.AnchorStatePublished}
+
+func isLocalSTHAnchorStatus(status string) bool {
+	return status == model.AnchorStatePending || status == model.AnchorStatePublished || status == model.AnchorStateFailed
+}
+
+func (s LocalStore) getSTHAnchorOutboxItemAtStatus(treeSize uint64, status string) (model.STHAnchorOutboxItem, bool, error) {
+	data, err := readStoredFile(s.sthAnchorOutboxPath(status, treeSize))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return model.STHAnchorOutboxItem{}, false, nil
+		}
+		return model.STHAnchorOutboxItem{}, false, trusterr.Wrap(trusterr.CodeDataLoss, "read sth anchor outbox item", err)
+	}
+	var item model.STHAnchorOutboxItem
+	if err := cborx.UnmarshalLimit(data, &item, maxStoredObjectBytes); err != nil {
+		return model.STHAnchorOutboxItem{}, false, trusterr.Wrap(trusterr.CodeDataLoss, "decode sth anchor outbox item", err)
+	}
+	if item.TreeSize != treeSize || item.Status != status {
+		return model.STHAnchorOutboxItem{}, false, trusterr.New(trusterr.CodeDataLoss, "sth anchor outbox path does not match item")
+	}
+	return item, true, nil
+}
+
+func (s LocalStore) sthAnchorOutboxEntries(ctx context.Context) ([]localSTHAnchorOutboxEntry, error) {
+	byTreeSize := make(map[uint64]localSTHAnchorOutboxEntry)
+	for _, status := range localSTHAnchorStatusOrder {
+		if err := ctx.Err(); err != nil {
+			return nil, trusterr.Wrap(trusterr.CodeDeadlineExceeded, "proofstore list sth anchor outbox canceled", err)
+		}
+		dir := s.sthAnchorOutboxStatusDir(status)
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return nil, trusterr.Wrap(trusterr.CodeDataLoss, "read sth anchor outbox directory", err)
+		}
+		for _, entry := range entries {
+			if err := ctx.Err(); err != nil {
+				return nil, trusterr.Wrap(trusterr.CodeDeadlineExceeded, "proofstore list sth anchor outbox canceled", err)
+			}
+			if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".tdsth-anchor") {
+				continue
+			}
+			treeSize, err := decodeLocalUint64Filename(entry.Name(), ".tdsth-anchor")
+			if err != nil {
+				return nil, trusterr.Wrap(trusterr.CodeDataLoss, "decode sth anchor outbox filename", err)
+			}
+			if treeSize == 0 {
+				return nil, trusterr.New(trusterr.CodeDataLoss, "sth anchor outbox filename has zero tree size")
+			}
+			byTreeSize[treeSize] = localSTHAnchorOutboxEntry{treeSize: treeSize, status: status, path: filepath.Join(dir, entry.Name())}
+		}
+	}
+	entries := make([]localSTHAnchorOutboxEntry, 0, len(byTreeSize))
+	for _, entry := range byTreeSize {
+		entries = append(entries, entry)
+	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].treeSize < entries[j].treeSize })
+	return entries, nil
+}
+
+func sthAnchorPageRange(entries []localSTHAnchorOutboxEntry, opts model.AnchorListOptions) (start, end, step int) {
+	ascending := strings.EqualFold(opts.Direction, model.RecordListDirectionAsc)
+	if ascending {
+		if opts.AfterTreeSize > 0 {
+			start = sort.Search(len(entries), func(i int) bool { return entries[i].treeSize > opts.AfterTreeSize })
+		}
+		return start, len(entries), 1
+	}
+	upper := len(entries)
+	if opts.AfterTreeSize > 0 {
+		upper = sort.Search(len(entries), func(i int) bool { return entries[i].treeSize >= opts.AfterTreeSize })
+	}
+	return upper - 1, -1, -1
 }
 
 func (s LocalStore) globalLeafDir() string {
@@ -1834,6 +1934,10 @@ func (s LocalStore) globalOutboxStatusDir(status string) string {
 
 func (s LocalStore) sthAnchorOutboxDir() string {
 	return filepath.Join(s.root(), "anchor", "sth-outbox")
+}
+
+func (s LocalStore) sthAnchorOutboxStatusDir(status string) string {
+	return filepath.Join(s.sthAnchorOutboxDir(), status)
 }
 
 func (s LocalStore) sthAnchorResultDir() string {
@@ -1880,8 +1984,8 @@ func (s LocalStore) globalOutboxPath(status, batchID string) string {
 	return filepath.Join(s.globalOutboxStatusDir(status), safeFileName(batchID)+".tdgoutbox")
 }
 
-func (s LocalStore) sthAnchorOutboxPath(treeSize uint64) string {
-	return filepath.Join(s.sthAnchorOutboxDir(), fmt.Sprintf("%020d.tdsth-anchor", treeSize))
+func (s LocalStore) sthAnchorOutboxPath(status string, treeSize uint64) string {
+	return filepath.Join(s.sthAnchorOutboxStatusDir(status), fmt.Sprintf("%020d.tdsth-anchor", treeSize))
 }
 
 func (s LocalStore) sthAnchorResultPath(treeSize uint64) string {
@@ -2391,6 +2495,15 @@ func decodeLocalUint64PositionFilename(name, suffix string) (uint64, uint64, err
 		return 0, 0, fmt.Errorf("invalid second position in filename %q", name)
 	}
 	return first, second, nil
+}
+
+func decodeLocalUint64Filename(name, suffix string) (uint64, error) {
+	base := strings.TrimSuffix(name, suffix)
+	value, err := strconv.ParseUint(base, 10, 64)
+	if err != nil || fmt.Sprintf("%0*d%s", localPositionWidth, value, suffix) != name {
+		return 0, fmt.Errorf("invalid uint64 filename %q", name)
+	}
+	return value, nil
 }
 
 func decodeSafeFileName(value string) (string, error) {
