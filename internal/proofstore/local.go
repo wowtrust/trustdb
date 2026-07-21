@@ -21,7 +21,7 @@ import (
 const (
 	maxStoredObjectBytes  = 64 << 20
 	encodedFileNamePrefix = "~"
-	recordIndexTimeWidth  = 20
+	localPositionWidth    = 20
 )
 
 type LocalStore struct {
@@ -197,7 +197,7 @@ func (s LocalStore) PutRoot(ctx context.Context, root model.BatchRoot) error {
 	if root.ClosedAtUnixN == 0 {
 		root.ClosedAtUnixN = time.Now().UTC().UnixNano()
 	}
-	name := fmt.Sprintf("%020d_%s.tdroot", root.ClosedAtUnixN, safeFileName(root.BatchID))
+	name := fmt.Sprintf("%0*d_%s.tdroot", localPositionWidth, root.ClosedAtUnixN, safeFileName(root.BatchID))
 	path := filepath.Join(s.rootDir(), name)
 	if err := writeCBORAtomic(path, root); err != nil {
 		return trusterr.Wrap(trusterr.CodeDataLoss, "write batch root", err)
@@ -219,22 +219,26 @@ func (s LocalStore) ListRoots(ctx context.Context, limit int) ([]model.BatchRoot
 		}
 		return nil, trusterr.Wrap(trusterr.CodeDataLoss, "read root directory", err)
 	}
-	roots := make([]model.BatchRoot, 0, min(limit, len(entries)))
-	for i := len(entries) - 1; i >= 0 && len(roots) < limit; i-- {
-		entry := entries[i]
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".tdroot") {
-			continue
-		}
+	ordered, err := orderedRootEntries(entries)
+	if err != nil {
+		return nil, trusterr.Wrap(trusterr.CodeDataLoss, "parse batch root filename", err)
+	}
+	roots := make([]model.BatchRoot, 0, min(limit, len(ordered)))
+	for i := len(ordered) - 1; i >= 0 && len(roots) < limit; i-- {
+		entry := ordered[i]
 		if err := ctx.Err(); err != nil {
 			return nil, trusterr.Wrap(trusterr.CodeDeadlineExceeded, "proofstore list roots canceled", err)
 		}
-		data, err := readStoredFile(filepath.Join(s.rootDir(), entry.Name()))
+		data, err := readStoredFile(filepath.Join(s.rootDir(), entry.name))
 		if err != nil {
 			return nil, trusterr.Wrap(trusterr.CodeDataLoss, "read batch root", err)
 		}
 		var root model.BatchRoot
 		if err := cborx.UnmarshalLimit(data, &root, maxStoredObjectBytes); err != nil {
 			return nil, trusterr.Wrap(trusterr.CodeDataLoss, "decode batch root", err)
+		}
+		if root.ClosedAtUnixN != entry.closedAtUnixN || root.BatchID != entry.batchID {
+			return nil, trusterr.New(trusterr.CodeDataLoss, "batch root position does not match filename")
 		}
 		roots = append(roots, root)
 	}
@@ -255,15 +259,20 @@ func (s LocalStore) ListRootsAfter(ctx context.Context, afterClosedAtUnixN int64
 		}
 		return nil, trusterr.Wrap(trusterr.CodeDataLoss, "read root directory", err)
 	}
-	roots := make([]model.BatchRoot, 0, limit)
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".tdroot") {
-			continue
-		}
+	ordered, err := orderedRootEntries(entries)
+	if err != nil {
+		return nil, trusterr.Wrap(trusterr.CodeDataLoss, "parse batch root filename", err)
+	}
+	start := sort.Search(len(ordered), func(i int) bool {
+		return ordered[i].closedAtUnixN > afterClosedAtUnixN
+	})
+	roots := make([]model.BatchRoot, 0, min(limit, len(ordered)-start))
+	for i := start; i < len(ordered) && len(roots) < limit; i++ {
+		entry := ordered[i]
 		if err := ctx.Err(); err != nil {
 			return nil, trusterr.Wrap(trusterr.CodeDeadlineExceeded, "proofstore list roots after canceled", err)
 		}
-		data, err := readStoredFile(filepath.Join(s.rootDir(), entry.Name()))
+		data, err := readStoredFile(filepath.Join(s.rootDir(), entry.name))
 		if err != nil {
 			return nil, trusterr.Wrap(trusterr.CodeDataLoss, "read batch root", err)
 		}
@@ -271,13 +280,10 @@ func (s LocalStore) ListRootsAfter(ctx context.Context, afterClosedAtUnixN int64
 		if err := cborx.UnmarshalLimit(data, &root, maxStoredObjectBytes); err != nil {
 			return nil, trusterr.Wrap(trusterr.CodeDataLoss, "decode batch root", err)
 		}
-		if root.ClosedAtUnixN <= afterClosedAtUnixN {
-			continue
+		if root.ClosedAtUnixN != entry.closedAtUnixN || root.BatchID != entry.batchID {
+			return nil, trusterr.New(trusterr.CodeDataLoss, "batch root position does not match filename")
 		}
 		roots = append(roots, root)
-		if len(roots) >= limit {
-			break
-		}
 	}
 	return roots, nil
 }
@@ -294,15 +300,18 @@ func (s LocalStore) ListRootsPage(ctx context.Context, opts model.RootListOption
 		}
 		return nil, trusterr.Wrap(trusterr.CodeDataLoss, "read root directory", err)
 	}
-	roots := make([]model.BatchRoot, 0, len(entries))
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".tdroot") {
-			continue
-		}
+	ordered, err := orderedRootEntries(entries)
+	if err != nil {
+		return nil, trusterr.Wrap(trusterr.CodeDataLoss, "parse batch root filename", err)
+	}
+	roots := make([]model.BatchRoot, 0, min(limit, len(ordered)))
+	start, end, step := rootPageRange(ordered, opts)
+	for i := start; i != end && len(roots) < limit; i += step {
+		entry := ordered[i]
 		if err := ctx.Err(); err != nil {
 			return nil, trusterr.Wrap(trusterr.CodeDeadlineExceeded, "proofstore list roots page canceled", err)
 		}
-		data, err := readStoredFile(filepath.Join(s.rootDir(), entry.Name()))
+		data, err := readStoredFile(filepath.Join(s.rootDir(), entry.name))
 		if err != nil {
 			return nil, trusterr.Wrap(trusterr.CodeDataLoss, "read batch root", err)
 		}
@@ -310,14 +319,13 @@ func (s LocalStore) ListRootsPage(ctx context.Context, opts model.RootListOption
 		if err := cborx.UnmarshalLimit(data, &root, maxStoredObjectBytes); err != nil {
 			return nil, trusterr.Wrap(trusterr.CodeDataLoss, "decode batch root", err)
 		}
+		if root.ClosedAtUnixN != entry.closedAtUnixN || root.BatchID != entry.batchID {
+			return nil, trusterr.New(trusterr.CodeDataLoss, "batch root position does not match filename")
+		}
 		if !model.BatchRootAfterCursor(root, opts) {
 			continue
 		}
 		roots = append(roots, root)
-	}
-	sortBatchRoots(roots, opts.Direction)
-	if len(roots) > limit {
-		roots = roots[:limit]
 	}
 	return roots, nil
 }
@@ -1799,7 +1807,7 @@ func (s LocalStore) recordByIDPath(recordID string) string {
 }
 
 func (s LocalStore) recordIndexName(idx model.RecordIndex) string {
-	return fmt.Sprintf("%0*d_%s.tdrecord", recordIndexTimeWidth, idx.ReceivedAtUnixN, safeFileName(idx.RecordID))
+	return fmt.Sprintf("%0*d_%s.tdrecord", localPositionWidth, idx.ReceivedAtUnixN, safeFileName(idx.RecordID))
 }
 
 func (s LocalStore) rootDir() string {
@@ -1991,17 +1999,6 @@ func sortedDirectoryPageRange(length int, direction string) (start, end, step in
 	return length - 1, -1, -1
 }
 
-func sortBatchRoots(roots []model.BatchRoot, direction string) {
-	desc := !strings.EqualFold(direction, model.RecordListDirectionAsc)
-	sort.Slice(roots, func(i, j int) bool {
-		cmp := model.CompareBatchRootPosition(roots[i].ClosedAtUnixN, roots[i].BatchID, roots[j].ClosedAtUnixN, roots[j].BatchID)
-		if desc {
-			return cmp > 0
-		}
-		return cmp < 0
-	})
-}
-
 func (s LocalStore) promoteBatchRecords(ctx context.Context, batchID, proofLevel string) error {
 	if batchID == "" {
 		return nil
@@ -2059,18 +2056,9 @@ func orderedRecordIndexEntries(entries []os.DirEntry) ([]localRecordIndexEntry, 
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), suffix) {
 			continue
 		}
-		base := strings.TrimSuffix(entry.Name(), suffix)
-		if len(base) <= recordIndexTimeWidth+1 || base[recordIndexTimeWidth] != '_' {
-			return nil, fmt.Errorf("invalid record index filename %q", entry.Name())
-		}
-		receivedAtUnixN, err := strconv.ParseInt(base[:recordIndexTimeWidth], 10, 64)
-		if err != nil || receivedAtUnixN < 0 {
-			return nil, fmt.Errorf("invalid record index timestamp in %q", entry.Name())
-		}
-		encodedRecordID := base[recordIndexTimeWidth+1:]
-		recordID, err := decodeSafeFileName(encodedRecordID)
-		if err != nil || recordID == "" || safeFileName(recordID) != encodedRecordID {
-			return nil, fmt.Errorf("invalid record id in index filename %q", entry.Name())
+		receivedAtUnixN, recordID, err := decodeLocalPositionFilename(entry.Name(), suffix)
+		if err != nil {
+			return nil, err
 		}
 		ordered = append(ordered, localRecordIndexEntry{
 			name:            entry.Name(),
@@ -2087,6 +2075,48 @@ func orderedRecordIndexEntries(entries []os.DirEntry) ([]localRecordIndexEntry, 
 		) < 0
 	})
 	return ordered, nil
+}
+
+type localRootEntry struct {
+	name          string
+	closedAtUnixN int64
+	batchID       string
+}
+
+func orderedRootEntries(entries []os.DirEntry) ([]localRootEntry, error) {
+	const suffix = ".tdroot"
+	ordered := make([]localRootEntry, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), suffix) {
+			continue
+		}
+		closedAtUnixN, batchID, err := decodeLocalPositionFilename(entry.Name(), suffix)
+		if err != nil {
+			return nil, err
+		}
+		ordered = append(ordered, localRootEntry{name: entry.Name(), closedAtUnixN: closedAtUnixN, batchID: batchID})
+	}
+	sort.Slice(ordered, func(i, j int) bool {
+		return model.CompareBatchRootPosition(ordered[i].closedAtUnixN, ordered[i].batchID, ordered[j].closedAtUnixN, ordered[j].batchID) < 0
+	})
+	return ordered, nil
+}
+
+func decodeLocalPositionFilename(name, suffix string) (int64, string, error) {
+	base := strings.TrimSuffix(name, suffix)
+	if len(base) <= localPositionWidth+1 || base[localPositionWidth] != '_' {
+		return 0, "", fmt.Errorf("invalid position filename %q", name)
+	}
+	timestamp, err := strconv.ParseInt(base[:localPositionWidth], 10, 64)
+	if err != nil || timestamp < 0 {
+		return 0, "", fmt.Errorf("invalid timestamp in position filename %q", name)
+	}
+	encodedID := base[localPositionWidth+1:]
+	id, err := decodeSafeFileName(encodedID)
+	if err != nil || id == "" || safeFileName(id) != encodedID {
+		return 0, "", fmt.Errorf("invalid id in position filename %q", name)
+	}
+	return timestamp, id, nil
 }
 
 func decodeSafeFileName(value string) (string, error) {
@@ -2133,6 +2163,26 @@ func recordIndexPageRange(entries []localRecordIndexEntry, opts model.RecordList
 		return lower, upper, 1
 	}
 	return upper - 1, lower - 1, -1
+}
+
+func rootPageRange(entries []localRootEntry, opts model.RootListOptions) (start, end, step int) {
+	upper := len(entries)
+	hasCursor := opts.AfterClosedAtUnixN != 0 || opts.AfterBatchID != ""
+	asc := strings.EqualFold(opts.Direction, model.RecordListDirectionAsc)
+	if asc {
+		if hasCursor {
+			start = sort.Search(len(entries), func(i int) bool {
+				return model.CompareBatchRootPosition(entries[i].closedAtUnixN, entries[i].batchID, opts.AfterClosedAtUnixN, opts.AfterBatchID) > 0
+			})
+		}
+		return start, upper, 1
+	}
+	if hasCursor {
+		upper = sort.Search(len(entries), func(i int) bool {
+			return model.CompareBatchRootPosition(entries[i].closedAtUnixN, entries[i].batchID, opts.AfterClosedAtUnixN, opts.AfterBatchID) >= 0
+		})
+	}
+	return upper - 1, -1, -1
 }
 
 func isPlainSafeFileName(value string) bool {

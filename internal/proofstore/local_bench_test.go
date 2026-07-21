@@ -116,3 +116,59 @@ func BenchmarkLocalStoreRecordFirstPage4096(b *testing.B) {
 		}
 	}
 }
+
+func BenchmarkLocalStoreRootFirstPage4096(b *testing.B) {
+	store := localRootBenchStore(b, 4096)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		got, err := store.ListRootsPage(context.Background(), model.RootListOptions{Limit: 100, Direction: model.RecordListDirectionDesc})
+		if err != nil {
+			b.Fatal(err)
+		}
+		if len(got) != 100 || got[0].ClosedAtUnixN != 4096 || got[99].ClosedAtUnixN != 3997 {
+			b.Fatalf("unexpected page bounds: len=%d first=%d last=%d", len(got), got[0].ClosedAtUnixN, got[len(got)-1].ClosedAtUnixN)
+		}
+	}
+}
+
+func BenchmarkLocalStoreRootsAfterLateCursor4096(b *testing.B) {
+	store := localRootBenchStore(b, 4096)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		got, err := store.ListRootsAfter(context.Background(), 3996, 100)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if len(got) != 100 || got[0].ClosedAtUnixN != 3997 || got[99].ClosedAtUnixN != 4096 {
+			b.Fatalf("unexpected page bounds: len=%d first=%d last=%d", len(got), got[0].ClosedAtUnixN, got[len(got)-1].ClosedAtUnixN)
+		}
+	}
+}
+
+func localRootBenchStore(b *testing.B, count int) LocalStore {
+	b.Helper()
+	store := LocalStore{Root: b.TempDir()}
+	if err := os.MkdirAll(store.rootDir(), 0o755); err != nil {
+		b.Fatal(err)
+	}
+	for i := range count {
+		root := model.BatchRoot{
+			SchemaVersion: model.SchemaBatchRoot,
+			BatchID:       fmt.Sprintf("batch-%04d", i),
+			BatchRoot:     make([]byte, 32),
+			TreeSize:      1,
+			ClosedAtUnixN: int64(i + 1),
+		}
+		data, err := cborx.Marshal(root)
+		if err != nil {
+			b.Fatal(err)
+		}
+		name := fmt.Sprintf("%020d_%s.tdroot", root.ClosedAtUnixN, safeFileName(root.BatchID))
+		if err := os.WriteFile(filepath.Join(store.rootDir(), name), data, 0o600); err != nil {
+			b.Fatal(err)
+		}
+	}
+	return store
+}

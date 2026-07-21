@@ -276,6 +276,86 @@ func TestLocalStoreRootRoundTrip(t *testing.T) {
 	}
 }
 
+func TestLocalStoreRootPagesOrderEncodedIDsByRawValue(t *testing.T) {
+	t.Parallel()
+
+	store := LocalStore{Root: t.TempDir()}
+	ctx := context.Background()
+	for _, batchID := range []string{"batch_1", "batch/1", "batch-1"} {
+		if err := store.PutRoot(ctx, model.BatchRoot{
+			SchemaVersion: model.SchemaBatchRoot,
+			BatchID:       batchID,
+			BatchRoot:     bytes.Repeat([]byte{1}, 32),
+			TreeSize:      1,
+			ClosedAtUnixN: 100,
+		}); err != nil {
+			t.Fatalf("PutRoot(%q): %v", batchID, err)
+		}
+	}
+
+	first, err := store.ListRootsPage(ctx, model.RootListOptions{Limit: 2, Direction: model.RecordListDirectionAsc})
+	if err != nil {
+		t.Fatalf("ListRootsPage(first): %v", err)
+	}
+	if len(first) != 2 || first[0].BatchID != "batch-1" || first[1].BatchID != "batch/1" {
+		t.Fatalf("first page = %#v", first)
+	}
+	next, err := store.ListRootsPage(ctx, model.RootListOptions{
+		Limit:              2,
+		Direction:          model.RecordListDirectionAsc,
+		AfterClosedAtUnixN: first[1].ClosedAtUnixN,
+		AfterBatchID:       first[1].BatchID,
+	})
+	if err != nil {
+		t.Fatalf("ListRootsPage(next): %v", err)
+	}
+	if len(next) != 1 || next[0].BatchID != "batch_1" {
+		t.Fatalf("next page = %#v", next)
+	}
+}
+
+func TestLocalStoreRootReadersSkipFilesOutsideRequestedRange(t *testing.T) {
+	t.Parallel()
+
+	store := LocalStore{Root: t.TempDir()}
+	ctx := context.Background()
+	var oldest model.BatchRoot
+	for i := range 101 {
+		root := model.BatchRoot{
+			SchemaVersion: model.SchemaBatchRoot,
+			BatchID:       fmt.Sprintf("batch-%03d", i),
+			BatchRoot:     bytes.Repeat([]byte{1}, 32),
+			TreeSize:      1,
+			ClosedAtUnixN: int64(i + 1),
+		}
+		if i == 0 {
+			oldest = root
+		}
+		if err := store.PutRoot(ctx, root); err != nil {
+			t.Fatalf("PutRoot(%d): %v", i, err)
+		}
+	}
+	oldestName := fmt.Sprintf("%0*d_%s.tdroot", localPositionWidth, oldest.ClosedAtUnixN, safeFileName(oldest.BatchID))
+	if err := os.WriteFile(filepath.Join(store.rootDir(), oldestName), []byte("not-cbor"), 0o600); err != nil {
+		t.Fatalf("corrupt oldest root: %v", err)
+	}
+
+	page, err := store.ListRootsPage(ctx, model.RootListOptions{Limit: 100, Direction: model.RecordListDirectionDesc})
+	if err != nil {
+		t.Fatalf("ListRootsPage: %v", err)
+	}
+	if len(page) != 100 || page[0].ClosedAtUnixN != 101 || page[99].ClosedAtUnixN != 2 {
+		t.Fatalf("page bounds: len=%d first=%d last=%d", len(page), page[0].ClosedAtUnixN, page[len(page)-1].ClosedAtUnixN)
+	}
+	after, err := store.ListRootsAfter(ctx, 1, 100)
+	if err != nil {
+		t.Fatalf("ListRootsAfter: %v", err)
+	}
+	if len(after) != 100 || after[0].ClosedAtUnixN != 2 || after[99].ClosedAtUnixN != 101 {
+		t.Fatalf("after bounds: len=%d first=%d last=%d", len(after), after[0].ClosedAtUnixN, after[len(after)-1].ClosedAtUnixN)
+	}
+}
+
 func TestLocalStoreMissingBundle(t *testing.T) {
 	t.Parallel()
 
