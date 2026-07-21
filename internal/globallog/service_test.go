@@ -185,6 +185,57 @@ func TestEvidenceUsesLatestCoveringAnchoredSTH(t *testing.T) {
 	}
 }
 
+func TestEvidenceUsesConfiguredAnchorSinkStream(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	store := proofstore.LocalStore{Root: t.TempDir()}
+	_, priv, err := trustcrypto.GenerateEd25519Key()
+	if err != nil {
+		t.Fatalf("GenerateEd25519Key: %v", err)
+	}
+	svc, err := New(Options{
+		Store: store, LogID: "test-log", KeyID: "test-key", PrivateKey: priv,
+		AnchorSinkName: anchor.NoopSinkName,
+		Clock:          func() time.Time { return time.Unix(100, 0).UTC() },
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	sths, err := svc.AppendBatchRoots(ctx, []model.BatchRoot{
+		batchRoot("b1", 1), batchRoot("b2", 2), batchRoot("b3", 3),
+	})
+	if err != nil {
+		t.Fatalf("AppendBatchRoots: %v", err)
+	}
+	writer := any(store).(proofstore.STHAnchorResultWriter)
+	putResult := func(sth model.SignedTreeHead, sink string) {
+		t.Helper()
+		if err := writer.PutSTHAnchorResult(ctx, model.STHAnchorResult{
+			SchemaVersion: model.SchemaSTHAnchorResult, NodeID: sth.NodeID, LogID: sth.LogID, TreeSize: sth.TreeSize,
+			SinkName: sink, AnchorID: sink + "-anchor", RootHash: append([]byte(nil), sth.RootHash...), STH: sth, PublishedAtUnixN: int64(sth.TreeSize),
+		}); err != nil {
+			t.Fatalf("PutSTHAnchorResult %s: %v", sink, err)
+		}
+	}
+	putResult(sths[1], anchor.NoopSinkName)
+	putResult(sths[2], anchor.FileSinkName)
+
+	evidence, err := svc.Evidence(ctx, "b1")
+	if err != nil {
+		t.Fatalf("Evidence(b1): %v", err)
+	}
+	if evidence.AnchorResult == nil || evidence.AnchorResult.SinkName != anchor.NoopSinkName || evidence.GlobalProof.TreeSize != 2 {
+		t.Fatalf("configured-sink evidence = %+v", evidence)
+	}
+	evidence, err = svc.Evidence(ctx, "b3")
+	if err != nil {
+		t.Fatalf("Evidence(b3): %v", err)
+	}
+	if evidence.AnchorResult != nil || evidence.GlobalProof.TreeSize != 3 {
+		t.Fatalf("uncovered configured-sink evidence = %+v", evidence)
+	}
+}
+
 func TestAppendBatchRootsPreservesSTHSequence(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

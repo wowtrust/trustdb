@@ -26,6 +26,7 @@ import (
 	"github.com/ryan-wong-coder/trustdb/internal/httpapi"
 	"github.com/ryan-wong-coder/trustdb/internal/idempotency"
 	"github.com/ryan-wong-coder/trustdb/internal/ingest"
+	"github.com/ryan-wong-coder/trustdb/internal/l5projector"
 	"github.com/ryan-wong-coder/trustdb/internal/merkle"
 	"github.com/ryan-wong-coder/trustdb/internal/model"
 	"github.com/ryan-wong-coder/trustdb/internal/observability"
@@ -483,15 +484,39 @@ func newServeCommand(rt *runtimeConfig) *cobra.Command {
 				return err
 			}
 			defer anchorShutdown()
+			var coverageProjector *l5projector.Service
+			if anchorSvc != nil {
+				coverageStore, ok := proofStore.(l5projector.Store)
+				if !ok {
+					return trusterr.New(trusterr.CodeFailedPrecondition, "proofstore does not support recoverable L5 coverage projection")
+				}
+				coverageProjector, err = l5projector.New(l5projector.Config{
+					Store: coverageStore,
+					Key: model.STHAnchorScheduleKey{
+						NodeID: nodeID, LogID: logID, SinkName: anchorSvc.SinkName(),
+					},
+					PollInterval: anchorPollInterval,
+					Logger:       rt.logger,
+				})
+				if err != nil {
+					return trusterr.Wrap(trusterr.CodeInternal, "build L5 coverage projector", err)
+				}
+				defer coverageProjector.Stop()
+			}
 			var globalSvc *globallog.Service
 			var globalOutbox *globallog.OutboxWorker
 			if globalLogEnabled {
+				anchorSinkName := ""
+				if anchorSvc != nil {
+					anchorSinkName = anchorSvc.SinkName()
+				}
 				globalSvc, err = globallog.New(globallog.Options{
-					Store:      proofStore,
-					NodeID:     nodeID,
-					LogID:      logID,
-					KeyID:      rt.cfg.Server.KeyID,
-					PrivateKey: serverPriv,
+					Store:          proofStore,
+					NodeID:         nodeID,
+					LogID:          logID,
+					KeyID:          rt.cfg.Server.KeyID,
+					PrivateKey:     serverPriv,
+					AnchorSinkName: anchorSinkName,
 				})
 				if err != nil {
 					return trusterr.Wrap(trusterr.CodeInternal, "build global log service", err)
@@ -536,6 +561,9 @@ func newServeCommand(rt *runtimeConfig) *cobra.Command {
 				// Start *after* backfill so the worker sees the freshly
 				// enqueued items on its first tick.
 				anchorSvc.Start(context.Background())
+			}
+			if coverageProjector != nil {
+				coverageProjector.Start(context.Background())
 			}
 			// OTS upgrader: only meaningful when the anchor sink is
 			// the OpenTimestamps one. Enabled by default; the

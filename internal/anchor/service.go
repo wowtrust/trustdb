@@ -125,6 +125,13 @@ func NewService(cfg Config) (*Service, error) {
 	}, nil
 }
 
+func (s *Service) SinkName() string {
+	if s == nil || s.cfg.Sink == nil {
+		return ""
+	}
+	return s.cfg.Sink.Name()
+}
+
 // Start launches the worker goroutine. It is safe to call Start
 // multiple times but only the first call takes effect; subsequent
 // calls are no-ops so crash-recovery wiring that starts the worker
