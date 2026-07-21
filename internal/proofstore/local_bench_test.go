@@ -111,6 +111,12 @@ func BenchmarkLocalStoreGlobalLeafFirstPage4096(b *testing.B) {
 			b.Fatal(err)
 		}
 	}
+	if err := writeCBORAtomic(store.globalStatePath(), model.GlobalLogState{
+		SchemaVersion: model.SchemaGlobalLogState,
+		TreeSize:      4096,
+	}); err != nil {
+		b.Fatal(err)
+	}
 
 	b.ReportAllocs()
 	b.ResetTimer()

@@ -1126,6 +1126,71 @@ func (s LocalStore) ListGlobalLeavesPage(ctx context.Context, opts model.GlobalL
 		return nil, trusterr.Wrap(trusterr.CodeDeadlineExceeded, "proofstore list global leaves page canceled", err)
 	}
 	limit := normaliseRecordLimit(opts.Limit)
+	state, ok, err := s.GetGlobalLogState(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if ok {
+		return s.listCommittedGlobalLeavesPage(ctx, state.TreeSize, opts, limit)
+	}
+	return s.listGlobalLeavesPageFromDirectory(ctx, opts, limit)
+}
+
+func (s LocalStore) listCommittedGlobalLeavesPage(ctx context.Context, treeSize uint64, opts model.GlobalLeafListOptions, limit int) ([]model.GlobalLogLeaf, error) {
+	capacity := limit
+	if treeSize < uint64(capacity) {
+		capacity = int(treeSize)
+	}
+	leaves := make([]model.GlobalLogLeaf, 0, capacity)
+	if strings.EqualFold(opts.Direction, model.RecordListDirectionAsc) {
+		start := uint64(0)
+		if opts.AfterLeafIndex > 0 {
+			if opts.AfterLeafIndex == ^uint64(0) {
+				return leaves, nil
+			}
+			start = opts.AfterLeafIndex + 1
+		}
+		for index := start; index < treeSize && len(leaves) < limit; index++ {
+			leaf, err := s.readCommittedGlobalLeaf(ctx, index)
+			if err != nil {
+				return nil, err
+			}
+			leaves = append(leaves, leaf)
+		}
+		return leaves, nil
+	}
+
+	upper := treeSize
+	if opts.AfterLeafIndex > 0 && opts.AfterLeafIndex < upper {
+		upper = opts.AfterLeafIndex
+	}
+	for upper > 0 && len(leaves) < limit {
+		index := upper - 1
+		leaf, err := s.readCommittedGlobalLeaf(ctx, index)
+		if err != nil {
+			return nil, err
+		}
+		leaves = append(leaves, leaf)
+		upper = index
+	}
+	return leaves, nil
+}
+
+func (s LocalStore) readCommittedGlobalLeaf(ctx context.Context, index uint64) (model.GlobalLogLeaf, error) {
+	leaf, ok, err := s.GetGlobalLeaf(ctx, index)
+	if err != nil {
+		return model.GlobalLogLeaf{}, err
+	}
+	if !ok {
+		return model.GlobalLogLeaf{}, trusterr.New(trusterr.CodeDataLoss, "committed global log leaf is missing")
+	}
+	if leaf.LeafIndex != index {
+		return model.GlobalLogLeaf{}, trusterr.New(trusterr.CodeDataLoss, "global log leaf index does not match path")
+	}
+	return leaf, nil
+}
+
+func (s LocalStore) listGlobalLeavesPageFromDirectory(ctx context.Context, opts model.GlobalLeafListOptions, limit int) ([]model.GlobalLogLeaf, error) {
 	entries, err := os.ReadDir(s.globalLeafDir())
 	if err != nil {
 		if os.IsNotExist(err) {
