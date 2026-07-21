@@ -14,7 +14,9 @@ import (
 	"github.com/ryan-wong-coder/trustdb/internal/trustcrypto"
 	"github.com/ryan-wong-coder/trustdb/internal/trusterr"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
 )
 
@@ -82,6 +84,19 @@ func TestGRPCTransportMapsNotFound(t *testing.T) {
 	}
 	if !IsNotFound(err) {
 		t.Fatalf("IsNotFound(%T %v) = false", err, err)
+	}
+}
+
+func TestGRPCEndpointErrorRetryability(t *testing.T) {
+	t.Parallel()
+
+	unavailable := grpcError("test", "primary", status.Error(codes.Unavailable, "down"))
+	if !retryableEndpointError(unavailable) {
+		t.Fatalf("Unavailable error is terminal: %v", unavailable)
+	}
+	failedPrecondition := grpcError("test", "primary", status.Error(codes.FailedPrecondition, "invalid state"))
+	if retryableEndpointError(failedPrecondition) {
+		t.Fatalf("FailedPrecondition error is retryable: %v", failedPrecondition)
 	}
 }
 
