@@ -29,7 +29,15 @@ func BenchmarkLocalStoreLatestRoot4096(b *testing.B) {
 		TreeSize:      1,
 		ClosedAtUnixN: 4096,
 	}
-	if err := store.PutRoot(context.Background(), latest); err != nil {
+	data, err := cborx.Marshal(latest)
+	if err != nil {
+		b.Fatal(err)
+	}
+	if err := os.WriteFile(store.rootPath(latest.ClosedAtUnixN, latest.BatchID), data, 0o600); err != nil {
+		b.Fatal(err)
+	}
+	ref := localLatestRootReference{Candidate: localRootReferencePosition{ClosedAtUnixN: latest.ClosedAtUnixN, BatchID: latest.BatchID}}
+	if err := writeCBORAtomic(store.latestRootReferencePath(), ref); err != nil {
 		b.Fatal(err)
 	}
 

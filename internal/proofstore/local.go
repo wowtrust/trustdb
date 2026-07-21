@@ -45,6 +45,7 @@ type localFileOps struct {
 var localDurableDirectories sync.Map
 
 var localLatestSTHLocks [64]sync.Mutex
+var localLatestRootLocks [64]sync.Mutex
 
 func defaultLocalFileOps() localFileOps {
 	return localFileOps{
@@ -229,9 +230,13 @@ func (s LocalStore) PutRoot(ctx context.Context, root model.BatchRoot) error {
 	if root.ClosedAtUnixN == 0 {
 		root.ClosedAtUnixN = time.Now().UTC().UnixNano()
 	}
-	name := fmt.Sprintf("%0*d_%s.tdroot", localPositionWidth, root.ClosedAtUnixN, safeFileName(root.BatchID))
-	path := filepath.Join(s.rootDir(), name)
-	if err := writeCBORAtomic(path, root); err != nil {
+	lock := s.latestRootLock()
+	lock.Lock()
+	defer lock.Unlock()
+	if err := s.prepareLatestRootReferenceLocked(ctx, root); err != nil {
+		return err
+	}
+	if err := writeCBORAtomic(s.rootPath(root.ClosedAtUnixN, root.BatchID), root); err != nil {
 		return trusterr.Wrap(trusterr.CodeDataLoss, "write batch root", err)
 	}
 	return nil
@@ -363,14 +368,180 @@ func (s LocalStore) ListRootsPage(ctx context.Context, opts model.RootListOption
 }
 
 func (s LocalStore) LatestRoot(ctx context.Context) (model.BatchRoot, error) {
-	roots, err := s.ListRoots(ctx, 1)
+	if err := ctx.Err(); err != nil {
+		return model.BatchRoot{}, trusterr.Wrap(trusterr.CodeDeadlineExceeded, "proofstore latest root canceled", err)
+	}
+	ref, ok, refErr := s.readLatestRootReference()
+	if refErr == nil && ok {
+		root, found, complete, err := s.rootFromLatestReference(ctx, ref)
+		if err != nil {
+			return model.BatchRoot{}, err
+		}
+		if found && complete {
+			return root, nil
+		}
+	}
+	return s.rebuildLatestRootReference(ctx)
+}
+
+type localRootReferencePosition struct {
+	ClosedAtUnixN int64  `cbor:"closed_at_unix_n"`
+	BatchID       string `cbor:"batch_id"`
+}
+
+type localLatestRootReference struct {
+	Candidate localRootReferencePosition  `cbor:"candidate"`
+	Previous  *localRootReferencePosition `cbor:"previous,omitempty"`
+}
+
+func (s LocalStore) prepareLatestRootReferenceLocked(ctx context.Context, root model.BatchRoot) error {
+	if err := ctx.Err(); err != nil {
+		return trusterr.Wrap(trusterr.CodeDeadlineExceeded, "proofstore update latest root reference canceled", err)
+	}
+	candidate := localRootReferencePosition{ClosedAtUnixN: root.ClosedAtUnixN, BatchID: root.BatchID}
+	var current *localRootReferencePosition
+	if ref, ok, err := s.readLatestRootReference(); err == nil && ok {
+		currentRoot, found, _, resolveErr := s.rootFromLatestReference(ctx, ref)
+		if resolveErr != nil {
+			return resolveErr
+		}
+		if found {
+			position := localRootReferencePosition{ClosedAtUnixN: currentRoot.ClosedAtUnixN, BatchID: currentRoot.BatchID}
+			current = &position
+		}
+	} else {
+		currentRoot, found, historyErr := s.latestRootFromHistory(ctx)
+		if historyErr != nil {
+			return historyErr
+		}
+		if found {
+			position := localRootReferencePosition{ClosedAtUnixN: currentRoot.ClosedAtUnixN, BatchID: currentRoot.BatchID}
+			current = &position
+		}
+	}
+	if current != nil && compareLocalRootReferencePosition(candidate, *current) <= 0 {
+		return nil
+	}
+	ref := localLatestRootReference{Candidate: candidate, Previous: current}
+	if err := writeCBORAtomic(s.latestRootReferencePath(), ref); err != nil {
+		return trusterr.Wrap(trusterr.CodeDataLoss, "write latest root reference", err)
+	}
+	return nil
+}
+
+func (s LocalStore) rootFromLatestReference(ctx context.Context, ref localLatestRootReference) (model.BatchRoot, bool, bool, error) {
+	root, found, err := s.rootAtReferencePosition(ctx, ref.Candidate)
+	if err != nil {
+		return model.BatchRoot{}, false, false, err
+	}
+	if found {
+		return root, true, true, nil
+	}
+	if ref.Previous == nil {
+		return model.BatchRoot{}, false, false, nil
+	}
+	root, found, err = s.rootAtReferencePosition(ctx, *ref.Previous)
+	if err != nil {
+		return model.BatchRoot{}, false, false, err
+	}
+	return root, found, false, nil
+}
+
+func (s LocalStore) rootAtReferencePosition(ctx context.Context, position localRootReferencePosition) (model.BatchRoot, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return model.BatchRoot{}, false, trusterr.Wrap(trusterr.CodeDeadlineExceeded, "proofstore read referenced root canceled", err)
+	}
+	if position.ClosedAtUnixN <= 0 || position.BatchID == "" {
+		return model.BatchRoot{}, false, trusterr.New(trusterr.CodeDataLoss, "latest root reference position is invalid")
+	}
+	data, err := readStoredFile(s.rootPath(position.ClosedAtUnixN, position.BatchID))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return model.BatchRoot{}, false, nil
+		}
+		return model.BatchRoot{}, false, trusterr.Wrap(trusterr.CodeDataLoss, "read referenced batch root", err)
+	}
+	var root model.BatchRoot
+	if err := cborx.UnmarshalLimit(data, &root, maxStoredObjectBytes); err != nil {
+		return model.BatchRoot{}, false, trusterr.Wrap(trusterr.CodeDataLoss, "decode referenced batch root", err)
+	}
+	if root.ClosedAtUnixN != position.ClosedAtUnixN || root.BatchID != position.BatchID {
+		return model.BatchRoot{}, false, trusterr.New(trusterr.CodeDataLoss, "latest root reference does not match item")
+	}
+	return root, true, nil
+}
+
+func (s LocalStore) rebuildLatestRootReference(ctx context.Context) (model.BatchRoot, error) {
+	lock := s.latestRootLock()
+	lock.Lock()
+	defer lock.Unlock()
+
+	if ref, ok, err := s.readLatestRootReference(); err == nil && ok {
+		root, found, complete, resolveErr := s.rootFromLatestReference(ctx, ref)
+		if resolveErr != nil {
+			return model.BatchRoot{}, resolveErr
+		}
+		if found && complete {
+			return root, nil
+		}
+	}
+	root, found, err := s.latestRootFromHistory(ctx)
 	if err != nil {
 		return model.BatchRoot{}, err
 	}
-	if len(roots) == 0 {
+	if !found {
 		return model.BatchRoot{}, trusterr.New(trusterr.CodeNotFound, "batch root not found")
 	}
-	return roots[0], nil
+	ref := localLatestRootReference{Candidate: localRootReferencePosition{ClosedAtUnixN: root.ClosedAtUnixN, BatchID: root.BatchID}}
+	if err := writeCBORAtomic(s.latestRootReferencePath(), ref); err != nil {
+		return model.BatchRoot{}, trusterr.Wrap(trusterr.CodeDataLoss, "rebuild latest root reference", err)
+	}
+	return root, nil
+}
+
+func (s LocalStore) latestRootFromHistory(ctx context.Context) (model.BatchRoot, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return model.BatchRoot{}, false, trusterr.Wrap(trusterr.CodeDeadlineExceeded, "proofstore scan latest root canceled", err)
+	}
+	entries, err := os.ReadDir(s.rootDir())
+	if err != nil {
+		if os.IsNotExist(err) {
+			return model.BatchRoot{}, false, nil
+		}
+		return model.BatchRoot{}, false, trusterr.Wrap(trusterr.CodeDataLoss, "read root directory", err)
+	}
+	ordered, err := orderedRootEntries(entries)
+	if err != nil {
+		return model.BatchRoot{}, false, trusterr.Wrap(trusterr.CodeDataLoss, "parse batch root filename", err)
+	}
+	if len(ordered) == 0 {
+		return model.BatchRoot{}, false, nil
+	}
+	entry := ordered[len(ordered)-1]
+	root, found, err := s.rootAtReferencePosition(ctx, localRootReferencePosition{ClosedAtUnixN: entry.closedAtUnixN, BatchID: entry.batchID})
+	return root, found, err
+}
+
+func (s LocalStore) readLatestRootReference() (localLatestRootReference, bool, error) {
+	data, err := readStoredFile(s.latestRootReferencePath())
+	if err != nil {
+		if os.IsNotExist(err) {
+			return localLatestRootReference{}, false, nil
+		}
+		return localLatestRootReference{}, false, err
+	}
+	var ref localLatestRootReference
+	if err := cborx.UnmarshalLimit(data, &ref, maxStoredObjectBytes); err != nil {
+		return localLatestRootReference{}, false, err
+	}
+	if ref.Candidate.ClosedAtUnixN <= 0 || ref.Candidate.BatchID == "" {
+		return localLatestRootReference{}, false, trusterr.New(trusterr.CodeDataLoss, "latest root reference is invalid")
+	}
+	return ref, true, nil
+}
+
+func compareLocalRootReferencePosition(left, right localRootReferencePosition) int {
+	return model.CompareBatchRootPosition(left.ClosedAtUnixN, left.BatchID, right.ClosedAtUnixN, right.BatchID)
 }
 
 func (s LocalStore) PutBatchTreeArtifacts(ctx context.Context, leaves []model.BatchTreeLeaf, nodes []model.BatchTreeNode) error {
@@ -1280,13 +1451,20 @@ func (s LocalStore) readLatestSignedTreeHeadReference() (uint64, bool, error) {
 }
 
 func (s LocalStore) latestSignedTreeHeadLock() *sync.Mutex {
-	value := s.root()
+	return localStoreStripedLock(s.root(), &localLatestSTHLocks)
+}
+
+func (s LocalStore) latestRootLock() *sync.Mutex {
+	return localStoreStripedLock(s.root(), &localLatestRootLocks)
+}
+
+func localStoreStripedLock(value string, locks *[64]sync.Mutex) *sync.Mutex {
 	hash := uint64(14695981039346656037)
 	for i := 0; i < len(value); i++ {
 		hash ^= uint64(value[i])
 		hash *= 1099511628211
 	}
-	return &localLatestSTHLocks[hash%uint64(len(localLatestSTHLocks))]
+	return &locks[hash%uint64(len(locks))]
 }
 
 func (s LocalStore) PutGlobalLogTile(ctx context.Context, tile model.GlobalLogTile) error {
@@ -2186,6 +2364,15 @@ func (s LocalStore) recordIndexName(idx model.RecordIndex) string {
 
 func (s LocalStore) rootDir() string {
 	return filepath.Join(s.root(), "roots")
+}
+
+func (s LocalStore) rootPath(closedAtUnixN int64, batchID string) string {
+	name := fmt.Sprintf("%0*d_%s.tdroot", localPositionWidth, closedAtUnixN, safeFileName(batchID))
+	return filepath.Join(s.rootDir(), name)
+}
+
+func (s LocalStore) latestRootReferencePath() string {
+	return filepath.Join(s.rootDir(), "latest.tdroot-ref")
 }
 
 func (s LocalStore) manifestDir() string {

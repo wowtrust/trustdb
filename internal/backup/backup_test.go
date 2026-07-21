@@ -151,6 +151,9 @@ func TestBackupCreateVerifyRestoreRoundTrip(t *testing.T) {
 	if gotBundle.RecordID != "record-1" {
 		t.Fatalf("restored bundle = %+v", gotBundle)
 	}
+	if latest, err := dst.LatestRoot(ctx); err != nil || latest.BatchID != root.BatchID {
+		t.Fatalf("LatestRoot restored latest=%+v err=%v", latest, err)
+	}
 	if _, ok, err := dst.GetSTHAnchorResult(ctx, 1); err != nil || !ok {
 		t.Fatalf("GetSTHAnchorResult restored ok=%v err=%v", ok, err)
 	}
