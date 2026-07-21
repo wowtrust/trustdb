@@ -390,6 +390,7 @@ func newServeCommand(rt *runtimeConfig) *cobra.Command {
 			if reader, ok := proofStore.(proofstore.IdempotencyDecisionReader); ok {
 				engine.DurableIdempotency = reader
 			}
+			engine.DurableRecords = proofStore
 			ingestSvc := ingest.New(engine, ingest.Options{QueueSize: queueSize, Workers: workers}, metrics)
 			defer ingestSvc.Shutdown(context.Background())
 			if enabled, err := observability.RegisterPebbleMetrics(reg, proofStore); err != nil {
@@ -1809,7 +1810,7 @@ func replayWALAccepted(ctx context.Context, walPath string, engine app.LocalEngi
 		}
 		accepted := batch.Accepted{Signed: item.Signed, Record: item.Record, Accepted: item.Accepted}
 		idempotencyKey := app.IdempotencyKey(item.Signed.Claim.TenantID, item.Signed.Claim.ClientID, item.Signed.Claim.IdempotencyKey)
-		if engine.Idempotency == nil || idempotencyKey == "" {
+		if idempotencyKey == "" {
 			if localRecordIDs == nil {
 				localRecordIDs = make(map[string]struct{})
 			}
@@ -1817,6 +1818,7 @@ func replayWALAccepted(ctx context.Context, walPath string, engine app.LocalEngi
 				return trusterr.New(trusterr.CodeDataLoss, "record id appears at conflicting local wal positions")
 			}
 			localRecordIDs[item.Record.RecordID] = struct{}{}
+			idempotencyKey = app.RecordIDKey(item.Record.RecordID)
 		}
 		if engine.Idempotency != nil {
 			if !engine.Idempotency.Restore(idempotencyKey, item.Record, item.Accepted, item.Record.ClaimHash) {

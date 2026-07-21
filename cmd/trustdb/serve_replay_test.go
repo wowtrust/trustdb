@@ -779,7 +779,7 @@ func TestReplayRebuildsIdempotencyIndex(t *testing.T) {
 	}
 }
 
-func TestReplayRejectsDuplicateRecordIDWithEmptyIdempotencyKey(t *testing.T) {
+func TestEmptyIdempotencyKeyExactRetrySurvivesRestart(t *testing.T) {
 	t.Parallel()
 
 	env := newIdempotencyEnv(t)
@@ -789,16 +789,36 @@ func TestReplayRejectsDuplicateRecordIDWithEmptyIdempotencyKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Sign(empty idempotency) error = %v", err)
 	}
-	first, _, _, err := env.engine.Submit(context.Background(), signed)
+	first, firstAccepted, firstIdempotent, err := env.engine.Submit(context.Background(), signed)
 	if err != nil {
 		t.Fatalf("Submit(first) error = %v", err)
 	}
-	second, _, _, err := env.engine.Submit(context.Background(), signed)
+	if firstIdempotent {
+		t.Fatal("Submit(first) idempotent = true")
+	}
+	second, secondAccepted, secondIdempotent, err := env.engine.Submit(context.Background(), signed)
 	if err != nil {
 		t.Fatalf("Submit(second) error = %v", err)
 	}
-	if first.RecordID != second.RecordID || first.WAL == second.WAL {
-		t.Fatalf("duplicate records = first:%+v second:%+v", first, second)
+	if !secondIdempotent || !reflect.DeepEqual(second, first) || !reflect.DeepEqual(secondAccepted, firstAccepted) {
+		t.Fatalf("exact retry = record:%+v accepted:%+v idempotent:%v", second, secondAccepted, secondIdempotent)
+	}
+
+	distinctSeed := env.signClaim(t, "temporary-key-2", []byte("distinct-empty-idempotency"), 8)
+	distinctSeed.Claim.IdempotencyKey = ""
+	distinctSigned, err := claim.Sign(distinctSeed.Claim, env.clientKey)
+	if err != nil {
+		t.Fatalf("Sign(distinct empty idempotency) error = %v", err)
+	}
+	distinct, _, distinctIdempotent, err := env.engine.Submit(context.Background(), distinctSigned)
+	if err != nil {
+		t.Fatalf("Submit(distinct) error = %v", err)
+	}
+	if distinctIdempotent || distinct.RecordID == first.RecordID || distinct.WAL == first.WAL {
+		t.Fatalf("distinct claim = %+v idempotent=%v", distinct, distinctIdempotent)
+	}
+	if got := walRecordCount(t, env.walPath); got != 2 {
+		t.Fatalf("WAL records before restart = %d, want 2", got)
 	}
 	env.closeWAL(t)
 
@@ -808,12 +828,22 @@ func TestReplayRejectsDuplicateRecordIDWithEmptyIdempotencyKey(t *testing.T) {
 	restarted.WAL = reopened
 	restarted.Idempotency = app.NewIdempotencyIndex()
 	store := proofstore.LocalStore{Root: filepath.Join(env.dir, "proofs")}
-	svc := batch.New(restarted, store, batch.Options{QueueSize: 2, MaxRecords: 2, MaxDelay: time.Hour}, nil)
+	restarted.DurableRecords = store
+	svc := batch.New(restarted, store, batch.Options{QueueSize: 3, MaxRecords: 3, MaxDelay: time.Hour}, nil)
 	defer svc.Shutdown(context.Background())
 
-	_, _, _, err = replayWALAccepted(context.Background(), env.walPath, restarted, svc, store, nil)
-	if trusterr.CodeOf(err) != trusterr.CodeDataLoss {
-		t.Fatalf("replayWALAccepted() code=%s err=%v, want data_loss", trusterr.CodeOf(err), err)
+	if _, _, _, err = replayWALAccepted(context.Background(), env.walPath, restarted, svc, store, nil); err != nil {
+		t.Fatalf("replayWALAccepted() error = %v", err)
+	}
+	replayed, replayedAccepted, replayedIdempotent, err := restarted.Submit(context.Background(), signed)
+	if err != nil {
+		t.Fatalf("restarted Submit() error = %v", err)
+	}
+	if !replayedIdempotent || !reflect.DeepEqual(replayed, first) || !reflect.DeepEqual(replayedAccepted, firstAccepted) {
+		t.Fatalf("restarted retry = record:%+v accepted:%+v idempotent:%v", replayed, replayedAccepted, replayedIdempotent)
+	}
+	if got := walRecordCount(t, env.walPath); got != 2 {
+		t.Fatalf("WAL records after restart retry = %d, want 2", got)
 	}
 }
 

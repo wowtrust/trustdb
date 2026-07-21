@@ -33,7 +33,9 @@ type LocalEngine struct {
 	// DurableIdempotency resolves committed keys whose accepted WAL records
 	// were skipped below a trusted checkpoint. Nil preserves the WAL-only path.
 	DurableIdempotency DurableIdempotencyReader
-	Now                func() time.Time
+	// DurableRecords resolves committed unkeyed claims by deterministic record ID.
+	DurableRecords DurableRecordReader
+	Now            func() time.Time
 }
 
 type ClientKeyResolver interface {
@@ -80,9 +82,29 @@ func (e LocalEngine) Submit(ctx context.Context, signed model.SignedClaim) (mode
 		}
 		return e.buildAccepted(signed, verified, keyStatus, claimHash, sigHash, pos, now)
 	}
-	if e.Idempotency == nil || idemKey == "" {
+	if e.Idempotency == nil {
 		record, accepted, err := build()
 		return record, accepted, false, err
+	}
+	if idemKey == "" {
+		record, accepted, loaded, conflict, err := e.Idempotency.RememberDurableRecord(
+			ctx,
+			RecordIDKey(verified.RecordID),
+			verified.RecordID,
+			claimHash,
+			e.DurableRecords,
+			build,
+		)
+		if err != nil {
+			return model.ServerRecord{}, model.AcceptedReceipt{}, false, err
+		}
+		if conflict {
+			return model.ServerRecord{}, model.AcceptedReceipt{}, false, trusterr.New(
+				trusterr.CodeAlreadyExists,
+				fmt.Sprintf("record_id %q already associated with a different claim", verified.RecordID),
+			)
+		}
+		return record, accepted, loaded, nil
 	}
 	record, accepted, loaded, conflict, err := e.Idempotency.RememberDurable(
 		ctx,
@@ -102,6 +124,15 @@ func (e LocalEngine) Submit(ctx context.Context, signed model.SignedClaim) (mode
 		)
 	}
 	return record, accepted, loaded, nil
+}
+
+// MarkRecordCommitted converts an unkeyed live acceptance into the bounded
+// durable cache after its proof bundle and committed manifest are published.
+func (e LocalEngine) MarkRecordCommitted(recordID string) {
+	if e.Idempotency == nil || e.DurableRecords == nil {
+		return
+	}
+	e.Idempotency.ForgetCommitted(RecordIDKey(recordID), recordID)
 }
 
 // MarkIdempotencyCommitted evicts the process-local acceptance only after its

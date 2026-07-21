@@ -17,13 +17,16 @@ type DurableIdempotencyReader interface {
 	GetIdempotencyDecision(context.Context, model.IdempotencyIdentity) (model.IdempotencyDecision, bool, error)
 }
 
-// IdempotencyIndex tracks already-accepted claims keyed by their
-// (tenant_id, client_id, idempotency_key) triple as required by the design
-// document §24.4. Submits that share the same key and produce an identical
-// ClientClaim must converge to the exact same ServerRecord/AcceptedReceipt
-// pair. Submits that share the same key but carry a different claim must be
-// rejected with CodeAlreadyExists so callers cannot silently shadow an
-// earlier record by reusing its idempotency_key.
+// DurableRecordReader resolves a committed record by its deterministic ID.
+// It provides restart idempotency for claims that omit idempotency_key.
+type DurableRecordReader interface {
+	GetBundle(context.Context, string) (model.ProofBundle, error)
+}
+
+// IdempotencyIndex tracks already-accepted claims keyed by either their
+// (tenant_id, client_id, idempotency_key) triple or, for unkeyed claims, their
+// deterministic record ID. Exact retries must converge to the same accepted
+// response before another WAL append.
 //
 // The index is only a fast lookup layer. Retained WAL replay repopulates recent
 // decisions; a durable reader resolves committed decisions below a trusted
@@ -221,6 +224,54 @@ func (i *IdempotencyIndex) RememberDurable(
 	return record, accepted, false, false, nil
 }
 
+// RememberDurableRecord serializes an unkeyed exact retry by deterministic
+// record ID and resolves committed history with one proof-bundle point read.
+func (i *IdempotencyIndex) RememberDurableRecord(
+	ctx context.Context,
+	key string,
+	recordID string,
+	claimHash []byte,
+	durable DurableRecordReader,
+	build func() (model.ServerRecord, model.AcceptedReceipt, error),
+) (record model.ServerRecord, accepted model.AcceptedReceipt, loaded bool, conflict bool, err error) {
+	if key == "" || recordID == "" {
+		record, accepted, err = build()
+		return record, accepted, false, false, err
+	}
+	release := i.acquire(key)
+	defer release()
+
+	if existing, ok := i.Lookup(key); ok {
+		if !bytes.Equal(existing.claimHash, claimHash) {
+			return model.ServerRecord{}, model.AcceptedReceipt{}, false, true, nil
+		}
+		return existing.record, existing.accepted, true, false, nil
+	}
+	if durable != nil {
+		bundle, readErr := durable.GetBundle(ctx, recordID)
+		if readErr == nil {
+			if bundle.RecordID != recordID || bundle.ServerRecord.RecordID != recordID || bundle.AcceptedReceipt.RecordID != recordID ||
+				!bytes.Equal(bundle.ServerRecord.ClaimHash, claimHash) {
+				return model.ServerRecord{}, model.AcceptedReceipt{}, false, false, trusterr.New(
+					trusterr.CodeDataLoss,
+					"durable record does not match deterministic record id",
+				)
+			}
+			i.putDurable(key, idempotencyEntry{record: bundle.ServerRecord, accepted: bundle.AcceptedReceipt, claimHash: claimHash})
+			return bundle.ServerRecord, bundle.AcceptedReceipt, true, false, nil
+		}
+		if trusterr.CodeOf(readErr) != trusterr.CodeNotFound {
+			return model.ServerRecord{}, model.AcceptedReceipt{}, false, false, fmt.Errorf("app: read durable record: %w", readErr)
+		}
+	}
+	record, accepted, err = build()
+	if err != nil {
+		return model.ServerRecord{}, model.AcceptedReceipt{}, false, false, err
+	}
+	i.put(key, idempotencyEntry{record: record, accepted: accepted, claimHash: claimHash})
+	return record, accepted, false, false, nil
+}
+
 // ForgetCommitted converts an accepted entry into the bounded durable cache
 // after the same response has been atomically published with its manifest.
 func (i *IdempotencyIndex) ForgetCommitted(key, recordID string) {
@@ -282,14 +333,24 @@ func (i *IdempotencyIndex) Size() int {
 	return len(i.entries)
 }
 
-// IdempotencyKey derives the composite key used by the index. Empty
-// idempotency_key means the client opted out of replay protection, and the
-// engine will skip the index entirely.
+// IdempotencyKey derives the composite key used for explicit client replay
+// protection. Empty idempotency_key has no composite key; LocalEngine falls
+// back to RecordIDKey for exact-retry protection.
 func IdempotencyKey(tenantID, clientID, idempotencyKey string) string {
 	if idempotencyKey == "" {
 		return ""
 	}
 	return tenantID + "\x00" + clientID + "\x00" + idempotencyKey
+}
+
+// RecordIDKey derives the disjoint process-local key used to deduplicate exact
+// retries when a client omits idempotency_key. Retained WAL replay restores
+// these entries, so restart does not require a proofstore history scan.
+func RecordIDKey(recordID string) string {
+	if recordID == "" {
+		return ""
+	}
+	return "\x01" + recordID
 }
 
 func cloneIdempotencyEntry(entry idempotencyEntry) idempotencyEntry {

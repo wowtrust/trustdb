@@ -34,6 +34,10 @@ type idempotencyCommitObserver interface {
 	MarkIdempotencyCommitted(model.IdempotencyIdentity, string)
 }
 
+type recordCommitObserver interface {
+	MarkRecordCommitted(string)
+}
+
 const (
 	ProofModeInline   = "inline"
 	ProofModeAsync    = "async"
@@ -669,7 +673,11 @@ func (s *Service) persistBatch(ctx context.Context, batchID string, closedAt tim
 func (s *Service) publishCommittedBatch(ctx context.Context, manifest model.BatchManifest, bundles []model.ProofBundle) error {
 	publisher, ok := s.store.(proofstore.CommittedBatchIdempotencyPublisher)
 	if !ok {
-		return s.store.PutManifest(ctx, manifest)
+		if err := s.store.PutManifest(ctx, manifest); err != nil {
+			return err
+		}
+		s.markUnkeyedRecordsCommitted(bundles)
+		return nil
 	}
 	decisions, err := publisher.PublishCommittedBatch(ctx, manifest, bundles)
 	if err != nil {
@@ -680,7 +688,20 @@ func (s *Service) publishCommittedBatch(ctx context.Context, manifest model.Batc
 			observer.MarkIdempotencyCommitted(decisions[i].Identity, decisions[i].Record.RecordID)
 		}
 	}
+	s.markUnkeyedRecordsCommitted(bundles)
 	return nil
+}
+
+func (s *Service) markUnkeyedRecordsCommitted(bundles []model.ProofBundle) {
+	observer, ok := s.engine.(recordCommitObserver)
+	if !ok {
+		return
+	}
+	for i := range bundles {
+		if bundles[i].SignedClaim.Claim.IdempotencyKey == "" {
+			observer.MarkRecordCommitted(bundles[i].RecordID)
+		}
+	}
 }
 
 func (s *Service) writeBundlesAndRoot(ctx context.Context, batchID string, bundles []model.ProofBundle) (model.BatchRoot, error) {

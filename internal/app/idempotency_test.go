@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/ryan-wong-coder/trustdb/internal/model"
+	"github.com/ryan-wong-coder/trustdb/internal/trusterr"
 )
 
 type durableReaderStub struct {
@@ -20,6 +21,17 @@ type durableReaderStub struct {
 	entered  chan struct{}
 	release  chan struct{}
 	once     sync.Once
+}
+
+type durableRecordReaderStub struct {
+	bundle model.ProofBundle
+	err    error
+	calls  atomic.Int32
+}
+
+func (s *durableRecordReaderStub) GetBundle(context.Context, string) (model.ProofBundle, error) {
+	s.calls.Add(1)
+	return s.bundle, s.err
 }
 
 func (s *durableReaderStub) GetIdempotencyDecision(context.Context, model.IdempotencyIdentity) (model.IdempotencyDecision, bool, error) {
@@ -103,6 +115,66 @@ func TestIdempotencyIndexRememberDurableCachesExactDecision(t *testing.T) {
 		build,
 	); err != nil || loaded || !conflict {
 		t.Fatalf("conflicting RememberDurable() loaded=%v conflict=%v err=%v", loaded, conflict, err)
+	}
+}
+
+func TestIdempotencyIndexRememberDurableRecordUsesPointLookup(t *testing.T) {
+	idx := NewIdempotencyIndex()
+	claimHash := []byte{1, 2, 3}
+	reader := &durableRecordReaderStub{bundle: model.ProofBundle{
+		RecordID:        "record-1",
+		ServerRecord:    model.ServerRecord{RecordID: "record-1", ClaimHash: claimHash},
+		AcceptedReceipt: model.AcceptedReceipt{RecordID: "record-1"},
+	}}
+	builds := 0
+	build := func() (model.ServerRecord, model.AcceptedReceipt, error) {
+		builds++
+		return model.ServerRecord{RecordID: "new"}, model.AcceptedReceipt{RecordID: "new"}, nil
+	}
+
+	record, accepted, loaded, conflict, err := idx.RememberDurableRecord(
+		context.Background(), RecordIDKey("record-1"), "record-1", claimHash, reader, build,
+	)
+	if err != nil || !loaded || conflict || record.RecordID != "record-1" || accepted.RecordID != "record-1" {
+		t.Fatalf("RememberDurableRecord() = record:%+v accepted:%+v loaded:%v conflict:%v err:%v", record, accepted, loaded, conflict, err)
+	}
+	if builds != 0 || reader.calls.Load() != 1 {
+		t.Fatalf("cold lookup counts = builds:%d reads:%d", builds, reader.calls.Load())
+	}
+	_, _, loaded, conflict, err = idx.RememberDurableRecord(
+		context.Background(), RecordIDKey("record-1"), "record-1", claimHash, reader, build,
+	)
+	if err != nil || !loaded || conflict || reader.calls.Load() != 1 {
+		t.Fatalf("cached lookup = loaded:%v conflict:%v reads:%d err:%v", loaded, conflict, reader.calls.Load(), err)
+	}
+}
+
+func TestIdempotencyIndexRememberDurableRecordBuildsOnNotFoundAndRejectsMismatch(t *testing.T) {
+	notFound := &durableRecordReaderStub{err: trusterr.New(trusterr.CodeNotFound, "missing")}
+	idx := NewIdempotencyIndex()
+	record, _, loaded, conflict, err := idx.RememberDurableRecord(
+		context.Background(), RecordIDKey("new"), "new", []byte{1}, notFound,
+		func() (model.ServerRecord, model.AcceptedReceipt, error) {
+			return model.ServerRecord{RecordID: "new"}, model.AcceptedReceipt{RecordID: "new"}, nil
+		},
+	)
+	if err != nil || loaded || conflict || record.RecordID != "new" {
+		t.Fatalf("not-found lookup = record:%+v loaded:%v conflict:%v err:%v", record, loaded, conflict, err)
+	}
+
+	mismatch := &durableRecordReaderStub{bundle: model.ProofBundle{
+		RecordID:        "other",
+		ServerRecord:    model.ServerRecord{RecordID: "other", ClaimHash: []byte{1}},
+		AcceptedReceipt: model.AcceptedReceipt{RecordID: "other"},
+	}}
+	_, _, _, _, err = NewIdempotencyIndex().RememberDurableRecord(
+		context.Background(), RecordIDKey("expected"), "expected", []byte{1}, mismatch,
+		func() (model.ServerRecord, model.AcceptedReceipt, error) {
+			return model.ServerRecord{}, model.AcceptedReceipt{}, nil
+		},
+	)
+	if trusterr.CodeOf(err) != trusterr.CodeDataLoss {
+		t.Fatalf("mismatched durable record code = %s, err=%v", trusterr.CodeOf(err), err)
 	}
 }
 
@@ -444,5 +516,11 @@ func TestIdempotencyKeyFormat(t *testing.T) {
 	b := IdempotencyKey("abc", "d", "k")
 	if a == b {
 		t.Fatalf("IdempotencyKey() collided: %q == %q", a, b)
+	}
+	if RecordIDKey("") != "" {
+		t.Fatalf("RecordIDKey(empty) = %q", RecordIDKey(""))
+	}
+	if got := RecordIDKey("tr1record"); got == "" || got == IdempotencyKey("tenant", "client", "tr1record") {
+		t.Fatalf("RecordIDKey() = %q, want non-empty disjoint key", got)
 	}
 }
