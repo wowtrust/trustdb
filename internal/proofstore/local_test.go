@@ -41,12 +41,11 @@ func TestLocalStoreBundleRoundTrip(t *testing.T) {
 	}
 }
 
-func TestReadStoredFileLimitBoundsPrimaryAndFallback(t *testing.T) {
+func TestReadStoredFileLimitBoundsFileSize(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
 	primary := filepath.Join(dir, "primary")
-	fallback := filepath.Join(dir, "fallback")
 	data := bytes.Repeat([]byte{0x42}, 32)
 	if err := os.WriteFile(primary, data, 0o600); err != nil {
 		t.Fatalf("WriteFile(primary) error = %v", err)
@@ -64,16 +63,6 @@ func TestReadStoredFileLimitBoundsPrimaryAndFallback(t *testing.T) {
 	}
 	if _, err := readStoredFileLimit(primary, int64(len(data))); err == nil {
 		t.Fatal("readStoredFileLimit(oversized primary) error = nil")
-	}
-
-	if err := os.Remove(primary); err != nil {
-		t.Fatalf("Remove(primary) error = %v", err)
-	}
-	if err := os.WriteFile(fallback, append(data, 0x44), 0o600); err != nil {
-		t.Fatalf("WriteFile(oversized fallback) error = %v", err)
-	}
-	if _, err := readFileWithFallbackLimit(int64(len(data)), primary, fallback); err == nil {
-		t.Fatal("readFileWithFallbackLimit(oversized fallback) error = nil")
 	}
 }
 
@@ -136,29 +125,6 @@ func TestLocalStoreBundleIDsDoNotCollideAfterEscaping(t *testing.T) {
 	}
 }
 
-func TestLocalStoreBundleReadsLegacyEscapedPath(t *testing.T) {
-	t.Parallel()
-
-	store := LocalStore{Root: t.TempDir()}
-	bundle := model.ProofBundle{
-		SchemaVersion: model.SchemaProofBundle,
-		RecordID:      "legacy/rec",
-	}
-	if store.bundlePath(bundle.RecordID) == store.legacyBundlePath(bundle.RecordID) {
-		t.Fatalf("test record id must use a distinct legacy path")
-	}
-	if err := writeCBORAtomic(store.legacyBundlePath(bundle.RecordID), bundle); err != nil {
-		t.Fatalf("writeCBORAtomic(legacy) error = %v", err)
-	}
-	got, err := store.GetBundle(context.Background(), bundle.RecordID)
-	if err != nil {
-		t.Fatalf("GetBundle() error = %v", err)
-	}
-	if got.RecordID != bundle.RecordID {
-		t.Fatalf("GetBundle() RecordID = %q, want %q", got.RecordID, bundle.RecordID)
-	}
-}
-
 func TestLocalStoreListRecordIndexesRejectsSymlinkOutsideRoot(t *testing.T) {
 	t.Parallel()
 
@@ -205,42 +171,6 @@ func TestSafeFileNameAvoidsLegacyCollisions(t *testing.T) {
 	const plain = "tr1_record-1.2"
 	if got := safeFileName(plain); got != plain {
 		t.Fatalf("safeFileName(%q) = %q, want unchanged", plain, got)
-	}
-}
-
-func TestLocalStoreRecordIndexUpdateRemovesLegacySecondaryIndexes(t *testing.T) {
-	t.Parallel()
-
-	store := LocalStore{Root: t.TempDir()}
-	old := model.RecordIndex{
-		SchemaVersion:   model.SchemaRecordIndex,
-		RecordID:        "rec/legacy",
-		BatchID:         "batch/legacy",
-		TenantID:        "tenant/legacy",
-		ClientID:        "client/legacy",
-		ProofLevel:      "L3",
-		ReceivedAtUnixN: 10,
-	}
-	if err := writeCBORAtomic(store.legacyRecordByIDPath(old.RecordID), old); err != nil {
-		t.Fatalf("write legacy by-id index error = %v", err)
-	}
-	legacySecondaryPaths := store.legacyRecordIndexSecondaryPaths(old)
-	for _, path := range legacySecondaryPaths {
-		if err := writeCBORAtomic(path, old); err != nil {
-			t.Fatalf("write legacy secondary index error = %v", err)
-		}
-	}
-
-	next := old
-	next.ProofLevel = "L4"
-	next.ReceivedAtUnixN = 20
-	if err := store.PutRecordIndex(context.Background(), next); err != nil {
-		t.Fatalf("PutRecordIndex() error = %v", err)
-	}
-	for _, path := range legacySecondaryPaths {
-		if _, err := os.Stat(path); !os.IsNotExist(err) {
-			t.Fatalf("legacy secondary index %q still exists or stat failed with %v", path, err)
-		}
 	}
 }
 

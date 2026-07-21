@@ -74,7 +74,7 @@ func (s LocalStore) GetBundle(ctx context.Context, recordID string) (model.Proof
 	if recordID == "" {
 		return model.ProofBundle{}, trusterr.New(trusterr.CodeInvalidArgument, "record_id is required")
 	}
-	data, err := readFileWithFallback(s.bundlePath(recordID), s.legacyBundlePath(recordID))
+	data, err := readStoredFile(s.bundlePath(recordID))
 	if err != nil {
 		if os.IsNotExist(err) {
 			return model.ProofBundle{}, trusterr.Wrap(trusterr.CodeNotFound, "proof bundle not found", err)
@@ -95,7 +95,7 @@ func (s LocalStore) GetRecordIndex(ctx context.Context, recordID string) (model.
 	if recordID == "" {
 		return model.RecordIndex{}, false, trusterr.New(trusterr.CodeInvalidArgument, "record_id is required")
 	}
-	data, err := readFileWithFallback(s.recordByIDPath(recordID), s.legacyRecordByIDPath(recordID))
+	data, err := readStoredFile(s.recordByIDPath(recordID))
 	if err != nil {
 		if os.IsNotExist(err) {
 			return model.RecordIndex{}, false, nil
@@ -526,7 +526,7 @@ func (s LocalStore) GetManifest(ctx context.Context, batchID string) (model.Batc
 	if batchID == "" {
 		return model.BatchManifest{}, trusterr.New(trusterr.CodeInvalidArgument, "batch_id is required")
 	}
-	data, err := readFileWithFallback(s.manifestPath(batchID), s.legacyManifestPath(batchID))
+	data, err := readStoredFile(s.manifestPath(batchID))
 	if err != nil {
 		if os.IsNotExist(err) {
 			return model.BatchManifest{}, trusterr.Wrap(trusterr.CodeNotFound, "batch manifest not found", err)
@@ -718,7 +718,7 @@ func (s LocalStore) GetGlobalLeafByBatchID(ctx context.Context, batchID string) 
 	if batchID == "" {
 		return model.GlobalLogLeaf{}, false, trusterr.New(trusterr.CodeInvalidArgument, "batch_id is required")
 	}
-	data, err := readFileWithFallback(s.globalLeafByBatchPath(batchID), s.legacyGlobalLeafByBatchPath(batchID))
+	data, err := readStoredFile(s.globalLeafByBatchPath(batchID))
 	if err != nil {
 		if os.IsNotExist(err) {
 			return model.GlobalLogLeaf{}, false, nil
@@ -1210,12 +1210,10 @@ func (s LocalStore) EnqueueGlobalLog(ctx context.Context, item model.GlobalLogOu
 		item.EnqueuedAtUnixN = time.Now().UTC().UnixNano()
 	}
 	path := s.globalOutboxPath(item.BatchID)
-	for _, candidate := range uniquePaths(path, s.legacyGlobalOutboxPath(item.BatchID)) {
-		if _, err := os.Stat(candidate); err == nil {
-			return trusterr.New(trusterr.CodeAlreadyExists, "global log outbox item already exists")
-		} else if !os.IsNotExist(err) {
-			return trusterr.Wrap(trusterr.CodeDataLoss, "stat global log outbox item", err)
-		}
+	if _, err := os.Stat(path); err == nil {
+		return trusterr.New(trusterr.CodeAlreadyExists, "global log outbox item already exists")
+	} else if !os.IsNotExist(err) {
+		return trusterr.Wrap(trusterr.CodeDataLoss, "stat global log outbox item", err)
 	}
 	if err := writeCBORAtomic(path, item); err != nil {
 		return trusterr.Wrap(trusterr.CodeDataLoss, "write global log outbox item", err)
@@ -1277,7 +1275,7 @@ func (s LocalStore) GetGlobalLogOutboxItem(ctx context.Context, batchID string) 
 	if batchID == "" {
 		return model.GlobalLogOutboxItem{}, false, trusterr.New(trusterr.CodeInvalidArgument, "batch_id is required")
 	}
-	data, err := readFileWithFallback(s.globalOutboxPath(batchID), s.legacyGlobalOutboxPath(batchID))
+	data, err := readStoredFile(s.globalOutboxPath(batchID))
 	if err != nil {
 		if os.IsNotExist(err) {
 			return model.GlobalLogOutboxItem{}, false, nil
@@ -1309,7 +1307,6 @@ func (s LocalStore) MarkGlobalLogPublished(ctx context.Context, batchID string, 
 	if err := writeCBORAtomic(s.globalOutboxPath(batchID), item); err != nil {
 		return trusterr.Wrap(trusterr.CodeDataLoss, "update global log outbox item", err)
 	}
-	removeFallbackPath(s.globalOutboxPath(batchID), s.legacyGlobalOutboxPath(batchID))
 	if err := s.promoteBatchRecords(ctx, batchID, "L4"); err != nil {
 		return err
 	}
@@ -1332,7 +1329,6 @@ func (s LocalStore) RescheduleGlobalLog(ctx context.Context, batchID string, att
 	if err := writeCBORAtomic(s.globalOutboxPath(batchID), item); err != nil {
 		return trusterr.Wrap(trusterr.CodeDataLoss, "update global log outbox item", err)
 	}
-	removeFallbackPath(s.globalOutboxPath(batchID), s.legacyGlobalOutboxPath(batchID))
 	return nil
 }
 
@@ -1710,10 +1706,6 @@ func (s LocalStore) globalLeafByBatchPath(batchID string) string {
 	return filepath.Join(s.globalLeafByBatchDir(), safeFileName(batchID)+".tdgleaf")
 }
 
-func (s LocalStore) legacyGlobalLeafByBatchPath(batchID string) string {
-	return filepath.Join(s.globalLeafByBatchDir(), legacySafeFileName(batchID)+".tdgleaf")
-}
-
 func (s LocalStore) globalNodePath(level, start uint64) string {
 	return filepath.Join(s.globalNodeDir(), fmt.Sprintf("%020d_%020d.tdgnode", level, start))
 }
@@ -1746,10 +1738,6 @@ func (s LocalStore) globalOutboxPath(batchID string) string {
 	return filepath.Join(s.globalOutboxDir(), safeFileName(batchID)+".tdgoutbox")
 }
 
-func (s LocalStore) legacyGlobalOutboxPath(batchID string) string {
-	return filepath.Join(s.globalOutboxDir(), legacySafeFileName(batchID)+".tdgoutbox")
-}
-
 func (s LocalStore) sthAnchorOutboxPath(treeSize uint64) string {
 	return filepath.Join(s.sthAnchorOutboxDir(), fmt.Sprintf("%020d.tdsth-anchor", treeSize))
 }
@@ -1770,10 +1758,6 @@ func (s LocalStore) bundlePath(recordID string) string {
 	return filepath.Join(s.bundleDir(), safeFileName(recordID)+".tdproof")
 }
 
-func (s LocalStore) legacyBundlePath(recordID string) string {
-	return filepath.Join(s.bundleDir(), legacySafeFileName(recordID)+".tdproof")
-}
-
 func (s LocalStore) recordByIDDir() string {
 	return filepath.Join(s.root(), "records", "by-id")
 }
@@ -1786,32 +1770,16 @@ func (s LocalStore) recordByBatchDir(batchID string) string {
 	return filepath.Join(s.root(), "records", "by-batch", safeFileName(batchID))
 }
 
-func (s LocalStore) legacyRecordByBatchDir(batchID string) string {
-	return filepath.Join(s.root(), "records", "by-batch", legacySafeFileName(batchID))
-}
-
 func (s LocalStore) recordByProofLevelDir(level string) string {
 	return filepath.Join(s.root(), "records", "by-proof-level", safeFileName(level))
-}
-
-func (s LocalStore) legacyRecordByProofLevelDir(level string) string {
-	return filepath.Join(s.root(), "records", "by-proof-level", legacySafeFileName(level))
 }
 
 func (s LocalStore) recordByTenantDir(tenantID string) string {
 	return filepath.Join(s.root(), "records", "by-tenant", safeFileName(tenantID))
 }
 
-func (s LocalStore) legacyRecordByTenantDir(tenantID string) string {
-	return filepath.Join(s.root(), "records", "by-tenant", legacySafeFileName(tenantID))
-}
-
 func (s LocalStore) recordByClientDir(clientID string) string {
 	return filepath.Join(s.root(), "records", "by-client", safeFileName(clientID))
-}
-
-func (s LocalStore) legacyRecordByClientDir(clientID string) string {
-	return filepath.Join(s.root(), "records", "by-client", legacySafeFileName(clientID))
 }
 
 func (s LocalStore) recordByContentDir(contentHash []byte) string {
@@ -1826,16 +1794,8 @@ func (s LocalStore) recordByIDPath(recordID string) string {
 	return filepath.Join(s.recordByIDDir(), safeFileName(recordID)+".tdrecord")
 }
 
-func (s LocalStore) legacyRecordByIDPath(recordID string) string {
-	return filepath.Join(s.recordByIDDir(), legacySafeFileName(recordID)+".tdrecord")
-}
-
 func (s LocalStore) recordIndexName(idx model.RecordIndex) string {
 	return fmt.Sprintf("%020d_%s.tdrecord", idx.ReceivedAtUnixN, safeFileName(idx.RecordID))
-}
-
-func (s LocalStore) legacyRecordIndexName(idx model.RecordIndex) string {
-	return fmt.Sprintf("%020d_%s.tdrecord", idx.ReceivedAtUnixN, legacySafeFileName(idx.RecordID))
 }
 
 func (s LocalStore) rootDir() string {
@@ -1848,10 +1808,6 @@ func (s LocalStore) manifestDir() string {
 
 func (s LocalStore) manifestPath(batchID string) string {
 	return filepath.Join(s.manifestDir(), safeFileName(batchID)+".tdmanifest")
-}
-
-func (s LocalStore) legacyManifestPath(batchID string) string {
-	return filepath.Join(s.manifestDir(), legacySafeFileName(batchID)+".tdmanifest")
 }
 
 func (s LocalStore) root() string {
@@ -1921,27 +1877,6 @@ func rejectDirectoryTarget(path string) error {
 	return err
 }
 
-func readFileWithFallback(primary string, fallbacks ...string) ([]byte, error) {
-	return readFileWithFallbackLimit(maxStoredObjectBytes, primary, fallbacks...)
-}
-
-func readFileWithFallbackLimit(maxBytes int64, primary string, fallbacks ...string) ([]byte, error) {
-	data, err := readStoredFileLimit(primary, maxBytes)
-	if err == nil || !os.IsNotExist(err) {
-		return data, err
-	}
-	for _, fallback := range fallbacks {
-		if fallback == "" || fallback == primary {
-			continue
-		}
-		data, fallbackErr := readStoredFileLimit(fallback, maxBytes)
-		if fallbackErr == nil || !os.IsNotExist(fallbackErr) {
-			return data, fallbackErr
-		}
-	}
-	return nil, err
-}
-
 func readStoredFile(path string) ([]byte, error) {
 	return readStoredFileLimit(path, maxStoredObjectBytes)
 }
@@ -1963,13 +1898,6 @@ func readStoredFileLimit(path string, maxBytes int64) ([]byte, error) {
 		return nil, fmt.Errorf("stored object too large: %d > %d", len(data), maxBytes)
 	}
 	return data, nil
-}
-
-func removeFallbackPath(primary, fallback string) {
-	if fallback == "" || fallback == primary {
-		return
-	}
-	_ = os.Remove(fallback)
 }
 
 func (s LocalStore) writeRecordIndex(idx model.RecordIndex) error {
@@ -1996,10 +1924,6 @@ func (s LocalStore) writeRecordIndex(idx model.RecordIndex) error {
 
 func (s LocalStore) removeRecordIndex(idx model.RecordIndex) {
 	paths := append([]string{s.recordByIDPath(idx.RecordID)}, s.recordIndexSecondaryPaths(idx)...)
-	if legacy := s.legacyRecordByIDPath(idx.RecordID); legacy != s.recordByIDPath(idx.RecordID) {
-		paths = append(paths, legacy)
-	}
-	paths = append(paths, s.legacyRecordIndexSecondaryPaths(idx)...)
 	for _, path := range paths {
 		_ = os.Remove(path)
 	}
@@ -2013,8 +1937,7 @@ func (s LocalStore) removeRecordIndexSecondary(old, next model.RecordIndex) {
 	for _, path := range s.recordIndexSecondaryPaths(next) {
 		keep[path] = struct{}{}
 	}
-	oldPaths := append(s.recordIndexSecondaryPaths(old), s.legacyRecordIndexSecondaryPaths(old)...)
-	for _, path := range oldPaths {
+	for _, path := range s.recordIndexSecondaryPaths(old) {
 		if _, ok := keep[path]; ok {
 			continue
 		}
@@ -2043,31 +1966,6 @@ func (s LocalStore) recordIndexSecondaryPaths(idx model.RecordIndex) []string {
 	}
 	for _, token := range model.RecordIndexStorageTokens(idx) {
 		paths = append(paths, filepath.Join(s.recordByStorageTokenDir(token), s.recordIndexName(idx)))
-	}
-	return paths
-}
-
-func (s LocalStore) legacyRecordIndexSecondaryPaths(idx model.RecordIndex) []string {
-	paths := []string{
-		filepath.Join(s.recordByTimeDir(), s.legacyRecordIndexName(idx)),
-	}
-	if idx.BatchID != "" {
-		paths = append(paths, filepath.Join(s.legacyRecordByBatchDir(idx.BatchID), s.legacyRecordIndexName(idx)))
-	}
-	if idx.ProofLevel != "" {
-		paths = append(paths, filepath.Join(s.legacyRecordByProofLevelDir(idx.ProofLevel), s.legacyRecordIndexName(idx)))
-	}
-	if idx.TenantID != "" {
-		paths = append(paths, filepath.Join(s.legacyRecordByTenantDir(idx.TenantID), s.legacyRecordIndexName(idx)))
-	}
-	if idx.ClientID != "" {
-		paths = append(paths, filepath.Join(s.legacyRecordByClientDir(idx.ClientID), s.legacyRecordIndexName(idx)))
-	}
-	if len(idx.ContentHash) > 0 {
-		paths = append(paths, filepath.Join(s.recordByContentDir(idx.ContentHash), s.legacyRecordIndexName(idx)))
-	}
-	for _, token := range model.RecordIndexStorageTokens(idx) {
-		paths = append(paths, filepath.Join(s.recordByStorageTokenDir(token), s.legacyRecordIndexName(idx)))
 	}
 	return paths
 }
@@ -2155,22 +2053,6 @@ func safeFileName(value string) string {
 	return encodedFileNamePrefix + base64.RawURLEncoding.EncodeToString([]byte(value))
 }
 
-func legacySafeFileName(value string) string {
-	if value == "" {
-		return "_"
-	}
-	var b strings.Builder
-	b.Grow(len(value))
-	for _, r := range value {
-		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-' || r == '_' || r == '.' {
-			b.WriteRune(r)
-			continue
-		}
-		b.WriteByte('_')
-	}
-	return b.String()
-}
-
 func isPlainSafeFileName(value string) bool {
 	if value == "" || value == "." || value == ".." || strings.HasPrefix(value, ".") {
 		return false
@@ -2182,22 +2064,6 @@ func isPlainSafeFileName(value string) bool {
 		return false
 	}
 	return true
-}
-
-func uniquePaths(paths ...string) []string {
-	seen := make(map[string]struct{}, len(paths))
-	unique := make([]string, 0, len(paths))
-	for _, path := range paths {
-		if path == "" {
-			continue
-		}
-		if _, ok := seen[path]; ok {
-			continue
-		}
-		seen[path] = struct{}{}
-		unique = append(unique, path)
-	}
-	return unique
 }
 
 func recordTokenPart(value string) string {
