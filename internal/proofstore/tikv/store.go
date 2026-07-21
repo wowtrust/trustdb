@@ -28,6 +28,7 @@ import (
 	"github.com/ryan-wong-coder/trustdb/internal/anchorschedule"
 	"github.com/ryan-wong-coder/trustdb/internal/cborx"
 	"github.com/ryan-wong-coder/trustdb/internal/idempotency"
+	"github.com/ryan-wong-coder/trustdb/internal/l5coverage"
 	"github.com/ryan-wong-coder/trustdb/internal/model"
 	"github.com/ryan-wong-coder/trustdb/internal/trusterr"
 )
@@ -504,6 +505,7 @@ const (
 	prefixAnchorLatest   = "anchor/sth-latest/v1/"
 	prefixAnchorTreeRoot = "anchor/sth-tree-root/v1/"
 	prefixAnchorSchedule = "anchor/sth-schedule/v1/"
+	prefixL5Coverage     = "anchor/l5-coverage/v1/"
 	prefixCheckpoint     = "checkpoint/wal/v2/"
 	prefixIdempotency    = "idempotency/decision/"
 	idempotencyReadyKey  = "meta/idempotency-projection/ready"
@@ -3003,6 +3005,19 @@ func anchorScheduleKey(key model.STHAnchorScheduleKey) []byte {
 	return append(out, encodedSinkName...)
 }
 
+func l5CoverageKey(key model.STHAnchorScheduleKey) []byte {
+	encodedNodeID := recordSecondaryPart(key.NodeID)
+	encodedLogID := recordSecondaryPart(key.LogID)
+	encodedSinkName := recordSecondaryPart(key.SinkName)
+	out := make([]byte, 0, len(prefixL5Coverage)+len(encodedNodeID)+len(encodedLogID)+len(encodedSinkName)+2)
+	out = append(out, prefixL5Coverage...)
+	out = append(out, encodedNodeID...)
+	out = append(out, '/')
+	out = append(out, encodedLogID...)
+	out = append(out, '/')
+	return append(out, encodedSinkName...)
+}
+
 func (s *Store) PutGlobalLeaf(ctx context.Context, leaf model.GlobalLogLeaf) error {
 	if err := ctx.Err(); err != nil {
 		return trusterr.Wrap(trusterr.CodeDeadlineExceeded, "proofstore put global leaf canceled", err)
@@ -4627,6 +4642,68 @@ func (s *Store) PutSTHAnchorSchedule(ctx context.Context, schedule model.STHAnch
 	})
 }
 
+func (s *Store) GetL5CoverageCheckpoint(ctx context.Context, key model.STHAnchorScheduleKey) (model.L5CoverageCheckpoint, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return model.L5CoverageCheckpoint{}, false, trusterr.Wrap(trusterr.CodeDeadlineExceeded, "proofstore get L5 coverage checkpoint canceled", err)
+	}
+	if err := anchorschedule.ValidateKey(key); err != nil {
+		return model.L5CoverageCheckpoint{}, false, err
+	}
+	var checkpoint model.L5CoverageCheckpoint
+	found, err := s.readCBOR(l5CoverageKey(key), &checkpoint)
+	if err != nil {
+		return model.L5CoverageCheckpoint{}, false, trusterr.Wrap(trusterr.CodeDataLoss, "read L5 coverage checkpoint", err)
+	}
+	if !found {
+		return model.L5CoverageCheckpoint{}, false, nil
+	}
+	if err := l5coverage.ValidateCheckpoint(checkpoint); err != nil {
+		return model.L5CoverageCheckpoint{}, false, err
+	}
+	if !anchorschedule.SameKey(checkpoint.Key, key) {
+		return model.L5CoverageCheckpoint{}, false, trusterr.New(trusterr.CodeDataLoss, "stored L5 coverage checkpoint key does not match lookup")
+	}
+	return checkpoint, true, nil
+}
+
+func (s *Store) AdvanceL5CoverageCheckpoint(ctx context.Context, key model.STHAnchorScheduleKey, coveredTreeSize uint64, updatedAtUnixN int64) (model.L5CoverageCheckpoint, error) {
+	if err := ctx.Err(); err != nil {
+		return model.L5CoverageCheckpoint{}, trusterr.Wrap(trusterr.CodeDeadlineExceeded, "proofstore advance L5 coverage checkpoint canceled", err)
+	}
+	var committed model.L5CoverageCheckpoint
+	err := s.runAnchorScheduleTransaction(ctx, "advance L5 coverage checkpoint", func(txn *transaction.KVTxn) error {
+		physicalKey := s.db.physicalKey(l5CoverageKey(key))
+		data, err := txn.Get(ctx, physicalKey)
+		found := err == nil
+		if err != nil && !tikverr.IsErrNotFound(err) {
+			return err
+		}
+		var current model.L5CoverageCheckpoint
+		if found {
+			if err := cborx.UnmarshalLimit(data, &current, maxStoredObjectBytes); err != nil {
+				return trusterr.Wrap(trusterr.CodeDataLoss, "decode L5 coverage checkpoint", err)
+			}
+		}
+		next, changed, err := l5coverage.Advance(current, found, key, coveredTreeSize, updatedAtUnixN)
+		if err != nil {
+			return err
+		}
+		committed = next
+		if !changed {
+			return nil
+		}
+		encoded, err := cborx.Marshal(next)
+		if err != nil {
+			return trusterr.Wrap(trusterr.CodeDataLoss, "encode L5 coverage checkpoint", err)
+		}
+		return txn.Set(physicalKey, encoded)
+	})
+	if err != nil {
+		return model.L5CoverageCheckpoint{}, err
+	}
+	return committed, nil
+}
+
 func (s *Store) ClaimSTHAnchorAttempt(ctx context.Context, key model.STHAnchorScheduleKey, nowUnixN, leaseUntilUnixN int64, leaseOwner, leaseToken string) (model.STHAnchorAttempt, bool, error) {
 	if err := anchorschedule.ValidateKey(key); err != nil {
 		return model.STHAnchorAttempt{}, false, err
@@ -5240,6 +5317,14 @@ func (s *Store) promoteBatchRecords(ctx context.Context, batchID, proofLevel str
 		return trusterr.Wrap(trusterr.CodeDataLoss, "scan batch record indexes", err)
 	}
 	return s.commitRecordIndexPromotions(ctx, updates)
+}
+
+func (s *Store) PromoteBatchProofLevel(ctx context.Context, batchID, proofLevel string) error {
+	proofLevel = model.NormalizedProofLevel(proofLevel)
+	if batchID == "" || proofLevel == "" {
+		return trusterr.New(trusterr.CodeInvalidArgument, "batch_id and valid proof level are required")
+	}
+	return s.promoteBatchRecords(ctx, batchID, proofLevel)
 }
 
 func (s *Store) collectRecordIndexPromotions(ctx context.Context, batchID, proofLevel string) ([]recordIndexPromotion, error) {
