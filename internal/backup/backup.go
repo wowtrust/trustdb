@@ -155,7 +155,11 @@ func Create(ctx context.Context, store proofstore.Store, path string, opts Optio
 				bundle, err := store.GetBundle(ctx, recordID)
 				if err != nil {
 					if trusterr.CodeOf(err) == trusterr.CodeNotFound {
-						continue
+						return Manifest{}, trusterr.Wrap(
+							trusterr.CodeDataLoss,
+							fmt.Sprintf("backup manifest %q references missing proof bundle %q", manifest.BatchID, recordID),
+							err,
+						)
 					}
 					return Manifest{}, err
 				}
