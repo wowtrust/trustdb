@@ -172,3 +172,35 @@ func localRootBenchStore(b *testing.B, count int) LocalStore {
 	}
 	return store
 }
+
+func BenchmarkLocalStoreManifestsAfterLateCursor4096(b *testing.B) {
+	store := LocalStore{Root: b.TempDir()}
+	if err := os.MkdirAll(store.manifestDir(), 0o755); err != nil {
+		b.Fatal(err)
+	}
+	for i := range 4096 {
+		manifest := model.BatchManifest{
+			SchemaVersion: model.SchemaBatchManifest,
+			BatchID:       fmt.Sprintf("batch-%04d", i),
+			State:         model.BatchStateCommitted,
+		}
+		data, err := cborx.Marshal(manifest)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if err := os.WriteFile(store.manifestPath(manifest.BatchID), data, 0o600); err != nil {
+			b.Fatal(err)
+		}
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		got, err := store.ListManifestsAfter(context.Background(), "batch-3995", 100)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if len(got) != 100 || got[0].BatchID != "batch-3996" || got[99].BatchID != "batch-4095" {
+			b.Fatalf("unexpected page: len=%d first=%s last=%s", len(got), got[0].BatchID, got[len(got)-1].BatchID)
+		}
+	}
+}

@@ -407,6 +407,88 @@ func TestLocalStoreManifestRoundTrip(t *testing.T) {
 	}
 }
 
+func TestLocalStoreManifestPagesOrderEncodedIDsByRawValue(t *testing.T) {
+	t.Parallel()
+
+	store := LocalStore{Root: t.TempDir()}
+	ctx := context.Background()
+	for _, batchID := range []string{"batch_1", "batch/1", "batch-1"} {
+		if err := store.PutManifest(ctx, model.BatchManifest{
+			SchemaVersion: model.SchemaBatchManifest,
+			BatchID:       batchID,
+			State:         model.BatchStateCommitted,
+		}); err != nil {
+			t.Fatalf("PutManifest(%q): %v", batchID, err)
+		}
+	}
+
+	first, err := store.ListManifestsAfter(ctx, "", 2)
+	if err != nil {
+		t.Fatalf("ListManifestsAfter(first): %v", err)
+	}
+	if len(first) != 2 || first[0].BatchID != "batch-1" || first[1].BatchID != "batch/1" {
+		t.Fatalf("first page = %#v", first)
+	}
+	next, err := store.ListManifestsAfter(ctx, first[1].BatchID, 2)
+	if err != nil {
+		t.Fatalf("ListManifestsAfter(next): %v", err)
+	}
+	if len(next) != 1 || next[0].BatchID != "batch_1" {
+		t.Fatalf("next page = %#v", next)
+	}
+}
+
+func TestLocalStoreManifestPageSkipsFilesBeforeCursor(t *testing.T) {
+	t.Parallel()
+
+	store := LocalStore{Root: t.TempDir()}
+	ctx := context.Background()
+	for i := range 101 {
+		batchID := fmt.Sprintf("batch-%03d", i)
+		if err := store.PutManifest(ctx, model.BatchManifest{
+			SchemaVersion: model.SchemaBatchManifest,
+			BatchID:       batchID,
+			State:         model.BatchStateCommitted,
+		}); err != nil {
+			t.Fatalf("PutManifest(%s): %v", batchID, err)
+		}
+	}
+	if err := os.WriteFile(store.manifestPath("batch-000"), []byte("not-cbor"), 0o600); err != nil {
+		t.Fatalf("corrupt oldest manifest: %v", err)
+	}
+
+	page, err := store.ListManifestsAfter(ctx, "batch-000", 100)
+	if err != nil {
+		t.Fatalf("ListManifestsAfter: %v", err)
+	}
+	if len(page) != 100 || page[0].BatchID != "batch-001" || page[99].BatchID != "batch-100" {
+		t.Fatalf("page bounds: len=%d first=%s last=%s", len(page), page[0].BatchID, page[len(page)-1].BatchID)
+	}
+}
+
+func TestLocalStoreManifestListRejectsFilenameMismatch(t *testing.T) {
+	t.Parallel()
+
+	store := LocalStore{Root: t.TempDir()}
+	ctx := context.Background()
+	manifest := model.BatchManifest{
+		SchemaVersion: model.SchemaBatchManifest,
+		BatchID:       "batch-a",
+		State:         model.BatchStateCommitted,
+	}
+	if err := store.PutManifest(ctx, manifest); err != nil {
+		t.Fatalf("PutManifest: %v", err)
+	}
+	if err := os.Rename(store.manifestPath("batch-a"), store.manifestPath("batch-b")); err != nil {
+		t.Fatalf("rename manifest: %v", err)
+	}
+
+	_, err := store.ListManifestsAfter(ctx, "", 1)
+	if trusterr.CodeOf(err) != trusterr.CodeDataLoss {
+		t.Fatalf("ListManifestsAfter code = %s, err=%v", trusterr.CodeOf(err), err)
+	}
+}
+
 func TestLocalStoreMissingManifest(t *testing.T) {
 	t.Parallel()
 

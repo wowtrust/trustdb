@@ -563,21 +563,25 @@ func (s LocalStore) ListManifests(ctx context.Context) ([]model.BatchManifest, e
 		}
 		return nil, trusterr.Wrap(trusterr.CodeDataLoss, "read manifest directory", err)
 	}
-	manifests := make([]model.BatchManifest, 0, len(entries))
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".tdmanifest") {
-			continue
-		}
+	ordered, err := orderedManifestEntries(entries)
+	if err != nil {
+		return nil, trusterr.Wrap(trusterr.CodeDataLoss, "parse batch manifest filename", err)
+	}
+	manifests := make([]model.BatchManifest, 0, len(ordered))
+	for _, entry := range ordered {
 		if err := ctx.Err(); err != nil {
 			return nil, trusterr.Wrap(trusterr.CodeDeadlineExceeded, "proofstore list manifests canceled", err)
 		}
-		data, err := readStoredFile(filepath.Join(s.manifestDir(), entry.Name()))
+		data, err := readStoredFile(filepath.Join(s.manifestDir(), entry.name))
 		if err != nil {
 			return nil, trusterr.Wrap(trusterr.CodeDataLoss, "read batch manifest", err)
 		}
 		var manifest model.BatchManifest
 		if err := cborx.UnmarshalLimit(data, &manifest, maxStoredObjectBytes); err != nil {
 			return nil, trusterr.Wrap(trusterr.CodeDataLoss, "decode batch manifest", err)
+		}
+		if manifest.BatchID != entry.batchID {
+			return nil, trusterr.New(trusterr.CodeDataLoss, "batch manifest id does not match filename")
 		}
 		manifests = append(manifests, manifest)
 	}
@@ -598,15 +602,20 @@ func (s LocalStore) ListManifestsAfter(ctx context.Context, afterBatchID string,
 		}
 		return nil, trusterr.Wrap(trusterr.CodeDataLoss, "read manifest directory", err)
 	}
-	manifests := make([]model.BatchManifest, 0, limit)
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".tdmanifest") {
-			continue
-		}
+	ordered, err := orderedManifestEntries(entries)
+	if err != nil {
+		return nil, trusterr.Wrap(trusterr.CodeDataLoss, "parse batch manifest filename", err)
+	}
+	start := sort.Search(len(ordered), func(i int) bool {
+		return ordered[i].batchID > afterBatchID
+	})
+	manifests := make([]model.BatchManifest, 0, min(limit, len(ordered)-start))
+	for i := start; i < len(ordered) && len(manifests) < limit; i++ {
+		entry := ordered[i]
 		if err := ctx.Err(); err != nil {
 			return nil, trusterr.Wrap(trusterr.CodeDeadlineExceeded, "proofstore list manifests after canceled", err)
 		}
-		data, err := readStoredFile(filepath.Join(s.manifestDir(), entry.Name()))
+		data, err := readStoredFile(filepath.Join(s.manifestDir(), entry.name))
 		if err != nil {
 			return nil, trusterr.Wrap(trusterr.CodeDataLoss, "read batch manifest", err)
 		}
@@ -614,13 +623,10 @@ func (s LocalStore) ListManifestsAfter(ctx context.Context, afterBatchID string,
 		if err := cborx.UnmarshalLimit(data, &manifest, maxStoredObjectBytes); err != nil {
 			return nil, trusterr.Wrap(trusterr.CodeDataLoss, "decode batch manifest", err)
 		}
-		if manifest.BatchID <= afterBatchID {
-			continue
+		if manifest.BatchID != entry.batchID {
+			return nil, trusterr.New(trusterr.CodeDataLoss, "batch manifest id does not match filename")
 		}
 		manifests = append(manifests, manifest)
-		if len(manifests) >= limit {
-			break
-		}
 	}
 	return manifests, nil
 }
@@ -2083,6 +2089,28 @@ type localRootEntry struct {
 	batchID       string
 }
 
+type localManifestEntry struct {
+	name    string
+	batchID string
+}
+
+func orderedManifestEntries(entries []os.DirEntry) ([]localManifestEntry, error) {
+	const suffix = ".tdmanifest"
+	ordered := make([]localManifestEntry, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), suffix) {
+			continue
+		}
+		batchID, err := decodeLocalIDFilename(entry.Name(), suffix)
+		if err != nil {
+			return nil, err
+		}
+		ordered = append(ordered, localManifestEntry{name: entry.Name(), batchID: batchID})
+	}
+	sort.Slice(ordered, func(i, j int) bool { return ordered[i].batchID < ordered[j].batchID })
+	return ordered, nil
+}
+
 func orderedRootEntries(entries []os.DirEntry) ([]localRootEntry, error) {
 	const suffix = ".tdroot"
 	ordered := make([]localRootEntry, 0, len(entries))
@@ -2117,6 +2145,15 @@ func decodeLocalPositionFilename(name, suffix string) (int64, string, error) {
 		return 0, "", fmt.Errorf("invalid id in position filename %q", name)
 	}
 	return timestamp, id, nil
+}
+
+func decodeLocalIDFilename(name, suffix string) (string, error) {
+	encodedID := strings.TrimSuffix(name, suffix)
+	id, err := decodeSafeFileName(encodedID)
+	if err != nil || id == "" || safeFileName(id) != encodedID {
+		return "", fmt.Errorf("invalid id filename %q", name)
+	}
+	return id, nil
 }
 
 func decodeSafeFileName(value string) (string, error) {
