@@ -713,10 +713,11 @@ func (s LocalStore) Close() error {
 	return nil
 }
 
-// WALCheckpointPruneSafe is true because every successful local publication
-// synchronizes file contents, the atomic replacement, and all directory
-// ancestry before a later checkpoint can authorize WAL deletion.
-func (LocalStore) WALCheckpointPruneSafe() bool { return true }
+// WALCheckpointPruneSafe remains false because durable file publication alone
+// cannot rebuild committed idempotency decisions after older WAL records are
+// deleted. The development backend fails closed until it provides that second
+// half of the checkpoint contract.
+func (LocalStore) WALCheckpointPruneSafe() bool { return false }
 
 func (s LocalStore) PutGlobalLeaf(ctx context.Context, leaf model.GlobalLogLeaf) error {
 	if err := ctx.Err(); err != nil {

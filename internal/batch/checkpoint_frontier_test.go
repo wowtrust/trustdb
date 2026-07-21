@@ -786,7 +786,7 @@ func TestServiceDoesNotCheckpointDuplicateUnprotectedRecordID(t *testing.T) {
 }
 
 func TestServiceDisablesCheckpointForUnsafeStore(t *testing.T) {
-	store := unsafeCheckpointLocalStore{LocalStore: proofstore.LocalStore{Root: t.TempDir()}}
+	store := proofstore.LocalStore{Root: t.TempDir()}
 	var hookCalls int
 	svc := New(fakeEngine{}, store, Options{
 		OnCheckpointAdvanced: func(context.Context, model.WALCheckpoint) { hookCalls++ },
@@ -794,7 +794,7 @@ func TestServiceDisablesCheckpointForUnsafeStore(t *testing.T) {
 	defer svc.Shutdown(context.Background())
 
 	persistCheckpointTestBatch(t, svc, "unsafe-store", checkpointAccepted("unsafe-1", model.WALPosition{SegmentID: 1, Sequence: 1}))
-	if _, found := readCheckpointExact(t, store.LocalStore); found {
+	if _, found := readCheckpointExact(t, store); found {
 		t.Fatal("unsafe store persisted an automatic checkpoint")
 	}
 	if hookCalls != 0 {

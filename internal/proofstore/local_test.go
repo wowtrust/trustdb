@@ -104,10 +104,10 @@ func TestEnsureLocalDurableDirectorySyncsNewAncestry(t *testing.T) {
 	}
 }
 
-func TestWALCheckpointPruneSafetyRecognizesDurableLocalStore(t *testing.T) {
+func TestWALCheckpointPruneSafetyRejectsLocalStoreWithoutIdempotencyProjection(t *testing.T) {
 	t.Parallel()
-	if !WALCheckpointPruneSafe(LocalStore{Root: t.TempDir()}) {
-		t.Fatal("LocalStore did not report crash-safe WAL checkpoint pruning")
+	if WALCheckpointPruneSafe(LocalStore{Root: t.TempDir()}) {
+		t.Fatal("LocalStore reported WAL checkpoint pruning without restart idempotency")
 	}
 	if WALCheckpointPruneSafe(struct{}{}) {
 		t.Fatal("unknown store reported crash-safe WAL checkpoint pruning")
