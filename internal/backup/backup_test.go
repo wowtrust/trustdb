@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -168,6 +169,76 @@ func TestBackupCreateVerifyRestoreRoundTrip(t *testing.T) {
 	}
 	if checkpoint, ok, err := dst.GetCheckpoint(ctx); err != nil || ok {
 		t.Fatalf("GetCheckpoint restored checkpoint=%+v ok=%v err=%v, want absent node-local state", checkpoint, ok, err)
+	}
+}
+
+func TestBackupRootPaginationPreservesTimestampTies(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	src := proofstore.LocalStore{Root: filepath.Join(t.TempDir(), "src")}
+	const rootCount = scanPageSize + 1
+	const closedAtUnixN = int64(100)
+
+	for i := 0; i < rootCount; i++ {
+		batchID := fmt.Sprintf("batch-%04d", i)
+		if err := src.PutRoot(ctx, model.BatchRoot{
+			SchemaVersion: model.SchemaBatchRoot,
+			BatchID:       batchID,
+			BatchRoot:     repeatByte(byte(i), 32),
+			TreeSize:      1,
+			ClosedAtUnixN: closedAtUnixN,
+		}); err != nil {
+			t.Fatalf("PutRoot(%q): %v", batchID, err)
+		}
+	}
+
+	path := filepath.Join(t.TempDir(), "timestamp-ties.tdbackup")
+	report, err := Create(ctx, src, path, Options{Compression: "none"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if report.Roots != rootCount {
+		t.Fatalf("Create Roots = %d, want %d", report.Roots, rootCount)
+	}
+	verified, err := Verify(ctx, path)
+	if err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	if verified.Roots != rootCount {
+		t.Fatalf("Verify Roots = %d, want %d", verified.Roots, rootCount)
+	}
+
+	dst := proofstore.LocalStore{Root: filepath.Join(t.TempDir(), "dst")}
+	restored, err := Restore(ctx, dst, path)
+	if err != nil {
+		t.Fatalf("Restore: %v", err)
+	}
+	if restored.Roots != rootCount {
+		t.Fatalf("Restore Roots = %d, want %d", restored.Roots, rootCount)
+	}
+	restoredRootCount := 0
+	afterClosedAtUnixN := int64(0)
+	afterBatchID := ""
+	for {
+		roots, err := dst.ListRootsPage(ctx, model.RootListOptions{
+			Limit:              scanPageSize,
+			Direction:          model.RecordListDirectionAsc,
+			AfterClosedAtUnixN: afterClosedAtUnixN,
+			AfterBatchID:       afterBatchID,
+		})
+		if err != nil {
+			t.Fatalf("ListRootsPage: %v", err)
+		}
+		if len(roots) == 0 {
+			break
+		}
+		restoredRootCount += len(roots)
+		lastRoot := roots[len(roots)-1]
+		afterClosedAtUnixN = lastRoot.ClosedAtUnixN
+		afterBatchID = lastRoot.BatchID
+	}
+	if restoredRootCount != rootCount {
+		t.Fatalf("restored root count = %d, want %d", restoredRootCount, rootCount)
 	}
 }
 

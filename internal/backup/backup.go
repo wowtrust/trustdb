@@ -173,8 +173,14 @@ func Create(ctx context.Context, store proofstore.Store, path string, opts Optio
 	}
 
 	afterRootClosedAt := int64(0)
+	afterRootBatchID := ""
 	for {
-		roots, err := store.ListRootsAfter(ctx, afterRootClosedAt, scanPageSize)
+		roots, err := store.ListRootsPage(ctx, model.RootListOptions{
+			Limit:              scanPageSize,
+			Direction:          model.RecordListDirectionAsc,
+			AfterClosedAtUnixN: afterRootClosedAt,
+			AfterBatchID:       afterRootBatchID,
+		})
 		if err != nil {
 			return Manifest{}, err
 		}
@@ -187,7 +193,9 @@ func Create(ctx context.Context, store proofstore.Store, path string, opts Optio
 			}
 			report.Roots++
 		}
-		afterRootClosedAt = roots[len(roots)-1].ClosedAtUnixN
+		lastRoot := roots[len(roots)-1]
+		afterRootClosedAt = lastRoot.ClosedAtUnixN
+		afterRootBatchID = lastRoot.BatchID
 	}
 
 	nextLeafIndex := uint64(0)
