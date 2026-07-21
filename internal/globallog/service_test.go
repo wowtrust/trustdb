@@ -3,6 +3,7 @@ package globallog
 import (
 	"bytes"
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -11,6 +12,26 @@ import (
 	"github.com/ryan-wong-coder/trustdb/internal/trustcrypto"
 	"github.com/ryan-wong-coder/trustdb/internal/trusterr"
 )
+
+type conflictingBatchStore struct {
+	Store
+	once     sync.Once
+	conflict func() error
+}
+
+func (s *conflictingBatchStore) CommitGlobalLogAppends(ctx context.Context, appends []model.GlobalLogAppend) error {
+	var conflictErr error
+	s.once.Do(func() { conflictErr = s.conflict() })
+	if conflictErr != nil {
+		return conflictErr
+	}
+	for i := range appends {
+		if err := s.Store.CommitGlobalLogAppend(ctx, appends[i]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
 
 func newTestService(t testing.TB) (*Service, proofstore.LocalStore) {
 	t.Helper()
@@ -122,6 +143,62 @@ func TestAppendBatchRootsPreservesSTHSequence(t *testing.T) {
 	leaves, err := store.ListGlobalLeaves(ctx)
 	if err != nil || len(leaves) != 4 {
 		t.Fatalf("leaves=%d err=%v", len(leaves), err)
+	}
+}
+
+func TestAppendBatchRootReplansAfterConcurrentWriterAdvancesTree(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	store := proofstore.LocalStore{Root: t.TempDir()}
+	_, privateKey, err := trustcrypto.GenerateEd25519Key()
+	if err != nil {
+		t.Fatalf("GenerateEd25519Key: %v", err)
+	}
+	newService := func(store Store) *Service {
+		svc, err := New(Options{
+			Store:      store,
+			LogID:      "test-log",
+			KeyID:      "test-key",
+			PrivateKey: privateKey,
+			Clock:      func() time.Time { return time.Unix(100, 0).UTC() },
+		})
+		if err != nil {
+			t.Fatalf("New: %v", err)
+		}
+		return svc
+	}
+	competitor := newService(store)
+	conflictingStore := &conflictingBatchStore{Store: store}
+	conflictingStore.conflict = func() error {
+		if _, err := competitor.AppendBatchRoot(ctx, batchRoot("competitor", 1)); err != nil {
+			return err
+		}
+		return trusterr.New(trusterr.CodeFailedPrecondition, "global log append is based on stale tree state")
+	}
+	svc := newService(conflictingStore)
+
+	sth, err := svc.AppendBatchRoot(ctx, batchRoot("primary", 2))
+	if err != nil {
+		t.Fatalf("AppendBatchRoot: %v", err)
+	}
+	if sth.TreeSize != 2 {
+		t.Fatalf("primary STH tree_size = %d, want 2", sth.TreeSize)
+	}
+	for batchID, wantIndex := range map[string]uint64{"competitor": 0, "primary": 1} {
+		leaf, found, err := store.GetGlobalLeafByBatchID(ctx, batchID)
+		if err != nil || !found {
+			t.Fatalf("GetGlobalLeafByBatchID(%q) found=%v err=%v", batchID, found, err)
+		}
+		if leaf.LeafIndex != wantIndex {
+			t.Fatalf("%s leaf_index = %d, want %d", batchID, leaf.LeafIndex, wantIndex)
+		}
+	}
+	state, found, err := store.GetGlobalLogState(ctx)
+	if err != nil || !found {
+		t.Fatalf("GetGlobalLogState found=%v err=%v", found, err)
+	}
+	if state.TreeSize != 2 {
+		t.Fatalf("state tree_size = %d, want 2", state.TreeSize)
 	}
 }
 
