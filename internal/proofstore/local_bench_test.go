@@ -79,3 +79,40 @@ func BenchmarkLocalStoreGlobalLeafFirstPage4096(b *testing.B) {
 		}
 	}
 }
+
+func BenchmarkLocalStoreRecordFirstPage4096(b *testing.B) {
+	store := LocalStore{Root: b.TempDir()}
+	if err := os.MkdirAll(store.recordByTimeDir(), 0o755); err != nil {
+		b.Fatal(err)
+	}
+	for i := range 4096 {
+		idx := model.RecordIndex{
+			SchemaVersion:   model.SchemaRecordIndex,
+			RecordID:        fmt.Sprintf("tr1record-%04d", i),
+			ReceivedAtUnixN: int64(i + 1),
+			BatchID:         "batch-benchmark",
+			TenantID:        "tenant-benchmark",
+			ClientID:        "client-benchmark",
+			ProofLevel:      "L3",
+		}
+		data, err := cborx.Marshal(idx)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(store.recordByTimeDir(), store.recordIndexName(idx)), data, 0o600); err != nil {
+			b.Fatal(err)
+		}
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		got, err := store.ListRecordIndexes(context.Background(), model.RecordListOptions{Limit: 100})
+		if err != nil {
+			b.Fatal(err)
+		}
+		if len(got) != 100 || got[0].ReceivedAtUnixN != 4096 || got[99].ReceivedAtUnixN != 3997 {
+			b.Fatalf("unexpected page bounds: len=%d first=%d last=%d", len(got), got[0].ReceivedAtUnixN, got[len(got)-1].ReceivedAtUnixN)
+		}
+	}
+}

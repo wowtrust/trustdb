@@ -3,6 +3,7 @@ package proofstore
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -171,6 +172,78 @@ func TestSafeFileNameAvoidsLegacyCollisions(t *testing.T) {
 	const plain = "tr1_record-1.2"
 	if got := safeFileName(plain); got != plain {
 		t.Fatalf("safeFileName(%q) = %q, want unchanged", plain, got)
+	}
+}
+
+func TestLocalStoreRecordPagesOrderEncodedIDsByRawValue(t *testing.T) {
+	t.Parallel()
+
+	store := LocalStore{Root: t.TempDir()}
+	ctx := context.Background()
+	for _, recordID := range []string{"rec_1", "rec/1", "rec-1"} {
+		if err := store.PutRecordIndex(ctx, model.RecordIndex{
+			SchemaVersion:   model.SchemaRecordIndex,
+			RecordID:        recordID,
+			ReceivedAtUnixN: 100,
+		}); err != nil {
+			t.Fatalf("PutRecordIndex(%q): %v", recordID, err)
+		}
+	}
+
+	first, err := store.ListRecordIndexes(ctx, model.RecordListOptions{Limit: 2, Direction: model.RecordListDirectionAsc})
+	if err != nil {
+		t.Fatalf("ListRecordIndexes(first): %v", err)
+	}
+	if len(first) != 2 || first[0].RecordID != "rec-1" || first[1].RecordID != "rec/1" {
+		t.Fatalf("first page = %#v", first)
+	}
+	next, err := store.ListRecordIndexes(ctx, model.RecordListOptions{
+		Limit:                2,
+		Direction:            model.RecordListDirectionAsc,
+		AfterReceivedAtUnixN: first[1].ReceivedAtUnixN,
+		AfterRecordID:        first[1].RecordID,
+	})
+	if err != nil {
+		t.Fatalf("ListRecordIndexes(next): %v", err)
+	}
+	if len(next) != 1 || next[0].RecordID != "rec_1" {
+		t.Fatalf("next page = %#v", next)
+	}
+}
+
+func TestLocalStoreRecordPageStopsReadingAtLimit(t *testing.T) {
+	t.Parallel()
+
+	store := LocalStore{Root: t.TempDir()}
+	ctx := context.Background()
+	var oldest model.RecordIndex
+	for i := range 101 {
+		idx := model.RecordIndex{
+			SchemaVersion:   model.SchemaRecordIndex,
+			RecordID:        fmt.Sprintf("record-%03d", i),
+			ReceivedAtUnixN: int64(i + 1),
+		}
+		if i == 0 {
+			oldest = idx
+		}
+		if err := store.PutRecordIndex(ctx, idx); err != nil {
+			t.Fatalf("PutRecordIndex(%d): %v", i, err)
+		}
+	}
+	oldestPath := filepath.Join(store.recordByTimeDir(), store.recordIndexName(oldest))
+	if err := os.WriteFile(oldestPath, []byte("not-cbor"), 0o600); err != nil {
+		t.Fatalf("corrupt oldest index: %v", err)
+	}
+
+	page, err := store.ListRecordIndexes(ctx, model.RecordListOptions{Limit: 100})
+	if err != nil {
+		t.Fatalf("ListRecordIndexes(limit=100): %v", err)
+	}
+	if len(page) != 100 || page[0].ReceivedAtUnixN != 101 || page[99].ReceivedAtUnixN != 2 {
+		t.Fatalf("page bounds: len=%d first=%d last=%d", len(page), page[0].ReceivedAtUnixN, page[len(page)-1].ReceivedAtUnixN)
+	}
+	if _, err := store.ListRecordIndexes(ctx, model.RecordListOptions{Limit: 101}); trusterr.CodeOf(err) != trusterr.CodeDataLoss {
+		t.Fatalf("ListRecordIndexes(limit=101) error = %v, code = %s", err, trusterr.CodeOf(err))
 	}
 }
 

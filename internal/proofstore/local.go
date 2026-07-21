@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -20,6 +21,7 @@ import (
 const (
 	maxStoredObjectBytes  = 64 << 20
 	encodedFileNamePrefix = "~"
+	recordIndexTimeWidth  = 20
 )
 
 type LocalStore struct {
@@ -152,15 +154,18 @@ func (s LocalStore) ListRecordIndexes(ctx context.Context, opts model.RecordList
 	if closeErr != nil {
 		return nil, trusterr.Wrap(trusterr.CodeDataLoss, "close record index directory", closeErr)
 	}
-	indexes := make([]model.RecordIndex, 0, len(entries))
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".tdrecord") {
-			continue
-		}
+	ordered, err := orderedRecordIndexEntries(entries)
+	if err != nil {
+		return nil, trusterr.Wrap(trusterr.CodeDataLoss, "parse record index filename", err)
+	}
+	indexes := make([]model.RecordIndex, 0, min(limit, len(ordered)))
+	start, end, step := recordIndexPageRange(ordered, opts)
+	for i := start; i != end && len(indexes) < limit; i += step {
+		entry := ordered[i]
 		if err := ctx.Err(); err != nil {
 			return nil, trusterr.Wrap(trusterr.CodeDeadlineExceeded, "proofstore list record indexes canceled", err)
 		}
-		data, err := root.ReadFile(filepath.Join(dir, entry.Name()))
+		data, err := root.ReadFile(filepath.Join(dir, entry.name))
 		if err != nil {
 			return nil, trusterr.Wrap(trusterr.CodeDataLoss, "read record index", err)
 		}
@@ -168,14 +173,13 @@ func (s LocalStore) ListRecordIndexes(ctx context.Context, opts model.RecordList
 		if err := cborx.UnmarshalLimit(data, &idx, maxStoredObjectBytes); err != nil {
 			return nil, trusterr.Wrap(trusterr.CodeDataLoss, "decode record index", err)
 		}
+		if idx.ReceivedAtUnixN != entry.receivedAtUnixN || idx.RecordID != entry.recordID {
+			return nil, trusterr.New(trusterr.CodeDataLoss, "record index position does not match filename")
+		}
 		if !model.RecordIndexMatchesListOptions(idx, opts) || !model.RecordIndexAfterCursor(idx, opts) {
 			continue
 		}
 		indexes = append(indexes, idx)
-	}
-	sortRecordIndexes(indexes, opts.Direction)
-	if len(indexes) > limit {
-		indexes = indexes[:limit]
 	}
 	return indexes, nil
 }
@@ -1795,7 +1799,7 @@ func (s LocalStore) recordByIDPath(recordID string) string {
 }
 
 func (s LocalStore) recordIndexName(idx model.RecordIndex) string {
-	return fmt.Sprintf("%020d_%s.tdrecord", idx.ReceivedAtUnixN, safeFileName(idx.RecordID))
+	return fmt.Sprintf("%0*d_%s.tdrecord", recordIndexTimeWidth, idx.ReceivedAtUnixN, safeFileName(idx.RecordID))
 }
 
 func (s LocalStore) rootDir() string {
@@ -1998,17 +2002,6 @@ func sortBatchRoots(roots []model.BatchRoot, direction string) {
 	})
 }
 
-func sortRecordIndexes(indexes []model.RecordIndex, direction string) {
-	desc := !strings.EqualFold(direction, model.RecordListDirectionAsc)
-	sort.Slice(indexes, func(i, j int) bool {
-		cmp := model.CompareRecordPosition(indexes[i].ReceivedAtUnixN, indexes[i].RecordID, indexes[j].ReceivedAtUnixN, indexes[j].RecordID)
-		if desc {
-			return cmp > 0
-		}
-		return cmp < 0
-	})
-}
-
 func (s LocalStore) promoteBatchRecords(ctx context.Context, batchID, proofLevel string) error {
 	if batchID == "" {
 		return nil
@@ -2051,6 +2044,95 @@ func safeFileName(value string) string {
 		return value
 	}
 	return encodedFileNamePrefix + base64.RawURLEncoding.EncodeToString([]byte(value))
+}
+
+type localRecordIndexEntry struct {
+	name            string
+	receivedAtUnixN int64
+	recordID        string
+}
+
+func orderedRecordIndexEntries(entries []os.DirEntry) ([]localRecordIndexEntry, error) {
+	const suffix = ".tdrecord"
+	ordered := make([]localRecordIndexEntry, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), suffix) {
+			continue
+		}
+		base := strings.TrimSuffix(entry.Name(), suffix)
+		if len(base) <= recordIndexTimeWidth+1 || base[recordIndexTimeWidth] != '_' {
+			return nil, fmt.Errorf("invalid record index filename %q", entry.Name())
+		}
+		receivedAtUnixN, err := strconv.ParseInt(base[:recordIndexTimeWidth], 10, 64)
+		if err != nil || receivedAtUnixN < 0 {
+			return nil, fmt.Errorf("invalid record index timestamp in %q", entry.Name())
+		}
+		encodedRecordID := base[recordIndexTimeWidth+1:]
+		recordID, err := decodeSafeFileName(encodedRecordID)
+		if err != nil || recordID == "" || safeFileName(recordID) != encodedRecordID {
+			return nil, fmt.Errorf("invalid record id in index filename %q", entry.Name())
+		}
+		ordered = append(ordered, localRecordIndexEntry{
+			name:            entry.Name(),
+			receivedAtUnixN: receivedAtUnixN,
+			recordID:        recordID,
+		})
+	}
+	sort.Slice(ordered, func(i, j int) bool {
+		return model.CompareRecordPosition(
+			ordered[i].receivedAtUnixN,
+			ordered[i].recordID,
+			ordered[j].receivedAtUnixN,
+			ordered[j].recordID,
+		) < 0
+	})
+	return ordered, nil
+}
+
+func decodeSafeFileName(value string) (string, error) {
+	if !strings.HasPrefix(value, encodedFileNamePrefix) {
+		return value, nil
+	}
+	decoded, err := base64.RawURLEncoding.DecodeString(strings.TrimPrefix(value, encodedFileNamePrefix))
+	if err != nil {
+		return "", err
+	}
+	return string(decoded), nil
+}
+
+func recordIndexPageRange(entries []localRecordIndexEntry, opts model.RecordListOptions) (start, end, step int) {
+	lower, upper := 0, len(entries)
+	if opts.ReceivedFromUnixN > 0 {
+		lower = sort.Search(len(entries), func(i int) bool {
+			return entries[i].receivedAtUnixN >= opts.ReceivedFromUnixN
+		})
+	}
+	if opts.ReceivedToUnixN > 0 {
+		upper = sort.Search(len(entries), func(i int) bool {
+			return entries[i].receivedAtUnixN > opts.ReceivedToUnixN
+		})
+	}
+	hasCursor := opts.AfterReceivedAtUnixN != 0 || opts.AfterRecordID != ""
+	asc := strings.EqualFold(opts.Direction, model.RecordListDirectionAsc)
+	if hasCursor && asc {
+		cursor := sort.Search(len(entries), func(i int) bool {
+			return model.CompareRecordPosition(entries[i].receivedAtUnixN, entries[i].recordID, opts.AfterReceivedAtUnixN, opts.AfterRecordID) > 0
+		})
+		lower = max(lower, cursor)
+	}
+	if hasCursor && !asc {
+		cursor := sort.Search(len(entries), func(i int) bool {
+			return model.CompareRecordPosition(entries[i].receivedAtUnixN, entries[i].recordID, opts.AfterReceivedAtUnixN, opts.AfterRecordID) >= 0
+		})
+		upper = min(upper, cursor)
+	}
+	if lower > upper {
+		lower = upper
+	}
+	if asc {
+		return lower, upper, 1
+	}
+	return upper - 1, lower - 1, -1
 }
 
 func isPlainSafeFileName(value string) bool {
