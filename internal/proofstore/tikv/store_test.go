@@ -18,7 +18,10 @@ import (
 	"github.com/tikv/client-go/v2/txnkv"
 
 	"github.com/ryan-wong-coder/trustdb/internal/cborx"
+	"github.com/ryan-wong-coder/trustdb/internal/claim"
+	"github.com/ryan-wong-coder/trustdb/internal/idempotency"
 	"github.com/ryan-wong-coder/trustdb/internal/model"
+	"github.com/ryan-wong-coder/trustdb/internal/trustcrypto"
 	"github.com/ryan-wong-coder/trustdb/internal/trusterr"
 )
 
@@ -57,11 +60,120 @@ func TestGetBundleMissUsesOnePointRead(t *testing.T) {
 	}
 }
 
-func TestTiKVDoesNotUseSharedCheckpointForLocalWALPruning(t *testing.T) {
+func TestTiKVCheckpointPruneSafetyRequiresCompleteScope(t *testing.T) {
 	t.Parallel()
-	var store *Store
-	if store.WALCheckpointPruneSafe() {
-		t.Fatal("TiKV store reported a shared checkpoint safe for a node-local WAL")
+	for _, store := range []*Store{nil, {}, {checkpointNodeID: "node"}, {checkpointWALID: "wal"}} {
+		if store.WALCheckpointPruneSafe() {
+			t.Fatalf("WALCheckpointPruneSafe() = true for incomplete scope: %+v", store)
+		}
+	}
+	ready := &Store{checkpointNodeID: "node", checkpointWALID: "wal"}
+	ready.idempotencyReady.Store(true)
+	if !ready.WALCheckpointPruneSafe() {
+		t.Fatal("WALCheckpointPruneSafe() = false for complete scope")
+	}
+}
+
+func TestTiKVCheckpointScopesDoNotShareStateOrLegacyFallback(t *testing.T) {
+	db, _ := newMockTiKVDB(t, "checkpoint-scope/")
+	nodeA := &Store{db: db, checkpointNodeID: "node-a", checkpointWALID: "wal-a"}
+	nodeB := &Store{db: db, checkpointNodeID: "node-b", checkpointWALID: "wal-b"}
+	nodeA.idempotencyReady.Store(true)
+	nodeB.idempotencyReady.Store(true)
+	ctx := context.Background()
+
+	legacy, err := cborx.Marshal(model.WALCheckpoint{LastSequence: 99})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Set([]byte("checkpoint/wal"), legacy, syncWrite); err != nil {
+		t.Fatal(err)
+	}
+	if _, found, err := nodeA.GetCheckpoint(ctx); err != nil || found {
+		t.Fatalf("nodeA legacy GetCheckpoint found=%v err=%v", found, err)
+	}
+
+	if err := nodeA.PutCheckpoint(ctx, model.WALCheckpoint{LastSequence: 7}); err != nil {
+		t.Fatal(err)
+	}
+	if _, found, err := nodeB.GetCheckpoint(ctx); err != nil || found {
+		t.Fatalf("nodeB GetCheckpoint found=%v err=%v", found, err)
+	}
+	got, found, err := nodeA.GetCheckpoint(ctx)
+	if err != nil || !found || got.LastSequence != 7 || got.NodeID != "node-a" || got.WALID != "wal-a" {
+		t.Fatalf("nodeA GetCheckpoint = %+v found=%v err=%v", got, found, err)
+	}
+}
+
+func TestTiKVCheckpointNeverRegressesWithinScope(t *testing.T) {
+	db, _ := newMockTiKVDB(t, "checkpoint-monotonic/")
+	store := &Store{db: db, checkpointNodeID: "node", checkpointWALID: "wal"}
+	store.idempotencyReady.Store(true)
+	ctx := context.Background()
+	if err := store.PutCheckpoint(ctx, model.WALCheckpoint{LastSequence: 12, BatchID: "new"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.PutCheckpoint(ctx, model.WALCheckpoint{LastSequence: 4, BatchID: "old"}); err != nil {
+		t.Fatal(err)
+	}
+	got, found, err := store.GetCheckpoint(ctx)
+	if err != nil || !found || got.LastSequence != 12 || got.BatchID != "new" {
+		t.Fatalf("GetCheckpoint = %+v found=%v err=%v", got, found, err)
+	}
+}
+
+func TestTiKVIdempotencyProjectionPublishesWithCommittedManifest(t *testing.T) {
+	db, _ := newMockTiKVDB(t, "idempotency-publication/")
+	store := &Store{db: db, checkpointNodeID: "node", checkpointWALID: "wal"}
+	ctx := context.Background()
+	if err := store.EnsureIdempotencyProjection(ctx); err != nil {
+		t.Fatal(err)
+	}
+	bundle, wantDecision := tikvIdempotencyFixture(t, "batch-idempotency")
+	if err := store.PutBundle(ctx, bundle); err != nil {
+		t.Fatal(err)
+	}
+	prepared := model.BatchManifest{
+		SchemaVersion: model.SchemaBatchManifest,
+		BatchID:       "batch-idempotency",
+		State:         model.BatchStatePrepared,
+		TreeSize:      1,
+		RecordIDs:     []string{bundle.RecordID},
+	}
+	if err := store.PutManifest(ctx, prepared); err != nil {
+		t.Fatal(err)
+	}
+	committed := prepared
+	committed.State = model.BatchStateCommitted
+	decisions, err := store.PublishCommittedBatch(ctx, committed, []model.ProofBundle{bundle})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(decisions) != 1 || !idempotency.Equivalent(decisions[0], wantDecision) {
+		t.Fatalf("decisions=%+v, want %+v", decisions, wantDecision)
+	}
+	got, found, err := store.GetIdempotencyDecision(ctx, wantDecision.Identity)
+	if err != nil || !found || !idempotency.Equivalent(got, wantDecision) {
+		t.Fatalf("GetIdempotencyDecision=%+v found=%v err=%v", got, found, err)
+	}
+	manifest, err := store.GetManifest(ctx, committed.BatchID)
+	if err != nil || manifest.State != model.BatchStateCommitted {
+		t.Fatalf("GetManifest=%+v err=%v", manifest, err)
+	}
+}
+
+func TestTiKVIdempotencyProjectionRejectsCommittedHistoryWithoutMarker(t *testing.T) {
+	db, _ := newMockTiKVDB(t, "idempotency-no-compat/")
+	store := &Store{db: db}
+	if err := store.PutManifest(context.Background(), model.BatchManifest{
+		SchemaVersion: model.SchemaBatchManifest,
+		BatchID:       "old-committed",
+		State:         model.BatchStateCommitted,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.EnsureIdempotencyProjection(context.Background()); trusterr.CodeOf(err) != trusterr.CodeFailedPrecondition {
+		t.Fatalf("EnsureIdempotencyProjection error=%v, want failed_precondition", err)
 	}
 }
 
@@ -869,6 +981,84 @@ func BenchmarkTiKVDecodeStoredProofBundleV2(b *testing.B) {
 			b.Fatalf("record_id = %q, want %q", got.RecordID, bundle.RecordID)
 		}
 	}
+}
+
+func tikvIdempotencyFixture(t testing.TB, batchID string) (model.ProofBundle, model.IdempotencyDecision) {
+	t.Helper()
+	clientClaim := model.ClientClaim{
+		SchemaVersion:   model.SchemaClientClaim,
+		TenantID:        "tenant-a",
+		ClientID:        "client-a",
+		KeyID:           "client-key",
+		ProducedAtUnixN: 10,
+		Nonce:           bytes.Repeat([]byte{1}, 16),
+		IdempotencyKey:  "idem-a",
+		Content: model.Content{
+			HashAlg:       model.DefaultHashAlg,
+			ContentHash:   bytes.Repeat([]byte{2}, 32),
+			ContentLength: 1,
+		},
+	}
+	canonical, err := claim.Canonical(clientClaim)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signed := model.SignedClaim{
+		SchemaVersion: model.SchemaSignedClaim,
+		Claim:         clientClaim,
+		Signature: model.Signature{
+			Alg:       model.DefaultSignatureAlg,
+			KeyID:     clientClaim.KeyID,
+			Signature: bytes.Repeat([]byte{3}, 64),
+		},
+	}
+	claimHash, _ := trustcrypto.HashBytes(model.DefaultHashAlg, canonical)
+	signatureHash, _ := trustcrypto.HashBytes(model.DefaultHashAlg, signed.Signature.Signature)
+	position := model.WALPosition{SegmentID: 1, Offset: 64, Sequence: 1}
+	record := model.ServerRecord{
+		SchemaVersion:       model.SchemaServerRecord,
+		RecordID:            claim.RecordID(canonical, signed.Signature),
+		TenantID:            clientClaim.TenantID,
+		ClientID:            clientClaim.ClientID,
+		KeyID:               clientClaim.KeyID,
+		ClaimHash:           claimHash,
+		ClientSignatureHash: signatureHash,
+		ReceivedAtUnixN:     20,
+		WAL:                 position,
+	}
+	accepted := model.AcceptedReceipt{
+		SchemaVersion:   model.SchemaAcceptedReceipt,
+		RecordID:        record.RecordID,
+		Status:          "accepted",
+		ServerID:        "node",
+		ReceivedAtUnixN: record.ReceivedAtUnixN,
+		WAL:             position,
+		ServerSig: model.Signature{
+			Alg:       model.DefaultSignatureAlg,
+			KeyID:     "server-key",
+			Signature: bytes.Repeat([]byte{4}, 64),
+		},
+	}
+	decision, err := idempotency.BuildDecision(batchID, signed, record, accepted)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bundle := model.ProofBundle{
+		SchemaVersion:   model.SchemaProofBundle,
+		RecordID:        record.RecordID,
+		SignedClaim:     signed,
+		ServerRecord:    record,
+		AcceptedReceipt: accepted,
+		CommittedReceipt: model.CommittedReceipt{
+			SchemaVersion: model.SchemaCommittedReceipt,
+			RecordID:      record.RecordID,
+			Status:        "committed",
+			BatchID:       batchID,
+			LeafIndex:     0,
+		},
+		BatchProof: model.BatchProof{TreeAlg: model.DefaultMerkleTreeAlg, LeafIndex: 0, TreeSize: 1},
+	}
+	return bundle, decision
 }
 
 func syntheticTiKVProofBundles(n int) []model.ProofBundle {

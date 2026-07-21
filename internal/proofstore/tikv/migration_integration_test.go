@@ -10,9 +10,6 @@ import (
 	"regexp"
 	"testing"
 	"time"
-
-	"github.com/ryan-wong-coder/trustdb/internal/cborx"
-	"github.com/ryan-wong-coder/trustdb/internal/model"
 )
 
 func TestTiKVMigrateLegacyKeys(t *testing.T) {
@@ -45,48 +42,6 @@ func TestTiKVMigrateLegacyKeys(t *testing.T) {
 	}
 	if !bytes.Equal(got, legacyValue) {
 		t.Fatalf("migrated value = %q, want %q", got, legacyValue)
-	}
-}
-
-func TestTiKVMigrateLegacyCheckpointRoundTrip(t *testing.T) {
-	requireInternalTiKVIntegration(t)
-	if os.Getenv("TRUSTDB_TIKV_RUN_LEGACY_MIGRATION_TEST") != "1" {
-		t.Skip("set TRUSTDB_TIKV_RUN_LEGACY_MIGRATION_TEST=1 to copy legacy bare TiKV keys")
-	}
-
-	ctx := context.Background()
-	store := openInternalIntegrationStore(t, internalIntegrationNamespace(t, "migration-checkpoint"))
-	defer store.Close()
-
-	want := model.WALCheckpoint{
-		SchemaVersion:   model.SchemaWALCheckpoint,
-		SegmentID:       11,
-		LastSequence:    99,
-		BatchID:         "legacy-checkpoint",
-		RecordedAtUnixN: time.Now().UTC().UnixNano(),
-	}
-	data, err := cborx.Marshal(want)
-	if err != nil {
-		t.Fatalf("marshal checkpoint: %v", err)
-	}
-	if err := store.db.rawSet([]byte(checkpointKey), data); err != nil {
-		t.Fatalf("seed legacy checkpoint: %v", err)
-	}
-	t.Cleanup(func() { _ = store.db.rawDelete([]byte(checkpointKey)) })
-
-	report, err := store.MigrateLegacyKeys(ctx, MigrationOptions{})
-	if err != nil {
-		t.Fatalf("MigrateLegacyKeys: %v", err)
-	}
-	if report.Copied == 0 {
-		t.Fatalf("migration report = %+v, want copied checkpoint", report)
-	}
-	got, ok, err := store.GetCheckpoint(ctx)
-	if err != nil || !ok {
-		t.Fatalf("GetCheckpoint after migration ok=%v err=%v", ok, err)
-	}
-	if got.SegmentID != want.SegmentID || got.LastSequence != want.LastSequence || got.BatchID != want.BatchID {
-		t.Fatalf("migrated checkpoint = %+v, want %+v", got, want)
 	}
 }
 
