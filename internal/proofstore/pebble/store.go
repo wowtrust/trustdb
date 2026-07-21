@@ -12,17 +12,20 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"reflect"
 	"runtime"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	pdb "github.com/cockroachdb/pebble"
 	"github.com/golang/snappy"
 
 	"github.com/ryan-wong-coder/trustdb/internal/cborx"
+	"github.com/ryan-wong-coder/trustdb/internal/idempotency"
 	"github.com/ryan-wong-coder/trustdb/internal/model"
 	"github.com/ryan-wong-coder/trustdb/internal/trusterr"
 )
@@ -41,7 +44,6 @@ const (
 var errStopScan = errors.New("stop scan")
 
 const (
-	prefixBundle         = "bundle/"
 	prefixBundleV2       = "bundle-v2/"
 	prefixRecordByID     = "record/by-id/"
 	prefixRecordByTime   = "record/by-time/"
@@ -66,10 +68,15 @@ const (
 	prefixAnchorOutbox   = "anchor/sth-outbox/"
 	prefixAnchorStatus   = "anchor/sth-status/"
 	prefixAnchorResult   = "anchor/sth-result/"
+	prefixIdempotency    = "idempotency/decision/"
 	checkpointKey        = "checkpoint/wal"
 	globalStateKey       = "global/state/latest"
 	storageSchemaKey     = "meta/storage-schema"
-	storageSchemaV2      = "trustdb-proofstore-v2"
+	idempotencyReadyKey  = "meta/idempotency-projection/ready"
+	committedBatchesKey  = "meta/committed-batches/present"
+	storageSchemaV3      = "trustdb-proofstore-v3"
+	idempotencyReadyV1   = "trustdb.idempotency-projection.ready.v1"
+	committedBatchesV1   = "trustdb.committed-batches.present.v1"
 	rootSortKeyWidth     = 20
 )
 
@@ -165,13 +172,18 @@ type Store struct {
 	// double-free inside Pebble.
 	closeOnce sync.Once
 	closeErr  error
+
+	idempotencyMu     sync.RWMutex
+	idempotencyReady  atomic.Bool
+	hasCommittedBatch atomic.Bool
 }
 
-// WALCheckpointPruneSafe remains false until Pebble persists a keyed
-// restart-idempotency projection before publishing the checkpoint. Its
-// synchronous manifest/artifact ordering is otherwise sufficient, but pruning
-// the accepted WAL first would let a retry append a duplicate after restart.
-func (*Store) WALCheckpointPruneSafe() bool { return false }
+// WALCheckpointPruneSafe becomes true only after the durable projection is
+// complete. Generic committed-manifest writes invalidate it until the next
+// bounded rebuild.
+func (s *Store) WALCheckpointPruneSafe() bool {
+	return s != nil && s.idempotencyReady.Load()
+}
 
 // Open creates or opens a Pebble database at path and wraps it in a
 // Store. The caller owns the returned *Store and must call Close to
@@ -193,18 +205,31 @@ func OpenWithOptions(path string, opts Options) (*Store, error) {
 		_ = db.Close()
 		return nil, err
 	}
-	return &Store{
+	store := &Store{
 		db:               db,
 		recordIndexMode:  normalizeRecordIndexMode(opts),
 		artifactSyncMode: normalizeArtifactSyncMode(opts.ArtifactSyncMode),
-	}, nil
+	}
+	ready, err := store.projectionReadyOnDisk()
+	if err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	store.idempotencyReady.Store(ready)
+	hasCommittedBatch, err := store.committedBatchesOnDisk()
+	if err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	store.hasCommittedBatch.Store(hasCommittedBatch)
+	return store, nil
 }
 
 func ensureStorageSchema(db *pdb.DB) error {
 	value, closer, err := db.Get([]byte(storageSchemaKey))
 	if err == nil {
 		defer closer.Close()
-		if string(value) != storageSchemaV2 {
+		if string(value) != storageSchemaV3 {
 			return trusterr.New(trusterr.CodeFailedPrecondition, "unsupported pebble proofstore schema; clear or rebuild the proofstore")
 		}
 		return nil
@@ -225,10 +250,208 @@ func ensureStorageSchema(db *pdb.DB) error {
 		return trusterr.Wrap(trusterr.CodeDataLoss, "inspect pebble proofstore contents", iterErr)
 	}
 	if hasExistingData {
-		return trusterr.New(trusterr.CodeFailedPrecondition, "legacy pebble proofstore detected; clear or rebuild the proofstore")
+		return trusterr.New(trusterr.CodeFailedPrecondition, "unversioned pebble proofstore detected; clear or rebuild the proofstore")
 	}
-	if err := db.Set([]byte(storageSchemaKey), []byte(storageSchemaV2), pdb.Sync); err != nil {
-		return trusterr.Wrap(trusterr.CodeDataLoss, "write pebble proofstore schema", err)
+	batch := db.NewBatch()
+	defer batch.Close()
+	if err := batch.Set([]byte(storageSchemaKey), []byte(storageSchemaV3), nil); err != nil {
+		return trusterr.Wrap(trusterr.CodeDataLoss, "stage pebble proofstore schema", err)
+	}
+	if err := batch.Set([]byte(idempotencyReadyKey), []byte(idempotencyReadyV1), nil); err != nil {
+		return trusterr.Wrap(trusterr.CodeDataLoss, "stage empty idempotency projection readiness", err)
+	}
+	if err := batch.Commit(pdb.Sync); err != nil {
+		return trusterr.Wrap(trusterr.CodeDataLoss, "initialize pebble proofstore schema", err)
+	}
+	return nil
+}
+
+const (
+	idempotencyManifestPageSize = 64
+	idempotencyDecisionPageSize = 256
+)
+
+func idempotencyDecisionKey(identity model.IdempotencyIdentity) []byte {
+	return append([]byte(prefixIdempotency), idempotency.StorageKey(identity)...)
+}
+
+func (s *Store) projectionReadyOnDisk() (bool, error) {
+	value, closer, err := s.db.Get([]byte(idempotencyReadyKey))
+	if errors.Is(err, pdb.ErrNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, trusterr.Wrap(trusterr.CodeDataLoss, "read idempotency projection readiness", err)
+	}
+	defer closer.Close()
+	if string(value) != idempotencyReadyV1 {
+		return false, trusterr.New(trusterr.CodeDataLoss, "invalid idempotency projection readiness marker")
+	}
+	return true, nil
+}
+
+func (s *Store) committedBatchesOnDisk() (bool, error) {
+	value, closer, err := s.db.Get([]byte(committedBatchesKey))
+	if errors.Is(err, pdb.ErrNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, trusterr.Wrap(trusterr.CodeDataLoss, "read committed batch marker", err)
+	}
+	defer closer.Close()
+	if string(value) != committedBatchesV1 {
+		return false, trusterr.New(trusterr.CodeDataLoss, "invalid committed batch marker")
+	}
+	return true, nil
+}
+
+// EnsureIdempotencyProjection rebuilds the point-read projection only when a
+// prior generic committed-manifest write invalidated it. Normal restarts read
+// one marker and do no historical scan. Rebuild pages are individually synced;
+// readiness is published last, and a stale WAL checkpoint is removed first.
+func (s *Store) EnsureIdempotencyProjection(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return trusterr.Wrap(trusterr.CodeDeadlineExceeded, "ensure idempotency projection canceled", err)
+	}
+	s.idempotencyMu.Lock()
+	defer s.idempotencyMu.Unlock()
+
+	ready, err := s.projectionReadyOnDisk()
+	if err != nil {
+		s.idempotencyReady.Store(false)
+		return err
+	}
+	if ready {
+		s.idempotencyReady.Store(true)
+		return nil
+	}
+	s.idempotencyReady.Store(false)
+
+	reset := s.db.NewBatch()
+	lower, upper := prefixBounds(prefixIdempotency)
+	if err := reset.DeleteRange(lower, upper, nil); err != nil {
+		_ = reset.Close()
+		return trusterr.Wrap(trusterr.CodeDataLoss, "clear idempotency projection", err)
+	}
+	if err := reset.Delete([]byte(idempotencyReadyKey), nil); err != nil {
+		_ = reset.Close()
+		return trusterr.Wrap(trusterr.CodeDataLoss, "clear idempotency projection readiness", err)
+	}
+	if err := reset.Delete([]byte(checkpointKey), nil); err != nil {
+		_ = reset.Close()
+		return trusterr.Wrap(trusterr.CodeDataLoss, "clear stale wal checkpoint", err)
+	}
+	if err := reset.Commit(pdb.Sync); err != nil {
+		_ = reset.Close()
+		return trusterr.Wrap(trusterr.CodeDataLoss, "reset idempotency projection", err)
+	}
+	if err := reset.Close(); err != nil {
+		return trusterr.Wrap(trusterr.CodeDataLoss, "close idempotency projection reset", err)
+	}
+
+	for afterBatchID := ""; ; {
+		manifests, err := s.ListManifestsAfter(ctx, afterBatchID, idempotencyManifestPageSize)
+		if err != nil {
+			return err
+		}
+		if len(manifests) == 0 {
+			break
+		}
+		for i := range manifests {
+			if manifests[i].State == model.BatchStateCommitted {
+				if err := s.rebuildManifestIdempotency(ctx, manifests[i]); err != nil {
+					return err
+				}
+			}
+		}
+		afterBatchID = manifests[len(manifests)-1].BatchID
+	}
+	if err := s.db.Set([]byte(idempotencyReadyKey), []byte(idempotencyReadyV1), pdb.Sync); err != nil {
+		return trusterr.Wrap(trusterr.CodeDataLoss, "publish idempotency projection readiness", err)
+	}
+	s.idempotencyReady.Store(true)
+	return nil
+}
+
+func (s *Store) rebuildManifestIdempotency(ctx context.Context, manifest model.BatchManifest) error {
+	for start := 0; start < len(manifest.RecordIDs); start += idempotencyDecisionPageSize {
+		end := start + idempotencyDecisionPageSize
+		if end > len(manifest.RecordIDs) {
+			end = len(manifest.RecordIDs)
+		}
+		decisions := make([]model.IdempotencyDecision, 0, end-start)
+		for _, recordID := range manifest.RecordIDs[start:end] {
+			if err := ctx.Err(); err != nil {
+				return trusterr.Wrap(trusterr.CodeDeadlineExceeded, "rebuild idempotency projection canceled", err)
+			}
+			bundle, err := s.GetBundle(ctx, recordID)
+			if err != nil {
+				return trusterr.Wrap(trusterr.CodeDataLoss, "load committed bundle for idempotency projection", err)
+			}
+			if bundle.RecordID != recordID {
+				return trusterr.New(trusterr.CodeDataLoss, "committed bundle does not match manifest record")
+			}
+			if bundle.SignedClaim.Claim.IdempotencyKey == "" {
+				continue
+			}
+			if bundle.ServerRecord.RecordID != recordID {
+				return trusterr.New(trusterr.CodeDataLoss, "committed bundle server record does not match manifest record")
+			}
+			decision, err := idempotency.BuildDecision(
+				manifest.BatchID,
+				bundle.SignedClaim,
+				bundle.ServerRecord,
+				bundle.AcceptedReceipt,
+			)
+			if err != nil {
+				return trusterr.Wrap(trusterr.CodeDataLoss, "rebuild committed idempotency decision", err)
+			}
+			decisions = append(decisions, decision)
+		}
+		if err := s.writeIdempotencyDecisionPage(decisions); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Store) writeIdempotencyDecisionPage(decisions []model.IdempotencyDecision) error {
+	if len(decisions) == 0 {
+		return nil
+	}
+	batch := s.db.NewBatch()
+	defer batch.Close()
+	seen := make(map[string]model.IdempotencyDecision, len(decisions))
+	for i := range decisions {
+		storageKey := idempotency.StorageKey(decisions[i].Identity)
+		if prior, ok := seen[storageKey]; ok {
+			if !idempotency.Equivalent(prior, decisions[i]) {
+				return trusterr.New(trusterr.CodeDataLoss, "conflicting idempotency decisions in committed history")
+			}
+			continue
+		}
+		seen[storageKey] = decisions[i]
+		var existing model.IdempotencyDecision
+		found, err := s.readCBOR(idempotencyDecisionKey(decisions[i].Identity), &existing)
+		if err != nil {
+			return trusterr.Wrap(trusterr.CodeDataLoss, "read rebuilt idempotency decision", err)
+		}
+		if found {
+			if !idempotency.Equivalent(existing, decisions[i]) {
+				return trusterr.New(trusterr.CodeDataLoss, "committed history contains conflicting idempotency decisions")
+			}
+			continue
+		}
+		data, err := cborx.Marshal(decisions[i])
+		if err != nil {
+			return trusterr.Wrap(trusterr.CodeDataLoss, "encode rebuilt idempotency decision", err)
+		}
+		if err := stageSet(batch, idempotencyDecisionKey(decisions[i].Identity), data); err != nil {
+			return trusterr.Wrap(trusterr.CodeDataLoss, "stage rebuilt idempotency decision", err)
+		}
+	}
+	if err := batch.Commit(pdb.Sync); err != nil {
+		return trusterr.Wrap(trusterr.CodeDataLoss, "write rebuilt idempotency decisions", err)
 	}
 	return nil
 }
@@ -277,13 +500,6 @@ func (s *Store) PebbleMetrics() *pdb.Metrics {
 		return nil
 	}
 	return s.db.Metrics()
-}
-
-// bundleKey returns the Pebble key used to store a proof bundle. The
-// record_id is written raw because Pebble, unlike the filesystem, has
-// no filename escaping constraints.
-func bundleKey(recordID string) []byte {
-	return append([]byte(prefixBundle), recordID...)
 }
 
 func bundleV2Key(recordID string) []byte {
@@ -791,10 +1007,15 @@ func (s *Store) PutBundle(ctx context.Context, bundle model.ProofBundle) error {
 		return err
 	}
 	defer artifact.release()
+	s.idempotencyMu.RLock()
+	defer s.idempotencyMu.RUnlock()
 	var old model.RecordIndex
 	oldFound, err := s.readCBOR(recordByIDKey(bundle.RecordID), &old)
 	if err != nil {
 		return trusterr.Wrap(trusterr.CodeDataLoss, "read existing record index", err)
+	}
+	if err := s.ensureEncodedArtifactMutable(artifact, old, oldFound, nil); err != nil {
+		return err
 	}
 	batch := s.db.NewBatch()
 	defer batch.Close()
@@ -833,29 +1054,12 @@ func (s *Store) PutBatchArtifacts(ctx context.Context, bundles []model.ProofBund
 		if err != nil {
 			return err
 		}
-		batch := s.db.NewBatchWithSize(estimateBatchArtifactBytes(artifacts))
-		for i := range artifacts {
-			if err := s.stageEncodedBatchArtifact(batch, artifacts[i]); err != nil {
-				for j := i; j < len(artifacts); j++ {
-					artifacts[j].release()
-				}
-				_ = batch.Close()
-				return err
-			}
-			artifacts[i].release()
-		}
+		var finalRoot *model.BatchRoot
 		if end == len(bundles) {
-			if err := s.stageRoot(batch, root); err != nil {
-				_ = batch.Close()
-				return err
-			}
+			finalRoot = &root
 		}
-		if err := batch.Commit(s.artifactWriteOptions()); err != nil {
-			_ = batch.Close()
-			return trusterr.Wrap(trusterr.CodeDataLoss, "commit batch artifacts", err)
-		}
-		if err := batch.Close(); err != nil {
-			return trusterr.Wrap(trusterr.CodeDataLoss, "close batch artifacts", err)
+		if err := s.commitBatchArtifactChunk(artifacts, finalRoot); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -880,24 +1084,126 @@ func (s *Store) PutMaterializedBatchArtifacts(ctx context.Context, bundles []mod
 		if err != nil {
 			return err
 		}
-		batch := s.db.NewBatchWithSize(estimateMaterializedBatchArtifactBytes(artifacts))
-		for i := range artifacts {
-			if err := s.stageEncodedMaterializedBatchArtifact(batch, artifacts[i]); err != nil {
-				for j := i; j < len(artifacts); j++ {
-					artifacts[j].release()
-				}
-				_ = batch.Close()
-				return err
+		if err := s.commitMaterializedArtifactChunk(artifacts); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Store) commitBatchArtifactChunk(artifacts []encodedBatchArtifact, root *model.BatchRoot) error {
+	s.idempotencyMu.RLock()
+	defer s.idempotencyMu.RUnlock()
+	if err := s.ensureEncodedArtifactsMutable(artifacts); err != nil {
+		releaseBatchArtifacts(artifacts)
+		return err
+	}
+	batch := s.db.NewBatchWithSize(estimateBatchArtifactBytes(artifacts))
+	for i := range artifacts {
+		if err := s.stageEncodedBatchArtifact(batch, artifacts[i]); err != nil {
+			for j := i; j < len(artifacts); j++ {
+				artifacts[j].release()
 			}
-			artifacts[i].release()
-		}
-		if err := batch.Commit(s.artifactWriteOptions()); err != nil {
 			_ = batch.Close()
-			return trusterr.Wrap(trusterr.CodeDataLoss, "commit materialized batch artifacts", err)
+			return err
 		}
-		if err := batch.Close(); err != nil {
-			return trusterr.Wrap(trusterr.CodeDataLoss, "close materialized batch artifacts", err)
+		artifacts[i].release()
+	}
+	if root != nil {
+		if err := s.stageRoot(batch, *root); err != nil {
+			_ = batch.Close()
+			return err
 		}
+	}
+	if err := batch.Commit(s.artifactWriteOptions()); err != nil {
+		_ = batch.Close()
+		return trusterr.Wrap(trusterr.CodeDataLoss, "commit batch artifacts", err)
+	}
+	if err := batch.Close(); err != nil {
+		return trusterr.Wrap(trusterr.CodeDataLoss, "close batch artifacts", err)
+	}
+	return nil
+}
+
+func (s *Store) commitMaterializedArtifactChunk(artifacts []encodedBatchArtifact) error {
+	s.idempotencyMu.RLock()
+	defer s.idempotencyMu.RUnlock()
+	if err := s.ensureEncodedArtifactsMutable(artifacts); err != nil {
+		releaseBatchArtifacts(artifacts)
+		return err
+	}
+	batch := s.db.NewBatchWithSize(estimateMaterializedBatchArtifactBytes(artifacts))
+	for i := range artifacts {
+		if err := s.stageEncodedMaterializedBatchArtifact(batch, artifacts[i]); err != nil {
+			for j := i; j < len(artifacts); j++ {
+				artifacts[j].release()
+			}
+			_ = batch.Close()
+			return err
+		}
+		artifacts[i].release()
+	}
+	if err := batch.Commit(s.artifactWriteOptions()); err != nil {
+		_ = batch.Close()
+		return trusterr.Wrap(trusterr.CodeDataLoss, "commit materialized batch artifacts", err)
+	}
+	if err := batch.Close(); err != nil {
+		return trusterr.Wrap(trusterr.CodeDataLoss, "close materialized batch artifacts", err)
+	}
+	return nil
+}
+
+func (s *Store) ensureEncodedArtifactsMutable(artifacts []encodedBatchArtifact) error {
+	if !s.hasCommittedBatch.Load() {
+		return nil
+	}
+	manifests := make(map[string]model.BatchManifest)
+	for i := range artifacts {
+		var old model.RecordIndex
+		oldFound, err := s.readCBOR(recordByIDKey(artifacts[i].recordID), &old)
+		if err != nil {
+			return trusterr.Wrap(trusterr.CodeDataLoss, "read existing artifact index", err)
+		}
+		if err := s.ensureEncodedArtifactMutable(artifacts[i], old, oldFound, manifests); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Store) ensureEncodedArtifactMutable(artifact encodedBatchArtifact, old model.RecordIndex, oldFound bool, manifests map[string]model.BatchManifest) error {
+	if !s.hasCommittedBatch.Load() {
+		return nil
+	}
+	if !oldFound || old.BatchID == "" {
+		return nil
+	}
+	manifest, cached := manifests[old.BatchID]
+	if !cached {
+		found, err := s.readCBOR(manifestKey(old.BatchID), &manifest)
+		if err != nil {
+			return trusterr.Wrap(trusterr.CodeDataLoss, "read existing artifact manifest", err)
+		}
+		if manifests != nil {
+			manifests[old.BatchID] = manifest
+		}
+		if !found || manifest.State != model.BatchStateCommitted {
+			return nil
+		}
+	}
+	if manifest.State != model.BatchStateCommitted {
+		return nil
+	}
+	value, closer, err := s.db.Get(bundleV2Key(artifact.recordID))
+	if errors.Is(err, pdb.ErrNotFound) {
+		return trusterr.New(trusterr.CodeDataLoss, "committed record index has no proof bundle")
+	}
+	if err != nil {
+		return trusterr.Wrap(trusterr.CodeDataLoss, "read committed proof bundle", err)
+	}
+	defer closer.Close()
+	if !bytes.Equal(value, artifact.bundleValue) {
+		return trusterr.New(trusterr.CodeAlreadyExists, "committed proof bundle is immutable")
 	}
 	return nil
 }
@@ -1065,13 +1371,6 @@ func (s *Store) GetBundle(ctx context.Context, recordID string) (model.ProofBund
 	bundle, found, err := s.readStoredProofBundle(bundleV2Key(recordID))
 	if err != nil {
 		return model.ProofBundle{}, trusterr.Wrap(trusterr.CodeDataLoss, "read proof bundle", err)
-	}
-	if found {
-		return bundle, nil
-	}
-	found, err = s.readCBOR(bundleKey(recordID), &bundle)
-	if err != nil {
-		return model.ProofBundle{}, trusterr.Wrap(trusterr.CodeDataLoss, "read legacy proof bundle", err)
 	}
 	if found {
 		return bundle, nil
@@ -1706,6 +2005,8 @@ func (s *Store) PutManifest(ctx context.Context, manifest model.BatchManifest) e
 	if err != nil {
 		return trusterr.Wrap(trusterr.CodeDataLoss, "encode batch manifest", err)
 	}
+	s.idempotencyMu.Lock()
+	defer s.idempotencyMu.Unlock()
 	var old model.BatchManifest
 	oldFound, err := s.readCBOR(manifestKey(manifest.BatchID), &old)
 	if err != nil {
@@ -1724,10 +2025,217 @@ func (s *Store) PutManifest(ctx context.Context, manifest model.BatchManifest) e
 	if err := stageSet(batch, manifestStateKey(manifest), data); err != nil {
 		return trusterr.Wrap(trusterr.CodeDataLoss, "stage batch manifest state", err)
 	}
+	invalidateProjection := manifest.State == model.BatchStateCommitted ||
+		(oldFound && old.State == model.BatchStateCommitted)
+	if invalidateProjection {
+		// Fail closed in memory before making the generic committed write
+		// durable. The same Pebble batch removes both readiness and the local
+		// checkpoint that depended on it.
+		s.idempotencyReady.Store(false)
+		if err := batch.Delete([]byte(idempotencyReadyKey), nil); err != nil {
+			return trusterr.Wrap(trusterr.CodeDataLoss, "invalidate idempotency projection readiness", err)
+		}
+		if err := batch.Delete([]byte(checkpointKey), nil); err != nil {
+			return trusterr.Wrap(trusterr.CodeDataLoss, "invalidate wal checkpoint", err)
+		}
+	}
+	if manifest.State == model.BatchStateCommitted {
+		if err := stageSet(batch, []byte(committedBatchesKey), []byte(committedBatchesV1)); err != nil {
+			return trusterr.Wrap(trusterr.CodeDataLoss, "stage committed batch marker", err)
+		}
+	}
 	if err := batch.Commit(pdb.Sync); err != nil {
 		return trusterr.Wrap(trusterr.CodeDataLoss, "write batch manifest", err)
 	}
+	if manifest.State == model.BatchStateCommitted {
+		s.hasCommittedBatch.Store(true)
+	}
 	return nil
+}
+
+// PublishCommittedBatch makes the committed manifest and its durable keyed
+// responses visible in one synced Pebble batch. Existing identities are
+// conditional: an exact replay is harmless, while a conflicting response is
+// rejected without changing the manifest.
+func (s *Store) PublishCommittedBatch(ctx context.Context, manifest model.BatchManifest, bundles []model.ProofBundle) ([]model.IdempotencyDecision, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, trusterr.Wrap(trusterr.CodeDeadlineExceeded, "publish committed batch canceled", err)
+	}
+	if manifest.BatchID == "" || manifest.State != model.BatchStateCommitted {
+		return nil, trusterr.New(trusterr.CodeInvalidArgument, "a committed batch manifest is required")
+	}
+	if manifest.SchemaVersion == "" {
+		manifest.SchemaVersion = model.SchemaBatchManifest
+	}
+	manifestData, err := cborx.Marshal(manifest)
+	if err != nil {
+		return nil, trusterr.Wrap(trusterr.CodeDataLoss, "encode committed batch manifest", err)
+	}
+
+	if len(bundles) != len(manifest.RecordIDs) {
+		return nil, trusterr.New(trusterr.CodeInvalidArgument, "committed manifest and bundle counts differ")
+	}
+	decisions := make([]model.IdempotencyDecision, 0, len(bundles))
+	recordIDs := make(map[string]struct{}, len(manifest.RecordIDs))
+	for i, recordID := range manifest.RecordIDs {
+		if recordID == "" {
+			return nil, trusterr.New(trusterr.CodeInvalidArgument, "committed manifest contains an empty record_id")
+		}
+		if _, exists := recordIDs[recordID]; exists {
+			return nil, trusterr.New(trusterr.CodeInvalidArgument, "committed manifest contains a duplicate record_id")
+		}
+		recordIDs[recordID] = struct{}{}
+		if bundles[i].SchemaVersion != model.SchemaProofBundle ||
+			bundles[i].RecordID != recordID ||
+			bundles[i].ServerRecord.RecordID != recordID ||
+			bundles[i].AcceptedReceipt.RecordID != recordID ||
+			bundles[i].CommittedReceipt.SchemaVersion != model.SchemaCommittedReceipt ||
+			bundles[i].CommittedReceipt.RecordID != recordID ||
+			bundles[i].CommittedReceipt.Status != "committed" ||
+			bundles[i].CommittedReceipt.BatchID != manifest.BatchID ||
+			bundles[i].CommittedReceipt.LeafIndex != uint64(i) ||
+			bundles[i].BatchProof.LeafIndex != uint64(i) ||
+			bundles[i].BatchProof.TreeSize != manifest.TreeSize {
+			return nil, trusterr.New(trusterr.CodeInvalidArgument, "committed bundle does not match manifest record order")
+		}
+		if bundles[i].SignedClaim.Claim.IdempotencyKey == "" {
+			continue
+		}
+		decision, err := idempotency.BuildDecision(
+			manifest.BatchID,
+			bundles[i].SignedClaim,
+			bundles[i].ServerRecord,
+			bundles[i].AcceptedReceipt,
+		)
+		if err != nil {
+			return nil, trusterr.Wrap(trusterr.CodeDataLoss, "build committed idempotency decision", err)
+		}
+		decisions = append(decisions, decision)
+	}
+	encoded := make(map[string][]byte, len(decisions))
+	prepared := make(map[string]model.IdempotencyDecision, len(decisions))
+	decisionRecords := make(map[string]struct{}, len(decisions))
+	for i := range decisions {
+		if decisions[i].BatchID != manifest.BatchID {
+			return nil, trusterr.New(trusterr.CodeInvalidArgument, "idempotency decision belongs to a different batch")
+		}
+		if _, ok := recordIDs[decisions[i].Record.RecordID]; !ok {
+			return nil, trusterr.New(trusterr.CodeInvalidArgument, "idempotency decision record is absent from committed manifest")
+		}
+		if _, exists := decisionRecords[decisions[i].Record.RecordID]; exists {
+			return nil, trusterr.New(trusterr.CodeInvalidArgument, "duplicate idempotency decision record")
+		}
+		decisionRecords[decisions[i].Record.RecordID] = struct{}{}
+		if err := idempotency.ValidateDecision(decisions[i].Identity, decisions[i]); err != nil {
+			return nil, trusterr.Wrap(trusterr.CodeInvalidArgument, "validate idempotency decision", err)
+		}
+		storageKey := idempotency.StorageKey(decisions[i].Identity)
+		if prior, exists := prepared[storageKey]; exists {
+			if !idempotency.Equivalent(prior, decisions[i]) {
+				return nil, trusterr.New(trusterr.CodeAlreadyExists, "idempotency identity has conflicting decisions")
+			}
+			continue
+		}
+		data, err := cborx.Marshal(decisions[i])
+		if err != nil {
+			return nil, trusterr.Wrap(trusterr.CodeDataLoss, "encode idempotency decision", err)
+		}
+		prepared[storageKey] = decisions[i]
+		encoded[storageKey] = data
+	}
+
+	s.idempotencyMu.Lock()
+	defer s.idempotencyMu.Unlock()
+	if !s.idempotencyReady.Load() {
+		return nil, trusterr.New(trusterr.CodeFailedPrecondition, "idempotency projection is not ready")
+	}
+	for i := range bundles {
+		persisted, err := s.GetBundle(ctx, bundles[i].RecordID)
+		if err != nil {
+			return nil, trusterr.Wrap(trusterr.CodeDataLoss, "read committed bundle before publication", err)
+		}
+		if !reflect.DeepEqual(persisted, bundles[i]) {
+			return nil, trusterr.New(trusterr.CodeDataLoss, "persisted bundle differs from committed publication")
+		}
+	}
+	for storageKey, decision := range prepared {
+		var existing model.IdempotencyDecision
+		found, err := s.readCBOR(append([]byte(prefixIdempotency), storageKey...), &existing)
+		if err != nil {
+			return nil, trusterr.Wrap(trusterr.CodeDataLoss, "read existing idempotency decision", err)
+		}
+		if found && !idempotency.Equivalent(existing, decision) {
+			return nil, trusterr.New(trusterr.CodeAlreadyExists, "idempotency identity already has a different committed decision")
+		}
+	}
+
+	var old model.BatchManifest
+	oldFound, err := s.readCBOR(manifestKey(manifest.BatchID), &old)
+	if err != nil {
+		return nil, trusterr.Wrap(trusterr.CodeDataLoss, "read old batch manifest", err)
+	}
+	if oldFound && old.State == model.BatchStateCommitted {
+		oldData, err := cborx.Marshal(old)
+		if err != nil {
+			return nil, trusterr.Wrap(trusterr.CodeDataLoss, "encode old committed manifest", err)
+		}
+		if !bytes.Equal(oldData, manifestData) {
+			return nil, trusterr.New(trusterr.CodeAlreadyExists, "committed batch manifest already exists with different contents")
+		}
+	}
+
+	batch := s.db.NewBatchWithSize(len(manifestData)*2 + len(decisions)*512 + 512)
+	defer batch.Close()
+	if oldFound {
+		if err := batch.Delete(manifestStateKey(old), nil); err != nil {
+			return nil, trusterr.Wrap(trusterr.CodeDataLoss, "delete old batch manifest state", err)
+		}
+	}
+	if err := stageSet(batch, manifestKey(manifest.BatchID), manifestData); err != nil {
+		return nil, trusterr.Wrap(trusterr.CodeDataLoss, "stage committed batch manifest", err)
+	}
+	if err := stageSet(batch, manifestStateKey(manifest), manifestData); err != nil {
+		return nil, trusterr.Wrap(trusterr.CodeDataLoss, "stage committed batch manifest state", err)
+	}
+	for storageKey, data := range encoded {
+		if err := stageSet(batch, append([]byte(prefixIdempotency), storageKey...), data); err != nil {
+			return nil, trusterr.Wrap(trusterr.CodeDataLoss, "stage idempotency decision", err)
+		}
+	}
+	if err := stageSet(batch, []byte(committedBatchesKey), []byte(committedBatchesV1)); err != nil {
+		return nil, trusterr.Wrap(trusterr.CodeDataLoss, "stage committed batch marker", err)
+	}
+	if err := batch.Commit(pdb.Sync); err != nil {
+		return nil, trusterr.Wrap(trusterr.CodeDataLoss, "commit manifest and idempotency decisions", err)
+	}
+	s.hasCommittedBatch.Store(true)
+	return decisions, nil
+}
+
+func (s *Store) GetIdempotencyDecision(ctx context.Context, identity model.IdempotencyIdentity) (model.IdempotencyDecision, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return model.IdempotencyDecision{}, false, trusterr.Wrap(trusterr.CodeDeadlineExceeded, "get idempotency decision canceled", err)
+	}
+	if identity.TenantID == "" || identity.ClientID == "" || identity.IdempotencyKey == "" {
+		return model.IdempotencyDecision{}, false, trusterr.New(trusterr.CodeInvalidArgument, "idempotency identity is incomplete")
+	}
+	s.idempotencyMu.RLock()
+	defer s.idempotencyMu.RUnlock()
+	if !s.idempotencyReady.Load() {
+		return model.IdempotencyDecision{}, false, trusterr.New(trusterr.CodeFailedPrecondition, "idempotency projection is not ready")
+	}
+	var decision model.IdempotencyDecision
+	found, err := s.readCBOR(idempotencyDecisionKey(identity), &decision)
+	if err != nil {
+		return model.IdempotencyDecision{}, false, trusterr.Wrap(trusterr.CodeDataLoss, "read idempotency decision", err)
+	}
+	if !found {
+		return model.IdempotencyDecision{}, false, nil
+	}
+	if err := idempotency.ValidateDecision(identity, decision); err != nil {
+		return model.IdempotencyDecision{}, false, trusterr.Wrap(trusterr.CodeDataLoss, "validate stored idempotency decision", err)
+	}
+	return decision, true, nil
 }
 
 func (s *Store) ListPreparedManifests(ctx context.Context, nodeID string, nowUnixN int64, limit int) ([]model.BatchManifest, error) {
@@ -1868,6 +2376,11 @@ func (s *Store) PutCheckpoint(ctx context.Context, cp model.WALCheckpoint) error
 	if cp.RecordedAtUnixN == 0 {
 		cp.RecordedAtUnixN = time.Now().UTC().UnixNano()
 	}
+	s.idempotencyMu.RLock()
+	defer s.idempotencyMu.RUnlock()
+	if !s.idempotencyReady.Load() {
+		return trusterr.New(trusterr.CodeFailedPrecondition, "cannot persist wal checkpoint before idempotency projection is ready")
+	}
 	if err := s.writeCBOR([]byte(checkpointKey), cp); err != nil {
 		return trusterr.Wrap(trusterr.CodeDataLoss, "write wal checkpoint", err)
 	}
@@ -1887,6 +2400,32 @@ func (s *Store) GetCheckpoint(ctx context.Context) (model.WALCheckpoint, bool, e
 		return model.WALCheckpoint{}, false, nil
 	}
 	return cp, true, nil
+}
+
+func (s *Store) WithWALCheckpointPruneGuard(ctx context.Context, expected model.WALCheckpoint, prune func() error) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, trusterr.Wrap(trusterr.CodeDeadlineExceeded, "wal checkpoint prune guard canceled", err)
+	}
+	if prune == nil {
+		return false, trusterr.New(trusterr.CodeInvalidArgument, "wal checkpoint prune callback is required")
+	}
+	s.idempotencyMu.RLock()
+	defer s.idempotencyMu.RUnlock()
+	if !s.idempotencyReady.Load() {
+		return false, nil
+	}
+	var current model.WALCheckpoint
+	found, err := s.readCBOR([]byte(checkpointKey), &current)
+	if err != nil {
+		return false, trusterr.Wrap(trusterr.CodeDataLoss, "read guarded wal checkpoint", err)
+	}
+	if !found || current != expected {
+		return false, nil
+	}
+	if err := prune(); err != nil {
+		return true, err
+	}
+	return true, nil
 }
 
 func globalLeafKey(index uint64) []byte {

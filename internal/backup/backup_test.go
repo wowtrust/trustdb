@@ -121,7 +121,7 @@ func TestBackupCreateVerifyRestoreRoundTrip(t *testing.T) {
 	if report.SchemaVersion != SchemaManifest || report.BackupID == "" || len(report.Entries) == 0 {
 		t.Fatalf("missing v2 manifest metadata: %+v", report)
 	}
-	if report.Bundles != 1 || report.Roots != 1 || report.GlobalLeaves != 1 || report.GlobalNodes == 0 || !report.GlobalState || report.STHs != 1 || report.GlobalOutboxes != 1 || report.AnchorResults != 1 || !report.Checkpoint {
+	if report.Bundles != 1 || report.Roots != 1 || report.GlobalLeaves != 1 || report.GlobalNodes == 0 || !report.GlobalState || report.STHs != 1 || report.GlobalOutboxes != 1 || report.AnchorResults != 1 {
 		t.Fatalf("unexpected create report: %+v", report)
 	}
 	verified, err := Verify(ctx, path)
@@ -159,6 +159,9 @@ func TestBackupCreateVerifyRestoreRoundTrip(t *testing.T) {
 	}
 	if _, ok, err := dst.GetGlobalLogOutboxItem(ctx, root.BatchID); err != nil || !ok {
 		t.Fatalf("GetGlobalLogOutboxItem restored ok=%v err=%v", ok, err)
+	}
+	if checkpoint, ok, err := dst.GetCheckpoint(ctx); err != nil || ok {
+		t.Fatalf("GetCheckpoint restored checkpoint=%+v ok=%v err=%v, want absent node-local state", checkpoint, ok, err)
 	}
 }
 

@@ -287,31 +287,6 @@ func TestStorePutBundleWritesCompressedV2AndRoundTrips(t *testing.T) {
 	}
 }
 
-func TestStoreGetBundleReadsLegacyBundle(t *testing.T) {
-	t.Parallel()
-
-	store, err := Open(t.TempDir())
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	defer store.Close()
-	bundle := syntheticProofBundles(1)[0]
-	data, err := cborx.Marshal(bundle)
-	if err != nil {
-		t.Fatalf("Marshal: %v", err)
-	}
-	if err := store.db.Set(bundleKey(bundle.RecordID), data, pdb.Sync); err != nil {
-		t.Fatalf("write legacy bundle: %v", err)
-	}
-	got, err := store.GetBundle(context.Background(), bundle.RecordID)
-	if err != nil {
-		t.Fatalf("GetBundle: %v", err)
-	}
-	if got.RecordID != bundle.RecordID || got.CommittedReceipt.BatchID != bundle.CommittedReceipt.BatchID {
-		t.Fatalf("legacy round trip = %+v", got)
-	}
-}
-
 func TestDecodeStoredProofBundleRejectsInvalidEnvelopePayloads(t *testing.T) {
 	t.Parallel()
 

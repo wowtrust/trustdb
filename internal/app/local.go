@@ -30,7 +30,10 @@ type LocalEngine struct {
 	ProofWorkers     int
 	WAL              *wal.Writer
 	Idempotency      *IdempotencyIndex
-	Now              func() time.Time
+	// DurableIdempotency resolves committed keys whose accepted WAL records
+	// were skipped below a trusted checkpoint. Nil preserves the WAL-only path.
+	DurableIdempotency DurableIdempotencyReader
+	Now                func() time.Time
 }
 
 type ClientKeyResolver interface {
@@ -61,6 +64,11 @@ func (e LocalEngine) Submit(ctx context.Context, signed model.SignedClaim) (mode
 		return model.ServerRecord{}, model.AcceptedReceipt{}, false, err
 	}
 	idemKey := IdempotencyKey(signed.Claim.TenantID, signed.Claim.ClientID, signed.Claim.IdempotencyKey)
+	identity := model.IdempotencyIdentity{
+		TenantID:       signed.Claim.TenantID,
+		ClientID:       signed.Claim.ClientID,
+		IdempotencyKey: signed.Claim.IdempotencyKey,
+	}
 	build := func() (model.ServerRecord, model.AcceptedReceipt, error) {
 		payload, err := cborx.Marshal(signed)
 		if err != nil {
@@ -76,7 +84,14 @@ func (e LocalEngine) Submit(ctx context.Context, signed model.SignedClaim) (mode
 		record, accepted, err := build()
 		return record, accepted, false, err
 	}
-	record, accepted, loaded, conflict, err := e.Idempotency.Remember(idemKey, claimHash, build)
+	record, accepted, loaded, conflict, err := e.Idempotency.RememberDurable(
+		ctx,
+		idemKey,
+		identity,
+		claimHash,
+		e.DurableIdempotency,
+		build,
+	)
 	if err != nil {
 		return model.ServerRecord{}, model.AcceptedReceipt{}, false, err
 	}
@@ -87,6 +102,18 @@ func (e LocalEngine) Submit(ctx context.Context, signed model.SignedClaim) (mode
 		)
 	}
 	return record, accepted, loaded, nil
+}
+
+// MarkIdempotencyCommitted evicts the process-local acceptance only after its
+// exact response has been atomically published in the durable projection.
+func (e LocalEngine) MarkIdempotencyCommitted(identity model.IdempotencyIdentity, recordID string) {
+	if e.Idempotency == nil || e.DurableIdempotency == nil {
+		return
+	}
+	e.Idempotency.ForgetCommitted(
+		IdempotencyKey(identity.TenantID, identity.ClientID, identity.IdempotencyKey),
+		recordID,
+	)
 }
 
 func (e LocalEngine) ReplayAccepted(record wal.Record) (ReplayedAccepted, error) {

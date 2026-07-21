@@ -109,12 +109,38 @@ type WALCheckpointPruneSafety interface {
 	WALCheckpointPruneSafe() bool
 }
 
+// WALCheckpointPruneGuard keeps a verified local checkpoint current while its
+// caller removes WAL segments. Invalidating manifest writes must wait until
+// the callback returns, so they cannot race a previously queued prune.
+type WALCheckpointPruneGuard interface {
+	WithWALCheckpointPruneGuard(context.Context, model.WALCheckpoint, func() error) (bool, error)
+}
+
 // WALCheckpointPruneSafe deliberately defaults to false for wrappers and new
 // backends. Opting in without satisfying the durability and scoping contract
 // can turn a recovery optimization into permanent data loss.
 func WALCheckpointPruneSafe(store any) bool {
 	capability, ok := store.(WALCheckpointPruneSafety)
 	return ok && capability.WALCheckpointPruneSafe()
+}
+
+// IdempotencyDecisionReader resolves one committed ingest decision without a
+// scan. Backends that do not implement it must retain and replay their WAL.
+type IdempotencyDecisionReader interface {
+	GetIdempotencyDecision(context.Context, model.IdempotencyIdentity) (model.IdempotencyDecision, bool, error)
+}
+
+// CommittedBatchIdempotencyPublisher atomically publishes a committed
+// manifest and the keyed decisions owned by that batch. A checkpoint must not
+// advance between those two visibility changes.
+type CommittedBatchIdempotencyPublisher interface {
+	PublishCommittedBatch(context.Context, model.BatchManifest, []model.ProofBundle) ([]model.IdempotencyDecision, error)
+}
+
+// IdempotencyProjectionManager makes the durable point-read projection ready
+// before a backend advertises checkpoint/prune safety.
+type IdempotencyProjectionManager interface {
+	EnsureIdempotencyProjection(context.Context) error
 }
 
 // BatchArtifactWriter is an optional fast path for stores that can persist all

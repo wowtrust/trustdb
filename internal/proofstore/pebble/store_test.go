@@ -22,14 +22,14 @@ func TestPebbleStoreConformance(t *testing.T) {
 	})
 }
 
-func TestPebbleRetainsWALUntilDurableRestartIdempotency(t *testing.T) {
+func TestPebbleEnablesPruningAfterDurableRestartIdempotency(t *testing.T) {
 	t.Parallel()
 	store, err := pebblestore.Open(t.TempDir())
 	if err != nil {
 		t.Fatalf("pebble Open: %v", err)
 	}
 	defer store.Close()
-	if proofstore.WALCheckpointPruneSafe(store) {
-		t.Fatal("Pebble store opted into pruning before durable restart idempotency is available")
+	if !proofstore.WALCheckpointPruneSafe(store) {
+		t.Fatal("Pebble store did not enable pruning after durable restart idempotency became ready")
 	}
 }

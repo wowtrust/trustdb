@@ -77,12 +77,12 @@ Core paths:
 - Global log path: committed batch roots are appended into the global transparency log, producing persisted STHs and global proofs.
 - Anchor path: STH/global roots are queued and published by the configured anchor worker.
 - Storage path: proof data is stored in file, Pebble, or TiKV proofstores.
-- Backup path: proofstore data can be exported to `.tdbackup`, verified, and restored with resume checkpoints.
+- Backup path: proofstore data can be exported to `.tdbackup`, verified, and restored with resumable restore state; portable backups exclude node-local WAL checkpoints.
 - Observability path: `/metrics` exposes ingest, batch, global log, anchor, WAL, backup, and storage metrics.
 
 `wal.fsync_mode=strict` waits for each accepted record's WAL file fsync before returning. `group` bounds the asynchronous dirty window by `wal.group_commit_interval`; `batch` defers accepted-record data fsync until rotation or close. Writer startup and the namespace barriers used for WAL directory creation, file publication, rotation, and pruning are independent of that append policy. On Windows, TrustDB fails closed when the underlying filesystem rejects its best-available directory flush. Choose `strict` when the receipt contract requires a per-record fsync; end-to-end crash durability still depends on the filesystem and storage guarantees.
 
-Automatic WAL checkpoint skipping and segment pruning are enabled only when the proofstore can durably order committed artifacts and restart-idempotency decisions before a checkpoint, then scope that checkpoint to the node-local WAL. All built-in backends currently retain and replay WAL: Pebble is waiting for a durable idempotency projection, the development file backend lacks a complete crash-durability barrier, and shared TiKV checkpoints are not yet keyed per node.
+Automatic WAL checkpoint skipping and segment pruning are enabled only when the proofstore can durably order committed artifacts and restart-idempotency decisions before a checkpoint, then scope that checkpoint to the node-local WAL. Pebble atomically publishes keyed restart-idempotency decisions with committed manifests and enables checkpoint skipping and pruning while that projection is ready. The development file backend and shared TiKV backend retain and replay WAL; file lacks a complete crash-durability barrier, while TiKV checkpoints are not yet keyed per node.
 
 During upgrade, a legacy v1 checkpoint is rebuilt only from a complete retained WAL beginning at sequence 1. If an older deployment already pruned that prefix, startup fails closed with `DataLoss`; restore the complete WAL from a trusted backup rather than deleting the checkpoint marker, which cannot prove the missing records were committed.
 

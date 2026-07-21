@@ -2,18 +2,203 @@ package main
 
 import (
 	"context"
+	"crypto/ed25519"
 	"path/filepath"
+	"reflect"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/ryan-wong-coder/trustdb/internal/app"
 	"github.com/ryan-wong-coder/trustdb/internal/batch"
+	durableidempotency "github.com/ryan-wong-coder/trustdb/internal/idempotency"
 	"github.com/ryan-wong-coder/trustdb/internal/model"
 	"github.com/ryan-wong-coder/trustdb/internal/proofstore"
+	pebblestore "github.com/ryan-wong-coder/trustdb/internal/proofstore/pebble"
+	"github.com/ryan-wong-coder/trustdb/internal/receipt"
 	"github.com/ryan-wong-coder/trustdb/internal/trusterr"
 	"github.com/ryan-wong-coder/trustdb/internal/wal"
 )
+
+type replayDecisionReader struct {
+	decision model.IdempotencyDecision
+	found    bool
+}
+
+func (r replayDecisionReader) GetIdempotencyDecision(context.Context, model.IdempotencyIdentity) (model.IdempotencyDecision, bool, error) {
+	return r.decision, r.found, nil
+}
+
+func TestReplayDurableDecisionCrossChecksCommitState(t *testing.T) {
+	env := newIdempotencyEnv(t)
+	defer env.writer.Close()
+	signed := env.signClaim(t, "replay-cross-check", []byte("payload"), 1)
+	record, accepted, _, err := env.engine.Submit(context.Background(), signed)
+	if err != nil {
+		t.Fatalf("Submit() error = %v", err)
+	}
+	item := app.ReplayedAccepted{Signed: signed, Record: record, Accepted: accepted}
+	decision, err := durableidempotency.BuildDecision("batch-a", signed, record, accepted)
+	if err != nil {
+		t.Fatalf("BuildDecision() error = %v", err)
+	}
+	bundle := &model.ProofBundle{
+		RecordID:        record.RecordID,
+		SignedClaim:     signed,
+		ServerRecord:    record,
+		AcceptedReceipt: accepted,
+	}
+
+	tests := []struct {
+		name      string
+		reader    replayDecisionReader
+		batchID   string
+		committed bool
+	}{
+		{name: "missing committed decision", reader: replayDecisionReader{}, batchID: "batch-a", committed: true},
+		{name: "decision on uncommitted wal", reader: replayDecisionReader{decision: decision, found: true}},
+		{name: "conflicting committed batch", reader: replayDecisionReader{decision: func() model.IdempotencyDecision {
+			conflict := decision
+			conflict.BatchID = "batch-b"
+			return conflict
+		}(), found: true}, batchID: "batch-a", committed: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			engine := env.engine
+			engine.DurableIdempotency = test.reader
+			var committedBundle *model.ProofBundle
+			if test.committed {
+				committedBundle = bundle
+			}
+			if err := validateDurableReplayDecision(context.Background(), engine, item, committedBundle, test.batchID, test.committed); trusterr.CodeOf(err) != trusterr.CodeDataLoss {
+				t.Fatalf("validateDurableReplayDecision() code=%s err=%v, want data_loss", trusterr.CodeOf(err), err)
+			}
+		})
+	}
+}
+
+func TestReplayDurableDecisionUsesPersistedReceiptAcrossServerKeyRotation(t *testing.T) {
+	env := newIdempotencyEnv(t)
+	defer env.writer.Close()
+	signed := env.signClaim(t, "rotated-server-key", []byte("payload"), 1)
+	record, accepted, _, err := env.engine.Submit(context.Background(), signed)
+	if err != nil {
+		t.Fatalf("Submit() error = %v", err)
+	}
+	decision, err := durableidempotency.BuildDecision("batch-a", signed, record, accepted)
+	if err != nil {
+		t.Fatalf("BuildDecision() error = %v", err)
+	}
+	bundle := &model.ProofBundle{
+		RecordID:        record.RecordID,
+		SignedClaim:     signed,
+		ServerRecord:    record,
+		AcceptedReceipt: accepted,
+	}
+	_, rotatedPrivate, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatalf("GenerateKey(rotated server) error = %v", err)
+	}
+	rotatedAccepted, err := receipt.SignAccepted(accepted, "rotated-server-key", rotatedPrivate)
+	if err != nil {
+		t.Fatalf("SignAccepted(rotated server) error = %v", err)
+	}
+	engine := env.engine
+	engine.DurableIdempotency = replayDecisionReader{decision: decision, found: true}
+	item := app.ReplayedAccepted{Signed: signed, Record: record, Accepted: rotatedAccepted}
+	if err := validateDurableReplayDecision(context.Background(), engine, item, bundle, "batch-a", true); err != nil {
+		t.Fatalf("validateDurableReplayDecision() after server key rotation error = %v", err)
+	}
+}
+
+func TestPebbleCheckpointedRestartUsesDurableIdempotencyWithoutWALAppend(t *testing.T) {
+	env := newIdempotencyEnv(t)
+	signed := env.signClaim(t, "durable-restart-key", []byte("original payload"), 1)
+	wantRecord, wantAccepted, idempotent, err := env.engine.Submit(context.Background(), signed)
+	if err != nil || idempotent {
+		t.Fatalf("Submit(original) record=%+v accepted=%+v idempotent=%v err=%v", wantRecord, wantAccepted, idempotent, err)
+	}
+
+	storePath := filepath.Join(env.dir, "pebble")
+	store, err := pebblestore.Open(storePath)
+	if err != nil {
+		t.Fatalf("pebble.Open() error = %v", err)
+	}
+	svc := batch.New(env.engine, store, batch.Options{QueueSize: 1, MaxRecords: 1, MaxDelay: time.Hour}, nil)
+	if err := svc.Enqueue(context.Background(), signed, wantRecord, wantAccepted); err != nil {
+		t.Fatalf("Enqueue() error = %v", err)
+	}
+	waitForReplayProof(t, svc, wantRecord.RecordID)
+	waitForDurableCheckpoint(t, store, wantRecord.WAL.Sequence)
+	if err := svc.Shutdown(context.Background()); err != nil {
+		t.Fatalf("batch Shutdown() error = %v", err)
+	}
+	env.closeWAL(t)
+	if err := store.Close(); err != nil {
+		t.Fatalf("pebble Close() error = %v", err)
+	}
+
+	reopenedWAL := env.reopen(t)
+	defer reopenedWAL.Close()
+	store, err = pebblestore.Open(storePath)
+	if err != nil {
+		t.Fatalf("pebble reopen error = %v", err)
+	}
+	defer store.Close()
+	restarted := env.engine
+	_, rotatedPrivate, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatalf("GenerateKey(rotated restart server) error = %v", err)
+	}
+	restarted.ServerKeyID = "rotated-server-key"
+	restarted.ServerPrivateKey = rotatedPrivate
+	restarted.WAL = reopenedWAL
+	restarted.Idempotency = app.NewIdempotencyIndex()
+	restarted.DurableIdempotency = store
+	replaySvc := batch.New(restarted, store, batch.Options{QueueSize: 1, MaxRecords: 1, MaxDelay: time.Hour}, nil)
+	defer replaySvc.Shutdown(context.Background())
+
+	recovered, replayed, skipped, err := replayWALAccepted(context.Background(), env.walPath, restarted, replaySvc, store, nil)
+	if err != nil {
+		t.Fatalf("replayWALAccepted() error = %v", err)
+	}
+	if recovered != 0 || replayed != 0 || skipped != 1 || restarted.Idempotency.Size() != 0 {
+		t.Fatalf("checkpoint replay recovered=%d replayed=%d skipped=%d idempotency=%d, want 0/0/1/0", recovered, replayed, skipped, restarted.Idempotency.Size())
+	}
+
+	gotRecord, gotAccepted, idempotent, err := restarted.Submit(context.Background(), signed)
+	if err != nil {
+		t.Fatalf("Submit(identical restart retry) error = %v", err)
+	}
+	if !idempotent || !reflect.DeepEqual(gotRecord, wantRecord) || !reflect.DeepEqual(gotAccepted, wantAccepted) {
+		t.Fatalf("durable retry record=%+v accepted=%+v idempotent=%v, want original response", gotRecord, gotAccepted, idempotent)
+	}
+	conflicting := env.signClaim(t, "durable-restart-key", []byte("different payload"), 2)
+	if _, _, _, err := restarted.Submit(context.Background(), conflicting); trusterr.CodeOf(err) != trusterr.CodeAlreadyExists {
+		t.Fatalf("Submit(conflicting restart retry) code=%s err=%v, want AlreadyExists", trusterr.CodeOf(err), err)
+	}
+	if got := walRecordCount(t, env.walPath); got != 1 {
+		t.Fatalf("WAL records after durable restart retries = %d, want 1", got)
+	}
+}
+
+func waitForDurableCheckpoint(t *testing.T, store interface {
+	GetCheckpoint(context.Context) (model.WALCheckpoint, bool, error)
+}, wantSequence uint64) model.WALCheckpoint {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		checkpoint, found, err := store.GetCheckpoint(context.Background())
+		if err == nil && found && checkpoint.LastSequence >= wantSequence {
+			return checkpoint
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	checkpoint, found, err := store.GetCheckpoint(context.Background())
+	t.Fatalf("GetCheckpoint() = %+v found=%v err=%v, want sequence %d", checkpoint, found, err, wantSequence)
+	return model.WALCheckpoint{}
+}
 
 type replayCheckpointStore struct {
 	proofstore.LocalStore

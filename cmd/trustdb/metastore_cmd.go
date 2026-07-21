@@ -39,7 +39,6 @@ type migrateReport struct {
 	GlobalTiles    int    `json:"global_tiles"`
 	AnchorOutboxes int    `json:"anchor_outboxes"`
 	AnchorResults  int    `json:"anchor_results"`
-	Checkpoint     bool   `json:"checkpoint"`
 	Skipped        int    `json:"skipped"`
 }
 
@@ -107,7 +106,7 @@ func newMetastoreMigrateCommand(rt *runtimeConfig) *cobra.Command {
 	var overwrite bool
 	cmd := &cobra.Command{
 		Use:   "migrate",
-		Short: "Copy every proof/global-log/anchor/checkpoint item from a file-backed proofstore into another store",
+		Short: "Copy portable proof, global-log, and anchor data from a file-backed proofstore into another store",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if fromPath == "" {
 				return usageError("metastore migrate requires --from")
@@ -145,16 +144,13 @@ func newMetastoreMigrateCommand(rt *runtimeConfig) *cobra.Command {
 					break
 				}
 				for _, manifest := range manifests {
+					manifestExists := false
 					if !overwrite {
 						if existing, err := dst.GetManifest(ctx, manifest.BatchID); err == nil && existing.BatchID != "" {
+							manifestExists = true
 							report.Skipped++
-							continue
 						}
 					}
-					if err := dst.PutManifest(ctx, manifest); err != nil {
-						return err
-					}
-					report.Manifests++
 
 					for _, recordID := range manifest.RecordIDs {
 						if !overwrite {
@@ -179,6 +175,14 @@ func newMetastoreMigrateCommand(rt *runtimeConfig) *cobra.Command {
 							return err
 						}
 						report.Bundles++
+					}
+					// Publish the manifest after its available bundles so an
+					// interrupted migration can reopen and resume safely.
+					if !manifestExists {
+						if err := dst.PutManifest(ctx, manifest); err != nil {
+							return err
+						}
+						report.Manifests++
 					}
 				}
 				afterBatchID = manifests[len(manifests)-1].BatchID
@@ -386,17 +390,11 @@ func newMetastoreMigrateCommand(rt *runtimeConfig) *cobra.Command {
 				}
 			}
 
-			cp, ok, err := src.GetCheckpoint(ctx)
-			if err != nil {
-				return err
-			}
-			if ok {
-				if err := dst.PutCheckpoint(ctx, cp); err != nil {
-					return err
+			if manager, ok := dst.(proofstore.IdempotencyProjectionManager); ok {
+				if err := manager.EnsureIdempotencyProjection(ctx); err != nil {
+					return trusterr.Wrap(trusterr.CodeDataLoss, "rebuild migrated idempotency projection", err)
 				}
-				report.Checkpoint = true
 			}
-
 			return rt.writeJSON(report)
 		},
 	}
