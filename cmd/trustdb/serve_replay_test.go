@@ -1007,15 +1007,11 @@ func TestReplaySkipsStalePreparedManifestBelowCheckpoint(t *testing.T) {
 	}
 }
 
-// TestOpenWALWriterModes is the smoke test for the mode-selection heuristic
-// that cmd/trustdb uses when opening the WAL. The intent is to lock in the
-// backwards-compatible rule: an explicit .wal filename keeps the legacy
-// single-file layout, while directory-looking paths promote to a segment
-// directory.
+// TestOpenWALWriterModes locks server startup to the segmented directory WAL.
 func TestOpenWALWriterModes(t *testing.T) {
 	t.Parallel()
 
-	t.Run("existing file keeps legacy mode", func(t *testing.T) {
+	t.Run("existing file is rejected", func(t *testing.T) {
 		t.Parallel()
 		dir := t.TempDir()
 		walPath := filepath.Join(dir, "trustdb.wal")
@@ -1027,12 +1023,8 @@ func TestOpenWALWriterModes(t *testing.T) {
 			t.Fatalf("seed Close() error = %v", err)
 		}
 		got, mode, err := openWALWriter(walPath, 0)
-		if err != nil {
-			t.Fatalf("openWALWriter() error = %v", err)
-		}
-		defer got.Close()
-		if mode != "file" {
-			t.Fatalf("mode = %q, want file", mode)
+		if err == nil || trusterr.CodeOf(err) != trusterr.CodeFailedPrecondition {
+			t.Fatalf("openWALWriter() = (%v, %q, %v), want failed precondition", got, mode, err)
 		}
 	})
 
@@ -1056,7 +1048,7 @@ func TestOpenWALWriterModes(t *testing.T) {
 		}
 	})
 
-	t.Run("non-existent .wal path keeps legacy mode", func(t *testing.T) {
+	t.Run("non-existent .wal path selects directory mode", func(t *testing.T) {
 		t.Parallel()
 		dir := t.TempDir()
 		walPath := filepath.Join(dir, "fresh.wal")
@@ -1065,15 +1057,15 @@ func TestOpenWALWriterModes(t *testing.T) {
 			t.Fatalf("openWALWriter() error = %v", err)
 		}
 		defer got.Close()
-		if mode != "file" {
-			t.Fatalf("mode = %q, want file", mode)
+		if mode != "directory" {
+			t.Fatalf("mode = %q, want directory", mode)
 		}
 		info, err := os.Stat(walPath)
 		if err != nil {
 			t.Fatalf("Stat() error = %v", err)
 		}
-		if info.IsDir() {
-			t.Fatalf("Stat() reports directory; want regular file")
+		if !info.IsDir() {
+			t.Fatalf("Stat() reports regular file; want directory")
 		}
 	})
 
