@@ -29,7 +29,7 @@ func TestTiKVConformance(t *testing.T) {
 	})
 }
 
-func TestTiKVSharedNamespaceAcrossStores(t *testing.T) {
+func TestTiKVSharedCheckpointScopeAcrossStores(t *testing.T) {
 	requireTiKVIntegration(t)
 
 	ctx := context.Background()
@@ -59,6 +59,56 @@ func TestTiKVSharedNamespaceAcrossStores(t *testing.T) {
 	}
 }
 
+func TestTiKVCheckpointScopesAreIndependent(t *testing.T) {
+	requireTiKVIntegration(t)
+
+	ctx := context.Background()
+	namespace := integrationNamespace(t, "checkpoint-scope")
+	nodeA := openIntegrationStoreWithScope(t, namespace, "node-a", "wal-a")
+	defer nodeA.Close()
+	nodeB := openIntegrationStoreWithScope(t, namespace, "node-b", "wal-b")
+	defer nodeB.Close()
+
+	if err := nodeA.PutCheckpoint(ctx, model.WALCheckpoint{LastSequence: 42}); err != nil {
+		t.Fatalf("nodeA PutCheckpoint: %v", err)
+	}
+	if _, found, err := nodeB.GetCheckpoint(ctx); err != nil || found {
+		t.Fatalf("nodeB GetCheckpoint found=%v err=%v, want isolated scope", found, err)
+	}
+}
+
+func TestTiKVCheckpointConcurrentAdvancementIsMonotonic(t *testing.T) {
+	requireTiKVIntegration(t)
+
+	ctx := context.Background()
+	namespace := integrationNamespace(t, "checkpoint-concurrent")
+	storeA := openIntegrationStore(t, namespace)
+	defer storeA.Close()
+	storeB := openIntegrationStore(t, namespace)
+	defer storeB.Close()
+
+	var wg sync.WaitGroup
+	for sequence := uint64(1); sequence <= 32; sequence++ {
+		sequence := sequence
+		store := storeA
+		if sequence%2 == 0 {
+			store = storeB
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := store.PutCheckpoint(ctx, model.WALCheckpoint{LastSequence: sequence}); err != nil {
+				t.Errorf("PutCheckpoint(%d): %v", sequence, err)
+			}
+		}()
+	}
+	wg.Wait()
+	checkpoint, found, err := storeA.GetCheckpoint(ctx)
+	if err != nil || !found || checkpoint.LastSequence != 32 {
+		t.Fatalf("GetCheckpoint = %+v found=%v err=%v, want sequence 32", checkpoint, found, err)
+	}
+}
+
 func TestTiKVNamespaceIsolationAcrossStores(t *testing.T) {
 	requireTiKVIntegration(t)
 
@@ -85,7 +135,7 @@ func TestTiKVPreparedManifestIndexIntegration(t *testing.T) {
 	requireTiKVIntegration(t)
 
 	ctx := context.Background()
-	store := openIntegrationStore(t, integrationNamespace(t, "prepared-index"))
+	store := openIntegrationStoreWithoutProjection(t, integrationNamespace(t, "prepared-index"), "integration-node", "integration-wal")
 	defer store.Close()
 	ready := model.BatchManifest{
 		SchemaVersion:          model.SchemaBatchManifest,
@@ -261,11 +311,26 @@ func requireTiKVIntegration(t *testing.T) {
 }
 
 func openIntegrationStore(t *testing.T, namespace string) *tikvstore.Store {
+	return openIntegrationStoreWithScope(t, namespace, "integration-node", "integration-wal")
+}
+
+func openIntegrationStoreWithScope(t *testing.T, namespace, nodeID, walID string) *tikvstore.Store {
+	store := openIntegrationStoreWithoutProjection(t, namespace, nodeID, walID)
+	if err := store.EnsureIdempotencyProjection(context.Background()); err != nil {
+		_ = store.Close()
+		t.Fatalf("ensure TiKV idempotency projection: %v", err)
+	}
+	return store
+}
+
+func openIntegrationStoreWithoutProjection(t *testing.T, namespace, nodeID, walID string) *tikvstore.Store {
 	t.Helper()
 	store, err := tikvstore.OpenWithOptions(tikvstore.Options{
 		PDAddressText:    os.Getenv("TRUSTDB_TIKV_PD_ENDPOINTS"),
 		Keyspace:         os.Getenv("TRUSTDB_TIKV_KEYSPACE"),
 		Namespace:        namespace,
+		CheckpointNodeID: nodeID,
+		CheckpointWALID:  walID,
 		RecordIndexMode:  tikvstore.RecordIndexModeFull,
 		ArtifactSyncMode: tikvstore.ArtifactSyncModeChunk,
 	})
