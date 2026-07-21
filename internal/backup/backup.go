@@ -66,7 +66,6 @@ type Manifest struct {
 	GlobalOutboxes int     `json:"global_outboxes"`
 	AnchorOutboxes int     `json:"anchor_outboxes"`
 	AnchorResults  int     `json:"anchor_results"`
-	Checkpoint     bool    `json:"checkpoint"`
 	Entries        []Entry `json:"entries,omitempty"`
 }
 
@@ -152,10 +151,6 @@ func Create(ctx context.Context, store proofstore.Store, path string, opts Optio
 			break
 		}
 		for _, manifest := range manifests {
-			if err := writeCBORTracked(tw, &report, &ordinal, "manifests/"+safeName(manifest.BatchID)+".tdmanifest", "batch_manifest", manifest); err != nil {
-				return Manifest{}, err
-			}
-			report.Manifests++
 			for _, recordID := range manifest.RecordIDs {
 				bundle, err := store.GetBundle(ctx, recordID)
 				if err != nil {
@@ -169,6 +164,10 @@ func Create(ctx context.Context, store proofstore.Store, path string, opts Optio
 				}
 				report.Bundles++
 			}
+			if err := writeCBORTracked(tw, &report, &ordinal, "manifests/"+safeName(manifest.BatchID)+".tdmanifest", "batch_manifest", manifest); err != nil {
+				return Manifest{}, err
+			}
+			report.Manifests++
 		}
 		afterBatchID = manifests[len(manifests)-1].BatchID
 	}
@@ -327,17 +326,6 @@ func Create(ctx context.Context, store proofstore.Store, path string, opts Optio
 			}
 			report.AnchorResults++
 		}
-	}
-
-	cp, ok, err := store.GetCheckpoint(ctx)
-	if err != nil {
-		return Manifest{}, err
-	}
-	if ok {
-		if err := writeCBORTracked(tw, &report, &ordinal, "checkpoint/wal.tdcheckpoint", "wal_checkpoint", cp); err != nil {
-			return Manifest{}, err
-		}
-		report.Checkpoint = true
 	}
 
 	if err := writeJSONTracked(tw, &report, &ordinal, "manifest.json", "manifest", report); err != nil {
@@ -548,16 +536,6 @@ func RestoreWithOptions(ctx context.Context, store proofstore.Store, path string
 				return err
 			}
 			return markRestored()
-		case entry.Name == "checkpoint/wal.tdcheckpoint":
-			var v model.WALCheckpoint
-			if err := decodeCBOREntry(entry, &v); err != nil {
-				return err
-			}
-			report.Checkpoint = true
-			if err := store.PutCheckpoint(ctx, v); err != nil {
-				return err
-			}
-			return markRestored()
 		default:
 			_, _ = io.Copy(io.Discard, entry.Reader)
 			return nil
@@ -565,6 +543,11 @@ func RestoreWithOptions(ctx context.Context, store proofstore.Store, path string
 	})
 	if err != nil {
 		return Manifest{}, err
+	}
+	if manager, ok := store.(proofstore.IdempotencyProjectionManager); ok {
+		if err := manager.EnsureIdempotencyProjection(ctx); err != nil {
+			return Manifest{}, trusterr.Wrap(trusterr.CodeDataLoss, "rebuild restored idempotency projection", err)
+		}
 	}
 	return report, nil
 }
@@ -810,9 +793,6 @@ func validateStreamEntry(entry archiveEntry) error {
 		return decodeCBOREntry(entry, &v)
 	case strings.HasPrefix(entry.Name, "anchors/sth-result/"):
 		var v model.STHAnchorResult
-		return decodeCBOREntry(entry, &v)
-	case entry.Name == "checkpoint/wal.tdcheckpoint":
-		var v model.WALCheckpoint
 		return decodeCBOREntry(entry, &v)
 	default:
 		_, _ = io.Copy(io.Discard, entry.Reader)

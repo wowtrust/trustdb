@@ -1,6 +1,9 @@
 package app
 
 import (
+	"bytes"
+	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -8,6 +11,183 @@ import (
 
 	"github.com/ryan-wong-coder/trustdb/internal/model"
 )
+
+type durableReaderStub struct {
+	decision model.IdempotencyDecision
+	found    bool
+	err      error
+	calls    atomic.Int32
+	entered  chan struct{}
+	release  chan struct{}
+	once     sync.Once
+}
+
+func (s *durableReaderStub) GetIdempotencyDecision(context.Context, model.IdempotencyIdentity) (model.IdempotencyDecision, bool, error) {
+	s.calls.Add(1)
+	if s.entered != nil {
+		s.once.Do(func() { close(s.entered) })
+	}
+	if s.release != nil {
+		<-s.release
+	}
+	return s.decision, s.found, s.err
+}
+
+func testDurableDecision() model.IdempotencyDecision {
+	identity := model.IdempotencyIdentity{TenantID: "tenant", ClientID: "client", IdempotencyKey: "key"}
+	position := model.WALPosition{SegmentID: 1, Offset: 7, Sequence: 3}
+	claimHash := bytes.Repeat([]byte{1}, 32)
+	return model.IdempotencyDecision{
+		SchemaVersion: model.SchemaIdempotencyDecision,
+		Identity:      identity,
+		ClaimHash:     claimHash,
+		BatchID:       "batch-1",
+		Record: model.ServerRecord{
+			SchemaVersion:       model.SchemaServerRecord,
+			RecordID:            "record-1",
+			TenantID:            identity.TenantID,
+			ClientID:            identity.ClientID,
+			KeyID:               "client-key",
+			ClaimHash:           claimHash,
+			ClientSignatureHash: bytes.Repeat([]byte{2}, 32),
+			ReceivedAtUnixN:     10,
+			WAL:                 position,
+		},
+		Accepted: model.AcceptedReceipt{
+			SchemaVersion:   model.SchemaAcceptedReceipt,
+			RecordID:        "record-1",
+			Status:          "accepted",
+			ServerID:        "server-1",
+			ReceivedAtUnixN: 10,
+			WAL:             position,
+			ServerSig: model.Signature{
+				Alg:       model.DefaultSignatureAlg,
+				KeyID:     "server-key",
+				Signature: bytes.Repeat([]byte{3}, 64),
+			},
+		},
+	}
+}
+
+func TestIdempotencyIndexRememberDurableCachesExactDecision(t *testing.T) {
+	t.Parallel()
+	decision := testDurableDecision()
+	reader := &durableReaderStub{decision: decision, found: true}
+	idx := NewIdempotencyIndex()
+	build := func() (model.ServerRecord, model.AcceptedReceipt, error) {
+		t.Fatal("build ran for a durable hit")
+		return model.ServerRecord{}, model.AcceptedReceipt{}, nil
+	}
+	for attempt := 0; attempt < 2; attempt++ {
+		record, accepted, loaded, conflict, err := idx.RememberDurable(
+			context.Background(),
+			IdempotencyKey("tenant", "client", "key"),
+			decision.Identity,
+			decision.ClaimHash,
+			reader,
+			build,
+		)
+		if err != nil || !loaded || conflict || record.RecordID != decision.Record.RecordID || accepted.RecordID != decision.Accepted.RecordID {
+			t.Fatalf("RememberDurable(attempt %d) = record=%+v accepted=%+v loaded=%v conflict=%v err=%v", attempt, record, accepted, loaded, conflict, err)
+		}
+	}
+	if got := reader.calls.Load(); got != 1 {
+		t.Fatalf("durable reads = %d, want 1", got)
+	}
+	if _, _, loaded, conflict, err := idx.RememberDurable(
+		context.Background(),
+		IdempotencyKey("tenant", "client", "key"),
+		decision.Identity,
+		bytes.Repeat([]byte{9}, 32),
+		reader,
+		build,
+	); err != nil || loaded || !conflict {
+		t.Fatalf("conflicting RememberDurable() loaded=%v conflict=%v err=%v", loaded, conflict, err)
+	}
+}
+
+func TestIdempotencyIndexConcurrentColdDurableHitReadsOnce(t *testing.T) {
+	t.Parallel()
+	decision := testDurableDecision()
+	reader := &durableReaderStub{
+		decision: decision,
+		found:    true,
+		entered:  make(chan struct{}),
+		release:  make(chan struct{}),
+	}
+	idx := NewIdempotencyIndex()
+	const concurrency = 16
+	start := make(chan struct{})
+	errs := make(chan error, concurrency)
+	var wg sync.WaitGroup
+	for range concurrency {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			_, _, loaded, conflict, err := idx.RememberDurable(
+				context.Background(),
+				IdempotencyKey("tenant", "client", "key"),
+				decision.Identity,
+				decision.ClaimHash,
+				reader,
+				func() (model.ServerRecord, model.AcceptedReceipt, error) {
+					return model.ServerRecord{}, model.AcceptedReceipt{}, errors.New("unexpected build")
+				},
+			)
+			if err == nil && (!loaded || conflict) {
+				err = fmt.Errorf("loaded=%v conflict=%v", loaded, conflict)
+			}
+			errs <- err
+		}()
+	}
+	close(start)
+	<-reader.entered
+	close(reader.release)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("concurrent RememberDurable() error = %v", err)
+		}
+	}
+	if got := reader.calls.Load(); got != 1 {
+		t.Fatalf("durable reads = %d, want 1", got)
+	}
+}
+
+func TestIdempotencyIndexDurableReadErrorAndEmptyKey(t *testing.T) {
+	t.Parallel()
+	decision := testDurableDecision()
+	reader := &durableReaderStub{err: errors.New("unavailable")}
+	idx := NewIdempotencyIndex()
+	if _, _, _, _, err := idx.RememberDurable(
+		context.Background(),
+		IdempotencyKey("tenant", "client", "key"),
+		decision.Identity,
+		decision.ClaimHash,
+		reader,
+		func() (model.ServerRecord, model.AcceptedReceipt, error) {
+			return model.ServerRecord{}, model.AcceptedReceipt{}, nil
+		},
+	); err == nil {
+		t.Fatal("RememberDurable(read error) error = nil")
+	}
+	reader.err = nil
+	built := 0
+	if _, _, loaded, conflict, err := idx.RememberDurable(
+		context.Background(), "", model.IdempotencyIdentity{}, nil, reader,
+		func() (model.ServerRecord, model.AcceptedReceipt, error) {
+			built++
+			return model.ServerRecord{RecordID: "unkeyed"}, model.AcceptedReceipt{RecordID: "unkeyed"}, nil
+		},
+	); err != nil || loaded || conflict || built != 1 {
+		t.Fatalf("empty-key RememberDurable() loaded=%v conflict=%v built=%d err=%v", loaded, conflict, built, err)
+	}
+	if got := reader.calls.Load(); got != 1 {
+		t.Fatalf("empty key performed durable read: calls=%d", got)
+	}
+}
 
 func TestIdempotencyIndexRememberFirstStores(t *testing.T) {
 	t.Parallel()

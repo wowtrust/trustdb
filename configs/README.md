@@ -19,7 +19,7 @@ Shipped YAML files are **starting points** only: adjust paths, keys, `server.lis
 | `benchmark-large-payload.yaml` | `benchmark` | Dedicated 16 KiB and 64 KiB payload profile. |
 
 `benchmark*.yaml` files use separate data directories. Do not point them at an
-existing proofstore: the Pebble proofstore now requires storage schema v2 and
+existing proofstore: the Pebble proofstore now requires storage schema v3 and
 intentionally refuses legacy key layouts instead of deleting or migrating them.
 
 ## `run_profile`

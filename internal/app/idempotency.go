@@ -2,10 +2,20 @@ package app
 
 import (
 	"bytes"
+	"context"
+	"fmt"
 	"sync"
 
+	durableidempotency "github.com/ryan-wong-coder/trustdb/internal/idempotency"
 	"github.com/ryan-wong-coder/trustdb/internal/model"
+	"github.com/ryan-wong-coder/trustdb/internal/trusterr"
 )
+
+// DurableIdempotencyReader provides the bounded point lookup used when a
+// trusted checkpoint lets startup skip older accepted WAL records.
+type DurableIdempotencyReader interface {
+	GetIdempotencyDecision(context.Context, model.IdempotencyIdentity) (model.IdempotencyDecision, bool, error)
+}
 
 // IdempotencyIndex tracks already-accepted claims keyed by their
 // (tenant_id, client_id, idempotency_key) triple as required by the design
@@ -15,21 +25,32 @@ import (
 // rejected with CodeAlreadyExists so callers cannot silently shadow an
 // earlier record by reusing its idempotency_key.
 //
-// The index is only a fast lookup layer: the WAL is still the durable source
-// of truth, so on restart replayWALAccepted will scan the WAL once and repopulate
-// the index before the ingest service begins serving traffic.
+// The index is only a fast lookup layer. Retained WAL replay repopulates recent
+// decisions; a durable reader resolves committed decisions below a trusted
+// checkpoint without retaining all historical keys in memory.
 type IdempotencyIndex struct {
 	entriesMu sync.RWMutex
 	entries   map[string]idempotencyEntry
+
+	durableSlots     []durableIdempotencySlot
+	durableNext      int
+	nextDurableEpoch uint64
 
 	locksMu sync.Mutex
 	locks   map[string]*keyedLock
 }
 
 type idempotencyEntry struct {
-	record    model.ServerRecord
-	accepted  model.AcceptedReceipt
-	claimHash []byte
+	record       model.ServerRecord
+	accepted     model.AcceptedReceipt
+	claimHash    []byte
+	durable      bool
+	durableEpoch uint64
+}
+
+type durableIdempotencySlot struct {
+	key   string
+	epoch uint64
 }
 
 type keyedLock struct {
@@ -37,11 +58,14 @@ type keyedLock struct {
 	refs int
 }
 
+const defaultDurableIdempotencyCapacity = 4096
+
 // NewIdempotencyIndex returns an empty in-memory index ready for use.
 func NewIdempotencyIndex() *IdempotencyIndex {
 	return &IdempotencyIndex{
-		entries: make(map[string]idempotencyEntry),
-		locks:   make(map[string]*keyedLock),
+		entries:      make(map[string]idempotencyEntry),
+		durableSlots: make([]durableIdempotencySlot, defaultDurableIdempotencyCapacity),
+		locks:        make(map[string]*keyedLock),
 	}
 }
 
@@ -78,7 +102,7 @@ func (i *IdempotencyIndex) Lookup(key string) (idempotencyEntry, bool) {
 	i.entriesMu.RLock()
 	defer i.entriesMu.RUnlock()
 	entry, ok := i.entries[key]
-	return entry, ok
+	return cloneIdempotencyEntry(entry), ok
 }
 
 // put stores an entry for the given key, overwriting any previous value. It
@@ -87,7 +111,37 @@ func (i *IdempotencyIndex) Lookup(key string) (idempotencyEntry, bool) {
 func (i *IdempotencyIndex) put(key string, entry idempotencyEntry) {
 	i.entriesMu.Lock()
 	defer i.entriesMu.Unlock()
-	i.entries[key] = entry
+	entry.durable = false
+	entry.durableEpoch = 0
+	i.entries[key] = cloneIdempotencyEntry(entry)
+}
+
+func (i *IdempotencyIndex) putDurable(key string, entry idempotencyEntry) {
+	i.entriesMu.Lock()
+	defer i.entriesMu.Unlock()
+	i.putDurableLocked(key, entry)
+}
+
+func (i *IdempotencyIndex) putDurableLocked(key string, entry idempotencyEntry) {
+	if len(i.durableSlots) == 0 {
+		return
+	}
+	evicted := i.durableSlots[i.durableNext]
+	if evicted.epoch != 0 {
+		if existing, ok := i.entries[evicted.key]; ok &&
+			existing.durable && existing.durableEpoch == evicted.epoch {
+			delete(i.entries, evicted.key)
+		}
+	}
+	i.nextDurableEpoch++
+	if i.nextDurableEpoch == 0 {
+		i.nextDurableEpoch++
+	}
+	entry.durable = true
+	entry.durableEpoch = i.nextDurableEpoch
+	i.entries[key] = cloneIdempotencyEntry(entry)
+	i.durableSlots[i.durableNext] = durableIdempotencySlot{key: key, epoch: entry.durableEpoch}
+	i.durableNext = (i.durableNext + 1) % len(i.durableSlots)
 }
 
 // Remember loads an existing entry for the same claim or installs a new one.
@@ -109,6 +163,22 @@ func (i *IdempotencyIndex) Remember(
 	claimHash []byte,
 	build func() (model.ServerRecord, model.AcceptedReceipt, error),
 ) (record model.ServerRecord, accepted model.AcceptedReceipt, loaded bool, conflict bool, err error) {
+	return i.RememberDurable(context.Background(), key, model.IdempotencyIdentity{}, claimHash, nil, build)
+}
+
+// RememberDurable is Remember with a cold-miss lookup in the committed
+// proofstore projection. The read occurs under the per-key lock, so concurrent
+// retries cannot both miss storage and append duplicate WAL records. Durable
+// hits enter a fixed-size FIFO cache, so hot retries avoid repeated storage IO
+// without letting committed history grow this process-local map without bound.
+func (i *IdempotencyIndex) RememberDurable(
+	ctx context.Context,
+	key string,
+	identity model.IdempotencyIdentity,
+	claimHash []byte,
+	durable DurableIdempotencyReader,
+	build func() (model.ServerRecord, model.AcceptedReceipt, error),
+) (record model.ServerRecord, accepted model.AcceptedReceipt, loaded bool, conflict bool, err error) {
 	if key == "" {
 		record, accepted, err = build()
 		return record, accepted, false, false, err
@@ -122,12 +192,49 @@ func (i *IdempotencyIndex) Remember(
 		}
 		return existing.record, existing.accepted, true, false, nil
 	}
+	if durable != nil {
+		decision, found, readErr := durable.GetIdempotencyDecision(ctx, identity)
+		if readErr != nil {
+			return model.ServerRecord{}, model.AcceptedReceipt{}, false, false, fmt.Errorf("app: read durable idempotency decision: %w", readErr)
+		}
+		if found {
+			if validateErr := durableidempotency.ValidateDecision(identity, decision); validateErr != nil {
+				return model.ServerRecord{}, model.AcceptedReceipt{}, false, false, trusterr.Wrap(
+					trusterr.CodeDataLoss,
+					"validate durable idempotency decision",
+					validateErr,
+				)
+			}
+			if !bytes.Equal(decision.ClaimHash, claimHash) {
+				i.putDurable(key, idempotencyEntry{record: decision.Record, accepted: decision.Accepted, claimHash: decision.ClaimHash})
+				return model.ServerRecord{}, model.AcceptedReceipt{}, false, true, nil
+			}
+			i.putDurable(key, idempotencyEntry{record: decision.Record, accepted: decision.Accepted, claimHash: decision.ClaimHash})
+			return decision.Record, decision.Accepted, true, false, nil
+		}
+	}
 	record, accepted, err = build()
 	if err != nil {
 		return model.ServerRecord{}, model.AcceptedReceipt{}, false, false, err
 	}
 	i.put(key, idempotencyEntry{record: record, accepted: accepted, claimHash: claimHash})
 	return record, accepted, false, false, nil
+}
+
+// ForgetCommitted converts an accepted entry into the bounded durable cache
+// after the same response has been atomically published with its manifest.
+func (i *IdempotencyIndex) ForgetCommitted(key, recordID string) {
+	if key == "" || recordID == "" {
+		return
+	}
+	release := i.acquire(key)
+	defer release()
+
+	i.entriesMu.Lock()
+	defer i.entriesMu.Unlock()
+	if existing, ok := i.entries[key]; ok && existing.record.RecordID == recordID && !existing.durable {
+		i.putDurableLocked(key, existing)
+	}
 }
 
 // Remembered lets replay paths repopulate the index without going through the
@@ -148,17 +255,23 @@ func (i *IdempotencyIndex) Restore(key string, record model.ServerRecord, accept
 	i.entriesMu.Lock()
 	defer i.entriesMu.Unlock()
 	if existing, ok := i.entries[key]; ok {
-		return bytes.Equal(existing.claimHash, claimHash) &&
+		consistent := bytes.Equal(existing.claimHash, claimHash) &&
 			existing.record.RecordID == record.RecordID &&
 			existing.record.WAL == record.WAL &&
 			existing.accepted.RecordID == accepted.RecordID &&
 			existing.accepted.WAL == accepted.WAL
+		if consistent && existing.durable {
+			existing.durable = false
+			existing.durableEpoch = 0
+			i.entries[key] = existing
+		}
+		return consistent
 	}
-	i.entries[key] = idempotencyEntry{
+	i.entries[key] = cloneIdempotencyEntry(idempotencyEntry{
 		record:    record,
 		accepted:  accepted,
-		claimHash: append([]byte(nil), claimHash...),
-	}
+		claimHash: claimHash,
+	})
 	return true
 }
 
@@ -177,4 +290,12 @@ func IdempotencyKey(tenantID, clientID, idempotencyKey string) string {
 		return ""
 	}
 	return tenantID + "\x00" + clientID + "\x00" + idempotencyKey
+}
+
+func cloneIdempotencyEntry(entry idempotencyEntry) idempotencyEntry {
+	entry.claimHash = append([]byte(nil), entry.claimHash...)
+	entry.record.ClaimHash = append([]byte(nil), entry.record.ClaimHash...)
+	entry.record.ClientSignatureHash = append([]byte(nil), entry.record.ClientSignatureHash...)
+	entry.accepted.ServerSig.Signature = append([]byte(nil), entry.accepted.ServerSig.Signature...)
+	return entry
 }

@@ -30,6 +30,10 @@ type ComputeEngine interface {
 	ComputeBatch(ctx context.Context, batchID string, closedAt time.Time, signed []model.SignedClaim, records []model.ServerRecord, accepted []model.AcceptedReceipt, opts model.BatchComputeOptions) (model.BatchCommit, error)
 }
 
+type idempotencyCommitObserver interface {
+	MarkIdempotencyCommitted(model.IdempotencyIdentity, string)
+}
+
 const (
 	ProofModeInline   = "inline"
 	ProofModeAsync    = "async"
@@ -639,7 +643,7 @@ func (s *Service) persistBatch(ctx context.Context, batchID string, closedAt tim
 	manifest.State = model.BatchStateCommitted
 	manifest.CommittedAtUnixN = time.Now().UTC().UnixNano()
 	stageStart = time.Now()
-	err = s.store.PutManifest(ctx, manifest)
+	err = s.publishCommittedBatch(ctx, manifest, commit.Bundles)
 	s.observeBatchStage("manifest_commit", stageStart)
 	if err != nil {
 		return err
@@ -656,6 +660,26 @@ func (s *Service) persistBatch(ctx context.Context, batchID string, closedAt tim
 	stageStart = time.Now()
 	s.fireOnBatchCommitted(ctx, root)
 	s.observeBatchStage("outbox_hook", stageStart)
+	return nil
+}
+
+// publishCommittedBatch lets capable stores make the committed manifest and
+// every non-empty-key idempotency decision visible in one atomic operation.
+// Other stores retain their WAL and keep the existing manifest-only path.
+func (s *Service) publishCommittedBatch(ctx context.Context, manifest model.BatchManifest, bundles []model.ProofBundle) error {
+	publisher, ok := s.store.(proofstore.CommittedBatchIdempotencyPublisher)
+	if !ok {
+		return s.store.PutManifest(ctx, manifest)
+	}
+	decisions, err := publisher.PublishCommittedBatch(ctx, manifest, bundles)
+	if err != nil {
+		return err
+	}
+	if observer, ok := s.engine.(idempotencyCommitObserver); ok {
+		for i := range decisions {
+			observer.MarkIdempotencyCommitted(decisions[i].Identity, decisions[i].Record.RecordID)
+		}
+	}
 	return nil
 }
 
@@ -1176,7 +1200,7 @@ func (s *Service) materializeManifest(ctx context.Context, manifest model.BatchM
 	manifest.MaterializeNextUnixN = 0
 	manifest.MaterializeLastError = ""
 	manifest.MaterializeFailureCode = ""
-	if err := s.store.PutManifest(ctx, manifest); err != nil {
+	if err := s.publishCommittedBatch(ctx, manifest, commit.Bundles); err != nil {
 		return model.BatchRoot{}, err
 	}
 	if err := s.advanceCheckpoint(ctx, manifest, items); err != nil {

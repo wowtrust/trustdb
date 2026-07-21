@@ -26,7 +26,8 @@ type seedCounts struct {
 
 // seedFileStore populates a file-backed proofstore with a representative
 // mixture of manifests, bundles, roots, global log artefacts, STH anchors,
-// and a checkpoint so the migration exercises every code path in one shot.
+// and a node-local checkpoint so migration can verify that only portable data
+// is copied.
 // It returns the counts used by the assertions so the test body does not
 // have to hard-code magic numbers that would drift whenever the seed changes.
 func seedFileStore(t *testing.T, dir string) seedCounts {
@@ -194,7 +195,7 @@ func seedFileStore(t *testing.T, dir string) seedCounts {
 
 // TestMetastoreMigrateCopiesEverything runs the CLI end-to-end against a
 // pre-populated file store and verifies the Pebble destination ends up
-// with byte-equivalent manifests, bundles, roots, and checkpoint.
+// with byte-equivalent portable manifests, bundles, and roots.
 func TestMetastoreMigrateCopiesEverything(t *testing.T) {
 	t.Parallel()
 
@@ -243,8 +244,8 @@ func TestMetastoreMigrateCopiesEverything(t *testing.T) {
 	if report["anchor_results"] != float64(want.anchorResults) {
 		t.Fatalf("anchor_results = %v, want %d", report["anchor_results"], want.anchorResults)
 	}
-	if report["checkpoint"] != true {
-		t.Fatalf("checkpoint = %v, want true", report["checkpoint"])
+	if _, present := report["checkpoint"]; present {
+		t.Fatalf("node-local checkpoint unexpectedly appeared in report: %+v", report)
 	}
 
 	// Verify destination content.
@@ -272,12 +273,8 @@ func TestMetastoreMigrateCopiesEverything(t *testing.T) {
 	if gotRoots[0].ClosedAtUnixN != 200 {
 		t.Fatalf("dst latest root = %d, want newest-first (200)", gotRoots[0].ClosedAtUnixN)
 	}
-	cp, ok, err := dst.GetCheckpoint(ctx)
-	if err != nil || !ok {
-		t.Fatalf("dst GetCheckpoint ok=%v err=%v", ok, err)
-	}
-	if cp.LastSequence != 42 || cp.SegmentID != 3 {
-		t.Fatalf("dst checkpoint = %+v", cp)
+	if cp, ok, err := dst.GetCheckpoint(ctx); err != nil || ok {
+		t.Fatalf("dst GetCheckpoint = %+v ok=%v err=%v, want absent node-local state", cp, ok, err)
 	}
 	for _, recID := range []string{"rec-1", "rec-2", "rec-3"} {
 		bundle, err := dst.GetBundle(ctx, recID)
@@ -316,6 +313,47 @@ func TestMetastoreMigrateCopiesEverything(t *testing.T) {
 	}
 	if _, ok, err := dst.GetSTHAnchorResult(ctx, 1); err != nil || !ok {
 		t.Fatalf("dst GetSTHAnchorResult ok=%v err=%v", ok, err)
+	}
+}
+
+func TestMetastoreMigrateResumesAfterManifestOnlyInterruption(t *testing.T) {
+	t.Parallel()
+	tmp := t.TempDir()
+	fromDir := filepath.Join(tmp, "file")
+	toDir := filepath.Join(tmp, "pebble")
+	_ = seedFileStore(t, fromDir)
+	ctx := context.Background()
+	src := &proofstore.LocalStore{Root: fromDir}
+	manifest, err := src.GetManifest(ctx, "batch-1")
+	if err != nil {
+		t.Fatalf("source GetManifest() error = %v", err)
+	}
+	dst, err := proofstore.Open(proofstore.Config{Kind: proofstore.BackendPebble, Path: toDir})
+	if err != nil {
+		t.Fatalf("open interrupted destination error = %v", err)
+	}
+	if err := dst.PutManifest(ctx, manifest); err != nil {
+		t.Fatalf("seed interrupted manifest error = %v", err)
+	}
+	if err := dst.Close(); err != nil {
+		t.Fatalf("close interrupted destination error = %v", err)
+	}
+
+	var out, errOut bytes.Buffer
+	cmd := newRootCommand(&out, &errOut)
+	cmd.SetArgs([]string{"metastore", "migrate", "--from", fromDir, "--to", toDir})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("resumed metastore migrate error = %v stderr=%s", err, errOut.String())
+	}
+	dst, err = proofstore.Open(proofstore.Config{Kind: proofstore.BackendPebble, Path: toDir})
+	if err != nil {
+		t.Fatalf("reopen resumed destination error = %v", err)
+	}
+	defer dst.Close()
+	for _, recordID := range manifest.RecordIDs {
+		if _, err := dst.GetBundle(ctx, recordID); err != nil {
+			t.Fatalf("resumed destination GetBundle(%q) error = %v", recordID, err)
+		}
 	}
 }
 

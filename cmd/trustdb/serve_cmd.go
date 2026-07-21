@@ -24,6 +24,7 @@ import (
 	"github.com/ryan-wong-coder/trustdb/internal/globallog"
 	"github.com/ryan-wong-coder/trustdb/internal/grpcapi"
 	"github.com/ryan-wong-coder/trustdb/internal/httpapi"
+	"github.com/ryan-wong-coder/trustdb/internal/idempotency"
 	"github.com/ryan-wong-coder/trustdb/internal/ingest"
 	"github.com/ryan-wong-coder/trustdb/internal/merkle"
 	"github.com/ryan-wong-coder/trustdb/internal/model"
@@ -340,8 +341,6 @@ func newServeCommand(rt *runtimeConfig) *cobra.Command {
 				WAL:              writer,
 				Idempotency:      idempotency,
 			}
-			ingestSvc := ingest.New(engine, ingest.Options{QueueSize: queueSize, Workers: workers}, metrics)
-			defer ingestSvc.Shutdown(context.Background())
 			// Pick the proof store backend from the CLI/config, defaulting
 			// to the file backend rooted at --proof-dir so existing
 			// deployments continue to work unchanged. When --metastore
@@ -378,6 +377,21 @@ func newServeCommand(rt *runtimeConfig) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			defer func() {
+				if cerr := proofStore.Close(); cerr != nil {
+					rt.logger.Warn().Err(cerr).Msg("proofstore close failed")
+				}
+			}()
+			if manager, ok := proofStore.(proofstore.IdempotencyProjectionManager); ok {
+				if err := manager.EnsureIdempotencyProjection(context.Background()); err != nil {
+					return trusterr.Wrap(trusterr.CodeDataLoss, "prepare durable idempotency projection", err)
+				}
+			}
+			if reader, ok := proofStore.(proofstore.IdempotencyDecisionReader); ok {
+				engine.DurableIdempotency = reader
+			}
+			ingestSvc := ingest.New(engine, ingest.Options{QueueSize: queueSize, Workers: workers}, metrics)
+			defer ingestSvc.Shutdown(context.Background())
 			if enabled, err := observability.RegisterPebbleMetrics(reg, proofStore); err != nil {
 				return trusterr.Wrap(trusterr.CodeInternal, "register pebble metrics", err)
 			} else if enabled {
@@ -401,11 +415,6 @@ func newServeCommand(rt *runtimeConfig) *cobra.Command {
 				Str("artifact_sync_mode", proofstoreArtifactSyncMode).
 				Bool("global_log_enabled", rt.cfg.GlobalLog.Enabled).
 				Msg("semantic performance profile active")
-			defer func() {
-				if cerr := proofStore.Close(); cerr != nil {
-					rt.logger.Warn().Err(cerr).Msg("proofstore close failed")
-				}
-			}()
 			batchOpts := batch.Options{
 				QueueSize:                batchQueueSize,
 				MaxRecords:               batchMaxRecords,
@@ -426,10 +435,24 @@ func newServeCommand(rt *runtimeConfig) *cobra.Command {
 			// deployments have no notion of "older segments to delete" so
 			// firing PruneSegmentsBefore against them is both pointless
 			// and confusing in the logs.
-			if walMode == "directory" && proofstore.WALCheckpointPruneSafe(proofStore) {
-				batchOpts.OnCheckpointAdvanced = newPruneHook(rt, walPath, walKeepSegments, metrics)
-			} else if walMode == "directory" {
-				rt.logger.Warn().Str("metastore", metaKind).Msg("automatic WAL checkpoint pruning disabled: proofstore cannot yet durably bind committed artifacts and restart idempotency to this node-local WAL")
+			if walMode == "directory" {
+				pruneGuard, guarded := proofStore.(proofstore.WALCheckpointPruneGuard)
+				if proofstore.WALCheckpointPruneSafe(proofStore) && guarded {
+					pruneHook := newPruneHook(rt, walPath, walKeepSegments, metrics)
+					batchOpts.OnCheckpointAdvanced = func(ctx context.Context, cp model.WALCheckpoint) {
+						ran, err := pruneGuard.WithWALCheckpointPruneGuard(ctx, cp, func() error {
+							pruneHook(ctx, cp)
+							return nil
+						})
+						if err != nil {
+							rt.logger.Warn().Err(err).Msg("wal checkpoint prune guard failed")
+						} else if !ran {
+							rt.logger.Debug().Msg("wal checkpoint prune skipped: durable checkpoint is no longer current")
+						}
+					}
+				} else {
+					rt.logger.Warn().Str("metastore", metaKind).Msg("automatic WAL checkpoint pruning disabled: proofstore cannot durably guard committed artifacts and restart idempotency for this node-local WAL")
+				}
 			}
 			// Build the anchor sink + worker before constructing the batch
 			// service so the OnBatchCommitted hook can close over a live
@@ -1386,49 +1409,49 @@ func validateCommittedReplayIndex(ctx context.Context, store proofstore.Store, m
 	return manifest, nil
 }
 
-func validateCommittedReplayRecord(ctx context.Context, store proofstore.Store, manifests *replayManifestCache, record wal.Record, item app.ReplayedAccepted, idx model.RecordIndex) (string, error) {
+func validateCommittedReplayRecord(ctx context.Context, store proofstore.Store, manifests *replayManifestCache, record wal.Record, item app.ReplayedAccepted, idx model.RecordIndex) (string, model.ProofBundle, error) {
 	recordID := item.Record.RecordID
 	manifest, err := validateCommittedReplayIndex(ctx, store, manifests, recordID, idx)
 	if err != nil {
-		return "", err
+		return "", model.ProofBundle{}, err
 	}
 	bundle, err := store.GetBundle(ctx, recordID)
 	if err != nil {
-		return "", trusterr.Wrap(trusterr.CodeDataLoss, "load indexed proof bundle", err)
+		return "", model.ProofBundle{}, trusterr.Wrap(trusterr.CodeDataLoss, "load indexed proof bundle", err)
 	}
 	if bundle.RecordID != recordID || bundle.ServerRecord.RecordID != recordID ||
 		bundle.AcceptedReceipt.RecordID != recordID || bundle.CommittedReceipt.RecordID != recordID {
-		return "", trusterr.New(trusterr.CodeDataLoss, "proof bundle record identity does not match the wal record")
+		return "", model.ProofBundle{}, trusterr.New(trusterr.CodeDataLoss, "proof bundle record identity does not match the wal record")
 	}
 	if bundle.CommittedReceipt.BatchID != idx.BatchID || bundle.CommittedReceipt.LeafIndex != idx.BatchLeafIndex {
-		return "", trusterr.New(trusterr.CodeDataLoss, "proof bundle commitment does not match the record index")
+		return "", model.ProofBundle{}, trusterr.New(trusterr.CodeDataLoss, "proof bundle commitment does not match the record index")
 	}
 	if bundle.BatchProof.LeafIndex != idx.BatchLeafIndex || bundle.BatchProof.TreeSize != manifest.TreeSize ||
 		!bytes.Equal(bundle.CommittedReceipt.BatchRoot, manifest.BatchRoot) {
-		return "", trusterr.New(trusterr.CodeDataLoss, "proof bundle commitment does not match its committed batch manifest")
+		return "", model.ProofBundle{}, trusterr.New(trusterr.CodeDataLoss, "proof bundle commitment does not match its committed batch manifest")
 	}
 	if bundle.ServerRecord.WAL != record.Position || bundle.AcceptedReceipt.WAL != record.Position || item.Record.WAL != record.Position || item.Accepted.WAL != record.Position {
-		return "", trusterr.New(trusterr.CodeDataLoss, "proof bundle wal position does not match the replayed record")
+		return "", model.ProofBundle{}, trusterr.New(trusterr.CodeDataLoss, "proof bundle wal position does not match the replayed record")
 	}
 	if bundle.ServerRecord.TenantID != item.Record.TenantID ||
 		bundle.ServerRecord.ClientID != item.Record.ClientID ||
 		bundle.ServerRecord.KeyID != item.Record.KeyID ||
 		bundle.ServerRecord.ReceivedAtUnixN != item.Record.ReceivedAtUnixN ||
 		!bytes.Equal(bundle.ServerRecord.ClaimHash, item.Record.ClaimHash) {
-		return "", trusterr.New(trusterr.CodeDataLoss, "proof bundle server record does not match the replayed claim")
+		return "", model.ProofBundle{}, trusterr.New(trusterr.CodeDataLoss, "proof bundle server record does not match the replayed claim")
 	}
 	if err := validateProofBundleClaim(bundle); err != nil {
-		return "", err
+		return "", model.ProofBundle{}, err
 	}
 	leafHash, err := merkle.HashLeaf(bundle.ServerRecord)
 	if err != nil {
-		return "", trusterr.Wrap(trusterr.CodeDataLoss, "hash replay proof bundle leaf", err)
+		return "", model.ProofBundle{}, trusterr.Wrap(trusterr.CodeDataLoss, "hash replay proof bundle leaf", err)
 	}
 	if !bytes.Equal(leafHash, bundle.CommittedReceipt.LeafHash) ||
 		!merkle.Verify(leafHash, idx.BatchLeafIndex, manifest.TreeSize, bundle.BatchProof.AuditPath, manifest.BatchRoot) {
-		return "", trusterr.New(trusterr.CodeDataLoss, "proof bundle merkle path does not match its committed batch manifest")
+		return "", model.ProofBundle{}, trusterr.New(trusterr.CodeDataLoss, "proof bundle merkle path does not match its committed batch manifest")
 	}
-	return idx.BatchID, nil
+	return idx.BatchID, bundle, nil
 }
 
 func validateTrustedCheckpointBoundaryRecord(ctx context.Context, engine app.LocalEngine, store proofstore.Store, manifests *replayManifestCache, checkpoint model.WALCheckpoint, record wal.Record) error {
@@ -1448,12 +1471,50 @@ func validateTrustedCheckpointBoundaryRecord(ctx context.Context, engine app.Loc
 	if !ok {
 		return trusterr.New(trusterr.CodeDataLoss, "contiguous wal checkpoint boundary has no committed record index")
 	}
-	batchID, err := validateCommittedReplayRecord(ctx, store, manifests, record, item, idx)
+	batchID, bundle, err := validateCommittedReplayRecord(ctx, store, manifests, record, item, idx)
 	if err != nil {
 		return err
 	}
 	if checkpoint.BatchID != "" && checkpoint.BatchID != batchID {
 		return trusterr.New(trusterr.CodeDataLoss, "contiguous wal checkpoint batch does not match its boundary proof")
+	}
+	if err := validateDurableReplayDecision(ctx, engine, item, &bundle, batchID, true); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateDurableReplayDecision(ctx context.Context, engine app.LocalEngine, item app.ReplayedAccepted, bundle *model.ProofBundle, batchID string, committed bool) error {
+	if engine.DurableIdempotency == nil || item.Signed.Claim.IdempotencyKey == "" {
+		return nil
+	}
+	identity := model.IdempotencyIdentity{
+		TenantID:       item.Signed.Claim.TenantID,
+		ClientID:       item.Signed.Claim.ClientID,
+		IdempotencyKey: item.Signed.Claim.IdempotencyKey,
+	}
+	decision, found, err := engine.DurableIdempotency.GetIdempotencyDecision(ctx, identity)
+	if err != nil {
+		return trusterr.Wrap(trusterr.CodeDataLoss, "read replay idempotency decision", err)
+	}
+	if !committed {
+		if found {
+			return trusterr.New(trusterr.CodeDataLoss, "uncommitted wal record has a durable idempotency decision")
+		}
+		return nil
+	}
+	if !found {
+		return trusterr.New(trusterr.CodeDataLoss, "committed wal record is missing its durable idempotency decision")
+	}
+	if bundle == nil {
+		return trusterr.New(trusterr.CodeDataLoss, "committed wal record has no persisted proof bundle")
+	}
+	expected, err := idempotency.BuildDecision(batchID, bundle.SignedClaim, bundle.ServerRecord, bundle.AcceptedReceipt)
+	if err != nil {
+		return trusterr.Wrap(trusterr.CodeDataLoss, "build replay idempotency decision", err)
+	}
+	if !idempotency.Equivalent(decision, expected) {
+		return trusterr.New(trusterr.CodeDataLoss, "committed wal record conflicts with its durable idempotency decision")
 	}
 	return nil
 }
@@ -1766,11 +1827,17 @@ func replayWALAccepted(ctx context.Context, walPath string, engine app.LocalEngi
 			if err := flushCommittedRun(); err != nil {
 				return err
 			}
+			if err := validateDurableReplayDecision(ctx, engine, item, nil, "", false); err != nil {
+				return err
+			}
 			prepared.add(accepted)
 			return nil
 		}
 		if _, failed := failedByRecordID[item.Record.RecordID]; failed {
 			if err := flushCommittedRun(); err != nil {
+				return err
+			}
+			if err := validateDurableReplayDecision(ctx, engine, item, nil, "", false); err != nil {
 				return err
 			}
 			skipped++
@@ -1783,13 +1850,22 @@ func replayWALAccepted(ctx context.Context, walPath string, engine app.LocalEngi
 				return trusterr.New(trusterr.CodeDataLoss, "record index does not identify its committed batch")
 			}
 			batchID := idx.BatchID
-			if checkpointSafe {
-				batchID, err = validateCommittedReplayRecord(ctx, store, manifestCache, record, item, idx)
+			var committedBundle *model.ProofBundle
+			if checkpointSafe || engine.DurableIdempotency != nil {
+				validatedBatchID, bundle, validateErr := validateCommittedReplayRecord(ctx, store, manifestCache, record, item, idx)
+				batchID, err = validatedBatchID, validateErr
 				if err != nil {
 					return err
 				}
+				committedBundle = &bundle
 			} else if _, err := validateCommittedReplayIndex(ctx, store, manifestCache, item.Record.RecordID, idx); err != nil {
 				return err
+			}
+			if err := validateDurableReplayDecision(ctx, engine, item, committedBundle, batchID, true); err != nil {
+				return err
+			}
+			if engine.Idempotency != nil {
+				engine.Idempotency.ForgetCommitted(idempotencyKey, item.Record.RecordID)
 			}
 			if !checkpointSafe {
 				skipped++
@@ -1817,6 +1893,9 @@ func replayWALAccepted(ctx context.Context, walPath string, engine app.LocalEngi
 			return nil
 		}
 		if err := flushCommittedRun(); err != nil {
+			return err
+		}
+		if err := validateDurableReplayDecision(ctx, engine, item, nil, "", false); err != nil {
 			return err
 		}
 		if err := batchSvc.EnqueueRecovered(ctx, accepted); err != nil {
