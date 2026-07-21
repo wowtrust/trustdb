@@ -16,7 +16,7 @@ const DefaultYAML = `# TrustDB local client configuration.
 paths:
   data_dir: ".trustdb"
   key_registry: ".trustdb/keys.tdkeys"
-  wal: ".trustdb/trustdb.wal"
+  wal: ".trustdb/wal"
   object_dir: ".trustdb/objects"
   proof_dir: ".trustdb/proofs"
 
@@ -260,7 +260,7 @@ func Default() Config {
 		Paths: Paths{
 			DataDir:     ".trustdb",
 			KeyRegistry: ".trustdb/keys.tdkeys",
-			WAL:         ".trustdb/trustdb.wal",
+			WAL:         ".trustdb/wal",
 			ObjectDir:   ".trustdb/objects",
 			ProofDir:    ".trustdb/proofs",
 		},

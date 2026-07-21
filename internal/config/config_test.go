@@ -25,6 +25,12 @@ func TestDefaultYAMLIsStructured(t *testing.T) {
 			t.Fatalf("default yaml missing section %q", section)
 		}
 	}
+	if Default().Paths.WAL != ".trustdb/wal" {
+		t.Fatalf("default paths.wal = %q, want directory path", Default().Paths.WAL)
+	}
+	if !strings.Contains(DefaultYAML, `wal: ".trustdb/wal"`) {
+		t.Fatal("default yaml paths.wal is not a directory path")
+	}
 	if Default().Batch.ProofMode != "inline" {
 		t.Fatalf("default batch.proof_mode = %q, want inline", Default().Batch.ProofMode)
 	}

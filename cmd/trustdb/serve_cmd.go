@@ -1260,14 +1260,9 @@ func openWALWriter(walPath string, maxSegmentBytes int64) (*wal.Writer, string, 
 	return openWALWriterWithOptions(walPath, wal.Options{MaxSegmentBytes: maxSegmentBytes})
 }
 
-// openWALWriterWithOptions opens a wal.Writer in either single-file (legacy)
-// or directory (segment-rotating) mode, picking the mode based on what is
-// already on disk and falling back to a filename heuristic for fresh
-// locations. The returned walMode string is "file" or "directory" and is
-// emitted in the startup log so operators can confirm which layout the
-// process adopted. opts.OnRotate and opts.MaxSegmentBytes are only meaningful
-// in directory mode; they are silently ignored for single-file WALs (which
-// never rotate).
+// openWALWriterWithOptions opens the server's segment-rotating WAL directory.
+// Regular files fail closed: serve does not automatically adopt or migrate the
+// old single-file layout.
 func openWALWriterWithOptions(walPath string, opts wal.Options) (*wal.Writer, string, error) {
 	if walPath == "" {
 		return nil, "", trusterr.New(trusterr.CodeInvalidArgument, "wal path is required")
@@ -1278,20 +1273,8 @@ func openWALWriterWithOptions(walPath string, opts wal.Options) (*wal.Writer, st
 		w, oerr := wal.OpenDirWriter(walPath, opts)
 		return w, "directory", oerr
 	case err == nil:
-		// Existing regular file: keep legacy single-file semantics even
-		// if the operator set --wal-max-segment-bytes (it has no effect
-		// here; they must migrate to a directory to enable rotation).
-		w, oerr := wal.OpenWriterWithOptions(walPath, 1, opts)
-		return w, "file", oerr
+		return nil, "", trusterr.New(trusterr.CodeFailedPrecondition, "server wal path must be a directory: "+walPath)
 	case errors.Is(err, os.ErrNotExist):
-		// Heuristic for fresh paths: a path ending in .wal is treated
-		// as a single file for backwards compatibility with existing
-		// configs and e2e fixtures; anything else (directory-looking
-		// names like "./wal" or "trustdb-wal") becomes a directory.
-		if strings.HasSuffix(strings.ToLower(walPath), ".wal") {
-			w, oerr := wal.OpenWriterWithOptions(walPath, 1, opts)
-			return w, "file", oerr
-		}
 		w, oerr := wal.OpenDirWriter(walPath, opts)
 		return w, "directory", oerr
 	default:

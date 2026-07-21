@@ -12,7 +12,6 @@ import (
 	"github.com/ryan-wong-coder/trustdb/internal/keystore"
 	"github.com/ryan-wong-coder/trustdb/internal/model"
 	"github.com/ryan-wong-coder/trustdb/internal/prooflevel"
-	"github.com/ryan-wong-coder/trustdb/internal/wal"
 	"github.com/spf13/cobra"
 )
 
@@ -47,7 +46,7 @@ func newCommitCommand(rt *runtimeConfig) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			writer, err := wal.OpenWriter(walPath, 1)
+			writer, _, err := openWALWriter(walPath, 0)
 			if err != nil {
 				return err
 			}
@@ -131,7 +130,7 @@ func newCommitBatchCommand(rt *runtimeConfig) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			writer, err := wal.OpenWriter(walPath, 1)
+			writer, _, err := openWALWriter(walPath, 0)
 			if err != nil {
 				return err
 			}
