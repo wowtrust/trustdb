@@ -281,3 +281,46 @@ func BenchmarkLocalStorePendingGlobalLogWithPublishedHistory4096(b *testing.B) {
 		}
 	}
 }
+
+func BenchmarkLocalStorePendingSTHAnchorWithPublishedHistory4096(b *testing.B) {
+	store := LocalStore{Root: b.TempDir()}
+	if err := os.MkdirAll(store.sthAnchorOutboxStatusDir(model.AnchorStatePublished), 0o755); err != nil {
+		b.Fatal(err)
+	}
+	for index := range 4096 {
+		item := model.STHAnchorOutboxItem{
+			SchemaVersion:   model.SchemaSTHAnchorOutbox,
+			TreeSize:        uint64(index + 1),
+			Status:          model.AnchorStatePublished,
+			EnqueuedAtUnixN: int64(index + 1),
+		}
+		data, err := cborx.Marshal(item)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if err := os.WriteFile(store.sthAnchorOutboxPath(item.Status, item.TreeSize), data, 0o600); err != nil {
+			b.Fatal(err)
+		}
+	}
+	pending := model.STHAnchorOutboxItem{
+		SchemaVersion:   model.SchemaSTHAnchorOutbox,
+		TreeSize:        4097,
+		Status:          model.AnchorStatePending,
+		EnqueuedAtUnixN: 4097,
+	}
+	if err := store.EnqueueSTHAnchor(context.Background(), pending); err != nil {
+		b.Fatal(err)
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		items, err := store.ListPendingSTHAnchors(context.Background(), 4098, 64)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if len(items) != 1 || items[0].TreeSize != pending.TreeSize {
+			b.Fatalf("pending anchors = %+v", items)
+		}
+	}
+}
