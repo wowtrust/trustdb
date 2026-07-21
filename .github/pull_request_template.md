@@ -8,7 +8,7 @@ Fixes #
 
 ## Required Format
 
-- Branch name uses an approved prefix: `feat/`, `bug/`, `docs/`, `test/`, `refactor/`, `perf/`, `security/`, `chore/`, `ci/`, `build/`, `release/`, or `revert/`.
+- Branch name uses an approved prefix: `feat/`, `fix/`, `docs/`, `test/`, `refactor/`, `perf/`, `security/`, `chore/`, `ci/`, `build/`, `release/`, or `revert/`.
 - PR title uses Conventional Commit style, for example `fix(backup): validate restore checkpoints`.
 - Commit messages use Conventional Commits.
 

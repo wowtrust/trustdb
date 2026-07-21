@@ -21,7 +21,7 @@ This guide is bilingual. The Chinese section is authoritative for day-to-day pro
 | 类型 | 用途 | 示例 |
 | --- | --- | --- |
 | `feat/` | 新功能或用户可见能力 | `feat/admin-audit-log` |
-| `bug/` | Bug 修复或回归修复 | `bug/restore-checkpoint-validation` |
+| `fix/` | Bug 修复或回归修复 | `fix/restore-checkpoint-validation` |
 | `docs/` | README、贡献指南、格式文档、模板 | `docs/standardize-templates` |
 | `test/` | 测试补强、夹具、CI 覆盖 | `test/global-log-consistency` |
 | `refactor/` | 不改变行为的结构调整 | `refactor/proofstore-indexes` |
@@ -182,7 +182,7 @@ Branch names must use one of these type prefixes:
 | Prefix | Purpose |
 | --- | --- |
 | `feat/` | New user-facing capability |
-| `bug/` | Bug or regression fix |
+| `fix/` | Bug or regression fix |
 | `docs/` | Documentation and templates |
 | `test/` | Test coverage |
 | `refactor/` | Behavior-preserving structure changes |
@@ -194,7 +194,7 @@ Branch names must use one of these type prefixes:
 | `release/` | Version release and release notes |
 | `revert/` | Reverting merged changes |
 
-Use lowercase kebab-case, for example `bug/restore-checkpoint-validation`.
+Use lowercase kebab-case, for example `fix/restore-checkpoint-validation`.
 
 ### Issues
 
