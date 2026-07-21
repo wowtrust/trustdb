@@ -156,12 +156,15 @@ func TestServeDirectoryModeEndToEnd(t *testing.T) {
 		recordIDs = append(recordIDs, decoded.RecordID)
 	}
 
-	// Wait for all claims to produce a proof; this is the observable
-	// signal that every batch has committed and therefore that every
-	// checkpoint advance + prune has fired.
+	// Wait for all claims to produce a proof, then wait separately for the
+	// final checkpoint. Proof publication precedes checkpoint advancement, and
+	// durable local-store barriers can make that distinction observable.
 	for _, rid := range recordIDs {
 		waitForHTTPProof(t, server.URL, rid)
 	}
+	waitForMetric(t, func() bool {
+		return testutil.ToFloat64(metrics.WALCheckpointLastSequence) >= float64(totalClaims)
+	}, "wal_checkpoint_last_sequence >= totalClaims")
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	if err := batchSvc.Shutdown(shutdownCtx); err != nil {
@@ -178,9 +181,6 @@ func TestServeDirectoryModeEndToEnd(t *testing.T) {
 	// Checkpoint assertion: after all claims, the checkpoint sequence is
 	// the sequence of the last record we submitted. Under the hood this
 	// also means the checkpoint gauge is published.
-	waitForMetric(t, func() bool {
-		return testutil.ToFloat64(metrics.WALCheckpointLastSequence) >= float64(totalClaims)
-	}, "wal_checkpoint_last_sequence >= totalClaims")
 	if got := testutil.ToFloat64(metrics.WALCheckpointLastSequence); got < float64(totalClaims) {
 		t.Fatalf("wal_checkpoint_last_sequence = %v, want >= %d", got, totalClaims)
 	}

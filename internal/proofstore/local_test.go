@@ -3,6 +3,7 @@ package proofstore
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -12,10 +13,101 @@ import (
 	"github.com/ryan-wong-coder/trustdb/internal/trusterr"
 )
 
-func TestWALCheckpointPruneSafetyFailsClosedForFileAndUnknownStores(t *testing.T) {
+func TestWriteCBORAtomicDurabilityOrder(t *testing.T) {
 	t.Parallel()
-	if WALCheckpointPruneSafe(LocalStore{Root: t.TempDir()}) {
-		t.Fatal("LocalStore reported crash-safe WAL checkpoint pruning")
+	dir := t.TempDir()
+	path := filepath.Join(dir, "object.cbor")
+	ops := defaultLocalFileOps()
+	var events []string
+	baseSyncFile, baseClose, baseReplace, baseSyncDir := ops.syncFile, ops.closeFile, ops.replace, ops.syncDir
+	ops.syncFile = func(file *os.File) error {
+		events = append(events, "file-sync")
+		return baseSyncFile(file)
+	}
+	ops.closeFile = func(file *os.File) error {
+		events = append(events, "file-close")
+		return baseClose(file)
+	}
+	ops.replace = func(source, target string) error {
+		events = append(events, "replace")
+		return baseReplace(source, target)
+	}
+	ops.syncDir = func(path string) error {
+		if path == dir {
+			events = append(events, "directory-sync")
+		}
+		return baseSyncDir(path)
+	}
+	if err := writeCBORAtomicWithOps(path, model.WALCheckpoint{LastSequence: 1}, ops); err != nil {
+		t.Fatalf("writeCBORAtomicWithOps: %v", err)
+	}
+	want := []string{"file-sync", "file-close", "replace", "directory-sync"}
+	if fmt.Sprint(events) != fmt.Sprint(want) {
+		t.Fatalf("durability events = %v, want %v", events, want)
+	}
+}
+
+func TestWriteCBORAtomicFailsClosedAtDurabilityBarriers(t *testing.T) {
+	t.Parallel()
+	sentinel := errors.New("injected durability failure")
+	for _, step := range []string{"file-sync", "replace", "directory-sync"} {
+		t.Run(step, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "object.cbor")
+			ops := defaultLocalFileOps()
+			switch step {
+			case "file-sync":
+				ops.syncFile = func(*os.File) error { return sentinel }
+			case "replace":
+				ops.replace = func(string, string) error { return sentinel }
+			case "directory-sync":
+				base := ops.syncDir
+				ops.syncDir = func(syncPath string) error {
+					if syncPath == dir {
+						return sentinel
+					}
+					return base(syncPath)
+				}
+			}
+			if err := writeCBORAtomicWithOps(path, model.WALCheckpoint{LastSequence: 1}, ops); !errors.Is(err, sentinel) {
+				t.Fatalf("error = %v, want injected failure", err)
+			}
+		})
+	}
+}
+
+func TestEnsureLocalDurableDirectorySyncsNewAncestry(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	target := filepath.Join(root, "one", "two")
+	ops := defaultLocalFileOps()
+	base := ops.syncDir
+	var synced []string
+	ops.syncDir = func(path string) error {
+		synced = append(synced, filepath.Clean(path))
+		return base(path)
+	}
+	if err := ensureLocalDurableDirectory(target, 0o755, ops); err != nil {
+		t.Fatalf("ensureLocalDurableDirectory: %v", err)
+	}
+	for _, want := range []string{root, filepath.Join(root, "one")} {
+		found := false
+		for _, got := range synced {
+			if got == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("directory %q was not synchronized; got %v", want, synced)
+		}
+	}
+}
+
+func TestWALCheckpointPruneSafetyRecognizesDurableLocalStore(t *testing.T) {
+	t.Parallel()
+	if !WALCheckpointPruneSafe(LocalStore{Root: t.TempDir()}) {
+		t.Fatal("LocalStore did not report crash-safe WAL checkpoint pruning")
 	}
 	if WALCheckpointPruneSafe(struct{}{}) {
 		t.Fatal("unknown store reported crash-safe WAL checkpoint pruning")
