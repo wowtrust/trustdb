@@ -326,6 +326,10 @@ func newServeCommand(rt *runtimeConfig) *cobra.Command {
 
 			idempotency := app.NewIdempotencyIndex()
 			nodeID := stringValue(cmd, rt, "server-id", "server_id")
+			walID, err := filepath.Abs(filepath.Clean(walPath))
+			if err != nil {
+				return trusterr.Wrap(trusterr.CodeInvalidArgument, "resolve wal identity", err)
+			}
 			logID := strings.TrimSpace(rt.cfg.GlobalLog.LogID)
 			if logID == "" {
 				logID = nodeID
@@ -369,6 +373,8 @@ func newServeCommand(rt *runtimeConfig) *cobra.Command {
 				TiKVPDAddresses:              tikvPDAddresses,
 				TiKVKeyspace:                 proofstoreTiKVKeyspace,
 				TiKVNamespace:                proofstoreTiKVNamespace,
+				CheckpointNodeID:             nodeID,
+				CheckpointWALID:              walID,
 				RecordIndexMode:              proofstoreRecordIndexMode,
 				ArtifactSyncMode:             proofstoreArtifactSyncMode,
 				IndexStorageTokens:           !strings.EqualFold(proofstoreRecordIndexMode, "no_storage_tokens"),

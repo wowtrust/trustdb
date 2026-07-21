@@ -384,6 +384,8 @@ type WALRange struct {
 // only forces a retained-WAL scan.
 type WALCheckpoint struct {
 	SchemaVersion   string `cbor:"schema_version" json:"schema_version"`
+	NodeID          string `cbor:"node_id,omitempty" json:"node_id,omitempty"`
+	WALID           string `cbor:"wal_id,omitempty" json:"wal_id,omitempty"`
 	SegmentID       uint64 `cbor:"segment_id" json:"segment_id"`
 	LastSequence    uint64 `cbor:"last_sequence" json:"last_sequence"`
 	LastOffset      int64  `cbor:"last_offset" json:"last_offset"`

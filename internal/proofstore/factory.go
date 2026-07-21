@@ -27,6 +27,8 @@ type Config struct {
 	TiKVPDAddresses              []string
 	TiKVKeyspace                 string
 	TiKVNamespace                string
+	CheckpointNodeID             string
+	CheckpointWALID              string
 	RecordIndexMode              string
 	ArtifactSyncMode             string
 	IndexStorageTokens           bool
@@ -59,6 +61,8 @@ func Open(cfg Config) (Store, error) {
 			PDAddressText:                cfg.Path,
 			Keyspace:                     cfg.TiKVKeyspace,
 			Namespace:                    cfg.TiKVNamespace,
+			CheckpointNodeID:             cfg.CheckpointNodeID,
+			CheckpointWALID:              cfg.CheckpointWALID,
 			RecordIndexMode:              cfg.RecordIndexMode,
 			ArtifactSyncMode:             cfg.ArtifactSyncMode,
 			IndexStorageTokens:           cfg.IndexStorageTokens,

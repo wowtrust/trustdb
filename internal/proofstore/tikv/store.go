@@ -8,11 +8,13 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"reflect"
 	"runtime"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/golang/snappy"
@@ -23,6 +25,7 @@ import (
 	"github.com/tikv/client-go/v2/txnkv/txnsnapshot"
 
 	"github.com/ryan-wong-coder/trustdb/internal/cborx"
+	"github.com/ryan-wong-coder/trustdb/internal/idempotency"
 	"github.com/ryan-wong-coder/trustdb/internal/model"
 	"github.com/ryan-wong-coder/trustdb/internal/trusterr"
 )
@@ -44,6 +47,7 @@ const (
 	bundleCompressionMinBytes    = 4 << 10
 	maxBatchArtifactEncodeWorker = 16
 	globalOutboxReadBatchSize    = 1024
+	checkpointCommitMaxAttempts  = 16
 	promotionCommitMaxAttempts   = 3
 	promotionReferenceBatchSize  = 1024
 )
@@ -493,9 +497,12 @@ const (
 	prefixAnchorOutbox   = "anchor/sth-outbox/"
 	prefixAnchorStatus   = "anchor/sth-status/"
 	prefixAnchorResult   = "anchor/sth-result/"
-	checkpointKey        = "checkpoint/wal"
+	prefixCheckpoint     = "checkpoint/wal/v2/"
+	prefixIdempotency    = "idempotency/decision/"
+	idempotencyReadyKey  = "meta/idempotency-projection/ready"
 	globalStateKey       = "global/state/latest"
 	rootSortKeyWidth     = 20
+	idempotencyReadyV1   = "trustdb.idempotency-projection.ready.v1"
 )
 
 const (
@@ -551,6 +558,8 @@ type Options struct {
 	PDAddressText                string
 	Keyspace                     string
 	Namespace                    string
+	CheckpointNodeID             string
+	CheckpointWALID              string
 	RecordIndexMode              string
 	ArtifactSyncMode             string
 	IndexStorageTokens           bool
@@ -587,6 +596,9 @@ type Store struct {
 	db               *tikvDB
 	recordIndexMode  string
 	artifactSyncMode string
+	checkpointNodeID string
+	checkpointWALID  string
+	idempotencyReady atomic.Bool
 
 	// closeOnce guards the underlying db.Close so that duplicate
 	// Close calls from defers and shutdown hooks cannot panic on a
@@ -595,10 +607,15 @@ type Store struct {
 	closeErr  error
 }
 
-// WALCheckpointPruneSafe remains false until checkpoints are keyed by node.
-// The TiKV namespace is shared while each server owns a local WAL, so a single
-// global pointer cannot safely authorize any node to skip or prune records.
-func (*Store) WALCheckpointPruneSafe() bool { return false }
+// WALCheckpointPruneSafe is true only when this shared store is bound to the
+// exact compute node and local WAL whose recovery boundary it persists.
+func (s *Store) WALCheckpointPruneSafe() bool {
+	return s != nil && s.hasCheckpointScope() && s.idempotencyReady.Load()
+}
+
+func (s *Store) hasCheckpointScope() bool {
+	return s != nil && s.checkpointNodeID != "" && s.checkpointWALID != ""
+}
 
 // Open connects to a TiKV cluster using PD addresses and wraps it in a Store.
 func Open(pdAddresses []string) (*Store, error) {
@@ -627,6 +644,8 @@ func OpenWithOptions(opts Options) (*Store, error) {
 		db:               &tikvDB{client: client, namespace: namespaceKeyPrefix(opts.Namespace)},
 		recordIndexMode:  normalizeRecordIndexMode(opts),
 		artifactSyncMode: normalizeArtifactSyncMode(opts.ArtifactSyncMode),
+		checkpointNodeID: strings.TrimSpace(opts.CheckpointNodeID),
+		checkpointWALID:  strings.TrimSpace(opts.CheckpointWALID),
 	}, nil
 }
 
@@ -741,7 +760,6 @@ func (s *Store) migrateLegacyKey(key, value []byte, opts MigrationOptions, repor
 
 func legacyScalarKeys() [][]byte {
 	return [][]byte{
-		[]byte(checkpointKey),
 		[]byte(globalStateKey),
 		[]byte(namespaceMetadataName),
 	}
@@ -2351,6 +2369,9 @@ func (s *Store) PutManifest(ctx context.Context, manifest model.BatchManifest) e
 	if !model.ValidBatchManifestState(manifest.State) {
 		return trusterr.New(trusterr.CodeInvalidArgument, "invalid batch manifest state")
 	}
+	if manifest.State == model.BatchStateCommitted && s.idempotencyReady.Load() {
+		return trusterr.New(trusterr.CodeFailedPrecondition, "committed manifests require atomic idempotency publication")
+	}
 	if manifest.SchemaVersion == "" {
 		manifest.SchemaVersion = model.SchemaBatchManifest
 	}
@@ -2375,6 +2396,9 @@ func (s *Store) PutManifest(ctx context.Context, manifest model.BatchManifest) e
 		var old model.BatchManifest
 		if err := cborx.UnmarshalLimit(oldData, &old, maxStoredObjectBytes); err != nil {
 			return trusterr.Wrap(trusterr.CodeDataLoss, "decode old batch manifest", err)
+		}
+		if old.State == model.BatchStateCommitted && s.idempotencyReady.Load() {
+			return trusterr.New(trusterr.CodeFailedPrecondition, "committed manifests require atomic idempotency publication")
 		}
 		if old.State == model.BatchStatePrepared {
 			if err := txn.Delete(s.db.physicalKey(preparedManifestKey(old))); err != nil {
@@ -2535,18 +2559,304 @@ func (s *Store) ListPreparedManifests(ctx context.Context, nodeID string, nowUni
 	return manifests, nil
 }
 
+func idempotencyDecisionKey(identity model.IdempotencyIdentity) []byte {
+	return append([]byte(prefixIdempotency), idempotency.StorageKey(identity)...)
+}
+
+// EnsureIdempotencyProjection initializes the native TiKV point-read
+// projection only for a store with no committed history. There is deliberately
+// no compatibility rebuild: encountering committed manifests without the
+// readiness marker fails closed.
+func (s *Store) EnsureIdempotencyProjection(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return trusterr.Wrap(trusterr.CodeDeadlineExceeded, "ensure idempotency projection canceled", err)
+	}
+	ready, err := s.idempotencyProjectionReady(ctx)
+	if err != nil {
+		return err
+	}
+	if ready {
+		s.idempotencyReady.Store(true)
+		return nil
+	}
+	s.idempotencyReady.Store(false)
+	for afterBatchID := ""; ; {
+		manifests, err := s.ListManifestsAfter(ctx, afterBatchID, 128)
+		if err != nil {
+			return err
+		}
+		if len(manifests) == 0 {
+			break
+		}
+		for i := range manifests {
+			if manifests[i].State == model.BatchStateCommitted {
+				return trusterr.New(trusterr.CodeFailedPrecondition, "tikv idempotency projection cannot initialize over committed history")
+			}
+		}
+		afterBatchID = manifests[len(manifests)-1].BatchID
+	}
+	for attempt := 0; attempt < checkpointCommitMaxAttempts; attempt++ {
+		if err := s.db.Set([]byte(idempotencyReadyKey), []byte(idempotencyReadyV1), syncWrite); err == nil {
+			s.idempotencyReady.Store(true)
+			return nil
+		} else if !isRetryablePromotionCommitError(err) {
+			return trusterr.Wrap(trusterr.CodeDataLoss, "publish idempotency projection readiness", err)
+		}
+		ready, err = s.idempotencyProjectionReady(ctx)
+		if err != nil {
+			return err
+		}
+		if ready {
+			s.idempotencyReady.Store(true)
+			return nil
+		}
+	}
+	return trusterr.New(trusterr.CodeDataLoss, "publish idempotency projection readiness exhausted retries")
+}
+
+func (s *Store) idempotencyProjectionReady(ctx context.Context) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, trusterr.Wrap(trusterr.CodeDeadlineExceeded, "read idempotency projection readiness canceled", err)
+	}
+	value, closer, err := s.db.Get([]byte(idempotencyReadyKey))
+	if isNotFound(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, trusterr.Wrap(trusterr.CodeDataLoss, "read idempotency projection readiness", err)
+	}
+	defer closer.Close()
+	if string(value) != idempotencyReadyV1 {
+		return false, trusterr.New(trusterr.CodeDataLoss, "invalid idempotency projection readiness marker")
+	}
+	return true, nil
+}
+
+func (s *Store) GetIdempotencyDecision(ctx context.Context, identity model.IdempotencyIdentity) (model.IdempotencyDecision, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return model.IdempotencyDecision{}, false, trusterr.Wrap(trusterr.CodeDeadlineExceeded, "get idempotency decision canceled", err)
+	}
+	if identity.TenantID == "" || identity.ClientID == "" || identity.IdempotencyKey == "" {
+		return model.IdempotencyDecision{}, false, trusterr.New(trusterr.CodeInvalidArgument, "idempotency identity is incomplete")
+	}
+	if !s.idempotencyReady.Load() {
+		return model.IdempotencyDecision{}, false, trusterr.New(trusterr.CodeFailedPrecondition, "idempotency projection is not ready")
+	}
+	var decision model.IdempotencyDecision
+	found, err := s.readCBOR(idempotencyDecisionKey(identity), &decision)
+	if err != nil {
+		return model.IdempotencyDecision{}, false, trusterr.Wrap(trusterr.CodeDataLoss, "read idempotency decision", err)
+	}
+	if !found {
+		return model.IdempotencyDecision{}, false, nil
+	}
+	if err := idempotency.ValidateDecision(identity, decision); err != nil {
+		return model.IdempotencyDecision{}, false, trusterr.Wrap(trusterr.CodeDataLoss, "validate stored idempotency decision", err)
+	}
+	return decision, true, nil
+}
+
+func (s *Store) PublishCommittedBatch(ctx context.Context, manifest model.BatchManifest, bundles []model.ProofBundle) ([]model.IdempotencyDecision, error) {
+	if !s.idempotencyReady.Load() {
+		return nil, trusterr.New(trusterr.CodeFailedPrecondition, "idempotency projection is not ready")
+	}
+	manifestData, decisions, encoded, err := prepareCommittedIdempotencyPublication(manifest, bundles)
+	if err != nil {
+		return nil, err
+	}
+	for i := range bundles {
+		persisted, err := s.GetBundle(ctx, bundles[i].RecordID)
+		if err != nil {
+			return nil, trusterr.Wrap(trusterr.CodeDataLoss, "read committed bundle before publication", err)
+		}
+		if !reflect.DeepEqual(persisted, bundles[i]) {
+			return nil, trusterr.New(trusterr.CodeDataLoss, "persisted bundle differs from committed publication")
+		}
+	}
+	var commitErr error
+	for attempt := 0; attempt < checkpointCommitMaxAttempts; attempt++ {
+		commitErr = s.tryPublishCommittedBatch(ctx, manifest, manifestData, decisions, encoded)
+		if commitErr == nil || !isRetryablePromotionCommitError(commitErr) {
+			break
+		}
+	}
+	if commitErr != nil {
+		return nil, trusterr.Wrap(trusterr.CodeDataLoss, "commit manifest and idempotency decisions", commitErr)
+	}
+	return decisions, nil
+}
+
+func prepareCommittedIdempotencyPublication(manifest model.BatchManifest, bundles []model.ProofBundle) ([]byte, []model.IdempotencyDecision, map[string][]byte, error) {
+	if manifest.BatchID == "" || manifest.State != model.BatchStateCommitted {
+		return nil, nil, nil, trusterr.New(trusterr.CodeInvalidArgument, "a committed batch manifest is required")
+	}
+	if len(bundles) != len(manifest.RecordIDs) {
+		return nil, nil, nil, trusterr.New(trusterr.CodeInvalidArgument, "committed manifest and bundle counts differ")
+	}
+	if manifest.SchemaVersion == "" {
+		manifest.SchemaVersion = model.SchemaBatchManifest
+	}
+	manifestData, err := cborx.Marshal(manifest)
+	if err != nil {
+		return nil, nil, nil, trusterr.Wrap(trusterr.CodeDataLoss, "encode committed batch manifest", err)
+	}
+	decisions := make([]model.IdempotencyDecision, 0, len(bundles))
+	seenRecords := make(map[string]struct{}, len(bundles))
+	seenIdentities := make(map[string]model.IdempotencyDecision, len(bundles))
+	encoded := make(map[string][]byte, len(bundles))
+	for i := range bundles {
+		recordID := manifest.RecordIDs[i]
+		bundle := bundles[i]
+		if recordID == "" {
+			return nil, nil, nil, trusterr.New(trusterr.CodeInvalidArgument, "committed manifest contains an empty record_id")
+		}
+		if _, exists := seenRecords[recordID]; exists {
+			return nil, nil, nil, trusterr.New(trusterr.CodeInvalidArgument, "committed manifest contains a duplicate record_id")
+		}
+		seenRecords[recordID] = struct{}{}
+		if bundle.SchemaVersion != model.SchemaProofBundle || bundle.RecordID != recordID ||
+			bundle.ServerRecord.RecordID != recordID || bundle.AcceptedReceipt.RecordID != recordID ||
+			bundle.CommittedReceipt.SchemaVersion != model.SchemaCommittedReceipt ||
+			bundle.CommittedReceipt.RecordID != recordID || bundle.CommittedReceipt.Status != "committed" ||
+			bundle.CommittedReceipt.BatchID != manifest.BatchID || bundle.CommittedReceipt.LeafIndex != uint64(i) ||
+			bundle.BatchProof.LeafIndex != uint64(i) || bundle.BatchProof.TreeSize != manifest.TreeSize {
+			return nil, nil, nil, trusterr.New(trusterr.CodeInvalidArgument, "committed bundle does not match manifest record order")
+		}
+		if bundle.SignedClaim.Claim.IdempotencyKey == "" {
+			continue
+		}
+		decision, err := idempotency.BuildDecision(manifest.BatchID, bundle.SignedClaim, bundle.ServerRecord, bundle.AcceptedReceipt)
+		if err != nil {
+			return nil, nil, nil, trusterr.Wrap(trusterr.CodeDataLoss, "build committed idempotency decision", err)
+		}
+		if err := idempotency.ValidateDecision(decision.Identity, decision); err != nil {
+			return nil, nil, nil, trusterr.Wrap(trusterr.CodeInvalidArgument, "validate idempotency decision", err)
+		}
+		storageKey := idempotency.StorageKey(decision.Identity)
+		if prior, exists := seenIdentities[storageKey]; exists {
+			if !idempotency.Equivalent(prior, decision) {
+				return nil, nil, nil, trusterr.New(trusterr.CodeAlreadyExists, "idempotency identity has conflicting decisions")
+			}
+			continue
+		}
+		data, err := cborx.Marshal(decision)
+		if err != nil {
+			return nil, nil, nil, trusterr.Wrap(trusterr.CodeDataLoss, "encode idempotency decision", err)
+		}
+		seenIdentities[storageKey] = decision
+		encoded[storageKey] = data
+		decisions = append(decisions, decision)
+	}
+	return manifestData, decisions, encoded, nil
+}
+
+func (s *Store) tryPublishCommittedBatch(ctx context.Context, manifest model.BatchManifest, manifestData []byte, decisions []model.IdempotencyDecision, encoded map[string][]byte) error {
+	txn, err := s.db.client.Begin()
+	if err != nil {
+		return err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = txn.Rollback()
+		}
+	}()
+	ready, err := txn.Get(ctx, s.db.physicalKey([]byte(idempotencyReadyKey)))
+	if err != nil {
+		return err
+	}
+	if string(ready) != idempotencyReadyV1 {
+		return trusterr.New(trusterr.CodeDataLoss, "invalid idempotency projection readiness marker")
+	}
+	manifestPhysicalKey := s.db.physicalKey(manifestKey(manifest.BatchID))
+	oldData, err := txn.Get(ctx, manifestPhysicalKey)
+	switch {
+	case err == nil:
+		var old model.BatchManifest
+		if err := cborx.UnmarshalLimit(oldData, &old, maxStoredObjectBytes); err != nil {
+			return err
+		}
+		if old.State == model.BatchStateCommitted && !bytes.Equal(oldData, manifestData) {
+			return trusterr.New(trusterr.CodeAlreadyExists, "committed batch manifest already exists with different contents")
+		}
+		if old.State == model.BatchStatePrepared {
+			if err := txn.Delete(s.db.physicalKey(preparedManifestKey(old))); err != nil {
+				return err
+			}
+		}
+	case tikverr.IsErrNotFound(err):
+	default:
+		return err
+	}
+	for i := range decisions {
+		storageKey := idempotency.StorageKey(decisions[i].Identity)
+		physicalKey := s.db.physicalKey(idempotencyDecisionKey(decisions[i].Identity))
+		existingData, err := txn.Get(ctx, physicalKey)
+		switch {
+		case err == nil:
+			var existing model.IdempotencyDecision
+			if err := cborx.UnmarshalLimit(existingData, &existing, maxStoredObjectBytes); err != nil {
+				return err
+			}
+			if !idempotency.Equivalent(existing, decisions[i]) {
+				return trusterr.New(trusterr.CodeAlreadyExists, "idempotency identity already has a different committed decision")
+			}
+		case tikverr.IsErrNotFound(err):
+			if err := txn.Set(physicalKey, encoded[storageKey]); err != nil {
+				return err
+			}
+		default:
+			return err
+		}
+	}
+	if err := txn.Set(manifestPhysicalKey, manifestData); err != nil {
+		return err
+	}
+	if err := txn.Commit(ctx); err != nil {
+		return err
+	}
+	committed = true
+	return nil
+}
+
 func (s *Store) PutCheckpoint(ctx context.Context, cp model.WALCheckpoint) error {
 	if err := ctx.Err(); err != nil {
 		return trusterr.Wrap(trusterr.CodeDeadlineExceeded, "proofstore put checkpoint canceled", err)
 	}
+	key, err := s.scopedCheckpointKey()
+	if err != nil {
+		return err
+	}
+	if cp.NodeID != "" && cp.NodeID != s.checkpointNodeID {
+		return trusterr.New(trusterr.CodeInvalidArgument, "wal checkpoint node_id does not match store scope")
+	}
+	if cp.WALID != "" && cp.WALID != s.checkpointWALID {
+		return trusterr.New(trusterr.CodeInvalidArgument, "wal checkpoint wal_id does not match store scope")
+	}
+	cp.NodeID = s.checkpointNodeID
+	cp.WALID = s.checkpointWALID
 	if cp.SchemaVersion == "" {
 		cp.SchemaVersion = model.SchemaWALCheckpoint
 	}
 	if cp.RecordedAtUnixN == 0 {
 		cp.RecordedAtUnixN = time.Now().UTC().UnixNano()
 	}
-	if err := s.writeCBOR([]byte(checkpointKey), cp); err != nil {
-		return trusterr.Wrap(trusterr.CodeDataLoss, "write wal checkpoint", err)
+	data, err := cborx.Marshal(cp)
+	if err != nil {
+		return trusterr.Wrap(trusterr.CodeDataLoss, "encode wal checkpoint", err)
+	}
+	var commitErr error
+	for attempt := 0; attempt < checkpointCommitMaxAttempts; attempt++ {
+		commitErr = s.tryPutCheckpoint(ctx, key, cp, data)
+		if commitErr == nil || !isRetryablePromotionCommitError(commitErr) {
+			break
+		}
+	}
+	if commitErr != nil {
+		if ctx.Err() != nil {
+			return trusterr.Wrap(trusterr.CodeDeadlineExceeded, "write wal checkpoint canceled", ctx.Err())
+		}
+		return trusterr.Wrap(trusterr.CodeDataLoss, "write wal checkpoint", commitErr)
 	}
 	return nil
 }
@@ -2555,15 +2865,99 @@ func (s *Store) GetCheckpoint(ctx context.Context) (model.WALCheckpoint, bool, e
 	if err := ctx.Err(); err != nil {
 		return model.WALCheckpoint{}, false, trusterr.Wrap(trusterr.CodeDeadlineExceeded, "proofstore get checkpoint canceled", err)
 	}
+	key, err := s.scopedCheckpointKey()
+	if err != nil {
+		return model.WALCheckpoint{}, false, err
+	}
 	var cp model.WALCheckpoint
-	found, err := s.readCBOR([]byte(checkpointKey), &cp)
+	found, err := s.readCBOR(key, &cp)
 	if err != nil {
 		return model.WALCheckpoint{}, false, trusterr.Wrap(trusterr.CodeDataLoss, "read wal checkpoint", err)
 	}
 	if !found {
 		return model.WALCheckpoint{}, false, nil
 	}
+	if cp.NodeID != s.checkpointNodeID || cp.WALID != s.checkpointWALID {
+		return model.WALCheckpoint{}, false, trusterr.New(trusterr.CodeDataLoss, "wal checkpoint payload does not match key scope")
+	}
 	return cp, true, nil
+}
+
+func (s *Store) scopedCheckpointKey() ([]byte, error) {
+	if !s.hasCheckpointScope() {
+		return nil, trusterr.New(trusterr.CodeFailedPrecondition, "tikv wal checkpoint requires node and wal identity")
+	}
+	if !s.idempotencyReady.Load() {
+		return nil, trusterr.New(trusterr.CodeFailedPrecondition, "tikv wal checkpoint requires a ready idempotency projection")
+	}
+	return []byte(prefixCheckpoint + recordSecondaryPart(s.checkpointNodeID) + "/" + recordSecondaryPart(s.checkpointWALID)), nil
+}
+
+func (s *Store) tryPutCheckpoint(ctx context.Context, key []byte, cp model.WALCheckpoint, data []byte) error {
+	if s == nil || s.db == nil || s.db.client == nil {
+		return trusterr.New(trusterr.CodeFailedPrecondition, "tikv proofstore is closed")
+	}
+	txn, err := s.db.client.Begin()
+	if err != nil {
+		return err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = txn.Rollback()
+		}
+	}()
+	physicalKey := s.db.physicalKey(key)
+	currentData, err := txn.Get(ctx, physicalKey)
+	switch {
+	case err == nil:
+		var current model.WALCheckpoint
+		if err := cborx.UnmarshalLimit(currentData, &current, maxStoredObjectBytes); err != nil {
+			return trusterr.Wrap(trusterr.CodeDataLoss, "decode current wal checkpoint", err)
+		}
+		if current.NodeID != s.checkpointNodeID || current.WALID != s.checkpointWALID {
+			return trusterr.New(trusterr.CodeDataLoss, "current wal checkpoint payload does not match key scope")
+		}
+		if current.LastSequence >= cp.LastSequence {
+			return nil
+		}
+	case tikverr.IsErrNotFound(err):
+	case ctx.Err() != nil:
+		return ctx.Err()
+	default:
+		return err
+	}
+	if err := txn.Set(physicalKey, data); err != nil {
+		return err
+	}
+	if err := txn.Commit(ctx); err != nil {
+		return err
+	}
+	committed = true
+	return nil
+}
+
+func (s *Store) WithWALCheckpointPruneGuard(ctx context.Context, expected model.WALCheckpoint, prune func() error) (bool, error) {
+	if prune == nil {
+		return false, trusterr.New(trusterr.CodeInvalidArgument, "wal checkpoint prune callback is required")
+	}
+	current, found, err := s.GetCheckpoint(ctx)
+	if err != nil || !found {
+		return false, err
+	}
+	if expected.NodeID != "" && expected.NodeID != s.checkpointNodeID {
+		return false, nil
+	}
+	if expected.WALID != "" && expected.WALID != s.checkpointWALID {
+		return false, nil
+	}
+	if current.LastSequence < expected.LastSequence {
+		return false, nil
+	}
+	if err := prune(); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func globalLeafKey(index uint64) []byte {
