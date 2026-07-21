@@ -53,6 +53,10 @@ type latestSTHAnchorResultReader interface {
 	LatestSTHAnchorResult(context.Context) (model.STHAnchorResult, bool, error)
 }
 
+type latestSTHAnchorResultKeyedReader interface {
+	LatestSTHAnchorResultForKey(context.Context, model.STHAnchorScheduleKey) (model.STHAnchorResult, bool, error)
+}
+
 type BatchAppendStore interface {
 	CommitGlobalLogAppends(context.Context, []model.GlobalLogAppend) error
 }
@@ -65,6 +69,7 @@ type Service struct {
 	keyID      string
 	privateKey ed25519.PrivateKey
 	clock      func() time.Time
+	anchorKey  *model.STHAnchorScheduleKey
 }
 
 type Options struct {
@@ -74,6 +79,9 @@ type Options struct {
 	KeyID      string
 	PrivateKey ed25519.PrivateKey
 	Clock      func() time.Time
+	// AnchorSinkName binds GlobalEvidence to the configured provider stream.
+	// Empty preserves the generic aggregate lookup used by standalone tools.
+	AnchorSinkName string
 }
 
 func New(opts Options) (*Service, error) {
@@ -95,14 +103,18 @@ func New(opts Options) (*Service, error) {
 		logID = "trustdb-global-log"
 	}
 	nodeID := strings.TrimSpace(opts.NodeID)
-	return &Service{
+	service := &Service{
 		store:      opts.Store,
 		nodeID:     nodeID,
 		logID:      logID,
 		keyID:      opts.KeyID,
 		privateKey: opts.PrivateKey,
 		clock:      clock,
-	}, nil
+	}
+	if sinkName := strings.TrimSpace(opts.AnchorSinkName); sinkName != "" {
+		service.anchorKey = &model.STHAnchorScheduleKey{NodeID: nodeID, LogID: logID, SinkName: sinkName}
+	}
+	return service, nil
 }
 
 // NewReader returns a read-only global log service. It can build inclusion,
@@ -333,8 +345,7 @@ func (s *Service) Evidence(ctx context.Context, batchID string) (model.GlobalLog
 	if !ok {
 		return model.GlobalLogEvidence{}, trusterr.New(trusterr.CodeNotFound, "global log leaf not found")
 	}
-	if reader, ok := s.store.(latestSTHAnchorResultReader); ok {
-		result, found, err := reader.LatestSTHAnchorResult(ctx)
+	if result, found, available, err := s.latestAnchorResult(ctx); available {
 		if err != nil {
 			return model.GlobalLogEvidence{}, err
 		}
@@ -365,6 +376,23 @@ func (s *Service) Evidence(ctx context.Context, batchID string) (model.GlobalLog
 		return model.GlobalLogEvidence{}, err
 	}
 	return model.GlobalLogEvidence{GlobalProof: proof}, nil
+}
+
+func (s *Service) latestAnchorResult(ctx context.Context) (model.STHAnchorResult, bool, bool, error) {
+	if s.anchorKey != nil {
+		reader, ok := s.store.(latestSTHAnchorResultKeyedReader)
+		if !ok {
+			return model.STHAnchorResult{}, false, true, trusterr.New(trusterr.CodeFailedPrecondition, "global evidence store does not support keyed anchor lookup")
+		}
+		result, found, err := reader.LatestSTHAnchorResultForKey(ctx, *s.anchorKey)
+		return result, found, true, err
+	}
+	reader, ok := s.store.(latestSTHAnchorResultReader)
+	if !ok {
+		return model.STHAnchorResult{}, false, false, nil
+	}
+	result, found, err := reader.LatestSTHAnchorResult(ctx)
+	return result, found, true, err
 }
 
 func (s *Service) ConsistencyProof(ctx context.Context, from, to uint64) (model.GlobalConsistencyProof, error) {

@@ -142,6 +142,33 @@ func TestPebbleSTHAnchorScheduleSurvivesRestartAndPreservesResult(t *testing.T) 
 	}
 }
 
+func TestPebbleL5CoverageCheckpointSurvivesRestart(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	dir := t.TempDir()
+	key := model.STHAnchorScheduleKey{NodeID: "node-1", LogID: "log-1", SinkName: "file"}
+	store, err := pebblestore.Open(dir)
+	if err != nil {
+		t.Fatalf("pebble Open: %v", err)
+	}
+	coverage := proofstore.L5CoverageCheckpointStore(store)
+	if _, err := coverage.AdvanceL5CoverageCheckpoint(ctx, key, 17, 100); err != nil {
+		t.Fatalf("AdvanceL5CoverageCheckpoint: %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	store, err = pebblestore.Open(dir)
+	if err != nil {
+		t.Fatalf("pebble reopen: %v", err)
+	}
+	defer store.Close()
+	checkpoint, found, err := proofstore.L5CoverageCheckpointStore(store).GetL5CoverageCheckpoint(ctx, key)
+	if err != nil || !found || checkpoint.CoveredTreeSize != 17 || checkpoint.Revision != 1 {
+		t.Fatalf("restarted checkpoint=%+v found=%v err=%v", checkpoint, found, err)
+	}
+}
+
 func TestPebbleClaimReconcilesResultBeforeSubmittingPendingWork(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

@@ -234,6 +234,22 @@ func TestLocalStoreSTHAnchorTreeRootRejectsConcurrentSplitViewAcrossSinks(t *tes
 	}
 }
 
+func TestLocalStoreL5CoverageCheckpointSurvivesRestart(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	root := t.TempDir()
+	key := model.STHAnchorScheduleKey{NodeID: "node-1", LogID: "log-1", SinkName: "file"}
+	first := LocalStore{Root: root}
+	if _, err := first.AdvanceL5CoverageCheckpoint(ctx, key, 17, 100); err != nil {
+		t.Fatalf("AdvanceL5CoverageCheckpoint: %v", err)
+	}
+	restarted := LocalStore{Root: root}
+	checkpoint, found, err := restarted.GetL5CoverageCheckpoint(ctx, key)
+	if err != nil || !found || checkpoint.CoveredTreeSize != 17 || checkpoint.Revision != 1 {
+		t.Fatalf("restarted checkpoint=%+v found=%v err=%v", checkpoint, found, err)
+	}
+}
+
 func localScheduleCandidate(key model.STHAnchorScheduleKey, treeSize uint64, seed byte, observedAt, dueAt int64) model.STHAnchorCandidate {
 	return model.STHAnchorCandidate{
 		Key: key, STH: localScheduleSTH(key, treeSize, seed), ObservedAtUnixN: observedAt, DueAtUnixN: dueAt,

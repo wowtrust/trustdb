@@ -238,6 +238,10 @@ func TestBackupRoundTripPreservesAnchorScheduleAndIndependentResult(t *testing.T
 	if err := resultWriter.PutSTHAnchorResult(ctx, secondSinkResult); err != nil {
 		t.Fatalf("PutSTHAnchorResult second sink: %v", err)
 	}
+	coverage := any(src).(proofstore.L5CoverageCheckpointStore)
+	if _, err := coverage.AdvanceL5CoverageCheckpoint(ctx, key, 1, 120); err != nil {
+		t.Fatalf("AdvanceL5CoverageCheckpoint: %v", err)
+	}
 
 	path := filepath.Join(t.TempDir(), "anchor-schedule.tdbackup")
 	report, err := Create(ctx, src, path, Options{Compression: "none"})
@@ -283,6 +287,10 @@ func TestBackupRoundTripPreservesAnchorScheduleAndIndependentResult(t *testing.T
 		if err != nil || !found || result.AnchorID != tc.anchorID {
 			t.Fatalf("restored keyed result %s = %+v found=%v err=%v", tc.key.SinkName, result, found, err)
 		}
+	}
+	restoredCoverage := any(dst).(proofstore.L5CoverageCheckpointStore)
+	if checkpoint, found, err := restoredCoverage.GetL5CoverageCheckpoint(ctx, key); err != nil || found {
+		t.Fatalf("restored derived L5 checkpoint=%+v found=%v err=%v, want absent", checkpoint, found, err)
 	}
 }
 

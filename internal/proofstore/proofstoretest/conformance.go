@@ -66,6 +66,7 @@ func RunConformance(t *testing.T, newStore Factory) {
 	t.Run("STHAnchorMarkPublished", func(t *testing.T) { testSTHAnchorMarkPublished(t, newStore) })
 	t.Run("LatestSTHAnchorResultIsMonotonic", func(t *testing.T) { testLatestSTHAnchorResultIsMonotonic(t, newStore) })
 	t.Run("STHAnchorScheduleStateMachineOptional", func(t *testing.T) { testSTHAnchorScheduleStateMachineOptional(t, newStore) })
+	t.Run("L5CoverageProjectionStateOptional", func(t *testing.T) { testL5CoverageProjectionStateOptional(t, newStore) })
 	t.Run("STHAnchorMarkFailed", func(t *testing.T) { testSTHAnchorMarkFailed(t, newStore) })
 	t.Run("STHAnchorRescheduleKeepsPending", func(t *testing.T) { testSTHAnchorRescheduleKeepsPending(t, newStore) })
 	t.Run("STHAnchorMissing", func(t *testing.T) { testSTHAnchorMissing(t, newStore) })
@@ -1659,6 +1660,93 @@ func testSTHAnchorScheduleStateMachineOptional(t *testing.T, newStore Factory) {
 	}
 	if _, err := scheduler.UpsertSTHAnchorCandidate(ctx, scheduleCandidate(historyKey, 13, 0x99, 900, 1000)); trusterr.CodeOf(err) != trusterr.CodeDataLoss {
 		t.Fatalf("UpsertSTHAnchorCandidate historical conflicting root error=%v", err)
+	}
+}
+
+func testL5CoverageProjectionStateOptional(t *testing.T, newStore Factory) {
+	t.Parallel()
+	store, cleanup := newStore(t)
+	defer cleanup()
+	checkpoints, ok := store.(proofstore.L5CoverageCheckpointStore)
+	if !ok {
+		t.Skip("store does not implement L5CoverageCheckpointStore")
+	}
+	promoter, ok := store.(proofstore.BatchProofLevelPromoter)
+	if !ok {
+		t.Fatalf("L5CoverageCheckpointStore must also implement BatchProofLevelPromoter")
+	}
+	ctx := context.Background()
+	key := model.STHAnchorScheduleKey{NodeID: "node-1", LogID: "log-1", SinkName: "file"}
+	if _, found, err := checkpoints.GetL5CoverageCheckpoint(ctx, key); err != nil || found {
+		t.Fatalf("GetL5CoverageCheckpoint empty found=%v err=%v", found, err)
+	}
+	first, err := checkpoints.AdvanceL5CoverageCheckpoint(ctx, key, 4, 100)
+	if err != nil || first.CoveredTreeSize != 4 || first.Revision != 1 {
+		t.Fatalf("AdvanceL5CoverageCheckpoint first=%+v err=%v", first, err)
+	}
+	lower, err := checkpoints.AdvanceL5CoverageCheckpoint(ctx, key, 2, 200)
+	if err != nil || lower != first {
+		t.Fatalf("AdvanceL5CoverageCheckpoint lower=%+v err=%v", lower, err)
+	}
+
+	const highestTreeSize = uint64(20)
+	var wg sync.WaitGroup
+	errs := make(chan error, highestTreeSize-4)
+	for treeSize := uint64(5); treeSize <= highestTreeSize; treeSize++ {
+		treeSize := treeSize
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, err := checkpoints.AdvanceL5CoverageCheckpoint(ctx, key, treeSize, int64(treeSize))
+			errs <- err
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("concurrent AdvanceL5CoverageCheckpoint: %v", err)
+		}
+	}
+	latest, found, err := checkpoints.GetL5CoverageCheckpoint(ctx, key)
+	if err != nil || !found || latest.CoveredTreeSize != highestTreeSize {
+		t.Fatalf("latest L5 coverage checkpoint=%+v found=%v err=%v", latest, found, err)
+	}
+
+	otherKey := key
+	otherKey.SinkName = "ots"
+	other, err := checkpoints.AdvanceL5CoverageCheckpoint(ctx, otherKey, 3, 300)
+	if err != nil || other.CoveredTreeSize != 3 {
+		t.Fatalf("independent L5 coverage checkpoint=%+v err=%v", other, err)
+	}
+	latest, found, err = checkpoints.GetL5CoverageCheckpoint(ctx, key)
+	if err != nil || !found || latest.CoveredTreeSize != highestTreeSize {
+		t.Fatalf("primary checkpoint after other stream=%+v found=%v err=%v", latest, found, err)
+	}
+
+	indexes := []model.RecordIndex{
+		{SchemaVersion: model.SchemaRecordIndex, RecordID: "l5-rec-a", BatchID: "l5-batch-a", ProofLevel: "L4", ReceivedAtUnixN: 100},
+		{SchemaVersion: model.SchemaRecordIndex, RecordID: "l5-rec-b", BatchID: "l5-batch-b", ProofLevel: "L4", ReceivedAtUnixN: 200},
+	}
+	for _, idx := range indexes {
+		if err := store.PutRecordIndex(ctx, idx); err != nil {
+			t.Fatalf("PutRecordIndex %s: %v", idx.RecordID, err)
+		}
+	}
+	if err := promoter.PromoteBatchProofLevel(ctx, "l5-batch-a", "L5"); err != nil {
+		t.Fatalf("PromoteBatchProofLevel: %v", err)
+	}
+	if err := promoter.PromoteBatchProofLevel(ctx, "l5-batch-a", "L4"); err != nil {
+		t.Fatalf("PromoteBatchProofLevel lower retry: %v", err)
+	}
+	for _, tc := range []struct {
+		recordID string
+		want     string
+	}{{"l5-rec-a", "L5"}, {"l5-rec-b", "L4"}} {
+		idx, found, err := store.GetRecordIndex(ctx, tc.recordID)
+		if err != nil || !found || model.RecordIndexProofLevel(idx) != tc.want {
+			t.Fatalf("GetRecordIndex %s=%+v found=%v err=%v want=%s", tc.recordID, idx, found, err, tc.want)
+		}
 	}
 }
 

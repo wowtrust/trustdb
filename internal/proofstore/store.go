@@ -236,3 +236,17 @@ type STHAnchorScheduleStore interface {
 type STHAnchorScheduleRestorer interface {
 	PutSTHAnchorSchedule(context.Context, model.STHAnchorSchedule) error
 }
+
+// L5CoverageCheckpointStore persists only the continuous projected prefix.
+// The checkpoint is derived from immutable anchor results and Global Log
+// leaves, so logical backup deliberately omits it and restore starts at zero.
+type L5CoverageCheckpointStore interface {
+	GetL5CoverageCheckpoint(context.Context, model.STHAnchorScheduleKey) (model.L5CoverageCheckpoint, bool, error)
+	AdvanceL5CoverageCheckpoint(context.Context, model.STHAnchorScheduleKey, uint64, int64) (model.L5CoverageCheckpoint, error)
+}
+
+// BatchProofLevelPromoter idempotently raises every record index in a batch
+// to the requested level. Implementations must never lower an existing level.
+type BatchProofLevelPromoter interface {
+	PromoteBatchProofLevel(context.Context, string, string) error
+}

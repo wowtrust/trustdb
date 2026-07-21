@@ -20,6 +20,7 @@ import (
 
 	"github.com/ryan-wong-coder/trustdb/internal/anchorschedule"
 	"github.com/ryan-wong-coder/trustdb/internal/cborx"
+	"github.com/ryan-wong-coder/trustdb/internal/l5coverage"
 	"github.com/ryan-wong-coder/trustdb/internal/model"
 	"github.com/ryan-wong-coder/trustdb/internal/trusterr"
 )
@@ -34,6 +35,7 @@ const (
 	localAnchorResultPrefix   = "v2_"
 	localAnchorLatestSuffix   = ".tdsth-anchor-latest"
 	localAnchorTreeRootSuffix = ".tdsth-anchor-tree-root"
+	localL5CoverageSuffix     = ".tdl5-coverage"
 )
 
 type LocalStore struct {
@@ -59,6 +61,7 @@ var localLatestRootLocks [64]sync.Mutex
 var localLatestAnchorLocks [64]sync.Mutex
 var localSTHAnchorScheduleLocks [64]sync.Mutex
 var localSTHAnchorTreeRootLocks [64]sync.Mutex
+var localL5CoverageLocks [64]sync.Mutex
 
 type localLatestAnchorReference struct {
 	Candidate model.STHAnchorLatestReference  `cbor:"candidate"`
@@ -1558,6 +1561,10 @@ func (s LocalStore) sthAnchorTreeRootLock(nodeID, logID string, treeSize uint64)
 	return localStoreStripedLock(s.root()+"\x00"+encodeLocalSTHAnchorTreeRootFilename(nodeID, logID, treeSize), &localSTHAnchorTreeRootLocks)
 }
 
+func (s LocalStore) l5CoverageLock(key model.STHAnchorScheduleKey) *sync.Mutex {
+	return localStoreStripedLock(s.root()+"\x00"+encodeLocalL5CoverageFilename(key), &localL5CoverageLocks)
+}
+
 func localStoreStripedLock(value string, locks *[64]sync.Mutex) *sync.Mutex {
 	hash := uint64(14695981039346656037)
 	for i := 0; i < len(value); i++ {
@@ -2798,6 +2805,64 @@ func (s LocalStore) writeSTHAnchorSchedule(schedule model.STHAnchorSchedule) err
 	return nil
 }
 
+func (s LocalStore) GetL5CoverageCheckpoint(ctx context.Context, key model.STHAnchorScheduleKey) (model.L5CoverageCheckpoint, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return model.L5CoverageCheckpoint{}, false, trusterr.Wrap(trusterr.CodeDeadlineExceeded, "proofstore get L5 coverage checkpoint canceled", err)
+	}
+	if err := anchorschedule.ValidateKey(key); err != nil {
+		return model.L5CoverageCheckpoint{}, false, err
+	}
+	lock := s.l5CoverageLock(key)
+	lock.Lock()
+	defer lock.Unlock()
+	return s.readL5CoverageCheckpoint(key)
+}
+
+func (s LocalStore) AdvanceL5CoverageCheckpoint(ctx context.Context, key model.STHAnchorScheduleKey, coveredTreeSize uint64, updatedAtUnixN int64) (model.L5CoverageCheckpoint, error) {
+	if err := ctx.Err(); err != nil {
+		return model.L5CoverageCheckpoint{}, trusterr.Wrap(trusterr.CodeDeadlineExceeded, "proofstore advance L5 coverage checkpoint canceled", err)
+	}
+	lock := s.l5CoverageLock(key)
+	lock.Lock()
+	defer lock.Unlock()
+	current, found, err := s.readL5CoverageCheckpoint(key)
+	if err != nil {
+		return model.L5CoverageCheckpoint{}, err
+	}
+	next, changed, err := l5coverage.Advance(current, found, key, coveredTreeSize, updatedAtUnixN)
+	if err != nil {
+		return model.L5CoverageCheckpoint{}, err
+	}
+	if !changed {
+		return next, nil
+	}
+	if err := writeCBORAtomic(s.l5CoverageCheckpointPath(key), next); err != nil {
+		return model.L5CoverageCheckpoint{}, trusterr.Wrap(trusterr.CodeDataLoss, "write L5 coverage checkpoint", err)
+	}
+	return next, nil
+}
+
+func (s LocalStore) readL5CoverageCheckpoint(key model.STHAnchorScheduleKey) (model.L5CoverageCheckpoint, bool, error) {
+	data, err := readStoredFile(s.l5CoverageCheckpointPath(key))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return model.L5CoverageCheckpoint{}, false, nil
+		}
+		return model.L5CoverageCheckpoint{}, false, trusterr.Wrap(trusterr.CodeDataLoss, "read L5 coverage checkpoint", err)
+	}
+	var checkpoint model.L5CoverageCheckpoint
+	if err := cborx.UnmarshalLimit(data, &checkpoint, maxStoredObjectBytes); err != nil {
+		return model.L5CoverageCheckpoint{}, false, trusterr.Wrap(trusterr.CodeDataLoss, "decode L5 coverage checkpoint", err)
+	}
+	if err := l5coverage.ValidateCheckpoint(checkpoint); err != nil {
+		return model.L5CoverageCheckpoint{}, false, err
+	}
+	if !anchorschedule.SameKey(checkpoint.Key, key) {
+		return model.L5CoverageCheckpoint{}, false, trusterr.New(trusterr.CodeDataLoss, "L5 coverage checkpoint path does not match item")
+	}
+	return checkpoint, true, nil
+}
+
 func (s LocalStore) latestSTHAnchorResultForKey(ctx context.Context, key model.STHAnchorScheduleKey) (model.STHAnchorResult, bool, error) {
 	if err := anchorschedule.ValidateKey(key); err != nil {
 		return model.STHAnchorResult{}, false, err
@@ -3183,6 +3248,10 @@ func (s LocalStore) sthAnchorTreeRootPath(nodeID, logID string, treeSize uint64)
 	return filepath.Join(s.root(), "anchor", "sth-tree-root", encodeLocalSTHAnchorTreeRootFilename(nodeID, logID, treeSize))
 }
 
+func (s LocalStore) l5CoverageCheckpointPath(key model.STHAnchorScheduleKey) string {
+	return filepath.Join(s.root(), "anchor", "l5-coverage", encodeLocalL5CoverageFilename(key))
+}
+
 func (s LocalStore) latestSTHAnchorReferencePath() string {
 	return filepath.Join(s.root(), "anchor", "latest-sth-anchor.tdref")
 }
@@ -3554,6 +3623,14 @@ func (s LocalStore) promoteBatchRecords(ctx context.Context, batchID, proofLevel
 	return nil
 }
 
+func (s LocalStore) PromoteBatchProofLevel(ctx context.Context, batchID, proofLevel string) error {
+	proofLevel = model.NormalizedProofLevel(proofLevel)
+	if batchID == "" || proofLevel == "" {
+		return trusterr.New(trusterr.CodeInvalidArgument, "batch_id and valid proof level are required")
+	}
+	return s.promoteBatchRecords(ctx, batchID, proofLevel)
+}
+
 func safeFileName(value string) string {
 	if isPlainSafeFileName(value) {
 		return value
@@ -3747,6 +3824,10 @@ func encodeLocalSTHAnchorTreeRootFilename(nodeID, logID string, treeSize uint64)
 		base64.RawURLEncoding.EncodeToString([]byte(logID)),
 	}
 	return localAnchorSchedulePrefix + strings.Join(parts, ".") + localAnchorTreeRootSuffix
+}
+
+func encodeLocalL5CoverageFilename(key model.STHAnchorScheduleKey) string {
+	return strings.TrimSuffix(encodeLocalSTHAnchorScheduleFilename(key), localAnchorScheduleSuffix) + localL5CoverageSuffix
 }
 
 func decodeLocalSTHAnchorScheduleFilename(name string) (model.STHAnchorScheduleKey, error) {

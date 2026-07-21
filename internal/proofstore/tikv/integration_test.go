@@ -84,6 +84,27 @@ func TestTiKVAnchorScheduleConcurrentUpsertIsMonotonic(t *testing.T) {
 	}
 }
 
+func TestTiKVL5CoverageCheckpointIsVisibleAcrossStores(t *testing.T) {
+	requireTiKVIntegration(t)
+
+	ctx := context.Background()
+	namespace := integrationNamespace(t, "l5-coverage-restart")
+	storeA := openIntegrationStore(t, namespace)
+	defer storeA.Close()
+	storeB := openIntegrationStore(t, namespace)
+	defer storeB.Close()
+	key := model.STHAnchorScheduleKey{NodeID: "node-a", LogID: "global", SinkName: "file"}
+	coverageA := any(storeA).(proofstore.L5CoverageCheckpointStore)
+	coverageB := any(storeB).(proofstore.L5CoverageCheckpointStore)
+	if _, err := coverageA.AdvanceL5CoverageCheckpoint(ctx, key, 17, 100); err != nil {
+		t.Fatalf("AdvanceL5CoverageCheckpoint: %v", err)
+	}
+	checkpoint, found, err := coverageB.GetL5CoverageCheckpoint(ctx, key)
+	if err != nil || !found || checkpoint.CoveredTreeSize != 17 || checkpoint.Revision != 1 {
+		t.Fatalf("cross-store checkpoint=%+v found=%v err=%v", checkpoint, found, err)
+	}
+}
+
 func tikvScheduleCandidate(key model.STHAnchorScheduleKey, treeSize uint64, seed byte, observedAt, dueAt int64) model.STHAnchorCandidate {
 	return model.STHAnchorCandidate{
 		Key: key,
