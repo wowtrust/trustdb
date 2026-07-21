@@ -801,15 +801,24 @@ func (s LocalStore) ListGlobalLogNodesAfter(ctx context.Context, afterLevel, aft
 		}
 		return nil, trusterr.Wrap(trusterr.CodeDataLoss, "read global node directory", err)
 	}
-	nodes := make([]model.GlobalLogNode, 0, limit)
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".tdgnode") {
-			continue
-		}
+	ordered, err := orderedGlobalNodeEntries(entries)
+	if err != nil {
+		return nil, trusterr.Wrap(trusterr.CodeDataLoss, "parse global node filename", err)
+	}
+	hasCursor := afterLevel != ^uint64(0) || afterStartIndex != ^uint64(0)
+	start := 0
+	if hasCursor {
+		start = sort.Search(len(ordered), func(i int) bool {
+			return ordered[i].level > afterLevel || ordered[i].level == afterLevel && ordered[i].startIndex > afterStartIndex
+		})
+	}
+	nodes := make([]model.GlobalLogNode, 0, min(limit, len(ordered)-start))
+	for i := start; i < len(ordered) && len(nodes) < limit; i++ {
+		entry := ordered[i]
 		if err := ctx.Err(); err != nil {
 			return nil, trusterr.Wrap(trusterr.CodeDeadlineExceeded, "proofstore list global nodes after canceled", err)
 		}
-		data, err := readStoredFile(filepath.Join(s.globalNodeDir(), entry.Name()))
+		data, err := readStoredFile(filepath.Join(s.globalNodeDir(), entry.name))
 		if err != nil {
 			return nil, trusterr.Wrap(trusterr.CodeDataLoss, "read global log node", err)
 		}
@@ -817,14 +826,10 @@ func (s LocalStore) ListGlobalLogNodesAfter(ctx context.Context, afterLevel, aft
 		if err := cborx.UnmarshalLimit(data, &node, maxStoredObjectBytes); err != nil {
 			return nil, trusterr.Wrap(trusterr.CodeDataLoss, "decode global log node", err)
 		}
-		hasCursor := afterLevel != ^uint64(0) || afterStartIndex != ^uint64(0)
-		if hasCursor && (node.Level < afterLevel || node.Level == afterLevel && node.StartIndex <= afterStartIndex) {
-			continue
+		if node.Level != entry.level || node.StartIndex != entry.startIndex {
+			return nil, trusterr.New(trusterr.CodeDataLoss, "global log node position does not match filename")
 		}
 		nodes = append(nodes, node)
-		if len(nodes) >= limit {
-			break
-		}
 	}
 	return nodes, nil
 }
@@ -2094,6 +2099,28 @@ type localManifestEntry struct {
 	batchID string
 }
 
+type localGlobalNodeEntry struct {
+	name       string
+	level      uint64
+	startIndex uint64
+}
+
+func orderedGlobalNodeEntries(entries []os.DirEntry) ([]localGlobalNodeEntry, error) {
+	const suffix = ".tdgnode"
+	ordered := make([]localGlobalNodeEntry, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), suffix) {
+			continue
+		}
+		level, startIndex, err := decodeLocalUint64PositionFilename(entry.Name(), suffix)
+		if err != nil {
+			return nil, err
+		}
+		ordered = append(ordered, localGlobalNodeEntry{name: entry.Name(), level: level, startIndex: startIndex})
+	}
+	return ordered, nil
+}
+
 func orderedManifestEntries(entries []os.DirEntry) ([]localManifestEntry, error) {
 	const suffix = ".tdmanifest"
 	ordered := make([]localManifestEntry, 0, len(entries))
@@ -2154,6 +2181,22 @@ func decodeLocalIDFilename(name, suffix string) (string, error) {
 		return "", fmt.Errorf("invalid id filename %q", name)
 	}
 	return id, nil
+}
+
+func decodeLocalUint64PositionFilename(name, suffix string) (uint64, uint64, error) {
+	base := strings.TrimSuffix(name, suffix)
+	if len(base) != 2*localPositionWidth+1 || base[localPositionWidth] != '_' {
+		return 0, 0, fmt.Errorf("invalid uint64 position filename %q", name)
+	}
+	first, err := strconv.ParseUint(base[:localPositionWidth], 10, 64)
+	if err != nil {
+		return 0, 0, fmt.Errorf("invalid first position in filename %q", name)
+	}
+	second, err := strconv.ParseUint(base[localPositionWidth+1:], 10, 64)
+	if err != nil {
+		return 0, 0, fmt.Errorf("invalid second position in filename %q", name)
+	}
+	return first, second, nil
 }
 
 func decodeSafeFileName(value string) (string, error) {

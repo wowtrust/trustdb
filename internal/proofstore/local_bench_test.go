@@ -204,3 +204,37 @@ func BenchmarkLocalStoreManifestsAfterLateCursor4096(b *testing.B) {
 		}
 	}
 }
+
+func BenchmarkLocalStoreGlobalNodesAfterLateCursor4096(b *testing.B) {
+	store := LocalStore{Root: b.TempDir()}
+	if err := os.MkdirAll(store.globalNodeDir(), 0o755); err != nil {
+		b.Fatal(err)
+	}
+	for i := range 4096 {
+		node := model.GlobalLogNode{
+			SchemaVersion: model.SchemaGlobalLogNode,
+			Level:         0,
+			StartIndex:    uint64(i),
+			Width:         1,
+			Hash:          make([]byte, 32),
+		}
+		data, err := cborx.Marshal(node)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if err := os.WriteFile(store.globalNodePath(node.Level, node.StartIndex), data, 0o600); err != nil {
+			b.Fatal(err)
+		}
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		got, err := store.ListGlobalLogNodesAfter(context.Background(), 0, 3995, 100)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if len(got) != 100 || got[0].StartIndex != 3996 || got[99].StartIndex != 4095 {
+			b.Fatalf("unexpected page: len=%d first=%d last=%d", len(got), got[0].StartIndex, got[len(got)-1].StartIndex)
+		}
+	}
+}

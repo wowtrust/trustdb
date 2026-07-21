@@ -489,6 +489,92 @@ func TestLocalStoreManifestListRejectsFilenameMismatch(t *testing.T) {
 	}
 }
 
+func TestLocalStoreGlobalNodePagesOrderByPosition(t *testing.T) {
+	t.Parallel()
+
+	store := LocalStore{Root: t.TempDir()}
+	ctx := context.Background()
+	for _, position := range [][2]uint64{{1, 0}, {0, 9}, {0, 5}} {
+		if err := store.PutGlobalLogNode(ctx, model.GlobalLogNode{
+			SchemaVersion: model.SchemaGlobalLogNode,
+			Level:         position[0],
+			StartIndex:    position[1],
+			Width:         1,
+			Hash:          bytes.Repeat([]byte{1}, 32),
+		}); err != nil {
+			t.Fatalf("PutGlobalLogNode(%v): %v", position, err)
+		}
+	}
+
+	first, err := store.ListGlobalLogNodesAfter(ctx, ^uint64(0), ^uint64(0), 2)
+	if err != nil {
+		t.Fatalf("ListGlobalLogNodesAfter(first): %v", err)
+	}
+	if len(first) != 2 || first[0].Level != 0 || first[0].StartIndex != 5 || first[1].Level != 0 || first[1].StartIndex != 9 {
+		t.Fatalf("first page = %#v", first)
+	}
+	next, err := store.ListGlobalLogNodesAfter(ctx, first[1].Level, first[1].StartIndex, 2)
+	if err != nil {
+		t.Fatalf("ListGlobalLogNodesAfter(next): %v", err)
+	}
+	if len(next) != 1 || next[0].Level != 1 || next[0].StartIndex != 0 {
+		t.Fatalf("next page = %#v", next)
+	}
+}
+
+func TestLocalStoreGlobalNodePageSkipsFilesBeforeCursor(t *testing.T) {
+	t.Parallel()
+
+	store := LocalStore{Root: t.TempDir()}
+	ctx := context.Background()
+	for i := range 101 {
+		if err := store.PutGlobalLogNode(ctx, model.GlobalLogNode{
+			SchemaVersion: model.SchemaGlobalLogNode,
+			Level:         0,
+			StartIndex:    uint64(i),
+			Width:         1,
+			Hash:          bytes.Repeat([]byte{1}, 32),
+		}); err != nil {
+			t.Fatalf("PutGlobalLogNode(%d): %v", i, err)
+		}
+	}
+	if err := os.WriteFile(store.globalNodePath(0, 0), []byte("not-cbor"), 0o600); err != nil {
+		t.Fatalf("corrupt oldest node: %v", err)
+	}
+
+	page, err := store.ListGlobalLogNodesAfter(ctx, 0, 0, 100)
+	if err != nil {
+		t.Fatalf("ListGlobalLogNodesAfter: %v", err)
+	}
+	if len(page) != 100 || page[0].StartIndex != 1 || page[99].StartIndex != 100 {
+		t.Fatalf("page bounds: len=%d first=%d last=%d", len(page), page[0].StartIndex, page[len(page)-1].StartIndex)
+	}
+}
+
+func TestLocalStoreGlobalNodeListRejectsFilenameMismatch(t *testing.T) {
+	t.Parallel()
+
+	store := LocalStore{Root: t.TempDir()}
+	ctx := context.Background()
+	if err := store.PutGlobalLogNode(ctx, model.GlobalLogNode{
+		SchemaVersion: model.SchemaGlobalLogNode,
+		Level:         0,
+		StartIndex:    1,
+		Width:         1,
+		Hash:          bytes.Repeat([]byte{1}, 32),
+	}); err != nil {
+		t.Fatalf("PutGlobalLogNode: %v", err)
+	}
+	if err := os.Rename(store.globalNodePath(0, 1), store.globalNodePath(0, 2)); err != nil {
+		t.Fatalf("rename global node: %v", err)
+	}
+
+	_, err := store.ListGlobalLogNodesAfter(ctx, ^uint64(0), ^uint64(0), 1)
+	if trusterr.CodeOf(err) != trusterr.CodeDataLoss {
+		t.Fatalf("ListGlobalLogNodesAfter code = %s, err=%v", trusterr.CodeOf(err), err)
+	}
+}
+
 func TestLocalStoreMissingManifest(t *testing.T) {
 	t.Parallel()
 
