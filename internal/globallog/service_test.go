@@ -146,6 +146,29 @@ func TestAppendBatchRootsPreservesSTHSequence(t *testing.T) {
 	}
 }
 
+func TestAppendBatchRootRetriesConflictBeforeWinningStateIsVisible(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	store := proofstore.LocalStore{Root: t.TempDir()}
+	conflictingStore := &conflictingBatchStore{Store: store}
+	conflictingStore.conflict = func() error {
+		return trusterr.New(trusterr.CodeFailedPrecondition, "global log append lost concurrent write")
+	}
+	svc := newTestServiceForStore(t, conflictingStore)
+
+	sth, err := svc.AppendBatchRoot(ctx, batchRoot("eventual-winner", 1))
+	if err != nil {
+		t.Fatalf("AppendBatchRoot: %v", err)
+	}
+	if sth.TreeSize != 1 {
+		t.Fatalf("STH tree_size = %d, want 1", sth.TreeSize)
+	}
+	leaf, found, err := store.GetGlobalLeafByBatchID(ctx, "eventual-winner")
+	if err != nil || !found || leaf.LeafIndex != 0 {
+		t.Fatalf("persisted leaf = %+v, found=%v err=%v", leaf, found, err)
+	}
+}
+
 func TestAppendBatchRootReplansAfterConcurrentWriterAdvancesTree(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
