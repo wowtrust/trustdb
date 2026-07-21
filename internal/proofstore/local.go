@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ryan-wong-coder/trustdb/internal/cborx"
@@ -26,6 +28,34 @@ const (
 
 type LocalStore struct {
 	Root string
+}
+
+type localFileOps struct {
+	stat       func(string) (os.FileInfo, error)
+	mkdir      func(string, os.FileMode) error
+	createTemp func(string, string) (*os.File, error)
+	syncFile   func(*os.File) error
+	closeFile  func(*os.File) error
+	replace    func(string, string) error
+	remove     func(string) error
+	syncDir    func(string) error
+	cacheDirs  bool
+}
+
+var localDurableDirectories sync.Map
+
+func defaultLocalFileOps() localFileOps {
+	return localFileOps{
+		stat:       os.Stat,
+		mkdir:      os.Mkdir,
+		createTemp: os.CreateTemp,
+		syncFile:   func(file *os.File) error { return file.Sync() },
+		closeFile:  func(file *os.File) error { return file.Close() },
+		replace:    replaceLocalFile,
+		remove:     os.Remove,
+		syncDir:    syncLocalDirectory,
+		cacheDirs:  true,
+	}
 }
 
 func (s LocalStore) PutBundle(ctx context.Context, bundle model.ProofBundle) error {
@@ -683,11 +713,10 @@ func (s LocalStore) Close() error {
 	return nil
 }
 
-// WALCheckpointPruneSafe is false because writeCBORAtomic guarantees atomic
-// visibility but does not fsync every artifact and newly-created parent
-// directory before checkpoint publication. Keeping the WAL is the safe crash
-// recovery source for this development backend.
-func (LocalStore) WALCheckpointPruneSafe() bool { return false }
+// WALCheckpointPruneSafe is true because every successful local publication
+// synchronizes file contents, the atomic replacement, and all directory
+// ancestry before a later checkpoint can authorize WAL deletion.
+func (LocalStore) WALCheckpointPruneSafe() bool { return true }
 
 func (s LocalStore) PutGlobalLeaf(ctx context.Context, leaf model.GlobalLogLeaf) error {
 	if err := ctx.Err(); err != nil {
@@ -1841,16 +1870,20 @@ func (s LocalStore) root() string {
 }
 
 func writeCBORAtomic(path string, value any) error {
+	return writeCBORAtomicWithOps(path, value, defaultLocalFileOps())
+}
+
+func writeCBORAtomicWithOps(path string, value any, ops localFileOps) error {
 	data, err := cborx.Marshal(value)
 	if err != nil {
 		return err
 	}
 	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := ensureLocalDurableDirectory(dir, 0o755, ops); err != nil {
 		return err
 	}
 
-	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".*.tmp")
+	tmp, err := ops.createTemp(dir, "."+filepath.Base(path)+".*.tmp")
 	if err != nil {
 		return err
 	}
@@ -1858,31 +1891,85 @@ func writeCBORAtomic(path string, value any) error {
 	cleanup := true
 	defer func() {
 		if cleanup {
-			_ = os.Remove(tmpPath)
+			_ = ops.remove(tmpPath)
 		}
 	}()
 	if _, err := tmp.Write(data); err != nil {
-		_ = tmp.Close()
-		return err
+		return errors.Join(err, ops.closeFile(tmp))
 	}
-	if err := tmp.Close(); err != nil {
+	if err := ops.syncFile(tmp); err != nil {
+		return errors.Join(err, ops.closeFile(tmp))
+	}
+	if err := ops.closeFile(tmp); err != nil {
 		return err
 	}
 	if err := rejectDirectoryTarget(path); err != nil {
 		return err
 	}
-	if err := os.Rename(tmpPath, path); err != nil {
-		if os.IsExist(err) {
-			if removeErr := os.Remove(path); removeErr == nil {
-				if retryErr := os.Rename(tmpPath, path); retryErr == nil {
-					cleanup = false
-					return nil
-				}
-			}
-		}
+	if err := ops.replace(tmpPath, path); err != nil {
 		return err
 	}
 	cleanup = false
+	if err := ops.syncDir(dir); err != nil {
+		return fmt.Errorf("sync proofstore directory %q after publishing %q: %w", dir, path, err)
+	}
+	return nil
+}
+
+func ensureLocalDurableDirectory(path string, perm os.FileMode, ops localFileOps) error {
+	clean := filepath.Clean(path)
+	if ops.cacheDirs {
+		if _, ok := localDurableDirectories.Load(clean); ok {
+			return nil
+		}
+	}
+	missing := make([]string, 0, 4)
+	var boundary string
+	for current := clean; ; current = filepath.Dir(current) {
+		info, err := ops.stat(current)
+		if err == nil {
+			if !info.IsDir() {
+				return fmt.Errorf("proofstore path component %q is not a directory", current)
+			}
+			boundary = current
+			break
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("stat proofstore directory %q: %w", current, err)
+		}
+		missing = append(missing, current)
+		parent := filepath.Dir(current)
+		if parent == current {
+			return fmt.Errorf("no existing parent for proofstore directory %q", clean)
+		}
+	}
+	if parent := filepath.Dir(boundary); parent != boundary {
+		if err := ops.syncDir(parent); err != nil {
+			return fmt.Errorf("sync parent directory %q for proofstore boundary %q: %w", parent, boundary, err)
+		}
+	}
+	for i := len(missing) - 1; i >= 0; i-- {
+		component := missing[i]
+		if err := ops.mkdir(component, perm); err != nil {
+			if !errors.Is(err, os.ErrExist) {
+				return fmt.Errorf("create proofstore directory %q: %w", component, err)
+			}
+			info, statErr := ops.stat(component)
+			if statErr != nil {
+				return fmt.Errorf("stat concurrently created proofstore directory %q: %w", component, statErr)
+			}
+			if !info.IsDir() {
+				return fmt.Errorf("concurrently created proofstore path %q is not a directory", component)
+			}
+		}
+		parent := filepath.Dir(component)
+		if err := ops.syncDir(parent); err != nil {
+			return fmt.Errorf("sync parent directory %q after creating %q: %w", parent, component, err)
+		}
+	}
+	if ops.cacheDirs {
+		localDurableDirectories.Store(clean, struct{}{})
+	}
 	return nil
 }
 

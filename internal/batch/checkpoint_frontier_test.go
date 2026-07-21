@@ -16,6 +16,10 @@ import (
 	"github.com/ryan-wong-coder/trustdb/internal/trusterr"
 )
 
+type unsafeCheckpointLocalStore struct{ proofstore.LocalStore }
+
+func (unsafeCheckpointLocalStore) WALCheckpointPruneSafe() bool { return false }
+
 type checkpointRecordingStore struct {
 	proofstore.LocalStore
 
@@ -459,10 +463,19 @@ func TestAsyncMaterializersAdvanceOnlyAfterEarlierGapCloses(t *testing.T) {
 	if cp.LastSequence != 2 || cp.LastOffset != 200 {
 		t.Fatalf("checkpoint after releasing sequence 1 = %+v, want sequence 2", cp)
 	}
-	hookMu.Lock()
-	defer hookMu.Unlock()
-	if len(hooks) != 1 || hooks[0].LastSequence != 2 {
-		t.Fatalf("checkpoint hooks = %+v, want one sequence-2 advance", hooks)
+	deadline := time.Now().Add(time.Second)
+	for {
+		hookMu.Lock()
+		ready := len(hooks) == 1 && hooks[0].LastSequence == 2
+		got := append([]model.WALCheckpoint(nil), hooks...)
+		hookMu.Unlock()
+		if ready {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("checkpoint hooks = %+v, want one sequence-2 advance", got)
+		}
+		time.Sleep(time.Millisecond)
 	}
 }
 
@@ -773,7 +786,7 @@ func TestServiceDoesNotCheckpointDuplicateUnprotectedRecordID(t *testing.T) {
 }
 
 func TestServiceDisablesCheckpointForUnsafeStore(t *testing.T) {
-	store := proofstore.LocalStore{Root: t.TempDir()}
+	store := unsafeCheckpointLocalStore{LocalStore: proofstore.LocalStore{Root: t.TempDir()}}
 	var hookCalls int
 	svc := New(fakeEngine{}, store, Options{
 		OnCheckpointAdvanced: func(context.Context, model.WALCheckpoint) { hookCalls++ },
@@ -781,7 +794,7 @@ func TestServiceDisablesCheckpointForUnsafeStore(t *testing.T) {
 	defer svc.Shutdown(context.Background())
 
 	persistCheckpointTestBatch(t, svc, "unsafe-store", checkpointAccepted("unsafe-1", model.WALPosition{SegmentID: 1, Sequence: 1}))
-	if _, found := readCheckpointExact(t, store); found {
+	if _, found := readCheckpointExact(t, store.LocalStore); found {
 		t.Fatal("unsafe store persisted an automatic checkpoint")
 	}
 	if hookCalls != 0 {
