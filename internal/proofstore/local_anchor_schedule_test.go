@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/ryan-wong-coder/trustdb/internal/anchorschedule"
@@ -168,6 +169,68 @@ func TestLocalStorePutSTHAnchorScheduleValidatesRestoreSnapshot(t *testing.T) {
 	reconciled, found, err := reconciledDestination.GetSTHAnchorSchedule(ctx, key)
 	if err != nil || !found || reconciled.InFlight != nil {
 		t.Fatalf("reconciled restored schedule = %+v found=%v err=%v", reconciled, found, err)
+	}
+}
+
+func TestLocalStoreSTHAnchorCandidateDoesNotScanResultHistory(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	store := LocalStore{Root: t.TempDir()}
+	key := model.STHAnchorScheduleKey{NodeID: "node-1", LogID: "log-1", SinkName: "file"}
+	firstSTH := localScheduleSTH(key, 1, 0x11)
+	if err := store.PutSTHAnchorResult(ctx, localScheduleResult(key, firstSTH, "anchor-1", 100, []byte("proof"))); err != nil {
+		t.Fatalf("PutSTHAnchorResult first: %v", err)
+	}
+
+	// A malformed historical filename would make a directory-wide result scan
+	// fail. Candidate upserts must use the canonical tree-root point lookup.
+	malformed := filepath.Join(store.sthAnchorResultDir(), "malformed"+localAnchorResultSuffix)
+	if err := os.WriteFile(malformed, []byte("not-cbor"), 0o600); err != nil {
+		t.Fatalf("WriteFile malformed history: %v", err)
+	}
+	if _, err := store.UpsertSTHAnchorCandidate(ctx, localScheduleCandidate(key, 2, 0x22, 200, 300)); err != nil {
+		t.Fatalf("UpsertSTHAnchorCandidate with malformed history: %v", err)
+	}
+}
+
+func TestLocalStoreSTHAnchorTreeRootRejectsConcurrentSplitViewAcrossSinks(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	store := LocalStore{Root: t.TempDir()}
+	keys := []model.STHAnchorScheduleKey{
+		{NodeID: "node-1", LogID: "log-1", SinkName: "sink-a"},
+		{NodeID: "node-1", LogID: "log-1", SinkName: "sink-b"},
+	}
+
+	start := make(chan struct{})
+	errs := make([]error, len(keys))
+	var wg sync.WaitGroup
+	for i, key := range keys {
+		wg.Add(1)
+		go func(i int, key model.STHAnchorScheduleKey) {
+			defer wg.Done()
+			<-start
+			_, errs[i] = store.UpsertSTHAnchorCandidate(ctx, localScheduleCandidate(key, 7, byte(0x70+i), 100, 200))
+		}(i, key)
+	}
+	close(start)
+	wg.Wait()
+
+	succeeded, rejected := 0, 0
+	for _, err := range errs {
+		if err == nil {
+			succeeded++
+			continue
+		}
+		switch trusterr.CodeOf(err) {
+		case trusterr.CodeDataLoss:
+			rejected++
+		default:
+			t.Fatalf("unexpected concurrent upsert error: %v", err)
+		}
+	}
+	if succeeded != 1 || rejected != 1 {
+		t.Fatalf("concurrent split view succeeded=%d rejected=%d errors=%v", succeeded, rejected, errs)
 	}
 }
 

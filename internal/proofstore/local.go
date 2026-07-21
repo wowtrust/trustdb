@@ -3,6 +3,7 @@ package proofstore
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
@@ -32,6 +33,7 @@ const (
 	localAnchorResultSuffix   = ".tdsth-anchor-result"
 	localAnchorResultPrefix   = "v2_"
 	localAnchorLatestSuffix   = ".tdsth-anchor-latest"
+	localAnchorTreeRootSuffix = ".tdsth-anchor-tree-root"
 )
 
 type LocalStore struct {
@@ -56,6 +58,7 @@ var localLatestSTHLocks [64]sync.Mutex
 var localLatestRootLocks [64]sync.Mutex
 var localLatestAnchorLocks [64]sync.Mutex
 var localSTHAnchorScheduleLocks [64]sync.Mutex
+var localSTHAnchorTreeRootLocks [64]sync.Mutex
 
 type localLatestAnchorReference struct {
 	Candidate model.STHAnchorLatestReference  `cbor:"candidate"`
@@ -1551,6 +1554,10 @@ func (s LocalStore) sthAnchorScheduleLock(key model.STHAnchorScheduleKey) *sync.
 	return localStoreStripedLock(s.root()+"\x00"+encodeLocalSTHAnchorScheduleFilename(key), &localSTHAnchorScheduleLocks)
 }
 
+func (s LocalStore) sthAnchorTreeRootLock(nodeID, logID string, treeSize uint64) *sync.Mutex {
+	return localStoreStripedLock(s.root()+"\x00"+encodeLocalSTHAnchorTreeRootFilename(nodeID, logID, treeSize), &localSTHAnchorTreeRootLocks)
+}
+
 func localStoreStripedLock(value string, locks *[64]sync.Mutex) *sync.Mutex {
 	hash := uint64(14695981039346656037)
 	for i := 0; i < len(value); i++ {
@@ -2388,59 +2395,35 @@ func (s LocalStore) listLocalSTHAnchorResultEntries() ([]localSTHAnchorResultEnt
 }
 
 func (s LocalStore) validateSTHAnchorResultTreeLocked(result model.STHAnchorResult) error {
-	entries, err := s.listLocalSTHAnchorResultEntries()
-	if err != nil {
-		return err
-	}
-	for _, entry := range entries {
-		if entry.key.TreeSize < result.TreeSize {
-			continue
-		}
-		if entry.key.TreeSize > result.TreeSize {
-			break
-		}
-		if entry.key.NodeID != result.NodeID || entry.key.LogID != result.LogID {
-			continue
-		}
-		existing, found, err := s.readSTHAnchorResult(entry.key)
-		if err != nil {
-			return err
-		}
-		if !found {
-			return trusterr.New(trusterr.CodeDataLoss, "sth anchor result disappeared during split-view validation")
-		}
-		if !bytes.Equal(existing.RootHash, result.RootHash) {
-			return trusterr.New(trusterr.CodeDataLoss, "sth anchor result conflicts with another sink at the same tree size")
-		}
-	}
-	return nil
+	return s.validateOrStoreSTHAnchorTreeRootLocked(result.NodeID, result.LogID, result.TreeSize, result.RootHash)
 }
 
 func (s LocalStore) validateSTHAnchorCandidateTreeLocked(candidate model.STHAnchorCandidate) error {
-	entries, err := s.listLocalSTHAnchorResultEntries()
+	return s.validateOrStoreSTHAnchorTreeRootLocked(candidate.Key.NodeID, candidate.Key.LogID, candidate.STH.TreeSize, candidate.STH.RootHash)
+}
+
+func (s LocalStore) validateOrStoreSTHAnchorTreeRootLocked(nodeID, logID string, treeSize uint64, rootHash []byte) error {
+	lock := s.sthAnchorTreeRootLock(nodeID, logID, treeSize)
+	lock.Lock()
+	defer lock.Unlock()
+
+	path := s.sthAnchorTreeRootPath(nodeID, logID, treeSize)
+	data, err := readStoredFile(path)
 	if err != nil {
-		return err
+		if os.IsNotExist(err) {
+			if err := writeCBORAtomic(path, append([]byte(nil), rootHash...)); err != nil {
+				return trusterr.Wrap(trusterr.CodeDataLoss, "write canonical sth anchor tree root", err)
+			}
+			return nil
+		}
+		return trusterr.Wrap(trusterr.CodeDataLoss, "read canonical sth anchor tree root", err)
 	}
-	for _, entry := range entries {
-		if entry.key.TreeSize < candidate.STH.TreeSize {
-			continue
-		}
-		if entry.key.TreeSize > candidate.STH.TreeSize {
-			break
-		}
-		if entry.key.NodeID != candidate.Key.NodeID || entry.key.LogID != candidate.Key.LogID {
-			continue
-		}
-		existing, found, err := s.readSTHAnchorResult(entry.key)
-		if err != nil {
-			return err
-		}
-		if !found {
-			return trusterr.New(trusterr.CodeDataLoss, "sth anchor result disappeared during candidate validation")
-		}
-		if err := anchorschedule.ValidateCandidateAgainstExactResult(candidate, existing); err != nil {
-			return err
-		}
+	var stored []byte
+	if err := cborx.UnmarshalLimit(data, &stored, maxStoredObjectBytes); err != nil || len(stored) != sha256.Size {
+		return trusterr.New(trusterr.CodeDataLoss, "canonical sth anchor tree root is invalid")
+	}
+	if !bytes.Equal(stored, rootHash) {
+		return trusterr.New(trusterr.CodeDataLoss, "anchor tree size has conflicting root hash")
 	}
 	return nil
 }
@@ -3196,6 +3179,10 @@ func (s LocalStore) sthAnchorSchedulePath(key model.STHAnchorScheduleKey) string
 	return filepath.Join(s.sthAnchorScheduleDir(), encodeLocalSTHAnchorScheduleFilename(key))
 }
 
+func (s LocalStore) sthAnchorTreeRootPath(nodeID, logID string, treeSize uint64) string {
+	return filepath.Join(s.root(), "anchor", "sth-tree-root", encodeLocalSTHAnchorTreeRootFilename(nodeID, logID, treeSize))
+}
+
 func (s LocalStore) latestSTHAnchorReferencePath() string {
 	return filepath.Join(s.root(), "anchor", "latest-sth-anchor.tdref")
 }
@@ -3751,6 +3738,15 @@ func encodeLocalSTHAnchorScheduleFilename(key model.STHAnchorScheduleKey) string
 		base64.RawURLEncoding.EncodeToString([]byte(key.SinkName)),
 	}
 	return localAnchorSchedulePrefix + strings.Join(parts, ".") + localAnchorScheduleSuffix
+}
+
+func encodeLocalSTHAnchorTreeRootFilename(nodeID, logID string, treeSize uint64) string {
+	parts := []string{
+		fmt.Sprintf("%0*d", localPositionWidth, treeSize),
+		base64.RawURLEncoding.EncodeToString([]byte(nodeID)),
+		base64.RawURLEncoding.EncodeToString([]byte(logID)),
+	}
+	return localAnchorSchedulePrefix + strings.Join(parts, ".") + localAnchorTreeRootSuffix
 }
 
 func decodeLocalSTHAnchorScheduleFilename(name string) (model.STHAnchorScheduleKey, error) {
