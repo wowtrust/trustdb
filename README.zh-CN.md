@@ -223,6 +223,10 @@ TrustDB 默认可按单节点服务运行。启用 TiKV proofstore 后，多个 
 - [docs/performance/trustdb-performance-optimization-2026-07.zh-CN.md](docs/performance/trustdb-performance-optimization-2026-07.zh-CN.md)：性能优化实现说明。
 - [docs/performance/trustdb-performance-report-2026-04-30.zh-CN.md](docs/performance/trustdb-performance-report-2026-04-30.zh-CN.md)：旧版性能优先基线。
 
+## 社区致谢
+
+TrustDB 感谢 [LINUX DO 社区](https://linux.do/) 对开放技术交流与开源协作的推动。
+
 ## 开发检查
 
 迭代时按范围选择最小检查，合并前跑更完整的检查：

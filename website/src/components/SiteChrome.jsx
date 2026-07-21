@@ -70,6 +70,7 @@ export function SiteFooter() {
       </nav>
       <div className="site-footer__meta">
         <a href="https://github.com/ryan-wong-coder/trustdb" target="_blank" rel="noreferrer">源码 <ArrowUpRight /></a>
+        <a className="site-footer__community" href="https://linux.do/" target="_blank" rel="noreferrer" aria-label="访问 LINUX DO 社区">感谢 LINUX DO 社区 <ArrowUpRight /></a>
         <small>AGPL-3.0 · © 2026 TrustDB</small>
       </div>
     </footer>

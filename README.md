@@ -226,6 +226,10 @@ The screenshot below is rendered directly from the current desktop client code:
 - [docs/performance/trustdb-performance-optimization-2026-07.zh-CN.md](docs/performance/trustdb-performance-optimization-2026-07.zh-CN.md): performance implementation notes (Chinese).
 - [docs/performance/trustdb-performance-report-2026-04-30.en.md](docs/performance/trustdb-performance-report-2026-04-30.en.md): previous performance-first baseline.
 
+## Community Acknowledgements
+
+TrustDB gratefully acknowledges the [LINUX DO community](https://linux.do/) for fostering open technical discussion and open-source collaboration.
+
 ## Development Checks
 
 Use the smallest relevant set while iterating, then run broader checks before merge:

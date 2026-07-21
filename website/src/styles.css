@@ -654,7 +654,8 @@ button { font: inherit; }
   .terminal pre { padding: 28px 20px; font-size: 10px; }
   .site-footer .brand__descriptor { display: none; }
   .site-footer__meta > a { display: none; }
-  .site-footer__meta { gap: 0; }
+  .site-footer__meta > .site-footer__community { display: inline-flex; max-width: 170px; justify-content: flex-end; text-align: right; line-height: 1.45; }
+  .site-footer__meta { gap: 12px; }
   .page-hero { min-height: 650px; }
   .page-hero h1 { font-size: clamp(52px, 17vw, 78px); }
   .testbed__facts { grid-template-columns: 1fr; }
