@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"fmt"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -620,15 +621,19 @@ type scriptedTiKVIterator struct {
 
 type countingTiKVClient struct {
 	tikvclient.Client
-	scanRequests     atomic.Int64
-	getRequests      atomic.Int64
-	batchGetRequests atomic.Int64
-	batchGetKeys     atomic.Int64
-	batchGetMaxKeys  atomic.Int64
-	scanVersion      atomic.Uint64
-	batchGetVersion  atomic.Uint64
-	readVersionDrift atomic.Bool
-	batchGetHook     func()
+	scanRequests         atomic.Int64
+	getRequests          atomic.Int64
+	batchGetRequests     atomic.Int64
+	batchGetKeys         atomic.Int64
+	batchGetMaxKeys      atomic.Int64
+	prewriteRequests     atomic.Int64
+	prewriteMutations    atomic.Int64
+	prewriteTransactions atomic.Int64
+	prewriteVersions     sync.Map
+	scanVersion          atomic.Uint64
+	batchGetVersion      atomic.Uint64
+	readVersionDrift     atomic.Bool
+	batchGetHook         func()
 }
 
 func (client *countingTiKVClient) SendRequest(ctx context.Context, address string, request *tikvrpc.Request, timeout time.Duration) (*tikvrpc.Response, error) {
@@ -658,8 +663,24 @@ func (client *countingTiKVClient) SendRequest(ctx context.Context, address strin
 		if client.batchGetHook != nil {
 			client.batchGetHook()
 		}
+	case tikvrpc.CmdPrewrite:
+		client.prewriteRequests.Add(1)
+		client.prewriteMutations.Add(int64(len(request.Prewrite().Mutations)))
+		if _, loaded := client.prewriteVersions.LoadOrStore(request.Prewrite().StartVersion, struct{}{}); !loaded {
+			client.prewriteTransactions.Add(1)
+		}
 	}
 	return client.Client.SendRequest(ctx, address, request, timeout)
+}
+
+func (client *countingTiKVClient) resetWriteRequests() {
+	client.prewriteRequests.Store(0)
+	client.prewriteMutations.Store(0)
+	client.prewriteTransactions.Store(0)
+	client.prewriteVersions.Range(func(key, _ any) bool {
+		client.prewriteVersions.Delete(key)
+		return true
+	})
 }
 
 func (client *countingTiKVClient) resetReadRequests() {

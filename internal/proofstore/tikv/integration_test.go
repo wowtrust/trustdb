@@ -129,6 +129,51 @@ func TestTiKVPreparedManifestIndexIntegration(t *testing.T) {
 	}
 }
 
+func TestTiKVBatchTreeSnapshotIntegration(t *testing.T) {
+	requireTiKVIntegration(t)
+
+	ctx := context.Background()
+	store := openIntegrationStore(t, integrationNamespace(t, "batch-tree-tiles"))
+	defer store.Close()
+	const leafCount = 1024
+	snapshot := model.BatchTreeSnapshot{
+		BatchID:        "batch-tree-tiles",
+		CreatedAtUnixN: time.Now().UnixNano(),
+		RecordIDs:      make([]string, leafCount),
+		LeafHashes:     make([][32]byte, leafCount),
+	}
+	for i := range leafCount {
+		snapshot.RecordIDs[i] = fmt.Sprintf("record-%04d", i)
+		snapshot.LeafHashes[i][0] = byte(i)
+	}
+	for level, width := uint64(0), uint64(1); width <= leafCount; level, width = level+1, width*2 {
+		for start := uint64(0); start < leafCount; start += width {
+			node := model.BatchTreeSnapshotNode{Level: level, StartIndex: start, Width: width}
+			if level == 0 {
+				node.Hash = snapshot.LeafHashes[start]
+			} else {
+				node.Hash[0] = byte(level)
+			}
+			snapshot.Nodes = append(snapshot.Nodes, node)
+		}
+	}
+	writer, ok := any(store).(proofstore.BatchTreeSnapshotWriter)
+	if !ok {
+		t.Fatal("TiKV store does not implement BatchTreeSnapshotWriter")
+	}
+	if err := writer.PutBatchTreeSnapshot(ctx, snapshot); err != nil {
+		t.Fatalf("PutBatchTreeSnapshot: %v", err)
+	}
+	leaves, err := store.ListBatchTreeLeaves(ctx, model.BatchTreeLeafListOptions{BatchID: snapshot.BatchID, Limit: 2, AfterLeafIndex: 511, HasAfter: true})
+	if err != nil || len(leaves) != 2 || leaves[0].LeafIndex != 512 || !bytes.Equal(leaves[0].LeafHash, snapshot.LeafHashes[512][:]) {
+		t.Fatalf("cursor leaves = %+v, err=%v", leaves, err)
+	}
+	root, err := store.ListBatchTreeNodes(ctx, model.BatchTreeNodeListOptions{BatchID: snapshot.BatchID, Level: 10, Limit: 1})
+	if err != nil || len(root) != 1 || root[0].Width != leafCount || !bytes.Equal(root[0].Hash, snapshot.Nodes[len(snapshot.Nodes)-1].Hash[:]) {
+		t.Fatalf("root = %+v, err=%v", root, err)
+	}
+}
+
 func TestTiKVGlobalLogConcurrentServicesRetryConflicts(t *testing.T) {
 	requireTiKVIntegration(t)
 

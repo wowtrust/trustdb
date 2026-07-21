@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -38,6 +39,8 @@ const (
 const maxStoredObjectBytes = 64 << 20
 const (
 	batchArtifactChunkSize       = 1024
+	batchTreeTileSize            = 512
+	batchTreeTilesPerTransaction = 64
 	bundleCompressionMinBytes    = 4 << 10
 	maxBatchArtifactEncodeWorker = 16
 	globalOutboxReadBatchSize    = 1024
@@ -478,8 +481,8 @@ const (
 	prefixManifest       = "manifest/"
 	prefixManifestReady  = "manifest-prepared/"
 	prefixRoot           = "root/"
-	prefixBatchTreeLeaf  = "batch-tree/leaf/"
-	prefixBatchTreeNode  = "batch-tree/node/"
+	prefixBatchTreeLeaf  = "batch-tree/v2/leaf/"
+	prefixBatchTreeNode  = "batch-tree/v2/node/"
 	prefixGlobalLeaf     = "global/leaf/"
 	prefixGlobalBatch    = "global/leaf-by-batch/"
 	prefixGlobalNode     = "global/node/"
@@ -498,7 +501,30 @@ const (
 const (
 	schemaStoredProofBundleV2 = "trustdb.pebble-proof-bundle.v2"
 	storedBundleCodecSnappy   = "snappy"
+	schemaBatchTreeLeafTileV2 = "trustdb.batch-tree-leaf-tile.v2"
+	schemaBatchTreeNodeTileV2 = "trustdb.batch-tree-node-tile.v2"
 )
+
+type batchTreeLeafTile struct {
+	SchemaVersion  string   `cbor:"schema_version"`
+	BatchID        string   `cbor:"batch_id"`
+	StartIndex     uint64   `cbor:"start_index"`
+	LeafIndexes    []uint64 `cbor:"leaf_indexes"`
+	RecordIDs      []string `cbor:"record_ids"`
+	Hashes         [][]byte `cbor:"hashes"`
+	CreatedAtUnixN int64    `cbor:"created_at_unix_nano"`
+}
+
+type batchTreeNodeTile struct {
+	SchemaVersion  string   `cbor:"schema_version"`
+	BatchID        string   `cbor:"batch_id"`
+	Level          uint64   `cbor:"level"`
+	StartIndex     uint64   `cbor:"start_index"`
+	StartIndexes   []uint64 `cbor:"start_indexes"`
+	Widths         []uint64 `cbor:"widths"`
+	Hashes         [][]byte `cbor:"hashes"`
+	CreatedAtUnixN int64    `cbor:"created_at_unix_nano"`
+}
 
 const (
 	RecordIndexModeFull            = "full"
@@ -1935,80 +1961,206 @@ func (s *Store) PutBatchTreeArtifacts(ctx context.Context, leaves []model.BatchT
 		return trusterr.New(trusterr.CodeInvalidArgument, "batch tree artifact batch_id is required")
 	}
 	now := time.Now().UTC().UnixNano()
-	for start := 0; start < len(leaves); start += batchArtifactChunkSize {
-		end := start + batchArtifactChunkSize
-		if end > len(leaves) {
-			end = len(leaves)
-		}
-		batch := s.db.NewBatch()
-		for i := start; i < end; i++ {
-			leaf := leaves[i]
-			if leaf.BatchID != batchID {
-				_ = batch.Close()
-				return trusterr.New(trusterr.CodeInvalidArgument, "batch tree leaves must share batch_id")
-			}
-			if leaf.SchemaVersion == "" {
-				leaf.SchemaVersion = model.SchemaBatchTreeLeaf
-			}
-			if leaf.CreatedAtUnixN == 0 {
-				leaf.CreatedAtUnixN = now
-			}
-			data, err := cborx.Marshal(leaf)
-			if err != nil {
-				_ = batch.Close()
-				return err
-			}
-			if err := stageSet(batch, batchTreeLeafKey(leaf.BatchID, leaf.LeafIndex), data); err != nil {
-				_ = batch.Close()
-				return trusterr.Wrap(trusterr.CodeDataLoss, "stage batch tree leaf", err)
-			}
-		}
-		if err := batch.Commit(s.artifactWriteOptions()); err != nil {
-			_ = batch.Close()
-			return trusterr.Wrap(trusterr.CodeDataLoss, "commit batch tree leaves", err)
-		}
-		if err := batch.Close(); err != nil {
-			return trusterr.Wrap(trusterr.CodeDataLoss, "close batch tree leaves", err)
+	sortedLeaves := append([]model.BatchTreeLeaf(nil), leaves...)
+	sort.Slice(sortedLeaves, func(i, j int) bool { return sortedLeaves[i].LeafIndex < sortedLeaves[j].LeafIndex })
+	for i := range sortedLeaves {
+		if sortedLeaves[i].BatchID != batchID || sortedLeaves[i].RecordID == "" || len(sortedLeaves[i].LeafHash) == 0 || (i > 0 && sortedLeaves[i].LeafIndex <= sortedLeaves[i-1].LeafIndex) {
+			return trusterr.New(trusterr.CodeInvalidArgument, "invalid batch tree leaf sequence")
 		}
 	}
-	for start := 0; start < len(nodes); start += batchArtifactChunkSize {
-		end := start + batchArtifactChunkSize
-		if end > len(nodes) {
-			end = len(nodes)
+	leafTiles := make([]batchTreeLeafTile, 0, (len(sortedLeaves)+batchTreeTileSize-1)/batchTreeTileSize)
+	for start := 0; start < len(sortedLeaves); start += batchTreeTileSize {
+		end := min(start+batchTreeTileSize, len(sortedLeaves))
+		tile := batchTreeLeafTile{
+			SchemaVersion:  schemaBatchTreeLeafTileV2,
+			BatchID:        batchID,
+			StartIndex:     sortedLeaves[start].LeafIndex,
+			LeafIndexes:    make([]uint64, end-start),
+			RecordIDs:      make([]string, end-start),
+			Hashes:         make([][]byte, end-start),
+			CreatedAtUnixN: now,
 		}
+		for i := start; i < end; i++ {
+			leaf := sortedLeaves[i]
+			pos := i - start
+			tile.LeafIndexes[pos] = leaf.LeafIndex
+			tile.RecordIDs[pos] = leaf.RecordID
+			tile.Hashes[pos] = append([]byte(nil), leaf.LeafHash...)
+			if leaf.CreatedAtUnixN > 0 {
+				tile.CreatedAtUnixN = leaf.CreatedAtUnixN
+			}
+		}
+		leafTiles = append(leafTiles, tile)
+	}
+	sortedNodes := append([]model.BatchTreeNode(nil), nodes...)
+	sort.Slice(sortedNodes, func(i, j int) bool {
+		if sortedNodes[i].Level != sortedNodes[j].Level {
+			return sortedNodes[i].Level < sortedNodes[j].Level
+		}
+		return sortedNodes[i].StartIndex < sortedNodes[j].StartIndex
+	})
+	for i := range sortedNodes {
+		if sortedNodes[i].BatchID != batchID || sortedNodes[i].Width == 0 || (i > 0 && sortedNodes[i].Level == sortedNodes[i-1].Level && sortedNodes[i].StartIndex <= sortedNodes[i-1].StartIndex) {
+			return trusterr.New(trusterr.CodeInvalidArgument, "invalid batch tree node sequence")
+		}
+	}
+	nodeTiles := make([]batchTreeNodeTile, 0)
+	for levelStart := 0; levelStart < len(sortedNodes); {
+		level := sortedNodes[levelStart].Level
+		levelEnd := levelStart
+		for levelEnd < len(sortedNodes) && sortedNodes[levelEnd].Level == level {
+			levelEnd++
+		}
+		if level != 0 {
+			for start := levelStart; start < levelEnd; start += batchTreeTileSize {
+				end := min(start+batchTreeTileSize, levelEnd)
+				tile := batchTreeNodeTile{
+					SchemaVersion:  schemaBatchTreeNodeTileV2,
+					BatchID:        batchID,
+					Level:          level,
+					StartIndex:     sortedNodes[start].StartIndex,
+					StartIndexes:   make([]uint64, end-start),
+					Widths:         make([]uint64, end-start),
+					Hashes:         make([][]byte, end-start),
+					CreatedAtUnixN: now,
+				}
+				for i := start; i < end; i++ {
+					node := sortedNodes[i]
+					pos := i - start
+					tile.StartIndexes[pos] = node.StartIndex
+					tile.Widths[pos] = node.Width
+					tile.Hashes[pos] = append([]byte(nil), node.Hash...)
+					if node.CreatedAtUnixN > 0 {
+						tile.CreatedAtUnixN = node.CreatedAtUnixN
+					}
+				}
+				nodeTiles = append(nodeTiles, tile)
+			}
+		}
+		levelStart = levelEnd
+	}
+	return s.putBatchTreeTiles(ctx, leafTiles, nodeTiles)
+}
+
+func (s *Store) PutBatchTreeSnapshot(ctx context.Context, snapshot model.BatchTreeSnapshot) error {
+	if err := ctx.Err(); err != nil {
+		return trusterr.Wrap(trusterr.CodeDeadlineExceeded, "proofstore put batch tree snapshot canceled", err)
+	}
+	if snapshot.BatchID == "" || len(snapshot.LeafHashes) == 0 || len(snapshot.LeafHashes) != len(snapshot.RecordIDs) {
+		return trusterr.New(trusterr.CodeInvalidArgument, "invalid batch tree snapshot")
+	}
+	for i := range snapshot.RecordIDs {
+		if snapshot.RecordIDs[i] == "" {
+			return trusterr.New(trusterr.CodeInvalidArgument, "batch tree snapshot record_id is required")
+		}
+	}
+	createdAt := snapshot.CreatedAtUnixN
+	if createdAt == 0 {
+		createdAt = time.Now().UTC().UnixNano()
+	}
+	leafTiles := make([]batchTreeLeafTile, 0, (len(snapshot.LeafHashes)+batchTreeTileSize-1)/batchTreeTileSize)
+	for start := 0; start < len(snapshot.LeafHashes); start += batchTreeTileSize {
+		end := min(start+batchTreeTileSize, len(snapshot.LeafHashes))
+		tile := batchTreeLeafTile{
+			SchemaVersion:  schemaBatchTreeLeafTileV2,
+			BatchID:        snapshot.BatchID,
+			StartIndex:     uint64(start),
+			LeafIndexes:    make([]uint64, end-start),
+			RecordIDs:      append([]string(nil), snapshot.RecordIDs[start:end]...),
+			Hashes:         make([][]byte, end-start),
+			CreatedAtUnixN: createdAt,
+		}
+		for i := start; i < end; i++ {
+			pos := i - start
+			tile.LeafIndexes[pos] = uint64(i)
+			tile.Hashes[pos] = append([]byte(nil), snapshot.LeafHashes[i][:]...)
+		}
+		leafTiles = append(leafTiles, tile)
+	}
+	sortedNodes := append([]model.BatchTreeSnapshotNode(nil), snapshot.Nodes...)
+	sort.Slice(sortedNodes, func(i, j int) bool {
+		if sortedNodes[i].Level != sortedNodes[j].Level {
+			return sortedNodes[i].Level < sortedNodes[j].Level
+		}
+		return sortedNodes[i].StartIndex < sortedNodes[j].StartIndex
+	})
+	for i := range sortedNodes {
+		if sortedNodes[i].Width == 0 || (i > 0 && sortedNodes[i].Level == sortedNodes[i-1].Level && sortedNodes[i].StartIndex <= sortedNodes[i-1].StartIndex) {
+			return trusterr.New(trusterr.CodeInvalidArgument, "invalid batch tree snapshot node sequence")
+		}
+	}
+	nodeTiles := make([]batchTreeNodeTile, 0)
+	for levelStart := 0; levelStart < len(sortedNodes); {
+		level := sortedNodes[levelStart].Level
+		levelEnd := levelStart
+		for levelEnd < len(sortedNodes) && sortedNodes[levelEnd].Level == level {
+			levelEnd++
+		}
+		if level != 0 {
+			for start := levelStart; start < levelEnd; start += batchTreeTileSize {
+				end := min(start+batchTreeTileSize, levelEnd)
+				tile := batchTreeNodeTile{
+					SchemaVersion:  schemaBatchTreeNodeTileV2,
+					BatchID:        snapshot.BatchID,
+					Level:          level,
+					StartIndex:     sortedNodes[start].StartIndex,
+					StartIndexes:   make([]uint64, end-start),
+					Widths:         make([]uint64, end-start),
+					Hashes:         make([][]byte, end-start),
+					CreatedAtUnixN: createdAt,
+				}
+				for i := start; i < end; i++ {
+					pos := i - start
+					tile.StartIndexes[pos] = sortedNodes[i].StartIndex
+					tile.Widths[pos] = sortedNodes[i].Width
+					tile.Hashes[pos] = append([]byte(nil), sortedNodes[i].Hash[:]...)
+				}
+				nodeTiles = append(nodeTiles, tile)
+			}
+		}
+		levelStart = levelEnd
+	}
+	return s.putBatchTreeTiles(ctx, leafTiles, nodeTiles)
+}
+
+func (s *Store) putBatchTreeTiles(ctx context.Context, leaves []batchTreeLeafTile, nodes []batchTreeNodeTile) error {
+	type encodedTile struct {
+		key   []byte
+		value []byte
+	}
+	tiles := make([]encodedTile, 0, len(leaves)+len(nodes))
+	for i := range leaves {
+		data, err := cborx.Marshal(leaves[i])
+		if err != nil {
+			return trusterr.Wrap(trusterr.CodeDataLoss, "encode batch tree leaf tile", err)
+		}
+		tiles = append(tiles, encodedTile{key: batchTreeLeafKey(leaves[i].BatchID, leaves[i].StartIndex), value: data})
+	}
+	for i := range nodes {
+		data, err := cborx.Marshal(nodes[i])
+		if err != nil {
+			return trusterr.Wrap(trusterr.CodeDataLoss, "encode batch tree node tile", err)
+		}
+		tiles = append(tiles, encodedTile{key: batchTreeNodeKey(nodes[i].BatchID, nodes[i].Level, nodes[i].StartIndex), value: data})
+	}
+	for start := 0; start < len(tiles); start += batchTreeTilesPerTransaction {
+		if err := ctx.Err(); err != nil {
+			return trusterr.Wrap(trusterr.CodeDeadlineExceeded, "proofstore put batch tree tiles canceled", err)
+		}
+		end := min(start+batchTreeTilesPerTransaction, len(tiles))
 		batch := s.db.NewBatch()
 		for i := start; i < end; i++ {
-			node := nodes[i]
-			if node.BatchID != batchID {
+			if err := stageSet(batch, tiles[i].key, tiles[i].value); err != nil {
 				_ = batch.Close()
-				return trusterr.New(trusterr.CodeInvalidArgument, "batch tree nodes must share batch_id")
-			}
-			if node.Width == 0 {
-				_ = batch.Close()
-				return trusterr.New(trusterr.CodeInvalidArgument, "batch tree node width is required")
-			}
-			if node.SchemaVersion == "" {
-				node.SchemaVersion = model.SchemaBatchTreeNode
-			}
-			if node.CreatedAtUnixN == 0 {
-				node.CreatedAtUnixN = now
-			}
-			data, err := cborx.Marshal(node)
-			if err != nil {
-				_ = batch.Close()
-				return err
-			}
-			if err := stageSet(batch, batchTreeNodeKey(node.BatchID, node.Level, node.StartIndex), data); err != nil {
-				_ = batch.Close()
-				return trusterr.Wrap(trusterr.CodeDataLoss, "stage batch tree node", err)
+				return trusterr.Wrap(trusterr.CodeDataLoss, "stage batch tree tile", err)
 			}
 		}
 		if err := batch.Commit(s.artifactWriteOptions()); err != nil {
 			_ = batch.Close()
-			return trusterr.Wrap(trusterr.CodeDataLoss, "commit batch tree nodes", err)
+			return trusterr.Wrap(trusterr.CodeDataLoss, "commit batch tree tiles", err)
 		}
 		if err := batch.Close(); err != nil {
-			return trusterr.Wrap(trusterr.CodeDataLoss, "close batch tree nodes", err)
+			return trusterr.Wrap(trusterr.CodeDataLoss, "close batch tree tiles", err)
 		}
 	}
 	return nil
@@ -2030,8 +2182,13 @@ func (s *Store) ListBatchTreeLeaves(ctx context.Context, opts model.BatchTreeLea
 	}
 	defer iter.Close()
 	ok := iter.First()
-	if opts.HasAfter {
-		ok = iter.SeekGE(batchTreeLeafKey(opts.BatchID, opts.AfterLeafIndex))
+	if opts.HasAfter && opts.AfterLeafIndex < ^uint64(0) {
+		if iter.SeekLT(batchTreeLeafKey(opts.BatchID, opts.AfterLeafIndex+1)) {
+			key := append([]byte(nil), iter.key...)
+			ok = iter.SeekGE(key)
+		} else {
+			ok = iter.First()
+		}
 	}
 	leaves := make([]model.BatchTreeLeaf, 0, limit)
 	for ; ok; ok = iter.Next() {
@@ -2041,14 +2198,29 @@ func (s *Store) ListBatchTreeLeaves(ctx context.Context, opts model.BatchTreeLea
 		if len(leaves) >= limit {
 			break
 		}
-		var leaf model.BatchTreeLeaf
-		if err := cborx.UnmarshalLimit(iter.Value(), &leaf, maxStoredObjectBytes); err != nil {
-			return nil, trusterr.Wrap(trusterr.CodeDataLoss, "decode batch tree leaf", err)
+		var tile batchTreeLeafTile
+		if err := cborx.UnmarshalLimit(iter.Value(), &tile, maxStoredObjectBytes); err != nil {
+			return nil, trusterr.Wrap(trusterr.CodeDataLoss, "decode batch tree leaf tile", err)
 		}
-		if opts.HasAfter && leaf.LeafIndex <= opts.AfterLeafIndex {
-			continue
+		if err := validateBatchTreeLeafTile(tile, opts.BatchID); err != nil {
+			return nil, err
 		}
-		leaves = append(leaves, leaf)
+		for i := range tile.LeafIndexes {
+			if len(leaves) >= limit {
+				break
+			}
+			if opts.HasAfter && tile.LeafIndexes[i] <= opts.AfterLeafIndex {
+				continue
+			}
+			leaves = append(leaves, model.BatchTreeLeaf{
+				SchemaVersion:  model.SchemaBatchTreeLeaf,
+				BatchID:        tile.BatchID,
+				RecordID:       tile.RecordIDs[i],
+				LeafIndex:      tile.LeafIndexes[i],
+				LeafHash:       append([]byte(nil), tile.Hashes[i]...),
+				CreatedAtUnixN: tile.CreatedAtUnixN,
+			})
+		}
 	}
 	if err := iter.Error(); err != nil {
 		return nil, trusterr.Wrap(trusterr.CodeDataLoss, "iterate batch tree leaves", err)
@@ -2088,9 +2260,18 @@ func (s *Store) ListBatchTreeNodes(ctx context.Context, opts model.BatchTreeNode
 		return nil, trusterr.Wrap(trusterr.CodeDataLoss, "open batch tree node iterator", err)
 	}
 	defer iter.Close()
-	ok := iter.SeekGE(batchTreeNodeKey(opts.BatchID, opts.Level, opts.StartIndex))
-	if opts.HasAfter && opts.AfterStartIndex >= opts.StartIndex {
-		ok = iter.SeekGE(batchTreeNodeKey(opts.BatchID, opts.Level, opts.AfterStartIndex))
+	seekIndex := opts.StartIndex
+	if opts.HasAfter && opts.AfterStartIndex > seekIndex {
+		seekIndex = opts.AfterStartIndex
+	}
+	ok := iter.First()
+	if seekIndex < ^uint64(0) {
+		if iter.SeekLT(batchTreeNodeKey(opts.BatchID, opts.Level, seekIndex+1)) {
+			key := append([]byte(nil), iter.key...)
+			ok = iter.SeekGE(key)
+		} else {
+			ok = iter.First()
+		}
 	}
 	nodes := make([]model.BatchTreeNode, 0, limit)
 	for ; ok; ok = iter.Next() {
@@ -2100,22 +2281,64 @@ func (s *Store) ListBatchTreeNodes(ctx context.Context, opts model.BatchTreeNode
 		if len(nodes) >= limit {
 			break
 		}
-		var node model.BatchTreeNode
-		if err := cborx.UnmarshalLimit(iter.Value(), &node, maxStoredObjectBytes); err != nil {
-			return nil, trusterr.Wrap(trusterr.CodeDataLoss, "decode batch tree node", err)
+		var tile batchTreeNodeTile
+		if err := cborx.UnmarshalLimit(iter.Value(), &tile, maxStoredObjectBytes); err != nil {
+			return nil, trusterr.Wrap(trusterr.CodeDataLoss, "decode batch tree node tile", err)
 		}
-		if node.StartIndex < opts.StartIndex {
-			continue
+		if err := validateBatchTreeNodeTile(tile, opts.BatchID, opts.Level); err != nil {
+			return nil, err
 		}
-		if opts.HasAfter && node.StartIndex <= opts.AfterStartIndex {
-			continue
+		for i := range tile.StartIndexes {
+			if len(nodes) >= limit {
+				break
+			}
+			if tile.StartIndexes[i] < opts.StartIndex {
+				continue
+			}
+			if opts.HasAfter && tile.StartIndexes[i] <= opts.AfterStartIndex {
+				continue
+			}
+			nodes = append(nodes, model.BatchTreeNode{
+				SchemaVersion:  model.SchemaBatchTreeNode,
+				BatchID:        tile.BatchID,
+				Level:          tile.Level,
+				StartIndex:     tile.StartIndexes[i],
+				Width:          tile.Widths[i],
+				Hash:           append([]byte(nil), tile.Hashes[i]...),
+				CreatedAtUnixN: tile.CreatedAtUnixN,
+			})
 		}
-		nodes = append(nodes, node)
 	}
 	if err := iter.Error(); err != nil {
 		return nil, trusterr.Wrap(trusterr.CodeDataLoss, "iterate batch tree nodes", err)
 	}
 	return nodes, nil
+}
+
+func validateBatchTreeLeafTile(tile batchTreeLeafTile, batchID string) error {
+	count := len(tile.LeafIndexes)
+	if tile.SchemaVersion != schemaBatchTreeLeafTileV2 || tile.BatchID != batchID || count == 0 || count > batchTreeTileSize || count != len(tile.RecordIDs) || count != len(tile.Hashes) || tile.StartIndex != tile.LeafIndexes[0] {
+		return trusterr.New(trusterr.CodeDataLoss, "invalid batch tree leaf tile")
+	}
+	for i := range tile.LeafIndexes {
+		if tile.RecordIDs[i] == "" || len(tile.Hashes[i]) == 0 || (i > 0 && tile.LeafIndexes[i] <= tile.LeafIndexes[i-1]) {
+			return trusterr.New(trusterr.CodeDataLoss, "invalid batch tree leaf tile ordering")
+		}
+	}
+	return nil
+}
+
+func validateBatchTreeNodeTile(tile batchTreeNodeTile, batchID string, level uint64) error {
+	count := len(tile.StartIndexes)
+	if tile.SchemaVersion != schemaBatchTreeNodeTileV2 || tile.BatchID != batchID || tile.Level != level || count == 0 || count > batchTreeTileSize || count != len(tile.Widths) || count != len(tile.Hashes) || tile.StartIndex != tile.StartIndexes[0] {
+		return trusterr.New(trusterr.CodeDataLoss, "invalid batch tree node tile")
+	}
+	for i := range tile.StartIndexes {
+		if tile.Widths[i] == 0 || len(tile.Hashes[i]) == 0 || (i > 0 && tile.StartIndexes[i] <= tile.StartIndexes[i-1]) {
+			return trusterr.New(trusterr.CodeDataLoss, "invalid batch tree node tile ordering")
+		}
+	}
+	return nil
 }
 
 func (s *Store) PutManifest(ctx context.Context, manifest model.BatchManifest) error {
