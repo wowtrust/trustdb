@@ -524,6 +524,16 @@ type GlobalLogProof struct {
 	Consistency   GlobalConsistencyProof `cbor:"consistency,omitempty" json:"consistency,omitempty"`
 }
 
+// GlobalLogEvidence is the strongest currently available Global Log evidence
+// for one batch. When AnchorResult is present, GlobalProof is generated
+// directly against the exact SignedTreeHead carried by that result. When no
+// published anchor covers the batch yet, AnchorResult is nil and GlobalProof
+// targets the latest STH so callers can still export an L4 proof.
+type GlobalLogEvidence struct {
+	GlobalProof  GlobalLogProof   `cbor:"global_proof" json:"global_proof"`
+	AnchorResult *STHAnchorResult `cbor:"anchor_result,omitempty" json:"anchor_result,omitempty"`
+}
+
 // GlobalLogTile is a compacted immutable range of global log leaf hashes.
 // The first implementation stores deterministic CBOR tiles so old proofs can
 // be restored without keeping every hot in-memory node forever.

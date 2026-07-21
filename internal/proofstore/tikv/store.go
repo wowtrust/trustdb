@@ -4322,6 +4322,32 @@ func (s *Store) GetSTHAnchorResult(ctx context.Context, treeSize uint64) (model.
 	return result, found, nil
 }
 
+func (s *Store) LatestSTHAnchorResult(ctx context.Context) (model.STHAnchorResult, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return model.STHAnchorResult{}, false, trusterr.Wrap(trusterr.CodeDeadlineExceeded, "proofstore latest sth anchor result canceled", err)
+	}
+	lower, upper := prefixBounds(prefixAnchorResult)
+	iter, err := s.db.NewIter(&iterOptions{LowerBound: lower, UpperBound: upper})
+	if err != nil {
+		return model.STHAnchorResult{}, false, trusterr.Wrap(trusterr.CodeDataLoss, "open sth anchor result iterator", err)
+	}
+	defer iter.Close()
+	if !iter.Last() {
+		if err := iter.Error(); err != nil {
+			return model.STHAnchorResult{}, false, trusterr.Wrap(trusterr.CodeDataLoss, "iterate sth anchor results", err)
+		}
+		return model.STHAnchorResult{}, false, nil
+	}
+	var result model.STHAnchorResult
+	if err := cborx.UnmarshalLimit(iter.Value(), &result, maxStoredObjectBytes); err != nil {
+		return model.STHAnchorResult{}, false, trusterr.Wrap(trusterr.CodeDataLoss, "decode latest sth anchor result", err)
+	}
+	if result.TreeSize == 0 || !bytes.Equal(iter.key, anchorResultKey(result.TreeSize)) {
+		return model.STHAnchorResult{}, false, trusterr.New(trusterr.CodeDataLoss, "latest sth anchor result key does not match item")
+	}
+	return result, true, nil
+}
+
 func (s *Store) listSTHAnchors(ctx context.Context, limit int, include func(model.STHAnchorOutboxItem) bool) ([]model.STHAnchorOutboxItem, error) {
 	if limit <= 0 {
 		limit = 100

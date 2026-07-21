@@ -196,3 +196,10 @@ type GlobalLogPublishedBatchWithAnchorsMarker interface {
 type STHAnchorBatchEnqueuer interface {
 	EnqueueSTHAnchors(ctx context.Context, items []model.STHAnchorOutboxItem) error
 }
+
+// LatestSTHAnchorResultReader provides a bounded lookup for the newest
+// successfully published STH anchor. It is optional so wrappers and focused
+// test stores do not need to implement the entire anchor read path.
+type LatestSTHAnchorResultReader interface {
+	LatestSTHAnchorResult(context.Context) (model.STHAnchorResult, bool, error)
+}

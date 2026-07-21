@@ -49,6 +49,10 @@ type Store interface {
 	CommitGlobalLogAppend(context.Context, model.GlobalLogAppend) error
 }
 
+type latestSTHAnchorResultReader interface {
+	LatestSTHAnchorResult(context.Context) (model.STHAnchorResult, bool, error)
+}
+
 type BatchAppendStore interface {
 	CommitGlobalLogAppends(context.Context, []model.GlobalLogAppend) error
 }
@@ -314,6 +318,53 @@ func (s *Service) InclusionProof(ctx context.Context, batchID string, treeSize u
 		InclusionPath: path,
 		STH:           sth,
 	}, nil
+}
+
+// Evidence returns the strongest currently available Global Log evidence for
+// a batch. A later STH can cover every earlier leaf, so when the newest
+// published anchor contains the requested batch we build the inclusion proof
+// directly against that exact STH. This keeps L5's exact STH/anchor binding
+// unchanged while avoiding any need for a consistency-proof envelope.
+func (s *Service) Evidence(ctx context.Context, batchID string) (model.GlobalLogEvidence, error) {
+	leaf, ok, err := s.store.GetGlobalLeafByBatchID(ctx, batchID)
+	if err != nil {
+		return model.GlobalLogEvidence{}, err
+	}
+	if !ok {
+		return model.GlobalLogEvidence{}, trusterr.New(trusterr.CodeNotFound, "global log leaf not found")
+	}
+	if reader, ok := s.store.(latestSTHAnchorResultReader); ok {
+		result, found, err := reader.LatestSTHAnchorResult(ctx)
+		if err != nil {
+			return model.GlobalLogEvidence{}, err
+		}
+		if found {
+			if result.TreeSize == 0 {
+				return model.GlobalLogEvidence{}, trusterr.New(trusterr.CodeDataLoss, "latest STH anchor result has an empty tree size")
+			}
+			if leaf.LeafIndex < result.TreeSize {
+				proof, err := s.InclusionProof(ctx, batchID, result.TreeSize)
+				if err != nil {
+					return model.GlobalLogEvidence{}, err
+				}
+				if !bytes.Equal(result.RootHash, proof.STH.RootHash) {
+					return model.GlobalLogEvidence{}, trusterr.New(trusterr.CodeDataLoss, "latest STH anchor root does not match signed tree head")
+				}
+				if result.NodeID != "" && proof.STH.NodeID != "" && result.NodeID != proof.STH.NodeID {
+					return model.GlobalLogEvidence{}, trusterr.New(trusterr.CodeDataLoss, "latest STH anchor node does not match signed tree head")
+				}
+				if result.LogID != "" && proof.STH.LogID != "" && result.LogID != proof.STH.LogID {
+					return model.GlobalLogEvidence{}, trusterr.New(trusterr.CodeDataLoss, "latest STH anchor log does not match signed tree head")
+				}
+				return model.GlobalLogEvidence{GlobalProof: proof, AnchorResult: &result}, nil
+			}
+		}
+	}
+	proof, err := s.InclusionProof(ctx, batchID, 0)
+	if err != nil {
+		return model.GlobalLogEvidence{}, err
+	}
+	return model.GlobalLogEvidence{GlobalProof: proof}, nil
 }
 
 func (s *Service) ConsistencyProof(ctx context.Context, from, to uint64) (model.GlobalConsistencyProof, error) {

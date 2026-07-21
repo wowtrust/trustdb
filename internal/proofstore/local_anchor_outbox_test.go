@@ -95,6 +95,31 @@ func TestLocalStoreSTHAnchorTransitionsStatuses(t *testing.T) {
 	}
 }
 
+func TestLocalStoreLatestSTHAnchorReferenceRecoversIncompleteCandidate(t *testing.T) {
+	t.Parallel()
+
+	store := LocalStore{Root: t.TempDir()}
+	ctx := context.Background()
+	if err := store.EnqueueSTHAnchor(ctx, model.STHAnchorOutboxItem{TreeSize: 1, Status: model.AnchorStatePending}); err != nil {
+		t.Fatalf("EnqueueSTHAnchor: %v", err)
+	}
+	if err := store.MarkSTHAnchorPublished(ctx, model.STHAnchorResult{TreeSize: 1, AnchorID: "anchor-1"}); err != nil {
+		t.Fatalf("MarkSTHAnchorPublished: %v", err)
+	}
+	previous := uint64(1)
+	if err := writeCBORAtomic(store.latestSTHAnchorReferencePath(), localLatestAnchorReference{Candidate: 2, Previous: &previous}); err != nil {
+		t.Fatalf("write incomplete latest reference: %v", err)
+	}
+	result, found, err := store.LatestSTHAnchorResult(ctx)
+	if err != nil || !found || result.TreeSize != 1 {
+		t.Fatalf("LatestSTHAnchorResult result=%+v found=%v err=%v", result, found, err)
+	}
+	ref, ok, err := store.readLatestSTHAnchorReference()
+	if err != nil || !ok || ref.Candidate != 1 {
+		t.Fatalf("repaired latest reference=%+v ok=%v err=%v", ref, ok, err)
+	}
+}
+
 func TestLocalStoreSTHAnchorDuplicateTransitionConverges(t *testing.T) {
 	t.Parallel()
 

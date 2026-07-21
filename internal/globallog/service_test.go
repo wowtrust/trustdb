@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ryan-wong-coder/trustdb/internal/anchor"
 	"github.com/ryan-wong-coder/trustdb/internal/model"
 	"github.com/ryan-wong-coder/trustdb/internal/proofstore"
 	"github.com/ryan-wong-coder/trustdb/internal/trustcrypto"
@@ -113,6 +114,74 @@ func TestAppendBatchRootProducesStableSTHAndInclusionProof(t *testing.T) {
 	}
 	if proof.STH.TreeSize != latest.TreeSize || !bytes.Equal(proof.STH.RootHash, latest.RootHash) {
 		t.Fatalf("proof STH = %+v, want latest %+v", proof.STH, latest)
+	}
+}
+
+func TestEvidenceUsesLatestCoveringAnchoredSTH(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	svc, store := newTestService(t)
+	sths, err := svc.AppendBatchRoots(ctx, []model.BatchRoot{
+		batchRoot("b1", 1),
+		batchRoot("b2", 2),
+		batchRoot("b3", 3),
+	})
+	if err != nil {
+		t.Fatalf("AppendBatchRoots: %v", err)
+	}
+	anchored := sths[len(sths)-1]
+	if err := store.EnqueueSTHAnchor(ctx, model.STHAnchorOutboxItem{
+		SchemaVersion: model.SchemaSTHAnchorOutbox,
+		TreeSize:      anchored.TreeSize,
+		Status:        model.AnchorStatePending,
+		SinkName:      anchor.NoopSinkName,
+		STH:           anchored,
+	}); err != nil {
+		t.Fatalf("EnqueueSTHAnchor: %v", err)
+	}
+	result := model.STHAnchorResult{
+		SchemaVersion:    model.SchemaSTHAnchorResult,
+		NodeID:           anchored.NodeID,
+		LogID:            anchored.LogID,
+		TreeSize:         anchored.TreeSize,
+		SinkName:         anchor.NoopSinkName,
+		AnchorID:         anchor.DeterministicNoopAnchorID(anchored),
+		RootHash:         append([]byte(nil), anchored.RootHash...),
+		STH:              anchored,
+		PublishedAtUnixN: time.Unix(101, 0).UnixNano(),
+	}
+	if err := store.MarkSTHAnchorPublished(ctx, result); err != nil {
+		t.Fatalf("MarkSTHAnchorPublished: %v", err)
+	}
+	for _, batchID := range []string{"b1", "b2", "b3"} {
+		evidence, err := svc.Evidence(ctx, batchID)
+		if err != nil {
+			t.Fatalf("Evidence(%s): %v", batchID, err)
+		}
+		if evidence.AnchorResult == nil {
+			t.Fatalf("Evidence(%s) anchor result is nil", batchID)
+		}
+		if evidence.GlobalProof.TreeSize != anchored.TreeSize || evidence.AnchorResult.TreeSize != anchored.TreeSize {
+			t.Fatalf("Evidence(%s) tree sizes proof=%d anchor=%d, want %d", batchID, evidence.GlobalProof.TreeSize, evidence.AnchorResult.TreeSize, anchored.TreeSize)
+		}
+		if !VerifyInclusion(evidence.GlobalProof) {
+			t.Fatalf("Evidence(%s) inclusion proof failed", batchID)
+		}
+	}
+
+	latest, err := svc.AppendBatchRoot(ctx, batchRoot("b4", 4))
+	if err != nil {
+		t.Fatalf("AppendBatchRoot(b4): %v", err)
+	}
+	evidence, err := svc.Evidence(ctx, "b4")
+	if err != nil {
+		t.Fatalf("Evidence(b4): %v", err)
+	}
+	if evidence.AnchorResult != nil {
+		t.Fatalf("Evidence(b4) anchor=%+v, want nil", evidence.AnchorResult)
+	}
+	if evidence.GlobalProof.TreeSize != latest.TreeSize || !VerifyInclusion(evidence.GlobalProof) {
+		t.Fatalf("Evidence(b4) proof=%+v, want latest L4 proof", evidence.GlobalProof)
 	}
 }
 

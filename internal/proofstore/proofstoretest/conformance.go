@@ -61,6 +61,7 @@ func RunConformance(t *testing.T, newStore Factory) {
 	t.Run("STHAnchorListPendingIsCommitOrdered", func(t *testing.T) { testSTHAnchorListPendingIsCommitOrdered(t, newStore) })
 	t.Run("STHAnchorListPublishedFiltersTerminalOnly", func(t *testing.T) { testSTHAnchorListPublishedFilters(t, newStore) })
 	t.Run("STHAnchorMarkPublished", func(t *testing.T) { testSTHAnchorMarkPublished(t, newStore) })
+	t.Run("LatestSTHAnchorResultIsMonotonic", func(t *testing.T) { testLatestSTHAnchorResultIsMonotonic(t, newStore) })
 	t.Run("STHAnchorMarkFailed", func(t *testing.T) { testSTHAnchorMarkFailed(t, newStore) })
 	t.Run("STHAnchorRescheduleKeepsPending", func(t *testing.T) { testSTHAnchorRescheduleKeepsPending(t, newStore) })
 	t.Run("STHAnchorMissing", func(t *testing.T) { testSTHAnchorMissing(t, newStore) })
@@ -1422,6 +1423,35 @@ func testSTHAnchorMarkPublished(t *testing.T, newStore Factory) {
 	pending, err := store.ListPendingSTHAnchors(ctx, 1_000_000_000_000, 10)
 	if len(pending) != 0 {
 		t.Fatalf("ListPendingSTHAnchors after publish = %+v, want empty", pending)
+	}
+}
+
+func testLatestSTHAnchorResultIsMonotonic(t *testing.T, newStore Factory) {
+	t.Parallel()
+	store, cleanup := newStore(t)
+	defer cleanup()
+	reader, ok := store.(proofstore.LatestSTHAnchorResultReader)
+	if !ok {
+		t.Skip("store does not implement LatestSTHAnchorResultReader")
+	}
+	ctx := context.Background()
+	if _, found, err := reader.LatestSTHAnchorResult(ctx); err != nil || found {
+		t.Fatalf("LatestSTHAnchorResult empty found=%v err=%v", found, err)
+	}
+	for _, treeSize := range []uint64{3, 2} {
+		if err := store.EnqueueSTHAnchor(ctx, sthAnchorItem(treeSize, "file", int64(treeSize))); err != nil {
+			t.Fatalf("EnqueueSTHAnchor(%d): %v", treeSize, err)
+		}
+		if err := store.MarkSTHAnchorPublished(ctx, sthAnchorResult(treeSize, "file", "anchor")); err != nil {
+			t.Fatalf("MarkSTHAnchorPublished(%d): %v", treeSize, err)
+		}
+	}
+	latest, found, err := reader.LatestSTHAnchorResult(ctx)
+	if err != nil || !found {
+		t.Fatalf("LatestSTHAnchorResult found=%v err=%v", found, err)
+	}
+	if latest.TreeSize != 3 {
+		t.Fatalf("LatestSTHAnchorResult tree_size=%d, want 3", latest.TreeSize)
 	}
 }
 

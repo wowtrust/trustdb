@@ -47,6 +47,12 @@ var localDurableDirectories sync.Map
 
 var localLatestSTHLocks [64]sync.Mutex
 var localLatestRootLocks [64]sync.Mutex
+var localLatestAnchorLocks [64]sync.Mutex
+
+type localLatestAnchorReference struct {
+	Candidate uint64  `cbor:"candidate"`
+	Previous  *uint64 `cbor:"previous,omitempty"`
+}
 
 func defaultLocalFileOps() localFileOps {
 	return localFileOps{
@@ -1524,6 +1530,10 @@ func (s LocalStore) latestRootLock() *sync.Mutex {
 	return localStoreStripedLock(s.root(), &localLatestRootLocks)
 }
 
+func (s LocalStore) latestSTHAnchorLock() *sync.Mutex {
+	return localStoreStripedLock(s.root(), &localLatestAnchorLocks)
+}
+
 func localStoreStripedLock(value string, locks *[64]sync.Mutex) *sync.Mutex {
 	hash := uint64(14695981039346656037)
 	for i := 0; i < len(value); i++ {
@@ -2164,6 +2174,12 @@ func (s LocalStore) MarkSTHAnchorPublished(ctx context.Context, result model.STH
 	if !ok {
 		return trusterr.New(trusterr.CodeNotFound, "sth anchor outbox item not found")
 	}
+	lock := s.latestSTHAnchorLock()
+	lock.Lock()
+	defer lock.Unlock()
+	if err := s.prepareLatestSTHAnchorReferenceLocked(ctx, result.TreeSize); err != nil {
+		return err
+	}
 	if err := writeCBORAtomic(s.sthAnchorResultPath(result.TreeSize), result); err != nil {
 		return trusterr.Wrap(trusterr.CodeDataLoss, "write sth anchor result", err)
 	}
@@ -2233,6 +2249,153 @@ func (s LocalStore) GetSTHAnchorResult(ctx context.Context, treeSize uint64) (mo
 		return model.STHAnchorResult{}, false, trusterr.Wrap(trusterr.CodeDataLoss, "decode sth anchor result", err)
 	}
 	return result, true, nil
+}
+
+func (s LocalStore) LatestSTHAnchorResult(ctx context.Context) (model.STHAnchorResult, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return model.STHAnchorResult{}, false, trusterr.Wrap(trusterr.CodeDeadlineExceeded, "proofstore latest sth anchor result canceled", err)
+	}
+	if ref, ok, err := s.readLatestSTHAnchorReference(); err == nil && ok {
+		result, found, complete, resolveErr := s.sthAnchorResultFromLatestReference(ctx, ref)
+		if resolveErr != nil {
+			return model.STHAnchorResult{}, false, resolveErr
+		}
+		if found && complete {
+			return result, true, nil
+		}
+	}
+	return s.rebuildLatestSTHAnchorReference(ctx)
+}
+
+func (s LocalStore) prepareLatestSTHAnchorReferenceLocked(ctx context.Context, treeSize uint64) error {
+	if err := ctx.Err(); err != nil {
+		return trusterr.Wrap(trusterr.CodeDeadlineExceeded, "proofstore update latest sth anchor reference canceled", err)
+	}
+	var current *uint64
+	if ref, ok, err := s.readLatestSTHAnchorReference(); err == nil && ok {
+		result, found, _, resolveErr := s.sthAnchorResultFromLatestReference(ctx, ref)
+		if resolveErr != nil {
+			return resolveErr
+		}
+		if found {
+			value := result.TreeSize
+			current = &value
+		}
+	} else {
+		result, found, historyErr := s.latestSTHAnchorResultFromHistory(ctx)
+		if historyErr != nil {
+			return historyErr
+		}
+		if found {
+			value := result.TreeSize
+			current = &value
+		}
+	}
+	if current != nil && *current >= treeSize {
+		return nil
+	}
+	ref := localLatestAnchorReference{Candidate: treeSize, Previous: current}
+	if err := writeCBORAtomic(s.latestSTHAnchorReferencePath(), ref); err != nil {
+		return trusterr.Wrap(trusterr.CodeDataLoss, "write latest sth anchor reference", err)
+	}
+	return nil
+}
+
+func (s LocalStore) rebuildLatestSTHAnchorReference(ctx context.Context) (model.STHAnchorResult, bool, error) {
+	lock := s.latestSTHAnchorLock()
+	lock.Lock()
+	defer lock.Unlock()
+	if ref, ok, err := s.readLatestSTHAnchorReference(); err == nil && ok {
+		result, found, complete, resolveErr := s.sthAnchorResultFromLatestReference(ctx, ref)
+		if resolveErr != nil {
+			return model.STHAnchorResult{}, false, resolveErr
+		}
+		if found && complete {
+			return result, true, nil
+		}
+	}
+	result, found, err := s.latestSTHAnchorResultFromHistory(ctx)
+	if err != nil || !found {
+		return result, found, err
+	}
+	if err := writeCBORAtomic(s.latestSTHAnchorReferencePath(), localLatestAnchorReference{Candidate: result.TreeSize}); err != nil {
+		return model.STHAnchorResult{}, false, trusterr.Wrap(trusterr.CodeDataLoss, "rebuild latest sth anchor reference", err)
+	}
+	return result, true, nil
+}
+
+func (s LocalStore) latestSTHAnchorResultFromHistory(ctx context.Context) (model.STHAnchorResult, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return model.STHAnchorResult{}, false, trusterr.Wrap(trusterr.CodeDeadlineExceeded, "proofstore scan latest sth anchor result canceled", err)
+	}
+	entries, err := os.ReadDir(s.sthAnchorResultDir())
+	if err != nil {
+		if os.IsNotExist(err) {
+			return model.STHAnchorResult{}, false, nil
+		}
+		return model.STHAnchorResult{}, false, trusterr.Wrap(trusterr.CodeDataLoss, "read sth anchor result directory", err)
+	}
+	for i := len(entries) - 1; i >= 0; i-- {
+		entry := entries[i]
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".tdsth-anchor-result") {
+			continue
+		}
+		treeSize, err := decodeLocalUint64Filename(entry.Name(), ".tdsth-anchor-result")
+		if err != nil || treeSize == 0 {
+			return model.STHAnchorResult{}, false, trusterr.New(trusterr.CodeDataLoss, "invalid sth anchor result filename")
+		}
+		result, found, err := s.GetSTHAnchorResult(ctx, treeSize)
+		if err != nil {
+			return model.STHAnchorResult{}, false, err
+		}
+		if !found || result.TreeSize != treeSize {
+			return model.STHAnchorResult{}, false, trusterr.New(trusterr.CodeDataLoss, "sth anchor result path does not match item")
+		}
+		return result, true, nil
+	}
+	return model.STHAnchorResult{}, false, nil
+}
+
+func (s LocalStore) readLatestSTHAnchorReference() (localLatestAnchorReference, bool, error) {
+	data, err := readStoredFile(s.latestSTHAnchorReferencePath())
+	if err != nil {
+		if os.IsNotExist(err) {
+			return localLatestAnchorReference{}, false, nil
+		}
+		return localLatestAnchorReference{}, false, err
+	}
+	var ref localLatestAnchorReference
+	if err := cborx.UnmarshalLimit(data, &ref, maxStoredObjectBytes); err != nil {
+		return localLatestAnchorReference{}, false, err
+	}
+	if ref.Candidate == 0 {
+		return localLatestAnchorReference{}, false, trusterr.New(trusterr.CodeDataLoss, "latest sth anchor reference is invalid")
+	}
+	return ref, true, nil
+}
+
+func (s LocalStore) sthAnchorResultFromLatestReference(ctx context.Context, ref localLatestAnchorReference) (model.STHAnchorResult, bool, bool, error) {
+	result, found, err := s.GetSTHAnchorResult(ctx, ref.Candidate)
+	if err != nil {
+		return model.STHAnchorResult{}, false, false, err
+	}
+	if found {
+		if result.TreeSize != ref.Candidate {
+			return model.STHAnchorResult{}, false, false, trusterr.New(trusterr.CodeDataLoss, "latest sth anchor reference does not match item")
+		}
+		return result, true, true, nil
+	}
+	if ref.Previous == nil {
+		return model.STHAnchorResult{}, false, false, nil
+	}
+	result, found, err = s.GetSTHAnchorResult(ctx, *ref.Previous)
+	if err != nil {
+		return model.STHAnchorResult{}, false, false, err
+	}
+	if found && result.TreeSize != *ref.Previous {
+		return model.STHAnchorResult{}, false, false, trusterr.New(trusterr.CodeDataLoss, "previous sth anchor reference does not match item")
+	}
+	return result, found, false, nil
 }
 
 func (s LocalStore) listSTHAnchors(ctx context.Context, status string, limit int, include func(model.STHAnchorOutboxItem) bool) ([]model.STHAnchorOutboxItem, error) {
@@ -2462,6 +2625,10 @@ func (s LocalStore) sthAnchorOutboxPath(status string, treeSize uint64) string {
 
 func (s LocalStore) sthAnchorResultPath(treeSize uint64) string {
 	return filepath.Join(s.sthAnchorResultDir(), fmt.Sprintf("%020d.tdsth-anchor-result", treeSize))
+}
+
+func (s LocalStore) latestSTHAnchorReferencePath() string {
+	return filepath.Join(s.root(), "anchor", "latest-sth-anchor.tdref")
 }
 
 func (s LocalStore) checkpointPath() string {
