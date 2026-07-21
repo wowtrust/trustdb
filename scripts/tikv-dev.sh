@@ -268,7 +268,6 @@ pd_endpoints() {
 }
 
 run_go_test() {
-  local legacy="${1:-0}"
   export TRUSTDB_TIKV_PD_ENDPOINTS
   TRUSTDB_TIKV_PD_ENDPOINTS="$(pd_endpoints)"
   echo "[tikv-dev] TRUSTDB_TIKV_PD_ENDPOINTS=${TRUSTDB_TIKV_PD_ENDPOINTS}"
@@ -277,12 +276,6 @@ run_go_test() {
     echo "[tikv-dev] TRUSTDB_TIKV_KEYSPACE=${TRUSTDB_TIKV_KEYSPACE}"
   else
     unset TRUSTDB_TIKV_KEYSPACE || true
-  fi
-  if [[ "${legacy}" == "1" ]]; then
-    export TRUSTDB_TIKV_RUN_LEGACY_MIGRATION_TEST=1
-    echo "[tikv-dev] TRUSTDB_TIKV_RUN_LEGACY_MIGRATION_TEST=1"
-  else
-    unset TRUSTDB_TIKV_RUN_LEGACY_MIGRATION_TEST || true
   fi
   echo "[tikv-dev] go test -count=1 -tags=integration ./internal/proofstore/tikv"
   go test -count=1 -tags=integration ./internal/proofstore/tikv
@@ -300,7 +293,6 @@ Commands:
   down         Stop stack (keep volumes)
   reset        Stop and delete volumes (clean cluster)
   test         Run: go test -count=1 -tags=integration ./internal/proofstore/tikv
-  test-legacy  Same as test plus TRUSTDB_TIKV_RUN_LEGACY_MIGRATION_TEST=1
   logs         Follow service logs
   ps           List containers for this dev pod / compose project
 
@@ -340,10 +332,7 @@ case "${cmd}" in
     echo "[tikv-dev] volumes removed"
     ;;
   test)
-    run_go_test 0
-    ;;
-  test-legacy)
-    run_go_test 1
+    run_go_test
     ;;
   logs)
     stack logs -f --tail 200

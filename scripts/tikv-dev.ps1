@@ -6,7 +6,7 @@
   Default on Windows uses Podman only: pod + named volumes, same layout as docker-compose.tikv.yml.
   PD client: 127.0.0.1:2379, TiKV: 127.0.0.1:20160 (see compose file).
 
-  Commands: up, down, reset, test, test-legacy, logs, ps, help
+  Commands: up, down, reset, test, logs, ps, help
 
   Environment:
     TRUSTDB_TIKV_COMPOSE_FILE     Path to compose file (podman|docker-api only; native ignores)
@@ -20,7 +20,7 @@
 #>
 param(
     [Parameter(Position = 0)]
-    [ValidateSet("up", "down", "reset", "test", "test-legacy", "logs", "ps", "help")]
+    [ValidateSet("up", "down", "reset", "test", "logs", "ps", "help")]
     [string]$Command = "help"
 )
 
@@ -428,18 +428,11 @@ function Get-PdEndpoints {
 }
 
 function Invoke-TiKVGoTest {
-    param([switch]$LegacyMigration)
     $env:TRUSTDB_TIKV_PD_ENDPOINTS = Get-PdEndpoints
     if (-not [string]::IsNullOrWhiteSpace($env:TRUSTDB_TIKV_KEYSPACE)) {
         Write-Host "[tikv-dev] TRUSTDB_TIKV_KEYSPACE=$($env:TRUSTDB_TIKV_KEYSPACE)"
     } else {
         Remove-Item Env:TRUSTDB_TIKV_KEYSPACE -ErrorAction SilentlyContinue
-    }
-    if ($LegacyMigration) {
-        $env:TRUSTDB_TIKV_RUN_LEGACY_MIGRATION_TEST = "1"
-        Write-Host "[tikv-dev] TRUSTDB_TIKV_RUN_LEGACY_MIGRATION_TEST=1"
-    } else {
-        Remove-Item Env:TRUSTDB_TIKV_RUN_LEGACY_MIGRATION_TEST -ErrorAction SilentlyContinue
     }
     Write-Host "[tikv-dev] TRUSTDB_TIKV_PD_ENDPOINTS=$($env:TRUSTDB_TIKV_PD_ENDPOINTS)"
     Write-Host "[tikv-dev] go test -count=1 -tags=integration ./internal/proofstore/tikv"
@@ -497,9 +490,6 @@ switch ($Command) {
     "test" {
         Invoke-TiKVGoTest
     }
-    "test-legacy" {
-        Invoke-TiKVGoTest -LegacyMigration
-    }
     "logs" {
         Assert-StackPrereqs
         Invoke-Stack @("logs", "-f", "--tail", "200")
@@ -520,7 +510,6 @@ Commands:
   down         Stop stack (keep volumes)
   reset        Stop and delete volumes (clean cluster)
   test         Run: go test -count=1 -tags=integration ./internal/proofstore/tikv
-  test-legacy  Same as test plus TRUSTDB_TIKV_RUN_LEGACY_MIGRATION_TEST=1
   logs         Follow logs (pod logs, or TiKV container fallback)
   ps           podman ps for this pod
 

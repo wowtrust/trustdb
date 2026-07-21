@@ -15,7 +15,6 @@ TrustDB 单机路径：`ingest` → WAL → `batch` → proofstore（file/Pebble
 - TiKV **不是**旁路元数据目录或仅索引服务，而是可选的 **proofstore 后端**，需实现与 file/Pebble 相同的 `proofstore.Store` 契约（含 `CommitGlobalLogAppend`、`BatchArtifactWriter` 等）。
 - 配置通过 `metastore: tikv` 与 PD 地址等参数选择（见 `internal/config` 与 `internal/proofstore/factory.go`）。TiKV 后端必须连接原生 TiKV proofstore，不能退化为本地临时缓存。
 - TiKV 物理 key 必须带 TrustDB 应用级 namespace 前缀：`trustdb/proofstore/v1/ns/<base64url(namespace)>/`。默认 namespace 为 `default`；共享同一 proofstore 的多计算节点必须显式使用同一 namespace，独立租户或独立 log 必须使用不同 namespace。
-- 早期未使用 namespace 前缀的 TiKV 裸 key 通过 `trustdb metastore tikv-migrate-legacy` 迁移到当前前缀布局；默认只复制不删除 legacy key，确认后才能显式使用 `--delete-legacy`。
 - 值编码与 Pebble/file 一致：确定性 CBOR + 与 Pebble 相同的 bundle 信封语义，便于备份与迁移。
 
 ### 2. 存算分离
@@ -54,7 +53,7 @@ TrustDB 单机路径：`ingest` → WAL → `batch` → proofstore（file/Pebble
 
 - proofstore conformance：原生 TiKV 后端实现后，`internal/proofstore/proofstoretest` 必须对 TiKV 后端（在提供测试用 PD/TiKV 时）与 Pebble 一致。
 - CI 默认环境无 TiKV 时，TiKV 原生 conformance 测试应 `Skip`，不阻断 `go test ./...`。
-- 提供真实 TiKV integration tests：`TRUSTDB_TIKV_PD_ENDPOINTS=... go test -tags=integration ./internal/proofstore/tikv` 覆盖 conformance、同 namespace 多 store 共享可见、不同 namespace 隔离；legacy 迁移测试需额外设置 `TRUSTDB_TIKV_RUN_LEGACY_MIGRATION_TEST=1`。
+- 提供真实 TiKV integration tests：`TRUSTDB_TIKV_PD_ENDPOINTS=... go test -tags=integration ./internal/proofstore/tikv` 覆盖 conformance、同 namespace 多 store 共享可见、不同 namespace 隔离以及 scoped WAL checkpoint 并发推进。
 - 本机验证可用仓库内 `docker-compose.tikv.yml`（镜像标签可通过 `TRUSTDB_TIKV_PD_IMAGE` / `TRUSTDB_TIKV_TIKV_IMAGE` 或 `.env` 覆盖，见 `scripts/tikv-dev.env.example`）与 `scripts/tikv-dev.sh` / `scripts/tikv-dev.ps1` 启动最小 PD+TiKV；该 compose **仅用于开发/测试**，不代表生产 TiKV 部署或高可用拓扑。TiKV 相关变更在 CI 中由 `.github/workflows/tikv-integration.yml` 对 `internal/proofstore/tikv` 跑 integration 测试（含真实 PD+TiKV 容器）。
 
 ## 参考文件
