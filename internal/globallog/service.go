@@ -21,7 +21,12 @@ import (
 	"github.com/ryan-wong-coder/trustdb/internal/trusterr"
 )
 
-const sthDomain = "trustdb.signed-tree-head.v1"
+const (
+	sthDomain                = "trustdb.signed-tree-head.v1"
+	appendConflictAttempts   = 8
+	appendConflictBackoff    = time.Millisecond
+	appendConflictMaxBackoff = 16 * time.Millisecond
+)
 
 type Store interface {
 	PutGlobalLeaf(context.Context, model.GlobalLogLeaf) error
@@ -135,11 +140,41 @@ func (s *Service) AppendBatchRoots(ctx context.Context, roots []model.BatchRoot)
 			return nil, trusterr.New(trusterr.CodeInvalidArgument, "global log batch_root must be sha256")
 		}
 	}
+	for attempt := 0; ; attempt++ {
+		sths, expectedTreeSize, err := s.appendBatchRootsOnce(ctx, roots)
+		if err == nil {
+			return sths, nil
+		}
+		if trusterr.CodeOf(err) != trusterr.CodeFailedPrecondition || attempt+1 >= appendConflictAttempts {
+			return nil, err
+		}
+		state, stateErr := s.loadState(ctx)
+		if stateErr != nil {
+			return nil, stateErr
+		}
+		if state.TreeSize == expectedTreeSize {
+			return nil, err
+		}
+		backoff := appendConflictBackoff << min(attempt, 4)
+		if backoff > appendConflictMaxBackoff {
+			backoff = appendConflictMaxBackoff
+		}
+		timer := time.NewTimer(backoff)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, ctx.Err()
+		case <-timer.C:
+		}
+	}
+}
 
+func (s *Service) appendBatchRootsOnce(ctx context.Context, roots []model.BatchRoot) ([]model.SignedTreeHead, uint64, error) {
 	state, err := s.loadState(ctx)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
+	expectedTreeSize := state.TreeSize
 	sths := make([]model.SignedTreeHead, len(roots))
 	appends := make([]model.GlobalLogAppend, 0, len(roots))
 	planned := make(map[string]model.SignedTreeHead, len(roots))
@@ -150,14 +185,14 @@ func (s *Service) AppendBatchRoots(ctx context.Context, roots []model.BatchRoot)
 			continue
 		}
 		if existing, ok, err := s.store.GetGlobalLeafByBatchID(ctx, root.BatchID); err != nil {
-			return nil, err
+			return nil, expectedTreeSize, err
 		} else if ok {
 			sth, found, err := s.store.GetSignedTreeHead(ctx, existing.LeafIndex+1)
 			if err != nil {
-				return nil, err
+				return nil, expectedTreeSize, err
 			}
 			if !found {
-				return nil, trusterr.New(trusterr.CodeDataLoss, "global log leaf exists without matching signed tree head")
+				return nil, expectedTreeSize, trusterr.New(trusterr.CodeDataLoss, "global log leaf exists without matching signed tree head")
 			}
 			sths[i] = sth
 			planned[root.BatchID] = sth
@@ -184,16 +219,16 @@ func (s *Service) AppendBatchRoots(ctx context.Context, roots []model.BatchRoot)
 		}
 		hash, err := HashLeaf(leaf)
 		if err != nil {
-			return nil, trusterr.Wrap(trusterr.CodeInternal, "hash global log leaf", err)
+			return nil, expectedTreeSize, trusterr.Wrap(trusterr.CodeInternal, "hash global log leaf", err)
 		}
 		leaf.LeafHash = hash
 		nextState, nodes, err := s.appendState(state, leaf)
 		if err != nil {
-			return nil, err
+			return nil, expectedTreeSize, err
 		}
 		sth, err := s.signSTHFromState(nextState)
 		if err != nil {
-			return nil, err
+			return nil, expectedTreeSize, err
 		}
 		appends = append(appends, model.GlobalLogAppend{Leaf: leaf, Nodes: nodes, State: nextState, STH: sth})
 		state = nextState
@@ -203,17 +238,17 @@ func (s *Service) AppendBatchRoots(ctx context.Context, roots []model.BatchRoot)
 	if len(appends) > 0 {
 		if store, ok := s.store.(BatchAppendStore); ok {
 			if err := store.CommitGlobalLogAppends(ctx, appends); err != nil {
-				return nil, err
+				return nil, expectedTreeSize, err
 			}
 		} else {
 			for i := range appends {
 				if err := s.store.CommitGlobalLogAppend(ctx, appends[i]); err != nil {
-					return nil, err
+					return nil, expectedTreeSize, err
 				}
 			}
 		}
 	}
-	return sths, nil
+	return sths, expectedTreeSize, nil
 }
 
 func (s *Service) LatestSTH(ctx context.Context) (model.SignedTreeHead, bool, error) {

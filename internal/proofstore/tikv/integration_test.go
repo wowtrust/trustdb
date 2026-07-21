@@ -3,17 +3,21 @@
 package tikv_test
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
 	"regexp"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/ryan-wong-coder/trustdb/internal/globallog"
 	"github.com/ryan-wong-coder/trustdb/internal/model"
 	"github.com/ryan-wong-coder/trustdb/internal/proofstore"
 	"github.com/ryan-wong-coder/trustdb/internal/proofstore/proofstoretest"
 	tikvstore "github.com/ryan-wong-coder/trustdb/internal/proofstore/tikv"
+	"github.com/ryan-wong-coder/trustdb/internal/trustcrypto"
 )
 
 func TestTiKVConformance(t *testing.T) {
@@ -122,6 +126,85 @@ func TestTiKVPreparedManifestIndexIntegration(t *testing.T) {
 	}
 	if len(got) != 0 {
 		t.Fatalf("prepared manifests after commit = %#v", got)
+	}
+}
+
+func TestTiKVGlobalLogConcurrentServicesRetryConflicts(t *testing.T) {
+	requireTiKVIntegration(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	namespace := integrationNamespace(t, "global-log-concurrent")
+	storeA := openIntegrationStore(t, namespace)
+	defer storeA.Close()
+	storeB := openIntegrationStore(t, namespace)
+	defer storeB.Close()
+	_, privateKey, err := trustcrypto.GenerateEd25519Key()
+	if err != nil {
+		t.Fatalf("GenerateEd25519Key: %v", err)
+	}
+	newService := func(store globallog.Store, nodeID string) *globallog.Service {
+		svc, err := globallog.New(globallog.Options{
+			Store:      store,
+			NodeID:     nodeID,
+			LogID:      "integration-log",
+			KeyID:      "integration-key",
+			PrivateKey: privateKey,
+		})
+		if err != nil {
+			t.Fatalf("globallog.New(%s): %v", nodeID, err)
+		}
+		return svc
+	}
+	services := []*globallog.Service{newService(storeA, "node-a"), newService(storeB, "node-b")}
+	const appendsPerService = 8
+	start := make(chan struct{})
+	errs := make(chan error, len(services)*appendsPerService)
+	var wg sync.WaitGroup
+	for serviceIndex, svc := range services {
+		for appendIndex := 0; appendIndex < appendsPerService; appendIndex++ {
+			serviceIndex, appendIndex, svc := serviceIndex, appendIndex, svc
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				<-start
+				batchID := fmt.Sprintf("node-%d-batch-%d", serviceIndex, appendIndex)
+				_, err := svc.AppendBatchRoot(ctx, model.BatchRoot{
+					SchemaVersion: model.SchemaBatchRoot,
+					BatchID:       batchID,
+					BatchRoot:     bytes.Repeat([]byte{byte(serviceIndex*appendsPerService + appendIndex + 1)}, 32),
+					TreeSize:      1,
+				})
+				if err != nil {
+					errs <- fmt.Errorf("append %s: %w", batchID, err)
+				}
+			}()
+		}
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Error(err)
+	}
+	if t.Failed() {
+		return
+	}
+	state, found, err := storeA.GetGlobalLogState(ctx)
+	if err != nil || !found {
+		t.Fatalf("GetGlobalLogState found=%v err=%v", found, err)
+	}
+	wantSize := uint64(len(services) * appendsPerService)
+	if state.TreeSize != wantSize {
+		t.Fatalf("global tree_size = %d, want %d", state.TreeSize, wantSize)
+	}
+	for serviceIndex := range services {
+		for appendIndex := 0; appendIndex < appendsPerService; appendIndex++ {
+			batchID := fmt.Sprintf("node-%d-batch-%d", serviceIndex, appendIndex)
+			if _, found, err := storeB.GetGlobalLeafByBatchID(ctx, batchID); err != nil || !found {
+				t.Fatalf("GetGlobalLeafByBatchID(%q) found=%v err=%v", batchID, found, err)
+			}
+		}
 	}
 }
 

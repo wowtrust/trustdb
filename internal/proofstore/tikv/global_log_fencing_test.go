@@ -2,11 +2,38 @@ package tikv
 
 import (
 	"context"
+	"errors"
 	"testing"
+
+	tikverr "github.com/tikv/client-go/v2/error"
 
 	"github.com/ryan-wong-coder/trustdb/internal/model"
 	"github.com/ryan-wong-coder/trustdb/internal/trusterr"
 )
+
+func TestGlobalLogCommitErrorMapsWriteConflictsForServiceRetry(t *testing.T) {
+	t.Parallel()
+	for name, conflict := range map[string]error{
+		"optimistic": tikverr.NewErrWriteConflictWithArgs(1, 2, 3, []byte("global-state"), 0),
+		"latch":      &tikverr.ErrWriteConflictInLatch{StartTS: 1},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			got := globalLogCommitError(conflict)
+			if trusterr.CodeOf(got) != trusterr.CodeFailedPrecondition {
+				t.Fatalf("code = %s, want %s; err=%v", trusterr.CodeOf(got), trusterr.CodeFailedPrecondition, got)
+			}
+			if !errors.Is(got, conflict) {
+				t.Fatalf("mapped error does not preserve conflict: %v", got)
+			}
+		})
+	}
+
+	nonConflict := errors.New("transport failure")
+	if got := globalLogCommitError(nonConflict); got != nonConflict {
+		t.Fatalf("non-conflict error = %v, want original", got)
+	}
+}
 
 func TestCommitGlobalLogAppendRejectsStaleTreeState(t *testing.T) {
 	db, _ := newMockTiKVDB(t, "global-log-fence/")

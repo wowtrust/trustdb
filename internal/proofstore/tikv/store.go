@@ -285,10 +285,21 @@ func (b *tikvBatch) commitWithGlobalLogFence(ctx context.Context, expectedTreeSi
 		return err
 	}
 	if err := txn.Commit(ctx); err != nil {
-		return err
+		return globalLogCommitError(err)
 	}
 	committed = true
 	return nil
+}
+
+func globalLogCommitError(err error) error {
+	if tikverr.IsErrWriteConflict(err) {
+		return trusterr.Wrap(trusterr.CodeFailedPrecondition, "global log append lost concurrent write", err)
+	}
+	var latchConflict *tikverr.ErrWriteConflictInLatch
+	if errors.As(err, &latchConflict) {
+		return trusterr.Wrap(trusterr.CodeFailedPrecondition, "global log append lost concurrent write", err)
+	}
+	return err
 }
 
 func (b *tikvBatch) apply(txn *txnkv.KVTxn) error {
