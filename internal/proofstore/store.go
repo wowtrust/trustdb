@@ -203,3 +203,36 @@ type STHAnchorBatchEnqueuer interface {
 type LatestSTHAnchorResultReader interface {
 	LatestSTHAnchorResult(context.Context) (model.STHAnchorResult, bool, error)
 }
+
+type STHAnchorResultWriter interface {
+	PutSTHAnchorResult(context.Context, model.STHAnchorResult) error
+}
+
+type STHAnchorResultKeyedReader interface {
+	GetSTHAnchorResultForKey(context.Context, model.STHAnchorResultKey) (model.STHAnchorResult, bool, error)
+	LatestSTHAnchorResultForKey(context.Context, model.STHAnchorScheduleKey) (model.STHAnchorResult, bool, error)
+}
+
+type STHAnchorResultLister interface {
+	ListSTHAnchorResultsAfter(context.Context, model.STHAnchorResultKey, int) ([]model.STHAnchorResult, error)
+}
+
+// STHAnchorScheduleStore owns the durable constant-space Pending/InFlight
+// scheduler state. Runtime wiring is intentionally separate so the storage
+// contract can land and be verified before replacing the legacy outbox.
+type STHAnchorScheduleStore interface {
+	UpsertSTHAnchorCandidate(context.Context, model.STHAnchorCandidate) (model.STHAnchorSchedule, error)
+	GetSTHAnchorSchedule(context.Context, model.STHAnchorScheduleKey) (model.STHAnchorSchedule, bool, error)
+	ListSTHAnchorSchedules(context.Context) ([]model.STHAnchorSchedule, error)
+	ClaimSTHAnchorAttempt(ctx context.Context, key model.STHAnchorScheduleKey, nowUnixN, leaseUntilUnixN int64, leaseOwner, leaseToken string) (model.STHAnchorAttempt, bool, error)
+	RescheduleSTHAnchorAttempt(ctx context.Context, key model.STHAnchorScheduleKey, generation uint64, leaseToken string, attempts int, nextAttemptUnixN int64, lastError string) error
+	FailSTHAnchorAttempt(ctx context.Context, key model.STHAnchorScheduleKey, generation uint64, leaseToken string, attempts int, lastError string) error
+	CompleteSTHAnchorAttempt(ctx context.Context, key model.STHAnchorScheduleKey, generation uint64, leaseToken string, result model.STHAnchorResult) error
+}
+
+// STHAnchorScheduleRestorer imports one validated scheduler snapshot from a
+// logical backup. Restore callers must clear process-local lease ownership
+// before invoking it; normal runtime mutations use STHAnchorScheduleStore.
+type STHAnchorScheduleRestorer interface {
+	PutSTHAnchorSchedule(context.Context, model.STHAnchorSchedule) error
+}

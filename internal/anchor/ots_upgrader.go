@@ -226,31 +226,31 @@ func (u *OtsUpgrader) tick(ctx context.Context) UpgraderTickStats {
 		u.cfg.Logger.Warn().Err(err).Msg("ots-upgrader: list published failed")
 		return stats
 	}
-	treeSizes := make([]uint64, 0, len(items))
+	otsItems := make([]model.STHAnchorOutboxItem, 0, len(items))
 	for _, item := range items {
 		if item.SinkName == OtsSinkName {
-			treeSizes = append(treeSizes, item.TreeSize)
+			otsItems = append(otsItems, item)
 		}
 	}
-	workers := min(u.cfg.Workers, len(treeSizes))
+	workers := min(u.cfg.Workers, len(otsItems))
 	if workers > 0 {
-		jobs := make(chan uint64)
-		results := make(chan UpgraderTickStats, len(treeSizes))
+		jobs := make(chan model.STHAnchorOutboxItem)
+		results := make(chan UpgraderTickStats, len(otsItems))
 		var wg sync.WaitGroup
 		for i := 0; i < workers; i++ {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				for treeSize := range jobs {
+				for item := range jobs {
 					local := UpgraderTickStats{Visited: 1}
-					u.processOne(ctx, treeSize, &local)
+					u.processOne(ctx, item, &local)
 					results <- local
 				}
 			}()
 		}
-		for _, treeSize := range treeSizes {
+		for _, item := range otsItems {
 			select {
-			case jobs <- treeSize:
+			case jobs <- item:
 			case <-ctx.Done():
 				break
 			}
@@ -289,9 +289,18 @@ func mergeUpgraderTickStats(dst *UpgraderTickStats, src UpgraderTickStats) {
 // processOne loads the STHAnchorResult, runs the upgrade probe, and
 // persists when something changed. errors are logged + reflected in
 // stats; the loop keeps going so one bad batch can't stall the rest.
-func (u *OtsUpgrader) processOne(ctx context.Context, treeSize uint64, stats *UpgraderTickStats) {
-	logger := u.cfg.Logger.With().Uint64("tree_size", treeSize).Logger()
-	ar, ok, err := u.cfg.Store.GetSTHAnchorResult(ctx, treeSize)
+func (u *OtsUpgrader) processOne(ctx context.Context, item model.STHAnchorOutboxItem, stats *UpgraderTickStats) {
+	logger := u.cfg.Logger.With().Uint64("tree_size", item.TreeSize).Logger()
+	var ar model.STHAnchorResult
+	var ok bool
+	var err error
+	if reader, supported := u.cfg.Store.(proofstore.STHAnchorResultKeyedReader); supported {
+		ar, ok, err = reader.GetSTHAnchorResultForKey(ctx, model.STHAnchorResultKey{
+			NodeID: item.STH.NodeID, LogID: item.STH.LogID, SinkName: item.SinkName, TreeSize: item.TreeSize,
+		})
+	} else {
+		ar, ok, err = u.cfg.Store.GetSTHAnchorResult(ctx, item.TreeSize)
+	}
 	if err != nil {
 		stats.Errored++
 		u.markBatchOutcome("error")

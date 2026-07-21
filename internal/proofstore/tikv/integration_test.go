@@ -30,6 +30,82 @@ func TestTiKVConformance(t *testing.T) {
 	})
 }
 
+func TestTiKVAnchorScheduleConcurrentUpsertIsMonotonic(t *testing.T) {
+	requireTiKVIntegration(t)
+
+	ctx := context.Background()
+	namespace := integrationNamespace(t, "anchor-schedule-concurrent")
+	storeA := openIntegrationStore(t, namespace)
+	defer storeA.Close()
+	storeB := openIntegrationStore(t, namespace)
+	defer storeB.Close()
+	schedulerA := any(storeA).(proofstore.STHAnchorScheduleStore)
+	schedulerB := any(storeB).(proofstore.STHAnchorScheduleStore)
+	key := model.STHAnchorScheduleKey{NodeID: "node-a", LogID: "global", SinkName: "file"}
+
+	initial := tikvScheduleCandidate(key, 1, 1, 100, 200)
+	if _, err := schedulerA.UpsertSTHAnchorCandidate(ctx, initial); err != nil {
+		t.Fatalf("UpsertSTHAnchorCandidate(initial): %v", err)
+	}
+
+	const highestTreeSize = uint64(32)
+	var wg sync.WaitGroup
+	errs := make(chan error, highestTreeSize-1)
+	for treeSize := uint64(2); treeSize <= highestTreeSize; treeSize++ {
+		treeSize := treeSize
+		scheduler := schedulerA
+		if treeSize%2 == 0 {
+			scheduler = schedulerB
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, err := scheduler.UpsertSTHAnchorCandidate(ctx, tikvScheduleCandidate(key, treeSize, byte(treeSize), 100+int64(treeSize), 1_000))
+			errs <- err
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("concurrent UpsertSTHAnchorCandidate: %v", err)
+		}
+	}
+
+	schedule, found, err := schedulerA.GetSTHAnchorSchedule(ctx, key)
+	if err != nil || !found {
+		t.Fatalf("GetSTHAnchorSchedule found=%v err=%v", found, err)
+	}
+	if schedule.Pending == nil || schedule.Pending.Target.TreeSize != highestTreeSize {
+		t.Fatalf("pending schedule = %+v, want target %d", schedule.Pending, highestTreeSize)
+	}
+	if schedule.Pending.OpenedAtUnixN != initial.ObservedAtUnixN || schedule.Pending.DueAtUnixN != initial.DueAtUnixN {
+		t.Fatalf("fixed window = opened %d due %d, want opened %d due %d", schedule.Pending.OpenedAtUnixN, schedule.Pending.DueAtUnixN, initial.ObservedAtUnixN, initial.DueAtUnixN)
+	}
+}
+
+func tikvScheduleCandidate(key model.STHAnchorScheduleKey, treeSize uint64, seed byte, observedAt, dueAt int64) model.STHAnchorCandidate {
+	return model.STHAnchorCandidate{
+		Key: key,
+		STH: model.SignedTreeHead{
+			SchemaVersion:  model.SchemaSignedTreeHead,
+			TreeAlg:        model.DefaultMerkleTreeAlg,
+			TreeSize:       treeSize,
+			RootHash:       bytes.Repeat([]byte{seed}, 32),
+			TimestampUnixN: int64(treeSize),
+			NodeID:         key.NodeID,
+			LogID:          key.LogID,
+			Signature: model.Signature{
+				Alg:       model.DefaultSignatureAlg,
+				KeyID:     "server-key",
+				Signature: bytes.Repeat([]byte{seed}, 64),
+			},
+		},
+		ObservedAtUnixN: observedAt,
+		DueAtUnixN:      dueAt,
+	}
+}
+
 func TestTiKVSharedCheckpointScopeAcrossStores(t *testing.T) {
 	requireTiKVIntegration(t)
 

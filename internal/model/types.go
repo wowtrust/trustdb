@@ -24,6 +24,8 @@ const (
 	SchemaGlobalLogOutbox   = "trustdb.global-log-outbox.v1"
 	SchemaSTHAnchorOutbox   = "trustdb.sth-anchor-outbox.v1"
 	SchemaSTHAnchorResult   = "trustdb.sth-anchor-result.v1"
+	SchemaSTHAnchorSchedule = "trustdb.sth-anchor-schedule.v1"
+	SchemaSTHAnchorLatest   = "trustdb.sth-anchor-latest.v1"
 	DefaultHashAlg          = "sha256"
 	DefaultSignatureAlg     = "ed25519"
 	DefaultMerkleTreeAlg    = "rfc6962-sha256"
@@ -605,6 +607,80 @@ type STHAnchorResult struct {
 	STH              SignedTreeHead `cbor:"sth" json:"sth"`
 	Proof            []byte         `cbor:"proof,omitempty" json:"proof,omitempty"`
 	PublishedAtUnixN int64          `cbor:"published_at_unix_nano" json:"published_at_unix_nano"`
+}
+
+// STHAnchorResultKey is the immutable storage identity of one sink-specific
+// publication. TreeSize alone is not unique when a log is anchored through
+// more than one provider.
+type STHAnchorResultKey struct {
+	NodeID   string `cbor:"node_id" json:"node_id"`
+	LogID    string `cbor:"log_id" json:"log_id"`
+	SinkName string `cbor:"sink_name" json:"sink_name"`
+	TreeSize uint64 `cbor:"tree_size" json:"tree_size"`
+}
+
+// STHAnchorLatestReference is derived, rebuildable state. RootHash and
+// AnchorID fence a corrupted or stale pointer from silently selecting a
+// different immutable result at the same key.
+type STHAnchorLatestReference struct {
+	SchemaVersion string             `cbor:"schema_version" json:"schema_version"`
+	Key           STHAnchorResultKey `cbor:"key" json:"key"`
+	RootHash      []byte             `cbor:"root_hash" json:"root_hash"`
+	AnchorID      string             `cbor:"anchor_id" json:"anchor_id"`
+}
+
+// STHAnchorScheduleKey scopes one constant-space anchor scheduler. Current
+// deployments use one global log and sink, while the tuple keeps the durable
+// format safe for multiple logs or providers.
+type STHAnchorScheduleKey struct {
+	NodeID   string `cbor:"node_id,omitempty" json:"node_id,omitempty"`
+	LogID    string `cbor:"log_id,omitempty" json:"log_id,omitempty"`
+	SinkName string `cbor:"sink_name" json:"sink_name"`
+}
+
+// STHAnchorCandidate is the observation submitted by the Global Log
+// publisher. DueAtUnixN is computed once from the first observation and is
+// preserved when later STHs replace the pending target.
+type STHAnchorCandidate struct {
+	Key             STHAnchorScheduleKey `cbor:"key" json:"key"`
+	STH             SignedTreeHead       `cbor:"sth" json:"sth"`
+	ObservedAtUnixN int64                `cbor:"observed_at_unix_nano" json:"observed_at_unix_nano"`
+	DueAtUnixN      int64                `cbor:"due_at_unix_nano" json:"due_at_unix_nano"`
+}
+
+type STHAnchorWindow struct {
+	Generation     uint64         `cbor:"generation" json:"generation"`
+	Target         SignedTreeHead `cbor:"target" json:"target"`
+	OpenedAtUnixN  int64          `cbor:"opened_at_unix_nano" json:"opened_at_unix_nano"`
+	DueAtUnixN     int64          `cbor:"due_at_unix_nano" json:"due_at_unix_nano"`
+	UpdatedAtUnixN int64          `cbor:"updated_at_unix_nano" json:"updated_at_unix_nano"`
+}
+
+type STHAnchorAttempt struct {
+	Generation       uint64         `cbor:"generation" json:"generation"`
+	Target           SignedTreeHead `cbor:"target" json:"target"`
+	OpenedAtUnixN    int64          `cbor:"opened_at_unix_nano" json:"opened_at_unix_nano"`
+	DueAtUnixN       int64          `cbor:"due_at_unix_nano" json:"due_at_unix_nano"`
+	Attempts         int            `cbor:"attempts" json:"attempts"`
+	NextAttemptUnixN int64          `cbor:"next_attempt_unix_nano,omitempty" json:"next_attempt_unix_nano,omitempty"`
+	LastAttemptUnixN int64          `cbor:"last_attempt_unix_nano,omitempty" json:"last_attempt_unix_nano,omitempty"`
+	LastErrorMessage string         `cbor:"last_error_message,omitempty" json:"last_error_message,omitempty"`
+	TerminalFailure  bool           `cbor:"terminal_failure,omitempty" json:"terminal_failure,omitempty"`
+	LeaseOwner       string         `cbor:"lease_owner,omitempty" json:"lease_owner,omitempty"`
+	LeaseToken       string         `cbor:"lease_token,omitempty" json:"lease_token,omitempty"`
+	LeaseUntilUnixN  int64          `cbor:"lease_until_unix_nano,omitempty" json:"lease_until_unix_nano,omitempty"`
+}
+
+// STHAnchorSchedule contains at most one pending coalescing window and one
+// immutable in-flight target. Revision protects read/modify/write transitions;
+// Generation identifies work even while Pending changes concurrently.
+type STHAnchorSchedule struct {
+	SchemaVersion  string               `cbor:"schema_version" json:"schema_version"`
+	Key            STHAnchorScheduleKey `cbor:"key" json:"key"`
+	Revision       uint64               `cbor:"revision" json:"revision"`
+	NextGeneration uint64               `cbor:"next_generation" json:"next_generation"`
+	Pending        *STHAnchorWindow     `cbor:"pending,omitempty" json:"pending,omitempty"`
+	InFlight       *STHAnchorAttempt    `cbor:"in_flight,omitempty" json:"in_flight,omitempty"`
 }
 
 type KeyEvent struct {

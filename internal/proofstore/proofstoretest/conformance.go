@@ -5,10 +5,13 @@
 package proofstoretest
 
 import (
+	"bytes"
 	"context"
+	"fmt"
 	"sync"
 	"testing"
 
+	"github.com/ryan-wong-coder/trustdb/internal/anchorschedule"
 	"github.com/ryan-wong-coder/trustdb/internal/model"
 	"github.com/ryan-wong-coder/trustdb/internal/proofstore"
 	"github.com/ryan-wong-coder/trustdb/internal/trusterr"
@@ -62,6 +65,7 @@ func RunConformance(t *testing.T, newStore Factory) {
 	t.Run("STHAnchorListPublishedFiltersTerminalOnly", func(t *testing.T) { testSTHAnchorListPublishedFilters(t, newStore) })
 	t.Run("STHAnchorMarkPublished", func(t *testing.T) { testSTHAnchorMarkPublished(t, newStore) })
 	t.Run("LatestSTHAnchorResultIsMonotonic", func(t *testing.T) { testLatestSTHAnchorResultIsMonotonic(t, newStore) })
+	t.Run("STHAnchorScheduleStateMachineOptional", func(t *testing.T) { testSTHAnchorScheduleStateMachineOptional(t, newStore) })
 	t.Run("STHAnchorMarkFailed", func(t *testing.T) { testSTHAnchorMarkFailed(t, newStore) })
 	t.Run("STHAnchorRescheduleKeepsPending", func(t *testing.T) { testSTHAnchorRescheduleKeepsPending(t, newStore) })
 	t.Run("STHAnchorMissing", func(t *testing.T) { testSTHAnchorMissing(t, newStore) })
@@ -1455,6 +1459,250 @@ func testLatestSTHAnchorResultIsMonotonic(t *testing.T, newStore Factory) {
 	}
 }
 
+func testSTHAnchorScheduleStateMachineOptional(t *testing.T, newStore Factory) {
+	t.Parallel()
+	store, cleanup := newStore(t)
+	defer cleanup()
+	scheduler, ok := store.(proofstore.STHAnchorScheduleStore)
+	if !ok {
+		t.Skip("store does not implement STHAnchorScheduleStore")
+	}
+	resultLister, ok := store.(proofstore.STHAnchorResultLister)
+	if !ok {
+		t.Fatalf("STHAnchorScheduleStore must also implement STHAnchorResultLister")
+	}
+	resultWriter, ok := store.(proofstore.STHAnchorResultWriter)
+	if !ok {
+		t.Fatalf("STHAnchorScheduleStore must also implement STHAnchorResultWriter")
+	}
+	keyedReader, ok := store.(proofstore.STHAnchorResultKeyedReader)
+	if !ok {
+		t.Fatalf("STHAnchorScheduleStore must also implement STHAnchorResultKeyedReader")
+	}
+	ctx := context.Background()
+	key := model.STHAnchorScheduleKey{NodeID: "node-1", LogID: "log-1", SinkName: "file"}
+
+	if schedules, err := scheduler.ListSTHAnchorSchedules(ctx); err != nil || len(schedules) != 0 {
+		t.Fatalf("ListSTHAnchorSchedules empty = %+v err=%v", schedules, err)
+	}
+	if _, found, err := scheduler.GetSTHAnchorSchedule(ctx, key); err != nil || found {
+		t.Fatalf("GetSTHAnchorSchedule empty found=%v err=%v", found, err)
+	}
+
+	first, err := scheduler.UpsertSTHAnchorCandidate(ctx, scheduleCandidate(key, 1, 0x11, 100, 200))
+	if err != nil {
+		t.Fatalf("UpsertSTHAnchorCandidate first: %v", err)
+	}
+	merged, err := scheduler.UpsertSTHAnchorCandidate(ctx, scheduleCandidate(key, 3, 0x33, 150, 900))
+	if err != nil {
+		t.Fatalf("UpsertSTHAnchorCandidate merged: %v", err)
+	}
+	if first.Pending == nil || merged.Pending == nil || merged.Pending.Target.TreeSize != 3 || merged.Pending.OpenedAtUnixN != 100 || merged.Pending.DueAtUnixN != 200 {
+		t.Fatalf("non-sliding pending window first=%+v merged=%+v", first.Pending, merged.Pending)
+	}
+
+	if _, claimed, err := scheduler.ClaimSTHAnchorAttempt(ctx, key, 199, 250, "worker-1", "lease-early"); err != nil || claimed {
+		t.Fatalf("ClaimSTHAnchorAttempt before deadline claimed=%v err=%v", claimed, err)
+	}
+	attempt, claimed, err := scheduler.ClaimSTHAnchorAttempt(ctx, key, 200, 250, "worker-1", "lease-1")
+	if err != nil || !claimed || attempt.Target.TreeSize != 3 {
+		t.Fatalf("ClaimSTHAnchorAttempt attempt=%+v claimed=%v err=%v", attempt, claimed, err)
+	}
+	advanced, err := scheduler.UpsertSTHAnchorCandidate(ctx, scheduleCandidate(key, 5, 0x55, 220, 320))
+	if err != nil {
+		t.Fatalf("UpsertSTHAnchorCandidate while in-flight: %v", err)
+	}
+	if advanced.InFlight == nil || advanced.InFlight.Target.TreeSize != 3 || advanced.Pending == nil || advanced.Pending.Target.TreeSize != 5 {
+		t.Fatalf("bounded scheduler state = %+v", advanced)
+	}
+
+	if err := scheduler.RescheduleSTHAnchorAttempt(ctx, key, attempt.Generation+1, "lease-1", 1, 300, "retry"); trusterr.CodeOf(err) != trusterr.CodeFailedPrecondition {
+		t.Fatalf("RescheduleSTHAnchorAttempt wrong generation error=%v", err)
+	}
+	if err := scheduler.RescheduleSTHAnchorAttempt(ctx, key, attempt.Generation, "wrong", 1, 300, "retry"); trusterr.CodeOf(err) != trusterr.CodeFailedPrecondition {
+		t.Fatalf("RescheduleSTHAnchorAttempt wrong token error=%v", err)
+	}
+	if err := scheduler.RescheduleSTHAnchorAttempt(ctx, key, attempt.Generation, "lease-1", 1, 300, "retry"); err != nil {
+		t.Fatalf("RescheduleSTHAnchorAttempt: %v", err)
+	}
+	if _, claimed, err := scheduler.ClaimSTHAnchorAttempt(ctx, key, 299, 350, "worker-2", "lease-too-soon"); err != nil || claimed {
+		t.Fatalf("ClaimSTHAnchorAttempt before retry claimed=%v err=%v", claimed, err)
+	}
+	attempt, claimed, err = scheduler.ClaimSTHAnchorAttempt(ctx, key, 300, 400, "worker-2", "lease-2")
+	if err != nil || !claimed || attempt.Attempts != 1 || attempt.Target.TreeSize != 3 {
+		t.Fatalf("ClaimSTHAnchorAttempt retry attempt=%+v claimed=%v err=%v", attempt, claimed, err)
+	}
+
+	result := scheduleResult(key, attempt.Target, "anchor-3", 310)
+	if err := scheduler.CompleteSTHAnchorAttempt(ctx, key, attempt.Generation, "lease-2", result); err != nil {
+		t.Fatalf("CompleteSTHAnchorAttempt: %v", err)
+	}
+	if err := scheduler.CompleteSTHAnchorAttempt(ctx, key, attempt.Generation, "lease-2", result); err != nil {
+		t.Fatalf("CompleteSTHAnchorAttempt idempotent retry: %v", err)
+	}
+	completed, found, err := scheduler.GetSTHAnchorSchedule(ctx, key)
+	if err != nil || !found {
+		t.Fatalf("GetSTHAnchorSchedule completed found=%v err=%v", found, err)
+	}
+	if completed.InFlight != nil || completed.Pending == nil || completed.Pending.Target.TreeSize != 5 {
+		t.Fatalf("completed scheduler state = %+v", completed)
+	}
+	storedResult, found, err := store.GetSTHAnchorResult(ctx, 3)
+	if err != nil || !found || storedResult.AnchorID != result.AnchorID {
+		t.Fatalf("GetSTHAnchorResult completed result=%+v found=%v err=%v", storedResult, found, err)
+	}
+	results, err := resultLister.ListSTHAnchorResultsAfter(ctx, model.STHAnchorResultKey{}, 10)
+	if err != nil || len(results) != 1 || results[0].TreeSize != 3 {
+		t.Fatalf("ListSTHAnchorResultsAfter results=%+v err=%v", results, err)
+	}
+
+	conflict := scheduleCandidate(key, 5, 0x99, 230, 330)
+	if _, err := scheduler.UpsertSTHAnchorCandidate(ctx, conflict); trusterr.CodeOf(err) != trusterr.CodeDataLoss {
+		t.Fatalf("UpsertSTHAnchorCandidate conflicting root error=%v", err)
+	}
+	attempt, claimed, err = scheduler.ClaimSTHAnchorAttempt(ctx, key, 320, 400, "worker-3", "lease-3")
+	if err != nil || !claimed || attempt.Target.TreeSize != 5 {
+		t.Fatalf("ClaimSTHAnchorAttempt next window attempt=%+v claimed=%v err=%v", attempt, claimed, err)
+	}
+	if err := scheduler.FailSTHAnchorAttempt(ctx, key, attempt.Generation, "lease-3", 1, "schema rejected"); err != nil {
+		t.Fatalf("FailSTHAnchorAttempt: %v", err)
+	}
+	if _, claimed, err := scheduler.ClaimSTHAnchorAttempt(ctx, key, 500, 600, "worker-4", "lease-4"); err != nil || claimed {
+		t.Fatalf("ClaimSTHAnchorAttempt terminal claimed=%v err=%v", claimed, err)
+	}
+	terminal, err := scheduler.UpsertSTHAnchorCandidate(ctx, scheduleCandidate(key, 7, 0x77, 500, 600))
+	if err != nil {
+		t.Fatalf("UpsertSTHAnchorCandidate after terminal failure: %v", err)
+	}
+	if terminal.InFlight == nil || !terminal.InFlight.TerminalFailure || terminal.InFlight.Target.TreeSize != 5 || terminal.Pending == nil || terminal.Pending.Target.TreeSize != 7 {
+		t.Fatalf("terminal bounded scheduler state = %+v", terminal)
+	}
+
+	crashKey := model.STHAnchorScheduleKey{NodeID: "node-1", LogID: "log-1", SinkName: "crash-test"}
+	if _, err := scheduler.UpsertSTHAnchorCandidate(ctx, scheduleCandidate(crashKey, 11, 0x11, 700, 700)); err != nil {
+		t.Fatalf("UpsertSTHAnchorCandidate crash recovery: %v", err)
+	}
+	crashAttempt, claimed, err := scheduler.ClaimSTHAnchorAttempt(ctx, crashKey, 700, 750, "worker-5", "lease-5")
+	if err != nil || !claimed {
+		t.Fatalf("ClaimSTHAnchorAttempt crash recovery claimed=%v err=%v", claimed, err)
+	}
+	crashResult := scheduleResult(crashKey, crashAttempt.Target, "anchor-11", 710)
+	if err := resultWriter.PutSTHAnchorResult(ctx, crashResult); err != nil {
+		t.Fatalf("PutSTHAnchorResult crash recovery: %v", err)
+	}
+	if _, claimed, err := scheduler.ClaimSTHAnchorAttempt(ctx, crashKey, 800, 900, "worker-6", "lease-6"); err != nil || claimed {
+		t.Fatalf("ClaimSTHAnchorAttempt after durable result claimed=%v err=%v", claimed, err)
+	}
+	recovered, found, err := scheduler.GetSTHAnchorSchedule(ctx, crashKey)
+	if err != nil || !found || recovered.InFlight != nil {
+		t.Fatalf("crash-recovered schedule=%+v found=%v err=%v", recovered, found, err)
+	}
+
+	// Results are sink-specific even when two providers publish the same STH.
+	// Keyed reads and composite pagination must retain both envelopes.
+	multiA := model.STHAnchorScheduleKey{NodeID: "node-1", LogID: "log-1", SinkName: "multi-a"}
+	multiB := model.STHAnchorScheduleKey{NodeID: "node-1", LogID: "log-1", SinkName: "multi-b"}
+	sharedSTH := scheduleSTH(multiA, 23, 0x23)
+	for _, tc := range []struct {
+		key      model.STHAnchorScheduleKey
+		anchorID string
+	}{{multiA, "anchor-23-a"}, {multiB, "anchor-23-b"}} {
+		if err := resultWriter.PutSTHAnchorResult(ctx, scheduleResult(tc.key, sharedSTH, tc.anchorID, 230)); err != nil {
+			t.Fatalf("PutSTHAnchorResult %s: %v", tc.key.SinkName, err)
+		}
+		resultKey := model.STHAnchorResultKey{NodeID: tc.key.NodeID, LogID: tc.key.LogID, SinkName: tc.key.SinkName, TreeSize: sharedSTH.TreeSize}
+		got, found, err := keyedReader.GetSTHAnchorResultForKey(ctx, resultKey)
+		if err != nil || !found || got.AnchorID != tc.anchorID {
+			t.Fatalf("GetSTHAnchorResultForKey %s result=%+v found=%v err=%v", tc.key.SinkName, got, found, err)
+		}
+		latest, found, err := keyedReader.LatestSTHAnchorResultForKey(ctx, tc.key)
+		if err != nil || !found || latest.AnchorID != tc.anchorID {
+			t.Fatalf("LatestSTHAnchorResultForKey %s result=%+v found=%v err=%v", tc.key.SinkName, latest, found, err)
+		}
+	}
+	cursor := model.STHAnchorResultKey{}
+	multiCount := 0
+	for {
+		page, err := resultLister.ListSTHAnchorResultsAfter(ctx, cursor, 1)
+		if err != nil {
+			t.Fatalf("ListSTHAnchorResultsAfter composite page: %v", err)
+		}
+		if len(page) == 0 {
+			break
+		}
+		cursor = anchorschedule.ResultKey(page[0])
+		if page[0].TreeSize == sharedSTH.TreeSize && (page[0].SinkName == multiA.SinkName || page[0].SinkName == multiB.SinkName) {
+			multiCount++
+		}
+	}
+	if multiCount != 2 {
+		t.Fatalf("composite result pagination retained %d same-tree sinks, want 2", multiCount)
+	}
+	otherLog := model.STHAnchorScheduleKey{NodeID: "node-2", LogID: "log-2", SinkName: "multi-a"}
+	otherSTH := scheduleSTH(otherLog, 23, 0x99)
+	if err := resultWriter.PutSTHAnchorResult(ctx, scheduleResult(otherLog, otherSTH, "anchor-other-log", 231)); err != nil {
+		t.Fatalf("PutSTHAnchorResult same tree in another log: %v", err)
+	}
+	if _, err := scheduler.UpsertSTHAnchorCandidate(ctx, scheduleCandidate(multiB, 23, 0x99, 850, 950)); trusterr.CodeOf(err) != trusterr.CodeDataLoss {
+		t.Fatalf("UpsertSTHAnchorCandidate cross-sink conflicting root error=%v", err)
+	}
+
+	// A result at the same historical tree size remains authoritative even
+	// after a later result becomes latest. Candidate upsert must consult the
+	// exact immutable result and fail closed on a split-view root.
+	historyKey := model.STHAnchorScheduleKey{NodeID: "node-1", LogID: "log-1", SinkName: "history-test"}
+	for _, treeSize := range []uint64{13, 19} {
+		sth := scheduleSTH(historyKey, treeSize, byte(treeSize))
+		if err := resultWriter.PutSTHAnchorResult(ctx, scheduleResult(historyKey, sth, fmt.Sprintf("anchor-%d", treeSize), int64(treeSize*10))); err != nil {
+			t.Fatalf("PutSTHAnchorResult historical %d: %v", treeSize, err)
+		}
+	}
+	if _, err := scheduler.UpsertSTHAnchorCandidate(ctx, scheduleCandidate(historyKey, 13, 0x99, 900, 1000)); trusterr.CodeOf(err) != trusterr.CodeDataLoss {
+		t.Fatalf("UpsertSTHAnchorCandidate historical conflicting root error=%v", err)
+	}
+}
+
+func scheduleCandidate(key model.STHAnchorScheduleKey, treeSize uint64, seed byte, observedAt, dueAt int64) model.STHAnchorCandidate {
+	return model.STHAnchorCandidate{
+		Key:             key,
+		STH:             scheduleSTH(key, treeSize, seed),
+		ObservedAtUnixN: observedAt,
+		DueAtUnixN:      dueAt,
+	}
+}
+
+func scheduleSTH(key model.STHAnchorScheduleKey, treeSize uint64, seed byte) model.SignedTreeHead {
+	return model.SignedTreeHead{
+		SchemaVersion:  model.SchemaSignedTreeHead,
+		TreeAlg:        model.DefaultMerkleTreeAlg,
+		TreeSize:       treeSize,
+		RootHash:       bytes.Repeat([]byte{seed}, 32),
+		TimestampUnixN: int64(treeSize),
+		NodeID:         key.NodeID,
+		LogID:          key.LogID,
+		Signature: model.Signature{
+			Alg:       model.DefaultSignatureAlg,
+			KeyID:     "server-key",
+			Signature: bytes.Repeat([]byte{seed}, 64),
+		},
+	}
+}
+
+func scheduleResult(key model.STHAnchorScheduleKey, sth model.SignedTreeHead, anchorID string, publishedAt int64) model.STHAnchorResult {
+	return model.STHAnchorResult{
+		SchemaVersion:    model.SchemaSTHAnchorResult,
+		NodeID:           key.NodeID,
+		LogID:            key.LogID,
+		TreeSize:         sth.TreeSize,
+		SinkName:         key.SinkName,
+		AnchorID:         anchorID,
+		RootHash:         append([]byte(nil), sth.RootHash...),
+		STH:              sth,
+		Proof:            []byte("anchor-proof"),
+		PublishedAtUnixN: publishedAt,
+	}
+}
+
 func testSTHAnchorMarkFailed(t *testing.T, newStore Factory) {
 	t.Parallel()
 	store, cleanup := newStore(t)
@@ -1547,25 +1795,21 @@ func testSTHAnchorMissing(t *testing.T, newStore Factory) {
 }
 
 func sthAnchorItem(treeSize uint64, sink string, enqueuedAt int64) model.STHAnchorOutboxItem {
+	key := model.STHAnchorScheduleKey{NodeID: "node-1", LogID: "log-1", SinkName: sink}
 	return model.STHAnchorOutboxItem{
 		SchemaVersion:   model.SchemaSTHAnchorOutbox,
 		TreeSize:        treeSize,
 		SinkName:        sink,
 		Status:          model.AnchorStatePending,
-		STH:             model.SignedTreeHead{TreeSize: treeSize, RootHash: []byte{byte(treeSize)}},
+		STH:             scheduleSTH(key, treeSize, byte(treeSize)),
 		EnqueuedAtUnixN: enqueuedAt,
 	}
 }
 
 func sthAnchorResult(treeSize uint64, sink, anchorID string) model.STHAnchorResult {
-	return model.STHAnchorResult{
-		SchemaVersion: model.SchemaSTHAnchorResult,
-		TreeSize:      treeSize,
-		SinkName:      sink,
-		AnchorID:      anchorID,
-		RootHash:      []byte{byte(treeSize)},
-		STH:           model.SignedTreeHead{TreeSize: treeSize, RootHash: []byte{byte(treeSize)}},
-	}
+	key := model.STHAnchorScheduleKey{NodeID: "node-1", LogID: "log-1", SinkName: sink}
+	sth := scheduleSTH(key, treeSize, byte(treeSize))
+	return scheduleResult(key, sth, anchorID, int64(treeSize))
 }
 
 func idForWorker(worker, seq int) string {

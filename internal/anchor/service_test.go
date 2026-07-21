@@ -101,6 +101,7 @@ func testSTH(treeSize uint64) model.SignedTreeHead {
 		TreeSize:       treeSize,
 		RootHash:       root,
 		TimestampUnixN: int64(treeSize),
+		Signature:      model.Signature{Alg: model.DefaultSignatureAlg, KeyID: "test", Signature: []byte{1}},
 	}
 }
 

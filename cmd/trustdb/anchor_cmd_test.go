@@ -37,6 +37,7 @@ func seedOtsAnchor(t *testing.T, dir string, calendarURL string) model.STHAnchor
 		TreeSize:       1,
 		RootHash:       digest,
 		TimestampUnixN: 100,
+		Signature:      model.Signature{Alg: model.DefaultSignatureAlg, KeyID: "test", Signature: []byte{1}},
 	}
 	if err := store.PutSignedTreeHead(ctx, sth); err != nil {
 		t.Fatalf("PutSignedTreeHead: %v", err)
@@ -45,6 +46,7 @@ func seedOtsAnchor(t *testing.T, dir string, calendarURL string) model.STHAnchor
 		SchemaVersion: model.SchemaSTHAnchorOutbox,
 		TreeSize:      sth.TreeSize,
 		Status:        model.AnchorStatePending,
+		SinkName:      anchor.OtsSinkName,
 		STH:           sth,
 	}); err != nil {
 		t.Fatalf("EnqueueSTHAnchor: %v", err)
@@ -225,6 +227,7 @@ func TestAnchorUpgradeCommand_RejectsNonOtsSTH(t *testing.T) {
 		TreeSize:       2,
 		RootHash:       root,
 		TimestampUnixN: 50,
+		Signature:      model.Signature{Alg: model.DefaultSignatureAlg, KeyID: "test", Signature: []byte{1}},
 	}
 	if err := store.PutSignedTreeHead(ctx, sth); err != nil {
 		t.Fatalf("PutSignedTreeHead: %v", err)
@@ -233,6 +236,7 @@ func TestAnchorUpgradeCommand_RejectsNonOtsSTH(t *testing.T) {
 		SchemaVersion: model.SchemaSTHAnchorOutbox,
 		TreeSize:      sth.TreeSize,
 		Status:        model.AnchorStatePending,
+		SinkName:      "file",
 		STH:           sth,
 	}); err != nil {
 		t.Fatalf("EnqueueSTHAnchor: %v", err)
@@ -272,13 +276,14 @@ func TestAnchorExportCommand_ExportsCBORForOfflineVerify(t *testing.T) {
 	ctx := context.Background()
 	store := &proofstore.LocalStore{Root: proofDir}
 
-	root := []byte{0xaa, 0xbb, 0xcc}
+	root := bytes.Repeat([]byte{0xaa}, 32)
 	sth := model.SignedTreeHead{
 		SchemaVersion:  model.SchemaSignedTreeHead,
 		TreeAlg:        model.DefaultMerkleTreeAlg,
 		TreeSize:       2,
 		RootHash:       root,
 		TimestampUnixN: 50,
+		Signature:      model.Signature{Alg: model.DefaultSignatureAlg, KeyID: "test", Signature: []byte{1}},
 	}
 	if err := store.PutSignedTreeHead(ctx, sth); err != nil {
 		t.Fatalf("PutSignedTreeHead: %v", err)

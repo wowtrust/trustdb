@@ -39,6 +39,7 @@ func seedPublishedOtsSTH(
 		TreeSize:       treeSize,
 		RootHash:       digest,
 		TimestampUnixN: 100,
+		Signature:      model.Signature{Alg: model.DefaultSignatureAlg, KeyID: "test", Signature: []byte{1}},
 	}
 	if err := store.PutSignedTreeHead(ctx, sth); err != nil {
 		t.Fatalf("PutSignedTreeHead: %v", err)
@@ -222,6 +223,7 @@ func TestOtsUpgrader_IgnoresNonOtsSTHs(t *testing.T) {
 		TreeSize:       3,
 		RootHash:       root,
 		TimestampUnixN: 50,
+		Signature:      model.Signature{Alg: model.DefaultSignatureAlg, KeyID: "test", Signature: []byte{1}},
 	}
 	if err := store.PutSignedTreeHead(ctx, sth); err != nil {
 		t.Fatalf("PutSignedTreeHead: %v", err)

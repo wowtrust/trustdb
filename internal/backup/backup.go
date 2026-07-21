@@ -20,13 +20,14 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ryan-wong-coder/trustdb/internal/anchorschedule"
 	"github.com/ryan-wong-coder/trustdb/internal/cborx"
 	"github.com/ryan-wong-coder/trustdb/internal/model"
 	"github.com/ryan-wong-coder/trustdb/internal/proofstore"
 	"github.com/ryan-wong-coder/trustdb/internal/trusterr"
 )
 
-const SchemaManifest = "trustdb.backup.v2"
+const SchemaManifest = "trustdb.backup.v3"
 const SchemaRestoreCheckpoint = "trustdb.backup-restore-checkpoint.v1"
 const scanPageSize = 1024
 const maxRestoreEntryBytes int64 = 128 << 20
@@ -55,18 +56,19 @@ type Manifest struct {
 	CreatedAt     string `json:"created_at"`
 	Compression   string `json:"compression"`
 
-	Manifests      int     `json:"manifests"`
-	Bundles        int     `json:"bundles"`
-	Roots          int     `json:"roots"`
-	GlobalLeaves   int     `json:"global_leaves"`
-	GlobalNodes    int     `json:"global_nodes"`
-	GlobalState    bool    `json:"global_state"`
-	STHs           int     `json:"sths"`
-	GlobalTiles    int     `json:"global_tiles"`
-	GlobalOutboxes int     `json:"global_outboxes"`
-	AnchorOutboxes int     `json:"anchor_outboxes"`
-	AnchorResults  int     `json:"anchor_results"`
-	Entries        []Entry `json:"entries,omitempty"`
+	Manifests       int     `json:"manifests"`
+	Bundles         int     `json:"bundles"`
+	Roots           int     `json:"roots"`
+	GlobalLeaves    int     `json:"global_leaves"`
+	GlobalNodes     int     `json:"global_nodes"`
+	GlobalState     bool    `json:"global_state"`
+	STHs            int     `json:"sths"`
+	GlobalTiles     int     `json:"global_tiles"`
+	GlobalOutboxes  int     `json:"global_outboxes"`
+	AnchorOutboxes  int     `json:"anchor_outboxes"`
+	AnchorResults   int     `json:"anchor_results"`
+	AnchorSchedules int     `json:"anchor_schedules"`
+	Entries         []Entry `json:"entries,omitempty"`
 }
 
 type Options struct {
@@ -93,6 +95,14 @@ func Create(ctx context.Context, store proofstore.Store, path string, opts Optio
 	}
 	if path == "" {
 		return Manifest{}, trusterr.New(trusterr.CodeInvalidArgument, "backup output path is required")
+	}
+	resultLister, ok := store.(proofstore.STHAnchorResultLister)
+	if !ok {
+		return Manifest{}, trusterr.New(trusterr.CodeFailedPrecondition, "backup store cannot enumerate STH anchor results")
+	}
+	scheduleStore, ok := store.(proofstore.STHAnchorScheduleStore)
+	if !ok {
+		return Manifest{}, trusterr.New(trusterr.CodeFailedPrecondition, "backup store cannot enumerate STH anchor schedules")
 	}
 	compression := normaliseCompression(opts.Compression)
 	clock := opts.Clock
@@ -324,20 +334,51 @@ func Create(ctx context.Context, store proofstore.Store, path string, opts Optio
 			}
 			report.AnchorOutboxes++
 			afterAnchorTreeSize = item.TreeSize
+		}
+	}
 
-			result, ok, err := store.GetSTHAnchorResult(ctx, item.TreeSize)
-			if err != nil {
-				return Manifest{}, err
+	// Capture mutable scheduler state before immutable results. If a publish
+	// completes while the backup is running, this ordering can at worst retain
+	// a retryable in-flight target alongside its successful result; it cannot
+	// omit both the result and the retry intent.
+	schedules, err := scheduleStore.ListSTHAnchorSchedules(ctx)
+	if err != nil {
+		return Manifest{}, err
+	}
+	anchorschedule.Sort(schedules)
+
+	afterAnchorResult := model.STHAnchorResultKey{}
+	for {
+		results, err := resultLister.ListSTHAnchorResultsAfter(ctx, afterAnchorResult, scanPageSize)
+		if err != nil {
+			return Manifest{}, err
+		}
+		if len(results) == 0 {
+			break
+		}
+		for _, result := range results {
+			resultKey := anchorschedule.ResultKey(result)
+			if anchorschedule.CompareResultKeys(resultKey, afterAnchorResult) <= 0 {
+				return Manifest{}, trusterr.New(trusterr.CodeDataLoss, "STH anchor result listing did not advance")
 			}
-			if !ok {
-				continue
-			}
-			resultName := fmt.Sprintf("anchors/sth-result/%020d.tdsth-anchor-result", result.TreeSize)
+			resultName := fmt.Sprintf("anchors/sth-result/%09d.tdsth-anchor-result", report.AnchorResults)
 			if err := writeCBORTracked(tw, &report, &ordinal, resultName, "sth_anchor_result", result); err != nil {
 				return Manifest{}, err
 			}
 			report.AnchorResults++
+			afterAnchorResult = resultKey
 		}
+	}
+
+	for i, schedule := range schedules {
+		if err := anchorschedule.ValidateSchedule(schedule); err != nil {
+			return Manifest{}, trusterr.Wrap(trusterr.CodeDataLoss, "backup invalid STH anchor schedule", err)
+		}
+		name := fmt.Sprintf("anchors/schedules/%06d.tdanchor-schedule", i)
+		if err := writeCBORTracked(tw, &report, &ordinal, name, "sth_anchor_schedule", schedule); err != nil {
+			return Manifest{}, err
+		}
+		report.AnchorSchedules++
 	}
 
 	if err := writeJSONTracked(tw, &report, &ordinal, "manifest.json", "manifest", report); err != nil {
@@ -361,15 +402,18 @@ func Create(ctx context.Context, store proofstore.Store, path string, opts Optio
 
 func Verify(ctx context.Context, path string) (Manifest, error) {
 	manifest := Manifest{}
+	start := Manifest{}
+	var foundStart, foundSummary bool
 	err := readArchiveStream(path, func(entry archiveEntry) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
 		if entry.Name == "summary.json" {
+			foundSummary = true
 			return decodeJSONEntry(entry, &manifest)
 		}
 		if entry.Name == "manifest.json" {
-			var start Manifest
+			foundStart = true
 			return decodeJSONEntry(entry, &start)
 		}
 		return validateStreamEntry(entry)
@@ -377,8 +421,14 @@ func Verify(ctx context.Context, path string) (Manifest, error) {
 	if err != nil {
 		return Manifest{}, err
 	}
-	if manifest.SchemaVersion == "" {
+	if !foundStart || !foundSummary {
 		return Manifest{}, trusterr.New(trusterr.CodeDataLoss, "backup summary.json is missing")
+	}
+	if start.SchemaVersion != SchemaManifest || manifest.SchemaVersion != SchemaManifest {
+		return Manifest{}, trusterr.New(trusterr.CodeFailedPrecondition, fmt.Sprintf("unsupported backup schema: manifest=%q summary=%q want=%q", start.SchemaVersion, manifest.SchemaVersion, SchemaManifest))
+	}
+	if start.BackupID == "" || manifest.BackupID == "" || start.BackupID != manifest.BackupID {
+		return Manifest{}, trusterr.New(trusterr.CodeDataLoss, "backup manifest and summary identifiers do not match")
 	}
 	return manifest, nil
 }
@@ -391,7 +441,22 @@ func RestoreWithOptions(ctx context.Context, store proofstore.Store, path string
 	if store == nil {
 		return Manifest{}, trusterr.New(trusterr.CodeInvalidArgument, "restore store is required")
 	}
-	report := Manifest{SchemaVersion: SchemaManifest}
+	resultWriter, ok := store.(proofstore.STHAnchorResultWriter)
+	if !ok {
+		return Manifest{}, trusterr.New(trusterr.CodeFailedPrecondition, "restore store cannot write STH anchor results")
+	}
+	scheduleRestorer, ok := store.(proofstore.STHAnchorScheduleRestorer)
+	if !ok {
+		return Manifest{}, trusterr.New(trusterr.CodeFailedPrecondition, "restore store cannot restore STH anchor schedules")
+	}
+	if _, ok := store.(proofstore.STHAnchorResultKeyedReader); !ok {
+		return Manifest{}, trusterr.New(trusterr.CodeFailedPrecondition, "restore store cannot read keyed STH anchor results")
+	}
+	verified, err := Verify(ctx, path)
+	if err != nil {
+		return Manifest{}, err
+	}
+	report := Manifest{SchemaVersion: SchemaManifest, BackupID: verified.BackupID}
 	checkpointPath := opts.CheckpointPath
 	var restoreCP RestoreCheckpoint
 	if opts.Resume && checkpointPath == "" {
@@ -403,8 +468,11 @@ func RestoreWithOptions(ctx context.Context, store proofstore.Store, path string
 		if err != nil {
 			return Manifest{}, trusterr.Wrap(trusterr.CodeDataLoss, "read restore checkpoint", err)
 		}
+		if restoreCP.BackupID != "" && restoreCP.BackupID != verified.BackupID {
+			return Manifest{}, trusterr.New(trusterr.CodeFailedPrecondition, "restore checkpoint belongs to a different backup")
+		}
 	}
-	err := readArchiveStream(path, func(entry archiveEntry) error {
+	err = readArchiveStream(path, func(entry archiveEntry) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -544,7 +612,25 @@ func RestoreWithOptions(ctx context.Context, store proofstore.Store, path string
 				return err
 			}
 			report.AnchorResults++
-			if err := store.MarkSTHAnchorPublished(ctx, v); err != nil {
+			if err := resultWriter.PutSTHAnchorResult(ctx, v); err != nil {
+				return err
+			}
+			return markRestored()
+		case strings.HasPrefix(entry.Name, "anchors/schedules/"):
+			var v model.STHAnchorSchedule
+			if err := decodeCBOREntry(entry, &v); err != nil {
+				return err
+			}
+			v, err := anchorschedule.ClearLeaseForRestore(v)
+			if err != nil {
+				return trusterr.Wrap(trusterr.CodeDataLoss, "restore invalid STH anchor schedule", err)
+			}
+			v, err = reconcileRestoredAnchorSchedule(ctx, store, v)
+			if err != nil {
+				return err
+			}
+			report.AnchorSchedules++
+			if err := scheduleRestorer.PutSTHAnchorSchedule(ctx, v); err != nil {
 				return err
 			}
 			return markRestored()
@@ -562,6 +648,47 @@ func RestoreWithOptions(ctx context.Context, store proofstore.Store, path string
 		}
 	}
 	return report, nil
+}
+
+func reconcileRestoredAnchorSchedule(ctx context.Context, store proofstore.Store, schedule model.STHAnchorSchedule) (model.STHAnchorSchedule, error) {
+	reader, ok := store.(proofstore.STHAnchorResultKeyedReader)
+	if !ok {
+		return model.STHAnchorSchedule{}, trusterr.New(trusterr.CodeFailedPrecondition, "restore store cannot read keyed STH anchor results")
+	}
+	if schedule.InFlight != nil {
+		resultKey := model.STHAnchorResultKey{
+			NodeID: schedule.Key.NodeID, LogID: schedule.Key.LogID, SinkName: schedule.Key.SinkName, TreeSize: schedule.InFlight.Target.TreeSize,
+		}
+		result, found, err := reader.GetSTHAnchorResultForKey(ctx, resultKey)
+		if err != nil {
+			return model.STHAnchorSchedule{}, err
+		}
+		if found {
+			resultKey := model.STHAnchorScheduleKey{NodeID: result.NodeID, LogID: result.LogID, SinkName: result.SinkName}
+			if !anchorschedule.SameKey(resultKey, schedule.Key) {
+				return model.STHAnchorSchedule{}, trusterr.New(trusterr.CodeDataLoss, "restored STH anchor result conflicts with schedule key")
+			}
+			schedule, _, err = anchorschedule.ReconcileCompleted(schedule, result)
+			if err != nil {
+				return model.STHAnchorSchedule{}, trusterr.Wrap(trusterr.CodeDataLoss, "reconcile restored in-flight anchor result", err)
+			}
+		}
+	}
+	if schedule.Pending == nil {
+		return schedule, nil
+	}
+	latest, found, err := reader.LatestSTHAnchorResultForKey(ctx, schedule.Key)
+	if err != nil {
+		return model.STHAnchorSchedule{}, err
+	}
+	if !found {
+		return schedule, nil
+	}
+	schedule, _, err = anchorschedule.ReconcileCompleted(schedule, latest)
+	if err != nil {
+		return model.STHAnchorSchedule{}, trusterr.Wrap(trusterr.CodeDataLoss, "reconcile restored pending anchor result", err)
+	}
+	return schedule, nil
 }
 
 func writeCBOR(tw *tar.Writer, name string, v any) error {
@@ -806,6 +933,15 @@ func validateStreamEntry(entry archiveEntry) error {
 	case strings.HasPrefix(entry.Name, "anchors/sth-result/"):
 		var v model.STHAnchorResult
 		return decodeCBOREntry(entry, &v)
+	case strings.HasPrefix(entry.Name, "anchors/schedules/"):
+		var v model.STHAnchorSchedule
+		if err := decodeCBOREntry(entry, &v); err != nil {
+			return err
+		}
+		if err := anchorschedule.ValidateSchedule(v); err != nil {
+			return trusterr.Wrap(trusterr.CodeDataLoss, "invalid STH anchor schedule", err)
+		}
+		return nil
 	default:
 		_, _ = io.Copy(io.Discard, entry.Reader)
 		return nil

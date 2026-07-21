@@ -5,6 +5,7 @@ import (
 	"os"
 	"testing"
 
+	"github.com/ryan-wong-coder/trustdb/internal/anchorschedule"
 	"github.com/ryan-wong-coder/trustdb/internal/model"
 	"github.com/ryan-wong-coder/trustdb/internal/trusterr"
 )
@@ -59,7 +60,7 @@ func TestLocalStoreSTHAnchorTransitionsStatuses(t *testing.T) {
 
 	store := LocalStore{Root: t.TempDir()}
 	ctx := context.Background()
-	if err := store.EnqueueSTHAnchor(ctx, model.STHAnchorOutboxItem{TreeSize: 1, Status: model.AnchorStatePending, EnqueuedAtUnixN: 10}); err != nil {
+	if err := store.EnqueueSTHAnchor(ctx, localOutboxItem(1, model.AnchorStatePending, 10)); err != nil {
 		t.Fatalf("EnqueueSTHAnchor published transition: %v", err)
 	}
 	if err := store.RescheduleSTHAnchor(ctx, 1, 2, 200, "retry"); err != nil {
@@ -100,22 +101,31 @@ func TestLocalStoreLatestSTHAnchorReferenceRecoversIncompleteCandidate(t *testin
 
 	store := LocalStore{Root: t.TempDir()}
 	ctx := context.Background()
-	if err := store.EnqueueSTHAnchor(ctx, model.STHAnchorOutboxItem{TreeSize: 1, Status: model.AnchorStatePending}); err != nil {
+	if err := store.EnqueueSTHAnchor(ctx, localOutboxItem(1, model.AnchorStatePending, 10)); err != nil {
 		t.Fatalf("EnqueueSTHAnchor: %v", err)
 	}
 	if err := store.MarkSTHAnchorPublished(ctx, model.STHAnchorResult{TreeSize: 1, AnchorID: "anchor-1"}); err != nil {
 		t.Fatalf("MarkSTHAnchorPublished: %v", err)
 	}
-	previous := uint64(1)
-	if err := writeCBORAtomic(store.latestSTHAnchorReferencePath(), localLatestAnchorReference{Candidate: 2, Previous: &previous}); err != nil {
+	previousResult, found, err := store.GetSTHAnchorResult(ctx, 1)
+	if err != nil || !found {
+		t.Fatalf("GetSTHAnchorResult previous found=%v err=%v", found, err)
+	}
+	previous := anchorschedule.LatestReference(previousResult)
+	dangling := anchorschedule.LatestReference(localScheduleResult(
+		model.STHAnchorScheduleKey{NodeID: "node-1", LogID: "log-1", SinkName: "file"},
+		localScheduleSTH(model.STHAnchorScheduleKey{NodeID: "node-1", LogID: "log-1", SinkName: "file"}, 2, 2),
+		"anchor-2", 200, nil,
+	))
+	if err := writeCBORAtomic(store.latestSTHAnchorReferencePath(), localLatestAnchorReference{Candidate: dangling, Previous: &previous}); err != nil {
 		t.Fatalf("write incomplete latest reference: %v", err)
 	}
 	result, found, err := store.LatestSTHAnchorResult(ctx)
 	if err != nil || !found || result.TreeSize != 1 {
 		t.Fatalf("LatestSTHAnchorResult result=%+v found=%v err=%v", result, found, err)
 	}
-	ref, ok, err := store.readLatestSTHAnchorReference()
-	if err != nil || !ok || ref.Candidate != 1 {
+	ref, ok, err := store.readLatestSTHAnchorReference(store.latestSTHAnchorReferencePath())
+	if err != nil || !ok || ref.Candidate.Key.TreeSize != 1 {
 		t.Fatalf("repaired latest reference=%+v ok=%v err=%v", ref, ok, err)
 	}
 }
@@ -125,12 +135,7 @@ func TestLocalStoreSTHAnchorDuplicateTransitionConverges(t *testing.T) {
 
 	store := LocalStore{Root: t.TempDir()}
 	ctx := context.Background()
-	pending := model.STHAnchorOutboxItem{
-		SchemaVersion:   model.SchemaSTHAnchorOutbox,
-		TreeSize:        1,
-		Status:          model.AnchorStatePending,
-		EnqueuedAtUnixN: 10,
-	}
+	pending := localOutboxItem(1, model.AnchorStatePending, 10)
 	if err := store.EnqueueSTHAnchor(ctx, pending); err != nil {
 		t.Fatalf("EnqueueSTHAnchor: %v", err)
 	}
@@ -152,6 +157,14 @@ func TestLocalStoreSTHAnchorDuplicateTransitionConverges(t *testing.T) {
 	}
 	if _, err := os.Stat(store.sthAnchorOutboxPath(model.AnchorStatePending, 1)); !os.IsNotExist(err) {
 		t.Fatalf("pending duplicate after convergence error = %v, want not exist", err)
+	}
+}
+
+func localOutboxItem(treeSize uint64, status string, enqueuedAt int64) model.STHAnchorOutboxItem {
+	key := model.STHAnchorScheduleKey{NodeID: "node-1", LogID: "log-1", SinkName: "file"}
+	return model.STHAnchorOutboxItem{
+		SchemaVersion: model.SchemaSTHAnchorOutbox, TreeSize: treeSize, Status: status,
+		SinkName: key.SinkName, STH: localScheduleSTH(key, treeSize, byte(treeSize)), EnqueuedAtUnixN: enqueuedAt,
 	}
 }
 

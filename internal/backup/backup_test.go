@@ -73,6 +73,7 @@ func TestBackupCreateVerifyRestoreRoundTrip(t *testing.T) {
 	}
 	globalSvc, err := globallog.New(globallog.Options{
 		Store:      src,
+		NodeID:     "node-1",
 		LogID:      "backup-test",
 		KeyID:      "backup-key",
 		PrivateKey: priv,
@@ -99,6 +100,8 @@ func TestBackupCreateVerifyRestoreRoundTrip(t *testing.T) {
 	}
 	if err := src.MarkSTHAnchorPublished(ctx, model.STHAnchorResult{
 		SchemaVersion:    model.SchemaSTHAnchorResult,
+		NodeID:           sth.NodeID,
+		LogID:            sth.LogID,
 		TreeSize:         sth.TreeSize,
 		SinkName:         "noop",
 		AnchorID:         "noop-sth-1",
@@ -122,7 +125,7 @@ func TestBackupCreateVerifyRestoreRoundTrip(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 	if report.SchemaVersion != SchemaManifest || report.BackupID == "" || len(report.Entries) == 0 {
-		t.Fatalf("missing v2 manifest metadata: %+v", report)
+		t.Fatalf("missing v3 manifest metadata: %+v", report)
 	}
 	if report.Bundles != 1 || report.Roots != 1 || report.GlobalLeaves != 1 || report.GlobalNodes == 0 || !report.GlobalState || report.STHs != 1 || report.GlobalOutboxes != 1 || report.AnchorResults != 1 {
 		t.Fatalf("unexpected create report: %+v", report)
@@ -171,6 +174,160 @@ func TestBackupCreateVerifyRestoreRoundTrip(t *testing.T) {
 	}
 	if checkpoint, ok, err := dst.GetCheckpoint(ctx); err != nil || ok {
 		t.Fatalf("GetCheckpoint restored checkpoint=%+v ok=%v err=%v, want absent node-local state", checkpoint, ok, err)
+	}
+}
+
+func TestBackupRoundTripPreservesAnchorScheduleAndIndependentResult(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	src := proofstore.LocalStore{Root: filepath.Join(t.TempDir(), "src")}
+	scheduler, ok := any(src).(proofstore.STHAnchorScheduleStore)
+	if !ok {
+		t.Fatal("LocalStore does not implement STHAnchorScheduleStore")
+	}
+	resultWriter, ok := any(src).(proofstore.STHAnchorResultWriter)
+	if !ok {
+		t.Fatal("LocalStore does not implement STHAnchorResultWriter")
+	}
+	key := model.STHAnchorScheduleKey{NodeID: "node-1", LogID: "log-1", SinkName: "file"}
+	firstSTH := backupScheduleSTH(key, 1, 0x11)
+	if _, err := scheduler.UpsertSTHAnchorCandidate(ctx, model.STHAnchorCandidate{
+		Key: key, STH: firstSTH, ObservedAtUnixN: 100, DueAtUnixN: 100,
+	}); err != nil {
+		t.Fatalf("UpsertSTHAnchorCandidate first: %v", err)
+	}
+	firstAttempt, claimed, err := scheduler.ClaimSTHAnchorAttempt(ctx, key, 100, 150, "worker-1", "lease-1")
+	if err != nil || !claimed {
+		t.Fatalf("ClaimSTHAnchorAttempt first claimed=%v err=%v", claimed, err)
+	}
+	firstResult := backupScheduleResult(key, firstSTH, "anchor-1", 110)
+	if err := scheduler.CompleteSTHAnchorAttempt(ctx, key, firstAttempt.Generation, "lease-1", firstResult); err != nil {
+		t.Fatalf("CompleteSTHAnchorAttempt first: %v", err)
+	}
+
+	inFlightSTH := backupScheduleSTH(key, 3, 0x33)
+	if _, err := scheduler.UpsertSTHAnchorCandidate(ctx, model.STHAnchorCandidate{
+		Key: key, STH: inFlightSTH, ObservedAtUnixN: 200, DueAtUnixN: 200,
+	}); err != nil {
+		t.Fatalf("UpsertSTHAnchorCandidate in-flight: %v", err)
+	}
+	inFlightAttempt, claimed, err := scheduler.ClaimSTHAnchorAttempt(ctx, key, 200, 250, "worker-2", "lease-2")
+	if err != nil || !claimed {
+		t.Fatalf("ClaimSTHAnchorAttempt in-flight claimed=%v err=%v", claimed, err)
+	}
+	if err := scheduler.RescheduleSTHAnchorAttempt(ctx, key, inFlightAttempt.Generation, "lease-2", 2, 300, "temporary outage"); err != nil {
+		t.Fatalf("RescheduleSTHAnchorAttempt: %v", err)
+	}
+	if _, claimed, err := scheduler.ClaimSTHAnchorAttempt(ctx, key, 300, 350, "worker-3", "lease-3"); err != nil || !claimed {
+		t.Fatalf("ClaimSTHAnchorAttempt retry claimed=%v err=%v", claimed, err)
+	}
+	pendingSTH := backupScheduleSTH(key, 5, 0x55)
+	if _, err := scheduler.UpsertSTHAnchorCandidate(ctx, model.STHAnchorCandidate{
+		Key: key, STH: pendingSTH, ObservedAtUnixN: 310, DueAtUnixN: 410,
+	}); err != nil {
+		t.Fatalf("UpsertSTHAnchorCandidate pending: %v", err)
+	}
+	// Exercise the backup capability directly: successful immutable results
+	// must not depend on a legacy per-STH outbox entry being present.
+	if err := resultWriter.PutSTHAnchorResult(ctx, firstResult); err != nil {
+		t.Fatalf("PutSTHAnchorResult idempotent: %v", err)
+	}
+	secondSinkKey := key
+	secondSinkKey.SinkName = "ots"
+	secondSinkResult := backupScheduleResult(secondSinkKey, firstSTH, "anchor-1-ots", 111)
+	if err := resultWriter.PutSTHAnchorResult(ctx, secondSinkResult); err != nil {
+		t.Fatalf("PutSTHAnchorResult second sink: %v", err)
+	}
+
+	path := filepath.Join(t.TempDir(), "anchor-schedule.tdbackup")
+	report, err := Create(ctx, src, path, Options{Compression: "none"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if report.AnchorOutboxes != 0 || report.AnchorResults != 2 || report.AnchorSchedules != 1 {
+		t.Fatalf("backup report = %+v", report)
+	}
+
+	dst := proofstore.LocalStore{Root: filepath.Join(t.TempDir(), "dst")}
+	restored, err := Restore(ctx, dst, path)
+	if err != nil {
+		t.Fatalf("Restore: %v", err)
+	}
+	if restored.AnchorResults != 2 || restored.AnchorSchedules != 1 {
+		t.Fatalf("restore report = %+v", restored)
+	}
+	restoredScheduler := any(dst).(proofstore.STHAnchorScheduleStore)
+	schedule, found, err := restoredScheduler.GetSTHAnchorSchedule(ctx, key)
+	if err != nil || !found {
+		t.Fatalf("GetSTHAnchorSchedule found=%v err=%v", found, err)
+	}
+	if schedule.InFlight == nil || schedule.InFlight.Target.TreeSize != 3 || schedule.InFlight.Attempts != 2 || schedule.InFlight.NextAttemptUnixN != 300 {
+		t.Fatalf("restored in-flight = %+v", schedule.InFlight)
+	}
+	if schedule.InFlight.LeaseOwner != "" || schedule.InFlight.LeaseToken != "" || schedule.InFlight.LeaseUntilUnixN != 0 {
+		t.Fatalf("restored stale lease = %+v", schedule.InFlight)
+	}
+	if schedule.Pending == nil || schedule.Pending.Target.TreeSize != 5 || schedule.Pending.OpenedAtUnixN != 310 || schedule.Pending.DueAtUnixN != 410 {
+		t.Fatalf("restored pending = %+v", schedule.Pending)
+	}
+	if result, found, err := dst.GetSTHAnchorResult(ctx, 1); err != nil || !found || result.AnchorID != "anchor-1" {
+		t.Fatalf("restored independent result = %+v found=%v err=%v", result, found, err)
+	}
+	keyedReader := any(dst).(proofstore.STHAnchorResultKeyedReader)
+	for _, tc := range []struct {
+		key      model.STHAnchorScheduleKey
+		anchorID string
+	}{{key, "anchor-1"}, {secondSinkKey, "anchor-1-ots"}} {
+		resultKey := model.STHAnchorResultKey{NodeID: tc.key.NodeID, LogID: tc.key.LogID, SinkName: tc.key.SinkName, TreeSize: 1}
+		result, found, err := keyedReader.GetSTHAnchorResultForKey(ctx, resultKey)
+		if err != nil || !found || result.AnchorID != tc.anchorID {
+			t.Fatalf("restored keyed result %s = %+v found=%v err=%v", tc.key.SinkName, result, found, err)
+		}
+	}
+}
+
+func TestRestoreRejectsLegacySchemaBeforeApplyingEntries(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "legacy.tdbackup")
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	tw := tar.NewWriter(f)
+	legacy := Manifest{
+		SchemaVersion: "trustdb.backup.v2",
+		BackupID:      "legacy-backup",
+		CreatedAt:     time.Unix(1, 0).UTC().Format(time.RFC3339Nano),
+		Compression:   "none",
+	}
+	var ordinal int64
+	root := model.BatchRoot{SchemaVersion: model.SchemaBatchRoot, BatchID: "must-not-restore", BatchRoot: repeatByte(0x42, 32), TreeSize: 1, ClosedAtUnixN: 1}
+	if err := writeCBORTracked(tw, &legacy, &ordinal, "roots/must-not-restore.tdroot", "batch_root", root); err != nil {
+		t.Fatalf("write root: %v", err)
+	}
+	if err := writeJSONTracked(tw, &legacy, &ordinal, "manifest.json", "manifest", legacy); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+	if err := writeJSONTracked(tw, &legacy, &ordinal, "summary.json", "summary", legacy); err != nil {
+		t.Fatalf("write summary: %v", err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatalf("tar Close: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("file Close: %v", err)
+	}
+
+	if _, err := Verify(ctx, path); trusterr.CodeOf(err) != trusterr.CodeFailedPrecondition {
+		t.Fatalf("Verify legacy error=%v", err)
+	}
+	dst := proofstore.LocalStore{Root: filepath.Join(t.TempDir(), "dst")}
+	if _, err := Restore(ctx, dst, path); trusterr.CodeOf(err) != trusterr.CodeFailedPrecondition {
+		t.Fatalf("Restore legacy error=%v", err)
+	}
+	if _, err := dst.LatestRoot(ctx); trusterr.CodeOf(err) != trusterr.CodeNotFound {
+		t.Fatalf("LatestRoot after rejected restore error=%v", err)
 	}
 }
 
@@ -322,16 +479,20 @@ func TestBackupRoundTripPreservesSTHAnchorStatuses(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	src := proofstore.LocalStore{Root: filepath.Join(t.TempDir(), "src")}
-	if err := src.EnqueueSTHAnchor(ctx, model.STHAnchorOutboxItem{TreeSize: 1, Status: model.AnchorStatePending, EnqueuedAtUnixN: 1}); err != nil {
+	key := model.STHAnchorScheduleKey{NodeID: "node-1", LogID: "log-1", SinkName: "file"}
+	sth1 := backupScheduleSTH(key, 1, 0x11)
+	sth2 := backupScheduleSTH(key, 2, 0x22)
+	sth3 := backupScheduleSTH(key, 3, 0x33)
+	if err := src.EnqueueSTHAnchor(ctx, model.STHAnchorOutboxItem{SchemaVersion: model.SchemaSTHAnchorOutbox, TreeSize: 1, SinkName: key.SinkName, STH: sth1, Status: model.AnchorStatePending, EnqueuedAtUnixN: 1}); err != nil {
 		t.Fatalf("EnqueueSTHAnchor pending: %v", err)
 	}
-	if err := src.EnqueueSTHAnchor(ctx, model.STHAnchorOutboxItem{TreeSize: 2, Status: model.AnchorStatePending, EnqueuedAtUnixN: 2}); err != nil {
+	if err := src.EnqueueSTHAnchor(ctx, model.STHAnchorOutboxItem{SchemaVersion: model.SchemaSTHAnchorOutbox, TreeSize: 2, SinkName: key.SinkName, STH: sth2, Status: model.AnchorStatePending, EnqueuedAtUnixN: 2}); err != nil {
 		t.Fatalf("EnqueueSTHAnchor published: %v", err)
 	}
-	if err := src.MarkSTHAnchorPublished(ctx, model.STHAnchorResult{TreeSize: 2, AnchorID: "anchor-2", PublishedAtUnixN: 3}); err != nil {
+	if err := src.MarkSTHAnchorPublished(ctx, backupScheduleResult(key, sth2, "anchor-2", 3)); err != nil {
 		t.Fatalf("MarkSTHAnchorPublished: %v", err)
 	}
-	if err := src.EnqueueSTHAnchor(ctx, model.STHAnchorOutboxItem{TreeSize: 3, Status: model.AnchorStatePending, EnqueuedAtUnixN: 4}); err != nil {
+	if err := src.EnqueueSTHAnchor(ctx, model.STHAnchorOutboxItem{SchemaVersion: model.SchemaSTHAnchorOutbox, TreeSize: 3, SinkName: key.SinkName, STH: sth3, Status: model.AnchorStatePending, EnqueuedAtUnixN: 4}); err != nil {
 		t.Fatalf("EnqueueSTHAnchor failed: %v", err)
 	}
 	if err := src.MarkSTHAnchorFailed(ctx, 3, "permanent"); err != nil {
@@ -629,4 +790,36 @@ func repeatByte(b byte, n int) []byte {
 		out[i] = b
 	}
 	return out
+}
+
+func backupScheduleSTH(key model.STHAnchorScheduleKey, treeSize uint64, seed byte) model.SignedTreeHead {
+	return model.SignedTreeHead{
+		SchemaVersion:  model.SchemaSignedTreeHead,
+		TreeAlg:        model.DefaultMerkleTreeAlg,
+		TreeSize:       treeSize,
+		RootHash:       repeatByte(seed, 32),
+		TimestampUnixN: int64(treeSize),
+		NodeID:         key.NodeID,
+		LogID:          key.LogID,
+		Signature: model.Signature{
+			Alg:       model.DefaultSignatureAlg,
+			KeyID:     "server-key",
+			Signature: repeatByte(seed, 64),
+		},
+	}
+}
+
+func backupScheduleResult(key model.STHAnchorScheduleKey, sth model.SignedTreeHead, anchorID string, publishedAt int64) model.STHAnchorResult {
+	return model.STHAnchorResult{
+		SchemaVersion:    model.SchemaSTHAnchorResult,
+		NodeID:           key.NodeID,
+		LogID:            key.LogID,
+		TreeSize:         sth.TreeSize,
+		SinkName:         key.SinkName,
+		AnchorID:         anchorID,
+		RootHash:         append([]byte(nil), sth.RootHash...),
+		STH:              sth,
+		Proof:            []byte("anchor-proof"),
+		PublishedAtUnixN: publishedAt,
+	}
 }

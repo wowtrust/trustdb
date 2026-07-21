@@ -125,19 +125,20 @@ func seedFileStore(t *testing.T, dir string) seedCounts {
 	if err := store.PutGlobalLogState(ctx, model.GlobalLogState{
 		SchemaVersion:  model.SchemaGlobalLogState,
 		TreeSize:       1,
-		RootHash:       []byte{0xaa},
-		Frontier:       [][]byte{{0xaa}},
+		RootHash:       bytes.Repeat([]byte{0xaa}, 32),
+		Frontier:       [][]byte{bytes.Repeat([]byte{0xaa}, 32)},
 		UpdatedAtUnixN: 300,
 	}); err != nil {
 		t.Fatalf("PutGlobalLogState: %v", err)
 	}
 	sth := model.SignedTreeHead{
 		SchemaVersion:  model.SchemaSignedTreeHead,
-		TreeAlg:        "trustdb-global-merkle-v1",
+		TreeAlg:        model.DefaultMerkleTreeAlg,
 		TreeSize:       1,
-		RootHash:       []byte{0xaa},
+		RootHash:       bytes.Repeat([]byte{0xaa}, 32),
 		TimestampUnixN: 301,
 		LogID:          "test-log",
+		Signature:      model.Signature{Alg: model.DefaultSignatureAlg, KeyID: "test", Signature: []byte{1}},
 	}
 	if err := store.PutSignedTreeHead(ctx, sth); err != nil {
 		t.Fatalf("PutSignedTreeHead: %v", err)
@@ -170,7 +171,7 @@ func seedFileStore(t *testing.T, dir string) seedCounts {
 		TreeSize:         1,
 		SinkName:         "file",
 		AnchorID:         "anchor-1",
-		RootHash:         []byte{0xaa},
+		RootHash:         append([]byte(nil), sth.RootHash...),
 		STH:              sth,
 		Proof:            []byte(`{"ok":true}`),
 		PublishedAtUnixN: 304,
