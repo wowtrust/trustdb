@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -16,6 +17,7 @@ import (
 	"github.com/ryan-wong-coder/trustdb/internal/model"
 	"github.com/ryan-wong-coder/trustdb/internal/proofstore"
 	"github.com/ryan-wong-coder/trustdb/internal/trustcrypto"
+	"github.com/ryan-wong-coder/trustdb/internal/trusterr"
 )
 
 func TestBackupCreateVerifyRestoreRoundTrip(t *testing.T) {
@@ -239,6 +241,43 @@ func TestBackupRootPaginationPreservesTimestampTies(t *testing.T) {
 	}
 	if restoredRootCount != rootCount {
 		t.Fatalf("restored root count = %d, want %d", restoredRootCount, rootCount)
+	}
+}
+
+func TestBackupCreateRejectsMissingManifestBundle(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	src := proofstore.LocalStore{Root: filepath.Join(t.TempDir(), "src")}
+	if err := src.PutManifest(ctx, model.BatchManifest{
+		SchemaVersion: model.SchemaBatchManifest,
+		BatchID:       "batch-missing-bundle",
+		State:         model.BatchStateCommitted,
+		TreeSize:      1,
+		BatchRoot:     repeatByte(0x44, 32),
+		RecordIDs:     []string{"record-missing"},
+		ClosedAtUnixN: 1,
+	}); err != nil {
+		t.Fatalf("PutManifest: %v", err)
+	}
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "incomplete.tdbackup")
+	_, err := Create(ctx, src, path, Options{Compression: "none"})
+	if trusterr.CodeOf(err) != trusterr.CodeDataLoss {
+		t.Fatalf("Create error = %v, code = %s, want %s", err, trusterr.CodeOf(err), trusterr.CodeDataLoss)
+	}
+	if !strings.Contains(err.Error(), "batch-missing-bundle") || !strings.Contains(err.Error(), "record-missing") {
+		t.Fatalf("Create error = %q, want batch and record identifiers", err)
+	}
+	if _, statErr := os.Stat(path); !os.IsNotExist(statErr) {
+		t.Fatalf("backup target stat error = %v, want not exist", statErr)
+	}
+	temporaryFiles, globErr := filepath.Glob(filepath.Join(dir, ".incomplete.tdbackup.*.tmp"))
+	if globErr != nil {
+		t.Fatalf("Glob temporary files: %v", globErr)
+	}
+	if len(temporaryFiles) != 0 {
+		t.Fatalf("temporary backup files remain: %v", temporaryFiles)
 	}
 }
 
