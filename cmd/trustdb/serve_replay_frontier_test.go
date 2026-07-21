@@ -216,10 +216,18 @@ type checkpointSafeLocalStore struct {
 
 func (checkpointSafeLocalStore) WALCheckpointPruneSafe() bool { return true }
 
+type checkpointUnsafeLocalStore struct {
+	proofstore.LocalStore
+}
+
+func (checkpointUnsafeLocalStore) WALCheckpointPruneSafe() bool { return false }
+
 type replayBundleCountingStore struct {
 	proofstore.LocalStore
 	getBundleCalls int
 }
+
+func (*replayBundleCountingStore) WALCheckpointPruneSafe() bool { return false }
 
 func (s *replayBundleCountingStore) GetBundle(ctx context.Context, recordID string) (model.ProofBundle, error) {
 	s.getBundleCalls++
@@ -538,7 +546,7 @@ func TestReplayRejectsLegacyCheckpointWithPrunedPrefix(t *testing.T) {
 		t.Fatalf("checkpoint writes after missing prefix = %+v, want none", puts)
 	}
 
-	unsafeLocal := proofstore.LocalStore{Root: filepath.Join(t.TempDir(), "unsafe-proofs")}
+	unsafeLocal := checkpointUnsafeLocalStore{LocalStore: proofstore.LocalStore{Root: filepath.Join(t.TempDir(), "unsafe-proofs")}}
 	if err := unsafeLocal.PutCheckpoint(context.Background(), model.WALCheckpoint{
 		SchemaVersion: model.SchemaWALCheckpoint,
 		SegmentID:     positions[len(positions)-1].SegmentID,
@@ -612,10 +620,11 @@ func TestReplayIgnoresCheckpointFromUnsafeFileStore(t *testing.T) {
 	restarted, reopened := env.restartedEngine(t)
 	defer reopened.Close()
 	restarted.Idempotency = app.NewIdempotencyIndex()
-	svc := batch.New(restarted, env.store, batch.Options{QueueSize: 2, MaxRecords: 2, MaxDelay: time.Hour}, nil)
+	unsafeStore := checkpointUnsafeLocalStore{LocalStore: env.store}
+	svc := batch.New(restarted, unsafeStore, batch.Options{QueueSize: 2, MaxRecords: 2, MaxDelay: time.Hour}, nil)
 	defer svc.Shutdown(context.Background())
 
-	_, replayed, skipped, err := replayWALAccepted(context.Background(), env.walPath, restarted, svc, env.store, nil)
+	_, replayed, skipped, err := replayWALAccepted(context.Background(), env.walPath, restarted, svc, unsafeStore, nil)
 	if err != nil {
 		t.Fatalf("replayWALAccepted() error = %v", err)
 	}

@@ -621,18 +621,18 @@ func (s *Service) persistBatch(ctx context.Context, batchID string, closedAt tim
 			s.observeBatchStage("artifacts", stageStart)
 			return err
 		}
+		itemsCopy := cloneAcceptedItems(items)
+		s.rememberPending(manifest.BatchID, itemsCopy)
 		manifest.State = model.BatchStatePrepared
 		manifest.PreparedAtUnixN = time.Now().UTC().UnixNano()
 		if err := s.store.PutManifest(ctx, manifest); err != nil {
+			s.forgetPending(manifest.BatchID)
 			s.observeBatchStage("artifacts", stageStart)
 			return err
 		}
 		s.observeBatchStage("artifacts", stageStart)
-		itemsCopy := cloneAcceptedItems(items)
 		if s.opts.ProofMode == ProofModeAsync {
 			s.startAsyncMaterialize(manifest, itemsCopy)
-		} else {
-			s.rememberPending(manifest.BatchID, itemsCopy)
 		}
 		return nil
 	}
