@@ -46,6 +46,43 @@ func BenchmarkLocalStoreLatestRoot4096(b *testing.B) {
 	}
 }
 
+func BenchmarkLocalStoreLatestSignedTreeHead4096(b *testing.B) {
+	store := LocalStore{Root: b.TempDir()}
+	if err := os.MkdirAll(store.sthDir(), 0o755); err != nil {
+		b.Fatal(err)
+	}
+	for i := range 4096 {
+		sth := model.SignedTreeHead{
+			SchemaVersion:  model.SchemaSignedTreeHead,
+			TreeSize:       uint64(i + 1),
+			RootHash:       make([]byte, 32),
+			TimestampUnixN: int64(i + 1),
+		}
+		data, err := cborx.Marshal(sth)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if err := os.WriteFile(store.sthPath(sth.TreeSize), data, 0o600); err != nil {
+			b.Fatal(err)
+		}
+	}
+	if err := writeCBORAtomic(store.latestSignedTreeHeadReferencePath(), uint64(4096)); err != nil {
+		b.Fatal(err)
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		got, ok, err := store.LatestSignedTreeHead(context.Background())
+		if err != nil {
+			b.Fatal(err)
+		}
+		if !ok || got.TreeSize != 4096 {
+			b.Fatalf("latest STH = %+v ok=%v", got, ok)
+		}
+	}
+}
+
 func BenchmarkLocalStoreGlobalLeafFirstPage4096(b *testing.B) {
 	store := LocalStore{Root: b.TempDir()}
 	if err := os.MkdirAll(store.globalLeafDir(), 0o755); err != nil {
