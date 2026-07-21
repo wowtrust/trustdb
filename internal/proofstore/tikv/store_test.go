@@ -44,6 +44,18 @@ func TestOpenWithOptionsRequiresPDEndpoints(t *testing.T) {
 	}
 }
 
+func TestGetBundleMissUsesOnePointRead(t *testing.T) {
+	db, countingClient := newMockTiKVDB(t, "bundle-miss/")
+	store := &Store{db: db}
+
+	if _, err := store.GetBundle(context.Background(), "missing-record"); trusterr.CodeOf(err) != trusterr.CodeNotFound {
+		t.Fatalf("GetBundle error = %v, code = %s, want %s", err, trusterr.CodeOf(err), trusterr.CodeNotFound)
+	}
+	if requests := countingClient.getRequests.Load(); requests != 1 {
+		t.Fatalf("GetBundle point-get requests = %d, want 1", requests)
+	}
+}
+
 func TestTiKVDoesNotUseSharedCheckpointForLocalWALPruning(t *testing.T) {
 	t.Parallel()
 	var store *Store
