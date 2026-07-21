@@ -3,8 +3,11 @@ package sdk
 import (
 	"context"
 	"errors"
+	"net/http"
 	"sync/atomic"
 	"testing"
+
+	"github.com/ryan-wong-coder/trustdb/internal/trusterr"
 )
 
 func TestLoadBalancedDispatchRoundRobinOrder(t *testing.T) {
@@ -78,6 +81,60 @@ func TestLoadBalancedDispatchPreservesCancellationAndJoinedErrors(t *testing.T) 
 	_, err = transport.SubmitSignedClaim(ctx, SignedClaim{})
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("SubmitSignedClaim(canceled) error = %v, want context canceled", err)
+	}
+}
+
+func TestLoadBalancedDispatchStopsOnTerminalSDKError(t *testing.T) {
+	t.Parallel()
+
+	var primaryHits atomic.Int64
+	var secondaryHits atomic.Int64
+	terminal := &Error{
+		Op:         "submit claim",
+		StatusCode: http.StatusBadRequest,
+		Code:       string(trusterr.CodeInvalidArgument),
+		Message:    "invalid claim",
+	}
+	transport := &loadBalancedTransport{
+		transports: []Transport{
+			dispatchTransport{endpoint: "primary", hits: &primaryHits, err: terminal},
+			dispatchTransport{endpoint: "secondary", hits: &secondaryHits},
+		},
+		mode: LoadBalanceFailover,
+	}
+	_, err := transport.SubmitSignedClaim(context.Background(), SignedClaim{})
+	if !errors.Is(err, terminal) {
+		t.Fatalf("SubmitSignedClaim() error = %v, want terminal error", err)
+	}
+	if got := primaryHits.Load(); got != 1 {
+		t.Fatalf("primary hits = %d, want 1", got)
+	}
+	if got := secondaryHits.Load(); got != 0 {
+		t.Fatalf("secondary hits = %d, want 0", got)
+	}
+}
+
+func TestLoadBalancedDispatchRetriesTransientSDKError(t *testing.T) {
+	t.Parallel()
+
+	var primaryHits atomic.Int64
+	var secondaryHits atomic.Int64
+	transient := &Error{Op: "submit claim", StatusCode: http.StatusServiceUnavailable, Message: "overloaded"}
+	transport := &loadBalancedTransport{
+		transports: []Transport{
+			dispatchTransport{endpoint: "primary", hits: &primaryHits, err: transient},
+			dispatchTransport{endpoint: "secondary", hits: &secondaryHits},
+		},
+		mode: LoadBalanceFailover,
+	}
+	if _, err := transport.SubmitSignedClaim(context.Background(), SignedClaim{}); err != nil {
+		t.Fatalf("SubmitSignedClaim() error = %v", err)
+	}
+	if got := primaryHits.Load(); got != 1 {
+		t.Fatalf("primary hits = %d, want 1", got)
+	}
+	if got := secondaryHits.Load(); got != 1 {
+		t.Fatalf("secondary hits = %d, want 1", got)
 	}
 }
 

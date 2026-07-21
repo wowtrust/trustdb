@@ -439,7 +439,14 @@ func grpcError(method, target string, err error) error {
 	if !ok {
 		return &Error{Op: method, URL: target, Err: err}
 	}
-	return &Error{Op: method, URL: target, Code: trustCodeFromGRPC(st.Code()), Message: st.Message(), Err: err}
+	return &Error{
+		Op:        method,
+		URL:       target,
+		Code:      trustCodeFromGRPC(st.Code()),
+		Message:   st.Message(),
+		Err:       err,
+		retryable: st.Code() == codes.Unavailable,
+	}
 }
 
 func trustCodeFromGRPC(code codes.Code) string {

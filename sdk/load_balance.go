@@ -97,6 +97,9 @@ func tryEndpoints[T any](ctx context.Context, t *loadBalancedTransport, op strin
 			return got, nil
 		}
 		errs = errors.Join(errs, fmt.Errorf("%s %s: %w", op, transport.Endpoint(), err))
+		if !retryableEndpointError(err) {
+			return zero, errs
+		}
 	}
 	return zero, errs
 }

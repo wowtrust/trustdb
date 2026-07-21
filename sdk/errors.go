@@ -15,6 +15,7 @@ type Error struct {
 	Code       string
 	Message    string
 	Err        error
+	retryable  bool
 }
 
 func (e *Error) Error() string {
@@ -65,4 +66,29 @@ func IsUnavailable(err error) bool {
 		sdkErr.StatusCode == http.StatusPreconditionFailed ||
 		sdkErr.Code == string(trusterr.CodeNotFound) ||
 		sdkErr.Code == string(trusterr.CodeFailedPrecondition)
+}
+
+func retryableEndpointError(err error) bool {
+	var sdkErr *Error
+	if !errors.As(err, &sdkErr) {
+		// Custom transports do not have a shared typed error contract. Preserve
+		// failover for their opaque errors rather than treating them as terminal.
+		return true
+	}
+	if sdkErr.retryable {
+		return true
+	}
+	if sdkErr.StatusCode == 0 && sdkErr.Code == "" && sdkErr.Err != nil {
+		return true
+	}
+	switch sdkErr.StatusCode {
+	case http.StatusRequestTimeout,
+		http.StatusTooManyRequests,
+		http.StatusBadGateway,
+		http.StatusServiceUnavailable,
+		http.StatusGatewayTimeout:
+		return true
+	default:
+		return false
+	}
 }
