@@ -31,9 +31,7 @@ jobs:
       - name: Queue safe security update for squash merge
         if: >-
           steps.metadata.outputs.dependency-group == 'security-patches' &&
-          steps.metadata.outputs.maintainer-changes == 'false' &&
-          (steps.metadata.outputs.update-type == 'version-update:semver-patch' ||
-           steps.metadata.outputs.update-type == 'version-update:semver-minor')
+          steps.metadata.outputs.maintainer-changes == 'false'
         env:
           GH_TOKEN: ${{ github.token }}
           PR_URL: ${{ github.event.pull_request.html_url }}
@@ -42,15 +40,11 @@ jobs:
       - name: Explain why automatic merge was not queued
         if: >-
           steps.metadata.outputs.dependency-group != 'security-patches' ||
-          steps.metadata.outputs.maintainer-changes != 'false' ||
-          (steps.metadata.outputs.update-type != 'version-update:semver-patch' &&
-           steps.metadata.outputs.update-type != 'version-update:semver-minor')
+          steps.metadata.outputs.maintainer-changes != 'false'
         env:
           DEPENDENCY_GROUP: ${{ steps.metadata.outputs.dependency-group }}
           MAINTAINER_CHANGES: ${{ steps.metadata.outputs.maintainer-changes }}
-          UPDATE_TYPE: ${{ steps.metadata.outputs.update-type }}
         run: |
-          echo "Automatic merge is limited to untouched Dependabot security-patches groups."
+          echo "Automatic merge is limited to untouched Dependabot security-patches groups, which are constrained to patch and minor updates in dependabot.yml."
           echo "dependency_group=$DEPENDENCY_GROUP"
           echo "maintainer_changes=$MAINTAINER_CHANGES"
-          echo "update_type=$UPDATE_TYPE"
