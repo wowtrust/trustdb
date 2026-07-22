@@ -24,14 +24,6 @@ const desktopProducts = {
   ko: desktopKo,
 };
 
-const proofLevels = [
-  ["L1", "签名", "客户端签名，锁定来源与内容。"],
-  ["L2", "收据", "服务端接收并返回可验证收据。"],
-  ["L3", "MERKLE", "进入批次树，获得包含证明。"],
-  ["L4", "GLOBAL", "写入全局透明日志，持续可审计。"],
-  ["L5", "锚定", "发布外部锚点，获得独立时间边界。"],
-];
-
 const knowledgeItems = [
   ["01", "文档中心", "从本地启动到服务部署、CLI、Go SDK 与桌面客户端。", "/docs"],
   ["02", "性能基线", "基于 267.5 万次有效提交的双机压测结果与适用边界。", "/performance"],
@@ -67,9 +59,9 @@ function FlowCanvas({ mode = "hero" }) {
     const drawHero = (time) => {
       const progress = (Math.sin(time * 0.00042) + 1) / 2;
       const x1 = width * 0.045;
-      const y1 = height * 0.36;
+      const y1 = height * 0.70;
       const x2 = width * 0.77;
-      const y2 = height * 0.78;
+      const y2 = height * 0.88;
       const x = x1 + (x2 - x1) * progress;
       const y = y1 + (y2 - y1) * progress;
       const gradient = context.createLinearGradient(x1, y1, x2, y2);
@@ -134,7 +126,7 @@ function FlowCanvas({ mode = "hero" }) {
 
 export function HomePage() {
   const locale = useLocale();
-  const { comparison } = productExplanation(locale);
+  const { comparison, home } = productExplanation(locale);
   const [copied, setCopied] = useState(false);
   const command = "trustdb verify --file document.pdf --sproof document.sproof --server-public-key server.pub --client-public-key client.pub";
 
@@ -146,51 +138,75 @@ export function HomePage() {
 
   return (
     <>
-      <section className="hero" style={{ "--hero-image": `url(${heroLandscape})` }}>
+      <section className="hero" style={{ "--hero-image": `url(${heroLandscape})` }} data-i18n-ignore>
         <FlowCanvas mode="hero" />
         <div className="hero__content">
-          <p className="hero__eyebrow"><ShieldCheck weight="fill" /> Verifiable evidence database</p>
-          <h1 className="hero__title">有据可查</h1>
-          <p className="hero__copy">为文件和日志生成可独立验证的证据。原文不必公开，验证也不必依赖 TrustDB 本身。</p>
+          <p className="hero__eyebrow"><ShieldCheck weight="fill" /> {home.hero.eyebrow}</p>
+          <h1 className="hero__title" aria-label={home.hero.title.join(" ")}>{home.hero.title.map((line) => <span key={line}>{line}</span>)}</h1>
+          <p className="hero__copy">{home.hero.copy}</p>
           <div className="hero__actions">
-            <Link className="button button--solid" href="/docs/quick-start">开始使用 <ArrowRight /></Link>
-            <Link className="button button--ghost" href="/sproof">了解 .sproof</Link>
+            <Link className="button button--solid" href="/docs/quick-start">{home.hero.primary} <ArrowRight /></Link>
+            <Link className="button button--ghost" href="/sproof">{home.hero.secondary}</Link>
           </div>
+          <ul className="hero__signals" aria-label={home.hero.points.join(" · ")}>
+            {home.hero.points.map((point) => <li key={point}>{point}</li>)}
+          </ul>
         </div>
-        <p className="hero__index">01 / 文件可以离开系统，证据仍然经得起验证。</p>
+        <p className="hero__index">01 / {home.hero.index}</p>
       </section>
 
-      <section className="why-trustdb">
+      <section className="why-trustdb" data-i18n-ignore>
         <div className="section-shell why-trustdb__layout">
           <div className="why-trustdb__statement" data-reveal>
-            <p>Why TrustDB</p>
-            <h2>需求一直存在。<br />只是过去太贵。</h2>
+            <p>{home.problem.eyebrow}</p>
+            <h2>{home.problem.title.map((line) => <span key={line}>{line}</span>)}</h2>
           </div>
           <div className="why-trustdb__copy" data-reveal>
-            <p>文件交付后可能被替换，日志也可能由单方改写。等到争议发生，双方都很难证明当时的事实。</p>
+            {home.problem.copy.map((paragraph) => <p key={paragraph}>{paragraph}</p>)}
           </div>
         </div>
         <figure className="why-trustdb__art section-shell" data-reveal>
-          <img src={evidenceProblemLineart} width="1979" height="795" loading="lazy" decoding="async" alt="三个线稿场景：交付后的文件版本不一致、管理员可以单方修改日志、争议双方缺少独立证据" />
-          <figcaption><span>文件版本不一致</span><span>日志由单方保管</span><span>争议发生时无据可查</span></figcaption>
+          <img src={evidenceProblemLineart} width="1979" height="795" loading="lazy" decoding="async" alt={home.problem.artAlt} />
+          <figcaption>{home.problem.captions.map((caption) => <span key={caption}>{caption}</span>)}</figcaption>
         </figure>
         <div className="why-trustdb__answer section-shell" data-reveal>
-          <strong>现在，一台普通服务器就能开始。</strong>
-          <p>TrustDB 保存签名、收据和证明。发送方不用交出原文件，验证方拿到 .sproof 后就能自行核验。</p>
-          <Link href="/docs">为什么需要 TrustDB <ArrowRight /></Link>
+          <strong>{home.problem.answerTitle}</strong>
+          <p>{home.problem.answerBody}</p>
+          <Link href="/docs/concepts">{home.problem.cta} <ArrowRight /></Link>
         </div>
       </section>
 
-      <section className="proof" id="proof-model">
+      <section className="home-capabilities" id="capabilities" aria-labelledby="capabilities-title" data-i18n-ignore>
+        <div className="section-shell">
+          <header className="home-capabilities__heading" data-reveal>
+            <p>{home.capabilities.eyebrow}</p>
+            <h2 id="capabilities-title">{home.capabilities.title.map((line) => <span key={line}>{line}</span>)}</h2>
+            <span>{home.capabilities.lead}</span>
+          </header>
+          <div className="home-capabilities__grid">
+            {home.capabilities.cards.map(([index, title, description]) => (
+              <article key={index} data-reveal><span>{index}</span><h3>{title}</h3><p>{description}</p></article>
+            ))}
+          </div>
+          <div className="home-benchmark" data-reveal>
+            <div className="home-benchmark__label"><span>{home.capabilities.benchmarkEyebrow}</span><Link href="/performance">{home.capabilities.benchmarkCta} <ArrowRight /></Link></div>
+            <div className="home-benchmark__metrics">
+              {home.capabilities.metrics.map(([value, label]) => <div key={label}><strong>{value}</strong><span>{label}</span></div>)}
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section className="proof" id="proof-model" data-i18n-ignore>
         <div className="section-shell">
           <div className="section-heading" data-reveal>
-            <p>Proof model</p>
-            <h2>五级证明，<br />一条证据链。</h2>
-            <span>同一份证据随系统处理逐级增强，不改变原始事实，只增加独立验证能力。</span>
+            <p>{home.proof.eyebrow}</p>
+            <h2>{home.proof.title.map((line) => <span key={line}>{line}</span>)}</h2>
+            <span>{home.proof.lead}</span>
           </div>
           <div className="proof-rail">
             <div className="proof-rail__line" />
-            {proofLevels.map(([level, label, description]) => (
+            {home.proof.levels.map(([level, label, description]) => (
               <article className="proof-step" key={level} tabIndex="0">
                 <span className="proof-step__level">{level}</span>
                 <span className="proof-step__node"><Check weight="bold" /></span>
@@ -202,19 +218,32 @@ export function HomePage() {
         </div>
       </section>
 
-      <section className="journey" aria-labelledby="journey-title">
-        <img className="journey__image" src={evidenceField} width="2048" height="1024" loading="lazy" decoding="async" alt="由稀疏文件粒子汇入透明日志并汇聚到外部锚点的抽象数据场" />
+      <section className="journey" aria-labelledby="journey-title" data-i18n-ignore>
+        <img className="journey__image" src={evidenceField} width="2048" height="1024" loading="lazy" decoding="async" alt={home.journey.artAlt} />
         <FlowCanvas mode="journey" />
         <div className="journey__heading" data-reveal>
-          <p>Independent verification</p>
-          <h2 id="journey-title">证据如何穿过系统。</h2>
+          <p>{home.journey.eyebrow}</p>
+          <h2 id="journey-title">{home.journey.title.map((line) => <span key={line}>{line}</span>)}</h2>
         </div>
         <div className="journey__labels" data-reveal>
-          <span>文件<small>本地生成与签名</small></span>
-          <span>透明日志<small>公开、可追溯、不可静默改写</small></span>
-          <span>外部锚定<small>获得独立时间边界</small></span>
+          {home.journey.labels.map(([label, detail]) => <span key={label}>{label}<small>{detail}</small></span>)}
         </div>
-        <p className="journey__caption" data-reveal>从文件产生到链下日志，再到链上锚定，构成可独立验证的完整结构。</p>
+        <p className="journey__caption" data-reveal>{home.journey.caption}</p>
+      </section>
+
+      <section className="home-use-cases" id="use-cases" aria-labelledby="use-cases-title" data-i18n-ignore>
+        <div className="section-shell">
+          <header className="home-use-cases__heading" data-reveal>
+            <p>{home.useCases.eyebrow}</p>
+            <h2 id="use-cases-title">{home.useCases.title.map((line) => <span key={line}>{line}</span>)}</h2>
+            <span>{home.useCases.lead}</span>
+          </header>
+          <div className="home-use-cases__grid">
+            {home.useCases.cards.map(([eyebrow, title, description]) => (
+              <article key={eyebrow} data-reveal><span>{eyebrow}</span><h3>{title}</h3><p>{description}</p></article>
+            ))}
+          </div>
+        </div>
       </section>
 
       <section className="comparison" id="comparison" aria-labelledby="comparison-title" data-i18n-ignore>
