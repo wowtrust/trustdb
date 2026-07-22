@@ -15,7 +15,7 @@
     "@vueuse/core": "^11.1.0",
     "gsap": "^3.15.0",
     "lucide-vue-next": "^0.468.0",
-    "pinia": "^2.2.4",
+    "pinia": "^4.0.2",
     "vue": "^3.5.13",
     "vue-router": "^4.4.5"
   },
