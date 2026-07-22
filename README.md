@@ -32,7 +32,9 @@ The multi-architecture Docker image is published with both immutable and stable-
 
 ```bash
 docker pull wsy19990317/trustdb:1.0.0
-docker run --name trustdb -p 8080:8080 -v trustdb-data:/var/lib/trustdb wsy19990317/trustdb:1.0.0
+docker run -d --name trustdb -p 127.0.0.1:8080:8080 -v trustdb-data:/var/lib/trustdb wsy19990317/trustdb:1.0.0
+docker logs trustdb
+curl --fail http://127.0.0.1:8080/healthz
 ```
 
 Desktop packages carry a release-specific self-signed certificate and its public `.cer` file. The certificate lets you inspect the signer used for this release, but does not establish Apple or Microsoft trust, so Gatekeeper or SmartScreen may still show an unknown-developer warning. Verify the downloaded file against `SHA256SUMS` before installing.
@@ -45,7 +47,7 @@ Desktop packages carry a release-specific self-signed certificate and its public
 - Batch Merkle proofs, persisted record indexes, and paginated record/root APIs.
 - Global Transparency Log with persisted STHs, inclusion proofs, consistency proofs, and history tiles.
 - L5 STH/global-root anchoring through `off`, `noop`, file, and OpenTimestamps sinks.
-- File, Pebble, and TiKV proofstore backends. TiKV enables storage-compute separation for multiple TrustDB compute nodes sharing durable proof data.
+- File, Pebble, and TiKV proofstore backends. TiKV enables storage-compute separation, with one logical `(node_id, log_id)` stream per namespace and no same-namespace active-active writers.
 - Portable `.tdbackup` create, verify, and resumable restore.
 - Go SDK for claim signing, HTTP/gRPC calls, proof export, and local verification.
 - Wails + Vue desktop client for local identity, file attestation, record management, proof refresh, `.sproof` export, and offline verification.
@@ -61,7 +63,7 @@ Desktop packages carry a release-specific self-signed certificate and its public
 | L2 | Server validates and accepts the claim into WAL; crash durability follows the configured fsync policy. | `AcceptedReceipt` |
 | L3 | The accepted claim is committed into a batch Merkle tree. | `ProofBundle` / `.tdproof` |
 | L4 | The batch root is included in the Global Transparency Log and a target STH. | `GlobalLogProof` / `.tdgproof` |
-| L5 | The corresponding STH/global root is externally anchored. | `STHAnchorResult` / `.tdanchor-result` |
+| L5 | A supported anchor sink produced a matching result for the STH/global root; only a genuinely external sink adds independent time semantics. | `STHAnchorResult` / `.tdanchor-result` |
 
 For exchange and desktop verification, `.sproof` is the recommended single-file proof container. It can include the L3 `ProofBundle`, optional L4 `GlobalLogProof`, and optional L5 `STHAnchorResult`. The stable v1 format is documented in [formats/SPROOF_V1.md](formats/SPROOF_V1.md).
 
@@ -98,79 +100,58 @@ During upgrade, a legacy v1 checkpoint is rebuilt only from a complete retained 
 
 ## Quick Start
 
-Download the prebuilt Server/CLI archive for your operating system from the [v1.0.0 release](https://github.com/wowtrust/trustdb/releases/tag/v1.0.0), extract it, and run the commands below from the extracted directory. No Go toolchain is required. The examples use `./bin/trustdb`; on Windows use `.\bin\trustdb.exe`.
+Download the prebuilt Server/CLI archive for your operating system from the [v1.0.0 release](https://github.com/wowtrust/trustdb/releases/tag/v1.0.0). Verify the archive against [`SHA256SUMS`](https://github.com/wowtrust/trustdb/releases/download/v1.0.0/SHA256SUMS) before extracting it, then run the commands below from the extracted directory. No server or Go toolchain is required. The examples use a POSIX shell; Windows users should follow the platform-specific [website quick start](https://www.trustdb.ryan-wong.cn/docs/quick-start).
 
-Use [`SHA256SUMS`](https://github.com/wowtrust/trustdb/releases/download/v1.0.0/SHA256SUMS) to verify the archive before running it. Source builds are documented separately in the [Build from source guide](https://www.trustdb.ryan-wong.cn/docs/source-build).
+Create an explicit input and a disposable working directory:
 
-Generate client and server keys:
+```bash
+printf 'hello TrustDB\n' > example.txt
+mkdir -p .trustdb-dev
+```
 
-```powershell
+Generate one-time client and server keys. `keygen` replaces same-name key files, so do not rerun it for an identity that has already issued evidence:
+
+```bash
 ./bin/trustdb keygen --out .trustdb-dev --prefix client
 ./bin/trustdb keygen --out .trustdb-dev --prefix server
 ```
 
-Start a local development server:
+Create and sign a local file claim:
 
-```powershell
-./bin/trustdb serve `
-  --config config/production.yaml `
-  --server-private-key .trustdb-dev/server.key `
-  --client-public-key .trustdb-dev/client.pub `
-  --listen 127.0.0.1:8080
-```
-
-Create and sign a file claim:
-
-```powershell
-./bin/trustdb claim-file `
-  --file .\example.txt `
-  --private-key .trustdb-dev/client.key `
-  --tenant default `
-  --client local-client `
-  --key-id client-key `
+```bash
+./bin/trustdb claim-file \
+  --file ./example.txt \
+  --private-key .trustdb-dev/client.key \
+  --tenant default \
+  --client local-client \
+  --key-id client-key \
   --out .trustdb-dev/example.tdclaim
 ```
 
-Commit a claim locally into a proof bundle:
+Commit the claim locally into an L3 ProofBundle, keeping its WAL inside the practice directory:
 
-```powershell
-./bin/trustdb commit `
-  --claim .trustdb-dev/example.tdclaim `
-  --server-private-key .trustdb-dev/server.key `
-  --client-public-key .trustdb-dev/client.pub `
+```bash
+./bin/trustdb commit \
+  --claim .trustdb-dev/example.tdclaim \
+  --server-private-key .trustdb-dev/server.key \
+  --client-public-key .trustdb-dev/client.pub \
+  --wal .trustdb-dev/local-wal \
   --out .trustdb-dev/example.tdproof
+
+./bin/trustdb proof inspect --proof .trustdb-dev/example.tdproof
 ```
 
-Verify a local file with a proof:
+Verify the original file by recomputing its digest, signatures, receipt, and Merkle path:
 
-```powershell
-./bin/trustdb verify `
-  --file .\example.txt `
-  --proof .trustdb-dev/example.tdproof `
-  --server-public-key .trustdb-dev/server.pub `
+```bash
+./bin/trustdb verify \
+  --file ./example.txt \
+  --proof .trustdb-dev/example.tdproof \
+  --server-public-key .trustdb-dev/server.pub \
   --client-public-key .trustdb-dev/client.pub
 ```
 
-Verify the recommended single-file `.sproof` artifact:
-
-```powershell
-./bin/trustdb verify `
-  --file .\example.txt `
-  --sproof .trustdb-dev/example.sproof `
-  --server-public-key .trustdb-dev/server.pub `
-  --client-public-key .trustdb-dev/client.pub
-```
-
-Create and verify a portable backup:
-
-```powershell
-./bin/trustdb backup create `
-  --metastore file `
-  --metastore-path .trustdb-dev/proofs `
-  --out .trustdb-dev/trustdb.tdbackup
-
-./bin/trustdb backup verify --file .trustdb-dev/trustdb.tdbackup
-```
+Successful output contains `"valid":true` and `"proof_level":"L3"`. This local `commit` does not send the claim to a running server. Continue with the checked [Go SDK example](examples/sdk-onboarding) for server submission, asynchronous L4, `.sproof` export, and offline verification. Production deployment and stopped-service logical backup are covered by the [operations guide](https://www.trustdb.ryan-wong.cn/docs/server).
 
 ## HTTP And gRPC
 
@@ -189,6 +170,7 @@ Implemented HTTP endpoints:
 | `GET /v1/sth/latest` | Fetch latest SignedTreeHead. |
 | `GET /v1/sth/{tree_size}` | Fetch a specific STH. |
 | `GET /v1/global-log/inclusion/{batch_id}` | Fetch global-log inclusion proof for a batch. |
+| `GET /v1/global-log/evidence/{batch_id}` | Fetch covering Global Log evidence and the matching published anchor result when available. |
 | `GET /v1/global-log/consistency?from=&to=` | Fetch global-log consistency proof. |
 | `GET /v1/anchors/sth/{tree_size}` | Fetch an immutable published STH anchor result. |
 | `GET /metrics` | Prometheus metrics. |
