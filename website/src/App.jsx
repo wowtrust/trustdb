@@ -6,17 +6,19 @@ import { ArrowRight } from "@phosphor-icons/react";
 import { SiteFooter, SiteHeader, PageHero } from "./components/SiteChrome";
 import { useRoute, Link } from "./router";
 import { HomePage } from "./pages/HomePage";
-import { CliDocsPage, DesktopDocsPage, DesktopInstallPage, DocsIndexPage, MissingDocsPage, QuickStartPage, SdkDocsPage, ServerDocsPage, SourceBuildPage } from "./pages/DocsPages";
+import { CliDocsPage, ConceptsDocsPage, DesktopDocsPage, DesktopInstallPage, DocsIndexPage, MissingDocsPage, QuickStartPage, SdkDocsPage, ServerDocsPage, SourceBuildPage } from "./pages/DocsPages";
 import { PerformancePage } from "./pages/PerformancePage";
 import { SproofPage } from "./pages/SproofPage";
 import { ChangelogPage, DownloadsPage } from "./pages/ReleasePages";
 import { t, useLocale } from "./i18n";
+import { productExplanation } from "./content/productExplanation";
 
 gsap.registerPlugin(ScrollTrigger, useGSAP);
 
 const titles = {
   "/": "TrustDB · 可验证证据数据库",
   "/docs": "文档中心 · TrustDB",
+  "/docs/concepts": "理解 TrustDB · 系统与证据模型",
   "/docs/quick-start": "快速开始 · TrustDB 文档",
   "/docs/server": "服务器 · TrustDB 文档",
   "/docs/cli": "CLI · TrustDB 文档",
@@ -33,6 +35,7 @@ const titles = {
 function RouteView({ route }) {
   if (route === "/") return <HomePage />;
   if (route === "/docs") return <DocsIndexPage />;
+  if (route === "/docs/concepts") return <ConceptsDocsPage route={route} />;
   if (route === "/docs/quick-start") return <QuickStartPage route={route} />;
   if (route === "/docs/server") return <ServerDocsPage route={route} />;
   if (route === "/docs/cli") return <CliDocsPage route={route} />;
@@ -54,7 +57,9 @@ export function App() {
   const root = useRef(null);
 
   useEffect(() => {
-    document.title = t(titles[route] || "页面未找到 · TrustDB");
+    document.title = route === "/docs/concepts"
+      ? `${productExplanation(locale).concepts.title} · TrustDB`
+      : t(titles[route] || "页面未找到 · TrustDB");
   }, [route, locale]);
 
   useLayoutEffect(() => {

@@ -13,6 +13,7 @@ import desktopJa from "../assets/client-locales/desktop-ja.png";
 import desktopFr from "../assets/client-locales/desktop-fr.png";
 import desktopKo from "../assets/client-locales/desktop-ko.png";
 import { useLocale } from "../i18n";
+import { comparisonSources, productExplanation } from "../content/productExplanation";
 
 const desktopProducts = {
   "zh-CN": desktopZh,
@@ -133,6 +134,7 @@ function FlowCanvas({ mode = "hero" }) {
 
 export function HomePage() {
   const locale = useLocale();
+  const { comparison } = productExplanation(locale);
   const [copied, setCopied] = useState(false);
   const command = "trustdb verify --file document.pdf --sproof document.sproof --server-public-key server.pub --client-public-key client.pub";
 
@@ -213,6 +215,30 @@ export function HomePage() {
           <span>外部锚定<small>获得独立时间边界</small></span>
         </div>
         <p className="journey__caption" data-reveal>从文件产生到链下日志，再到链上锚定，构成可独立验证的完整结构。</p>
+      </section>
+
+      <section className="comparison" id="comparison" aria-labelledby="comparison-title" data-i18n-ignore>
+        <div className="section-shell">
+          <header className="comparison__heading" data-reveal>
+            <p>{comparison.eyebrow}</p>
+            <h2 id="comparison-title">{comparison.title}</h2>
+            <span>{comparison.lead}</span>
+          </header>
+          <div className="comparison__table" role="table" aria-label={comparison.title} data-reveal>
+            <div className="comparison__row comparison__row--head" role="row">
+              {comparison.columns.map((column) => <span role="columnheader" key={column}>{column}</span>)}
+            </div>
+            {comparison.products.map(([name, role, evidence, verification, choice], index) => (
+              <div className={`comparison__row${index === 0 ? " comparison__row--trustdb" : ""}`} role="row" key={name}>
+                {[name, role, evidence, verification, choice].map((value, cellIndex) => <div role="cell" key={comparison.columns[cellIndex]}><small>{comparison.columns[cellIndex]}</small>{cellIndex === 0 ? <strong>{value}</strong> : cellIndex === 1 ? <span>{value}</span> : <p>{value}</p>}</div>)}
+              </div>
+            ))}
+          </div>
+          <footer className="comparison__footer" data-reveal>
+            <div><strong>{comparison.note}</strong><p>{comparison.sourceLabel}: {comparisonSources.map((source, index) => <span key={source.name}>{index > 0 ? " · " : ""}<a href={source.href} target="_blank" rel="noreferrer">{source.name}</a></span>)}</p></div>
+            <Link href="/docs/concepts">{comparison.cta} <ArrowRight /></Link>
+          </footer>
+        </div>
       </section>
 
       <section className="ecosystem section-shell">
