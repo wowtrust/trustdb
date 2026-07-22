@@ -2,7 +2,7 @@
 
 ![CI](https://github.com/wowtrust/trustdb/actions/workflows/ci.yml/badge.svg)
 
-[Official Website](https://www.trustdb.ryan-wong.cn/) | [中文说明](README.zh-CN.md) | [Contributing](CONTRIBUTING.md) | [`.sproof` format](formats/SPROOF_V1.md)
+[Official Website](https://www.trustdb.ryan-wong.cn/) | [中文说明](README.zh-CN.md) | [Architecture](ARCHITECTURE.zh-CN.md) | [Contributing](CONTRIBUTING.md) | [`.sproof` format](formats/SPROOF_V1.md)
 
 TrustDB is a verifiable evidence database for file claims and proof exchange. It turns a local file hash into a signed claim, a server acceptance receipt, a batch Merkle proof, a global transparency-log proof, and optionally an externally anchored Signed Tree Head (STH).
 
@@ -92,7 +92,7 @@ or restore a current logical backup before starting this version.
 
 `wal.fsync_mode=strict` waits for each accepted record's WAL file fsync before returning. `group` bounds the asynchronous dirty window by `wal.group_commit_interval`; `batch` defers accepted-record data fsync until rotation or close. Writer startup and the namespace barriers used for WAL directory creation, file publication, rotation, and pruning are independent of that append policy. On Windows, TrustDB fails closed when the underlying filesystem rejects its best-available directory flush. Choose `strict` when the receipt contract requires a per-record fsync; end-to-end crash durability still depends on the filesystem and storage guarantees.
 
-Automatic WAL checkpoint skipping and segment pruning are enabled only when the proofstore can durably order committed artifacts and restart-idempotency decisions before a checkpoint, then scope that checkpoint to the node-local WAL. Pebble atomically publishes keyed restart-idempotency decisions with committed manifests and enables checkpoint skipping and pruning while that projection is ready. The development file backend and shared TiKV backend retain and replay WAL; file lacks a complete crash-durability barrier, while TiKV checkpoints are not yet keyed per node.
+Automatic WAL checkpoint skipping and segment pruning are enabled only when the proofstore can durably order committed artifacts and restart-idempotency decisions before a checkpoint, then scope that checkpoint to the node-local WAL. Pebble atomically publishes keyed restart-idempotency decisions with committed manifests and enables checkpoint skipping and pruning while that projection is ready. TiKV provides the same capability only when the store is explicitly bound to the current compute node and absolute local WAL identity. The development file backend lacks the complete idempotency projection barrier and therefore retains and replays WAL.
 
 During upgrade, a legacy v1 checkpoint is rebuilt only from a complete retained WAL beginning at sequence 1. If an older deployment already pruned that prefix, startup fails closed with `DataLoss`; restore the complete WAL from a trusted backup rather than deleting the checkpoint marker, which cannot prove the missing records were committed.
 
@@ -229,6 +229,7 @@ The screenshot below is rendered directly from the current desktop client code:
 
 ## Project Documents
 
+- [ARCHITECTURE.zh-CN.md](ARCHITECTURE.zh-CN.md): detailed TrustDB server, persistence, Global Log, anchoring, SDK, backup, and offline-verification architecture (Chinese).
 - [CONTRIBUTING.md](CONTRIBUTING.md): issue, PR, commit, validation, and review standards.
 - [formats/SPROOF_V1.md](formats/SPROOF_V1.md): stable `.sproof` v1 exchange format.
 - [formats/DISTRIBUTED_ARCHITECTURE.md](formats/DISTRIBUTED_ARCHITECTURE.md): distributed/storage-compute separation notes.
