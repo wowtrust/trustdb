@@ -22,10 +22,10 @@ github.com/wowtrust/trustdb
 
 第二个公开测试版通过 [GitHub Releases](https://github.com/wowtrust/trustdb/releases/tag/v1.0.0-beta.1) 发布。除 Linux、macOS、Windows 两种架构的服务器与 CLI、四种桌面客户端和统一的 `SHA256SUMS` 外，本版还为官网、桌面客户端和 Admin Web 增加中、英、俄、日、法、韩六种语言，并让官网按当前语言展示真实客户端画面。
 
-仓库 `main` 分支现在声明 `github.com/wowtrust/trustdb`。历史标签 `v1.0.0-beta.1` 发布于本次迁移之前，仍保留旧 module identity，因此不能通过新的 module 路径请求该标签。下一个新路径版本标签发布前，请从 `main` 安装当前源码；`go get` 会把解析出的 pseudo-version 写入 `go.mod`，可复现构建应继续固定该版本：
+仓库 `main` 分支现在声明 `github.com/wowtrust/trustdb`。历史标签 `v1.0.0-beta.1` 发布于本次迁移之前，仍保留旧 module identity，因此不能通过新的 module 路径请求该标签。下一个新路径版本标签发布前，请使用首次合并新路径后的 canonical pseudo-version。固定这个精确版本可避开分支查询缓存，并保证构建可复现：
 
 ```bash
-go get github.com/wowtrust/trustdb@main
+go get github.com/wowtrust/trustdb@v1.0.0-beta.1.0.20260722051404-c91313f7f40e
 ```
 
 Docker Hub 同步发布 amd64 与 arm64 镜像；测试版不会占用 `latest`：

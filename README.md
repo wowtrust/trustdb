@@ -22,10 +22,10 @@ License: AGPL-3.0-only. See [LICENSE](LICENSE).
 
 The second public beta is distributed through [GitHub Releases](https://github.com/wowtrust/trustdb/releases/tag/v1.0.0-beta.1). Alongside Server/CLI archives for Linux, macOS, and Windows, four self-signed desktop packages, and a single `SHA256SUMS` file, this release adds Chinese, English, Russian, Japanese, French, and Korean support to the website, desktop client, and Admin Web. The website now also shows a real client rendering in the selected language.
 
-The repository's `main` branch now declares `github.com/wowtrust/trustdb`. The historical `v1.0.0-beta.1` tag predates this migration and still carries the previous module identity, so it cannot be requested through the new module path. Until the next new-path release tag is published, install the current source from `main`; `go get` records a pseudo-version that reproducible builds should keep pinned:
+The repository's `main` branch now declares `github.com/wowtrust/trustdb`. The historical `v1.0.0-beta.1` tag predates this migration and still carries the previous module identity, so it cannot be requested through the new module path. Until the next new-path release tag is published, install the first merged new-path revision by its canonical pseudo-version. Pinning this exact version avoids stale branch-query caches and keeps builds reproducible:
 
 ```bash
-go get github.com/wowtrust/trustdb@main
+go get github.com/wowtrust/trustdb@v1.0.0-beta.1.0.20260722051404-c91313f7f40e
 ```
 
 The multi-architecture Docker image is published to Docker Hub without assigning the beta to `latest`:

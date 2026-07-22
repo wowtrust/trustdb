@@ -26,7 +26,7 @@ const manualMessages = {
     "下载 1.0.0-beta.1": "Download 1.0.0-beta.1",
     "1.0.0-beta.1 已进入公开测试": "1.0.0-beta.1 is now in public beta",
     "适用于 v1.0.0-beta.1 源码标签": "For the v1.0.0-beta.1 source tag",
-    "TrustDB 主分支已迁移到 WowTrust 组织并使用新的 Go module 路径。下一个新路径版本标签发布前，当前源码从 main 安装。": "TrustDB's main branch has moved to the WowTrust organization and now uses the new Go module path. Until a tag with the new path is published, install the current source from main.",
+    "TrustDB 主分支已迁移到 WowTrust 组织并使用新的 Go module 路径。下一个新路径版本标签发布前，请固定迁移后的 canonical pseudo-version，避免分支查询缓存和浮动版本。": "TrustDB's main branch has moved to the WowTrust organization and uses the new Go module path. Until a tag with the new path is published, pin the canonical post-migration pseudo-version to avoid stale branch-query caches and floating versions.",
     "v1.0.0-beta.1 发布于迁移前，仍保留旧 module identity。评估项目应固定 go.mod 解析出的 pseudo-version；新路径标签发布后再固定到该标签。": "v1.0.0-beta.1 predates the migration and retains the previous module identity. Evaluation projects should pin the pseudo-version resolved in go.mod, then switch to a fixed new-path tag after it is released.",
   },
   ru: {
@@ -45,7 +45,7 @@ const manualMessages = {
     "下载 1.0.0-beta.1": "Скачать 1.0.0-beta.1",
     "1.0.0-beta.1 已进入公开测试": "1.0.0-beta.1 доступна для публичного бета-тестирования",
     "适用于 v1.0.0-beta.1 源码标签": "Для исходного тега v1.0.0-beta.1",
-    "TrustDB 主分支已迁移到 WowTrust 组织并使用新的 Go module 路径。下一个新路径版本标签发布前，当前源码从 main 安装。": "Основная ветка TrustDB перенесена в организацию WowTrust и использует новый путь Go module. До публикации тега с новым путём устанавливайте текущий исходный код из main.",
+    "TrustDB 主分支已迁移到 WowTrust 组织并使用新的 Go module 路径。下一个新路径版本标签发布前，请固定迁移后的 canonical pseudo-version，避免分支查询缓存和浮动版本。": "Основная ветка TrustDB перенесена в организацию WowTrust и использует новый путь Go module. До публикации тега с новым путём закрепите каноническую pseudo-version после миграции, чтобы избежать устаревшего кэша запросов ветки и плавающих версий.",
     "v1.0.0-beta.1 发布于迁移前，仍保留旧 module identity。评估项目应固定 go.mod 解析出的 pseudo-version；新路径标签发布后再固定到该标签。": "v1.0.0-beta.1 выпущена до миграции и сохраняет прежнюю идентичность модуля. Для тестовых проектов закрепите pseudo-version, записанную в go.mod, а после выпуска нового тега закрепите этот тег.",
   },
   ja: {
@@ -64,7 +64,7 @@ const manualMessages = {
     "下载 1.0.0-beta.1": "1.0.0-beta.1 をダウンロード",
     "1.0.0-beta.1 已进入公开测试": "1.0.0-beta.1 を公開ベータとして提供中",
     "适用于 v1.0.0-beta.1 源码标签": "v1.0.0-beta.1 ソースタグ向け",
-    "TrustDB 主分支已迁移到 WowTrust 组织并使用新的 Go module 路径。下一个新路径版本标签发布前，当前源码从 main 安装。": "TrustDB の main ブランチは WowTrust 組織へ移行し、新しい Go module パスを使用しています。新しいパスのタグが公開されるまでは、現在のソースを main からインストールしてください。",
+    "TrustDB 主分支已迁移到 WowTrust 组织并使用新的 Go module 路径。下一个新路径版本标签发布前，请固定迁移后的 canonical pseudo-version，避免分支查询缓存和浮动版本。": "TrustDB の main ブランチは WowTrust 組織へ移行し、新しい Go module パスを使用しています。新しいパスのタグが公開されるまでは、移行後の canonical pseudo-version を固定し、古いブランチクエリのキャッシュや浮動バージョンを避けてください。",
     "v1.0.0-beta.1 发布于迁移前，仍保留旧 module identity。评估项目应固定 go.mod 解析出的 pseudo-version；新路径标签发布后再固定到该标签。": "v1.0.0-beta.1 は移行前に公開されたため、以前の module identity を保持しています。評価プロジェクトでは go.mod に解決された pseudo-version を固定し、新しいパスのタグ公開後にそのタグへ切り替えてください。",
   },
   fr: {
@@ -83,7 +83,7 @@ const manualMessages = {
     "下载 1.0.0-beta.1": "Télécharger 1.0.0-beta.1",
     "1.0.0-beta.1 已进入公开测试": "1.0.0-beta.1 est disponible en bêta publique",
     "适用于 v1.0.0-beta.1 源码标签": "Pour le tag source v1.0.0-beta.1",
-    "TrustDB 主分支已迁移到 WowTrust 组织并使用新的 Go module 路径。下一个新路径版本标签发布前，当前源码从 main 安装。": "La branche main de TrustDB a été transférée dans l’organisation WowTrust et utilise le nouveau chemin de module Go. Jusqu’à la publication d’un tag avec ce nouveau chemin, installez le code actuel depuis main.",
+    "TrustDB 主分支已迁移到 WowTrust 组织并使用新的 Go module 路径。下一个新路径版本标签发布前，请固定迁移后的 canonical pseudo-version，避免分支查询缓存和浮动版本。": "La branche main de TrustDB a été transférée dans l’organisation WowTrust et utilise le nouveau chemin de module Go. Jusqu’à la publication d’un tag avec ce nouveau chemin, figez la pseudo-version canonique post-migration afin d’éviter les caches obsolètes de requêtes de branche et les versions flottantes.",
     "v1.0.0-beta.1 发布于迁移前，仍保留旧 module identity。评估项目应固定 go.mod 解析出的 pseudo-version；新路径标签发布后再固定到该标签。": "v1.0.0-beta.1 est antérieure à la migration et conserve l’ancienne identité de module. Les projets d’évaluation doivent figer la pseudo-version résolue dans go.mod, puis passer à un tag fixe utilisant le nouveau chemin dès sa publication.",
   },
   ko: {
@@ -102,7 +102,7 @@ const manualMessages = {
     "下载 1.0.0-beta.1": "1.0.0-beta.1 다운로드",
     "1.0.0-beta.1 已进入公开测试": "1.0.0-beta.1 공개 베타 배포 중",
     "适用于 v1.0.0-beta.1 源码标签": "v1.0.0-beta.1 소스 태그용",
-    "TrustDB 主分支已迁移到 WowTrust 组织并使用新的 Go module 路径。下一个新路径版本标签发布前，当前源码从 main 安装。": "TrustDB의 main 브랜치는 WowTrust 조직으로 이전되었으며 새 Go module 경로를 사용합니다. 새 경로의 태그가 게시되기 전까지 현재 소스는 main에서 설치하세요.",
+    "TrustDB 主分支已迁移到 WowTrust 组织并使用新的 Go module 路径。下一个新路径版本标签发布前，请固定迁移后的 canonical pseudo-version，避免分支查询缓存和浮动版本。": "TrustDB의 main 브랜치는 WowTrust 조직으로 이전되었으며 새 Go module 경로를 사용합니다. 새 경로의 태그가 게시되기 전까지 마이그레이션 후 canonical pseudo-version을 고정해 오래된 브랜치 쿼리 캐시와 부동 버전을 피하세요.",
     "v1.0.0-beta.1 发布于迁移前，仍保留旧 module identity。评估项目应固定 go.mod 解析出的 pseudo-version；新路径标签发布后再固定到该标签。": "v1.0.0-beta.1은 이전 전에 출시되어 기존 module identity를 유지합니다. 평가 프로젝트에서는 go.mod에 해석된 pseudo-version을 고정하고, 새 경로 태그가 출시되면 해당 태그로 전환하세요.",
   },
 };
