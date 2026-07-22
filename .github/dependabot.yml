@@ -17,6 +17,12 @@ updates:
       prefix: "fix(deps)"
     allow:
       - dependency-type: all
+    ignore:
+      # Dependabot misclassifies this TiKV submodule pseudo-version as an
+      # upgrade to the unrelated v3.0.0-alpha+incompatible parent-module tag.
+      - dependency-name: github.com/tikv/pd/client
+        update-types:
+          - version-update:semver-major
     groups:
       security-patches:
         applies-to: security-updates
@@ -46,6 +52,12 @@ updates:
       prefix: "fix(deps)"
     allow:
       - dependency-type: all
+    ignore:
+      # Keep patch/minor and security fixes eligible; only the invalid major
+      # candidate makes the Go module graph unresolvable.
+      - dependency-name: github.com/tikv/pd/client
+        update-types:
+          - version-update:semver-major
     groups:
       security-patches:
         applies-to: security-updates
