@@ -1,0 +1,198 @@
+name: Deploy official website
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - website/**
+      - .github/workflows/website-deploy.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: website-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Build and deploy production website
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment:
+      name: production
+      url: https://www.trustdb.ryan-wong.cn/
+    env:
+      DEPLOY_HOST: ${{ vars.WEBSITE_DEPLOY_HOST }}
+      DEPLOY_USER: ${{ vars.WEBSITE_DEPLOY_USER }}
+      DEPLOY_ROOT: ${{ vars.WEBSITE_DEPLOY_ROOT }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: website/package-lock.json
+
+      - name: Validate deployment configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          for name in DEPLOY_HOST DEPLOY_USER DEPLOY_ROOT; do
+            if [ -z "${!name}" ]; then
+              echo "::error::$name is not configured in the production environment"
+              exit 1
+            fi
+          done
+          case "$DEPLOY_ROOT" in
+            /*) ;;
+            *)
+              echo "::error::DEPLOY_ROOT must be an absolute path"
+              exit 1
+              ;;
+          esac
+
+      - name: Install dependencies
+        working-directory: website
+        run: npm ci
+
+      - name: Build website
+        working-directory: website
+        run: npm run build
+
+      - name: Add deployment marker
+        shell: bash
+        run: |
+          deployed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          printf '{"commit":"%s","run_id":"%s","deployed_at":"%s"}\n' \
+            "$GITHUB_SHA" "$GITHUB_RUN_ID" "$deployed_at" \
+            > website/dist/deployment.json
+
+      - name: Configure SSH
+        shell: bash
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.WEBSITE_DEPLOY_SSH_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.WEBSITE_DEPLOY_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          if [ -z "$SSH_PRIVATE_KEY" ] || [ -z "$SSH_KNOWN_HOSTS" ]; then
+            echo "::error::production SSH secrets are not configured"
+            exit 1
+          fi
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$HOME/.ssh/id_ed25519"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/id_ed25519" "$HOME/.ssh/known_hosts"
+
+      - name: Package website
+        shell: bash
+        run: tar -C website/dist -czf "$RUNNER_TEMP/trustdb-website.tgz" .
+
+      - name: Upload and activate release
+        id: deploy
+        shell: bash
+        env:
+          RELEASE_ID: ${{ github.sha }}-${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          target="${DEPLOY_USER}@${DEPLOY_HOST}"
+          remote_archive="/tmp/trustdb-website-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.tgz"
+
+          scp -o BatchMode=yes "$RUNNER_TEMP/trustdb-website.tgz" "$target:$remote_archive"
+          ssh -o BatchMode=yes "$target" bash -s -- \
+            "$remote_archive" "$RELEASE_ID" "$DEPLOY_ROOT" <<'REMOTE'
+          set -euo pipefail
+
+          archive=$1
+          release_id=$2
+          deploy_root=$3
+
+          case "$release_id" in
+            *[!0-9a-f-]*|'')
+              echo "invalid release id" >&2
+              exit 1
+              ;;
+          esac
+          case "$deploy_root" in
+            /*) ;;
+            *)
+              echo "deployment root must be absolute" >&2
+              exit 1
+              ;;
+          esac
+
+          releases="$deploy_root/releases"
+          release="$releases/$release_id"
+          staging="$releases/.$release_id.tmp"
+          current="$deploy_root/current"
+          previous="$deploy_root/previous"
+
+          mkdir -p "$releases"
+          rm -rf -- "$staging"
+          mkdir "$staging"
+          cleanup() {
+            rm -rf -- "$staging"
+            rm -f -- "$archive"
+          }
+          trap cleanup EXIT
+
+          tar -xzf "$archive" -C "$staging"
+          test -s "$staging/index.html"
+          test -s "$staging/deployment.json"
+          chmod -R u=rwX,go=rX "$staging"
+          mv "$staging" "$release"
+
+          previous_target="$(readlink "$current" 2>/dev/null || true)"
+          if [ -n "$previous_target" ]; then
+            ln -s "$previous_target" "$deploy_root/.previous-$release_id"
+            mv -Tf "$deploy_root/.previous-$release_id" "$previous"
+          fi
+
+          ln -s "releases/$release_id" "$deploy_root/.current-$release_id"
+          mv -Tf "$deploy_root/.current-$release_id" "$current"
+
+          find "$releases" -mindepth 1 -maxdepth 1 -type d \
+            ! -name '.*.tmp' -printf '%T@ %f\n' \
+            | sort -rn \
+            | awk 'NR > 5 {sub(/^[^ ]+ /, ""); print}' \
+            | while IFS= read -r stale; do
+                rm -rf -- "$releases/$stale"
+              done
+          REMOTE
+
+          echo "switched=true" >> "$GITHUB_OUTPUT"
+
+      - name: Verify production release
+        shell: bash
+        run: |
+          set -euo pipefail
+          marker="$(curl --fail --silent --show-error \
+            --retry 8 --retry-all-errors --retry-delay 2 \
+            "https://www.trustdb.ryan-wong.cn/deployment.json?run=${GITHUB_RUN_ID}")"
+          printf '%s\n' "$marker" | grep -Fq "\"commit\":\"$GITHUB_SHA\""
+
+      - name: Roll back failed activation
+        if: failure() && steps.deploy.outputs.switched == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          target="${DEPLOY_USER}@${DEPLOY_HOST}"
+          ssh -o BatchMode=yes "$target" bash -s -- "$DEPLOY_ROOT" <<'REMOTE'
+          set -euo pipefail
+          deploy_root=$1
+          previous_target="$(readlink "$deploy_root/previous")"
+          rollback_link="$deploy_root/.rollback-${RANDOM}"
+          ln -s "$previous_target" "$rollback_link"
+          mv -Tf "$rollback_link" "$deploy_root/current"
+          REMOTE
+
+      - name: Remove runner deployment key
+        if: always()
+        shell: bash
+        run: find "$HOME/.ssh" -maxdepth 1 -type f -name id_ed25519 -delete
