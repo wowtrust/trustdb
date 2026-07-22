@@ -173,7 +173,8 @@ jobs:
         run: |
           set -euo pipefail
           marker="$(curl --fail --silent --show-error \
-            --retry 8 --retry-all-errors --retry-delay 2 \
+            --connect-timeout 5 --max-time 20 \
+            --retry 8 --retry-all-errors --retry-delay 2 --retry-max-time 120 \
             "https://www.trustdb.ryan-wong.cn/deployment.json?run=${GITHUB_RUN_ID}")"
           printf '%s\n' "$marker" | grep -Fq "\"commit\":\"$GITHUB_SHA\""
 
