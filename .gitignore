@@ -69,3 +69,5 @@ doc/
 docs/*
 !docs/performance/
 !docs/performance/**
+!docs/compliance/
+!docs/compliance/**
