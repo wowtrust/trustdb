@@ -4,7 +4,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/ryan-wong-coder/trustdb/internal/cborx"
+	"github.com/wowtrust/trustdb/internal/cborx"
 )
 
 func TestIdempotencyDecisionCBORRoundTrip(t *testing.T) {

@@ -7,10 +7,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ryan-wong-coder/trustdb/internal/claim"
-	"github.com/ryan-wong-coder/trustdb/internal/model"
-	"github.com/ryan-wong-coder/trustdb/internal/trustcrypto"
-	"github.com/ryan-wong-coder/trustdb/internal/wal"
+	"github.com/wowtrust/trustdb/internal/claim"
+	"github.com/wowtrust/trustdb/internal/model"
+	"github.com/wowtrust/trustdb/internal/trustcrypto"
+	"github.com/wowtrust/trustdb/internal/wal"
 )
 
 func TestLocalEnginePropagatesSourceIdentity(t *testing.T) {

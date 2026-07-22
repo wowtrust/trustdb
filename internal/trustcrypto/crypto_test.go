@@ -5,7 +5,7 @@ import (
 	"crypto/sha256"
 	"testing"
 
-	"github.com/ryan-wong-coder/trustdb/internal/model"
+	"github.com/wowtrust/trustdb/internal/model"
 )
 
 func TestHashBytesSHA256MatchesStandardAndOwnsResult(t *testing.T) {

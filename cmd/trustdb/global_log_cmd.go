@@ -3,8 +3,8 @@ package main
 import (
 	"context"
 
-	"github.com/ryan-wong-coder/trustdb/internal/globallog"
-	"github.com/ryan-wong-coder/trustdb/internal/trusterr"
+	"github.com/wowtrust/trustdb/internal/globallog"
+	"github.com/wowtrust/trustdb/internal/trusterr"
 	"github.com/spf13/cobra"
 )
 

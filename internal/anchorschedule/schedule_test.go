@@ -4,8 +4,8 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/ryan-wong-coder/trustdb/internal/model"
-	"github.com/ryan-wong-coder/trustdb/internal/trusterr"
+	"github.com/wowtrust/trustdb/internal/model"
+	"github.com/wowtrust/trustdb/internal/trusterr"
 )
 
 func testKey() model.STHAnchorScheduleKey {

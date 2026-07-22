@@ -7,12 +7,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ryan-wong-coder/trustdb/internal/anchor"
-	"github.com/ryan-wong-coder/trustdb/internal/anchorschedule"
-	"github.com/ryan-wong-coder/trustdb/internal/model"
-	"github.com/ryan-wong-coder/trustdb/internal/proofstore"
-	"github.com/ryan-wong-coder/trustdb/internal/trustcrypto"
-	"github.com/ryan-wong-coder/trustdb/internal/trusterr"
+	"github.com/wowtrust/trustdb/internal/anchor"
+	"github.com/wowtrust/trustdb/internal/anchorschedule"
+	"github.com/wowtrust/trustdb/internal/model"
+	"github.com/wowtrust/trustdb/internal/proofstore"
+	"github.com/wowtrust/trustdb/internal/trustcrypto"
+	"github.com/wowtrust/trustdb/internal/trusterr"
 )
 
 type conflictingBatchStore struct {

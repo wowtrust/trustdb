@@ -7,7 +7,7 @@ import (
 	"strings"
 	"sync/atomic"
 
-	"github.com/ryan-wong-coder/trustdb/internal/trusterr"
+	"github.com/wowtrust/trustdb/internal/trusterr"
 )
 
 // LoadBalanceMode controls how a multi-endpoint client chooses the first

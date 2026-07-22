@@ -5,7 +5,7 @@ export function PerformancePage() {
   return (
     <PageHero eyebrow="Performance / Sustained gRPC" title={<>60,528<small> QPS</small></>} lead="双机持续压测中，TrustDB 每秒完成 60,528 次有效提交。" meta="2026.07.16 · gRPC · 持续写入">
       <div className="page-hero__actions">
-        <a className="button button--solid" href="https://github.com/ryan-wong-coder/trustdb/blob/main/docs/performance/trustdb-performance-report-2026-07-16.zh-CN.md" target="_blank" rel="noreferrer">查看完整报告 <ArrowRight /></a>
+        <a className="button button--solid" href="https://github.com/wowtrust/trustdb/blob/main/docs/performance/trustdb-performance-report-2026-07-16.zh-CN.md" target="_blank" rel="noreferrer">查看完整报告 <ArrowRight /></a>
       </div>
       <div className="performance-proofline" aria-label="测试概况">
         <div><strong>2,675,000</strong><span>有效提交</span></div>

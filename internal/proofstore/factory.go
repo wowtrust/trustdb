@@ -7,10 +7,10 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/ryan-wong-coder/trustdb/internal/cborx"
-	pebblestore "github.com/ryan-wong-coder/trustdb/internal/proofstore/pebble"
-	tikvstore "github.com/ryan-wong-coder/trustdb/internal/proofstore/tikv"
-	"github.com/ryan-wong-coder/trustdb/internal/trusterr"
+	"github.com/wowtrust/trustdb/internal/cborx"
+	pebblestore "github.com/wowtrust/trustdb/internal/proofstore/pebble"
+	tikvstore "github.com/wowtrust/trustdb/internal/proofstore/tikv"
+	"github.com/wowtrust/trustdb/internal/trusterr"
 )
 
 // Backend enumerates the supported proof store implementations.

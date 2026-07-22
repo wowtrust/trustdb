@@ -3,8 +3,8 @@ package l5coverage
 import (
 	"testing"
 
-	"github.com/ryan-wong-coder/trustdb/internal/model"
-	"github.com/ryan-wong-coder/trustdb/internal/trusterr"
+	"github.com/wowtrust/trustdb/internal/model"
+	"github.com/wowtrust/trustdb/internal/trusterr"
 )
 
 func TestAdvanceIsMonotonic(t *testing.T) {

@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ryan-wong-coder/trustdb/internal/model"
+	"github.com/wowtrust/trustdb/internal/model"
 )
 
 // newTestDigest builds a 32-byte sha256 so every test uses a realistic

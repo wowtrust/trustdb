@@ -4,7 +4,7 @@ import (
 	"crypto/ed25519"
 	"time"
 
-	"github.com/ryan-wong-coder/trustdb/internal/model"
+	"github.com/wowtrust/trustdb/internal/model"
 )
 
 type ClientClaim = model.ClientClaim

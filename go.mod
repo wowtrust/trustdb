@@ -1,4 +1,4 @@
-module github.com/ryan-wong-coder/trustdb
+module github.com/wowtrust/trustdb
 
 go 1.26.5
 

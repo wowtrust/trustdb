@@ -10,9 +10,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ryan-wong-coder/trustdb/internal/model"
-	"github.com/ryan-wong-coder/trustdb/internal/trustcrypto"
-	"github.com/ryan-wong-coder/trustdb/sdk"
+	"github.com/wowtrust/trustdb/internal/model"
+	"github.com/wowtrust/trustdb/internal/trustcrypto"
+	"github.com/wowtrust/trustdb/sdk"
 )
 
 func TestParseBenchMetrics(t *testing.T) {

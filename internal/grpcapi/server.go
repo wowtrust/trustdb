@@ -13,11 +13,11 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/ryan-wong-coder/trustdb/internal/httpapi"
-	"github.com/ryan-wong-coder/trustdb/internal/ingest"
-	"github.com/ryan-wong-coder/trustdb/internal/model"
-	"github.com/ryan-wong-coder/trustdb/internal/prooflevel"
-	"github.com/ryan-wong-coder/trustdb/internal/trusterr"
+	"github.com/wowtrust/trustdb/internal/httpapi"
+	"github.com/wowtrust/trustdb/internal/ingest"
+	"github.com/wowtrust/trustdb/internal/model"
+	"github.com/wowtrust/trustdb/internal/prooflevel"
+	"github.com/wowtrust/trustdb/internal/trusterr"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )

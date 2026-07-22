@@ -7,11 +7,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ryan-wong-coder/trustdb/internal/globallog"
-	"github.com/ryan-wong-coder/trustdb/internal/l5projector"
-	"github.com/ryan-wong-coder/trustdb/internal/model"
-	"github.com/ryan-wong-coder/trustdb/internal/proofstore"
-	"github.com/ryan-wong-coder/trustdb/internal/trustcrypto"
+	"github.com/wowtrust/trustdb/internal/globallog"
+	"github.com/wowtrust/trustdb/internal/l5projector"
+	"github.com/wowtrust/trustdb/internal/model"
+	"github.com/wowtrust/trustdb/internal/proofstore"
+	"github.com/wowtrust/trustdb/internal/trustcrypto"
 )
 
 func TestLocalProjectorMaterializesOlderBatchesWithoutBlockingEvidence(t *testing.T) {

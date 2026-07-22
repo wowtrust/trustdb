@@ -9,12 +9,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ryan-wong-coder/trustdb/internal/app"
-	"github.com/ryan-wong-coder/trustdb/internal/claim"
-	"github.com/ryan-wong-coder/trustdb/internal/idempotency"
-	"github.com/ryan-wong-coder/trustdb/internal/model"
-	"github.com/ryan-wong-coder/trustdb/internal/proofstore"
-	"github.com/ryan-wong-coder/trustdb/internal/wal"
+	"github.com/wowtrust/trustdb/internal/app"
+	"github.com/wowtrust/trustdb/internal/claim"
+	"github.com/wowtrust/trustdb/internal/idempotency"
+	"github.com/wowtrust/trustdb/internal/model"
+	"github.com/wowtrust/trustdb/internal/proofstore"
+	"github.com/wowtrust/trustdb/internal/wal"
 )
 
 type publishingCheckpointStore struct {

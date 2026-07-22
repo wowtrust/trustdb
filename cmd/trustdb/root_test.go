@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	trustconfig "github.com/ryan-wong-coder/trustdb/internal/config"
-	"github.com/ryan-wong-coder/trustdb/internal/wal"
+	trustconfig "github.com/wowtrust/trustdb/internal/config"
+	"github.com/wowtrust/trustdb/internal/wal"
 	"github.com/spf13/viper"
 )
 

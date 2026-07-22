@@ -7,8 +7,8 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/ryan-wong-coder/trustdb/internal/trustcrypto"
-	"github.com/ryan-wong-coder/trustdb/internal/trusterr"
+	"github.com/wowtrust/trustdb/internal/trustcrypto"
+	"github.com/wowtrust/trustdb/internal/trusterr"
 )
 
 func TestLoadBalancedNativeBatchUsesOneBatchRequest(t *testing.T) {

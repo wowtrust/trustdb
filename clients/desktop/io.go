@@ -10,7 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/ryan-wong-coder/trustdb/internal/cborx"
+	"github.com/wowtrust/trustdb/internal/cborx"
 )
 
 // marshalCBOR keeps a single import path for CBOR output so future

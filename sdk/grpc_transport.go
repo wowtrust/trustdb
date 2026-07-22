@@ -8,8 +8,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ryan-wong-coder/trustdb/internal/grpcapi"
-	"github.com/ryan-wong-coder/trustdb/internal/trusterr"
+	"github.com/wowtrust/trustdb/internal/grpcapi"
+	"github.com/wowtrust/trustdb/internal/trusterr"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"

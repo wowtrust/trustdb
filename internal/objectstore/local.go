@@ -10,7 +10,7 @@ import (
 	"path/filepath"
 	"sync"
 
-	"github.com/ryan-wong-coder/trustdb/internal/model"
+	"github.com/wowtrust/trustdb/internal/model"
 )
 
 const copyBufferSize = 256 * 1024

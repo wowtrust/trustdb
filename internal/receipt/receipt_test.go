@@ -5,8 +5,8 @@ import (
 	"crypto/ed25519"
 	"testing"
 
-	"github.com/ryan-wong-coder/trustdb/internal/cborx"
-	"github.com/ryan-wong-coder/trustdb/internal/model"
+	"github.com/wowtrust/trustdb/internal/cborx"
+	"github.com/wowtrust/trustdb/internal/model"
 )
 
 func TestSignCommittedPreservesDomainEncoding(t *testing.T) {

@@ -12,8 +12,8 @@ import (
 	"testing"
 
 	"github.com/rs/zerolog"
-	trustconfig "github.com/ryan-wong-coder/trustdb/internal/config"
-	"github.com/ryan-wong-coder/trustdb/internal/httpapi"
+	trustconfig "github.com/wowtrust/trustdb/internal/config"
+	"github.com/wowtrust/trustdb/internal/httpapi"
 	"github.com/spf13/viper"
 	"golang.org/x/crypto/bcrypt"
 )

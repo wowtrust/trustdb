@@ -9,10 +9,10 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/ryan-wong-coder/trustdb/internal/cborx"
-	"github.com/ryan-wong-coder/trustdb/internal/model"
-	"github.com/ryan-wong-coder/trustdb/internal/prooflevel"
-	"github.com/ryan-wong-coder/trustdb/internal/verify"
+	"github.com/wowtrust/trustdb/internal/cborx"
+	"github.com/wowtrust/trustdb/internal/model"
+	"github.com/wowtrust/trustdb/internal/prooflevel"
+	"github.com/wowtrust/trustdb/internal/verify"
 )
 
 const (

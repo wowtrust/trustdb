@@ -16,17 +16,17 @@ import (
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/rs/zerolog"
 
-	"github.com/ryan-wong-coder/trustdb/internal/app"
-	"github.com/ryan-wong-coder/trustdb/internal/batch"
-	"github.com/ryan-wong-coder/trustdb/internal/cborx"
-	"github.com/ryan-wong-coder/trustdb/internal/claim"
-	"github.com/ryan-wong-coder/trustdb/internal/httpapi"
-	"github.com/ryan-wong-coder/trustdb/internal/ingest"
-	"github.com/ryan-wong-coder/trustdb/internal/model"
-	"github.com/ryan-wong-coder/trustdb/internal/observability"
-	"github.com/ryan-wong-coder/trustdb/internal/proofstore"
-	"github.com/ryan-wong-coder/trustdb/internal/trustcrypto"
-	"github.com/ryan-wong-coder/trustdb/internal/wal"
+	"github.com/wowtrust/trustdb/internal/app"
+	"github.com/wowtrust/trustdb/internal/batch"
+	"github.com/wowtrust/trustdb/internal/cborx"
+	"github.com/wowtrust/trustdb/internal/claim"
+	"github.com/wowtrust/trustdb/internal/httpapi"
+	"github.com/wowtrust/trustdb/internal/ingest"
+	"github.com/wowtrust/trustdb/internal/model"
+	"github.com/wowtrust/trustdb/internal/observability"
+	"github.com/wowtrust/trustdb/internal/proofstore"
+	"github.com/wowtrust/trustdb/internal/trustcrypto"
+	"github.com/wowtrust/trustdb/internal/wal"
 )
 
 // TestServeDirectoryModeEndToEnd stands up the full ingest → batch → proof

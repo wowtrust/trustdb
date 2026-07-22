@@ -1,6 +1,6 @@
 package grpcapi
 
-import "github.com/ryan-wong-coder/trustdb/internal/model"
+import "github.com/wowtrust/trustdb/internal/model"
 
 const MaxMessageBytes = 16 << 20
 

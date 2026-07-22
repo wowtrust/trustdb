@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/ryan-wong-coder/trustdb/internal/anchor"
-	"github.com/ryan-wong-coder/trustdb/internal/model"
-	"github.com/ryan-wong-coder/trustdb/internal/prooflevel"
-	"github.com/ryan-wong-coder/trustdb/internal/sproof"
+	"github.com/wowtrust/trustdb/internal/anchor"
+	"github.com/wowtrust/trustdb/internal/model"
+	"github.com/wowtrust/trustdb/internal/prooflevel"
+	"github.com/wowtrust/trustdb/internal/sproof"
 )
 
 // SubmitRequest is the single, JSON-friendly shape the UI uses to

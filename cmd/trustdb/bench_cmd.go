@@ -18,8 +18,8 @@ import (
 	dto "github.com/prometheus/client_model/go"
 	"github.com/prometheus/common/expfmt"
 	prommodel "github.com/prometheus/common/model"
-	"github.com/ryan-wong-coder/trustdb/internal/trusterr"
-	"github.com/ryan-wong-coder/trustdb/sdk"
+	"github.com/wowtrust/trustdb/internal/trusterr"
+	"github.com/wowtrust/trustdb/sdk"
 	"github.com/spf13/cobra"
 )
 

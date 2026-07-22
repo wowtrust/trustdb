@@ -10,8 +10,8 @@ import (
 	"time"
 
 	"github.com/rs/zerolog"
-	trustconfig "github.com/ryan-wong-coder/trustdb/internal/config"
-	"github.com/ryan-wong-coder/trustdb/internal/logx"
+	trustconfig "github.com/wowtrust/trustdb/internal/config"
+	"github.com/wowtrust/trustdb/internal/logx"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 	"gopkg.in/natefinch/lumberjack.v2"

@@ -4,9 +4,9 @@ import (
 	"context"
 	"strings"
 
-	trustbackup "github.com/ryan-wong-coder/trustdb/internal/backup"
-	"github.com/ryan-wong-coder/trustdb/internal/proofstore"
-	"github.com/ryan-wong-coder/trustdb/internal/trusterr"
+	trustbackup "github.com/wowtrust/trustdb/internal/backup"
+	"github.com/wowtrust/trustdb/internal/proofstore"
+	"github.com/wowtrust/trustdb/internal/trusterr"
 	"github.com/spf13/cobra"
 )
 

@@ -12,8 +12,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ryan-wong-coder/trustdb/internal/model"
-	"github.com/ryan-wong-coder/trustdb/internal/trustcrypto"
+	"github.com/wowtrust/trustdb/internal/model"
+	"github.com/wowtrust/trustdb/internal/trustcrypto"
 )
 
 // HashJobEvent is the envelope every backend → frontend hashing message

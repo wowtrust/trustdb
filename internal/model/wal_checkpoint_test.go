@@ -3,7 +3,7 @@ package model
 import (
 	"testing"
 
-	"github.com/ryan-wong-coder/trustdb/internal/cborx"
+	"github.com/wowtrust/trustdb/internal/cborx"
 )
 
 // legacyWALCheckpoint pins the v1 wire shape. A rollback binary can decode a

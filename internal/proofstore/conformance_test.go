@@ -3,8 +3,8 @@ package proofstore_test
 import (
 	"testing"
 
-	"github.com/ryan-wong-coder/trustdb/internal/proofstore"
-	"github.com/ryan-wong-coder/trustdb/internal/proofstore/proofstoretest"
+	"github.com/wowtrust/trustdb/internal/proofstore"
+	"github.com/wowtrust/trustdb/internal/proofstore/proofstoretest"
 )
 
 // TestLocalStoreConformance runs the shared conformance suite against

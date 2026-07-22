@@ -285,7 +285,7 @@ export function HomePage() {
 
       <section className="home-github">
         <div data-reveal><p>Open source / AGPL-3.0</p><h2>源码公开，<br />结论可验。</h2></div>
-        <a className="button button--ghost" href="https://github.com/ryan-wong-coder/trustdb" target="_blank" rel="noreferrer"><GithubLogo weight="fill" /> GitHub <ArrowRight /></a>
+        <a className="button button--ghost" href="https://github.com/wowtrust/trustdb" target="_blank" rel="noreferrer"><GithubLogo weight="fill" /> GitHub <ArrowRight /></a>
       </section>
     </>
   );

@@ -9,10 +9,10 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/ryan-wong-coder/trustdb/internal/cborx"
-	"github.com/ryan-wong-coder/trustdb/internal/model"
-	"github.com/ryan-wong-coder/trustdb/internal/sproof"
-	"github.com/ryan-wong-coder/trustdb/sdk"
+	"github.com/wowtrust/trustdb/internal/cborx"
+	"github.com/wowtrust/trustdb/internal/model"
+	"github.com/wowtrust/trustdb/internal/sproof"
+	"github.com/wowtrust/trustdb/sdk"
 )
 
 // VerifyRequest covers both verify modes the UI offers:

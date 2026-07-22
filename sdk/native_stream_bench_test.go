@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ryan-wong-coder/trustdb/internal/trustcrypto"
+	"github.com/wowtrust/trustdb/internal/trustcrypto"
 )
 
 func TestNativeLogStreamUsesConfiguredSigningConcurrency(t *testing.T) {

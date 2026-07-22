@@ -20,7 +20,7 @@ export function SproofPage() {
   return (
     <>
       <PageHero eyebrow="Stable exchange format / v1" title={<><span className="acid">.</span>sproof</>} lead="把 L3、L4 与 L5 材料装进一个确定性 CBOR 文件，让证据离开 TrustDB 服务后仍能独立复算。" meta="schema: trustdb.sproof.v1 · format_version: 1 · max decode: 16 MiB">
-        <div className="page-hero__actions"><a className="button button--solid" href="https://github.com/ryan-wong-coder/trustdb/blob/main/formats/SPROOF_V1.md" target="_blank" rel="noreferrer">查看规范原文 <ArrowRight /></a><Link className="button button--ghost" href="/docs/cli">CLI 验证</Link></div>
+        <div className="page-hero__actions"><a className="button button--solid" href="https://github.com/wowtrust/trustdb/blob/main/formats/SPROOF_V1.md" target="_blank" rel="noreferrer">查看规范原文 <ArrowRight /></a><Link className="button button--ghost" href="/docs/cli">CLI 验证</Link></div>
       </PageHero>
 
       <section className="format-intro section-shell">
@@ -62,7 +62,7 @@ export function SproofPage() {
         <div><CodeBlock>trustdb verify \{"\n"}  --file ./document.pdf \{"\n"}  --sproof ./document.sproof \{"\n"}  --server-public-key ./server.pub \{"\n"}  --client-public-key ./client.pub</CodeBlock><CodeBlock label="test vector">sha256  test/vectors/sproof-v1-l3.cbor{"\n"}# 规范仓库包含可复算的 L3 测试向量</CodeBlock></div>
       </section>
 
-      <section className="format-links section-shell"><InlineLink href="https://github.com/ryan-wong-coder/trustdb/blob/main/formats/SPROOF_V1.md">完整 v1 规范</InlineLink><InlineLink href="https://github.com/ryan-wong-coder/trustdb/tree/main/test/vectors">测试向量</InlineLink><InlineLink href="/docs/sdk">SDK 导出接口</InlineLink></section>
+      <section className="format-links section-shell"><InlineLink href="https://github.com/wowtrust/trustdb/blob/main/formats/SPROOF_V1.md">完整 v1 规范</InlineLink><InlineLink href="https://github.com/wowtrust/trustdb/tree/main/test/vectors">测试向量</InlineLink><InlineLink href="/docs/sdk">SDK 导出接口</InlineLink></section>
     </>
   );
 }

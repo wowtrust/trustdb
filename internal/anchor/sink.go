@@ -14,7 +14,7 @@ import (
 	"context"
 	"errors"
 
-	"github.com/ryan-wong-coder/trustdb/internal/model"
+	"github.com/wowtrust/trustdb/internal/model"
 )
 
 // Sink is the one-method contract every external notary must satisfy.

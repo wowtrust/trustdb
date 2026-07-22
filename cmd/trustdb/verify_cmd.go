@@ -13,10 +13,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ryan-wong-coder/trustdb/internal/keystore"
-	"github.com/ryan-wong-coder/trustdb/internal/model"
-	"github.com/ryan-wong-coder/trustdb/internal/sproof"
-	"github.com/ryan-wong-coder/trustdb/internal/verify"
+	"github.com/wowtrust/trustdb/internal/keystore"
+	"github.com/wowtrust/trustdb/internal/model"
+	"github.com/wowtrust/trustdb/internal/sproof"
+	"github.com/wowtrust/trustdb/internal/verify"
 	"github.com/spf13/cobra"
 )
 

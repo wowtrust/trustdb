@@ -2,11 +2,11 @@ export const release = {
   version: "1.0.0-beta.1",
   tag: "v1.0.0-beta.1",
   published: "2026.07.20",
-  pageUrl: "https://github.com/ryan-wong-coder/trustdb/releases/tag/v1.0.0-beta.1",
+  pageUrl: "https://github.com/wowtrust/trustdb/releases/tag/v1.0.0-beta.1",
   dockerUrl: "https://hub.docker.com/r/wsy19990317/trustdb",
 };
 
-const releaseBase = "https://github.com/ryan-wong-coder/trustdb/releases/download/v1.0.0-beta.1";
+const releaseBase = "https://github.com/wowtrust/trustdb/releases/download/v1.0.0-beta.1";
 
 export function assetUrl(filename) {
   return `${releaseBase}/${filename}`;

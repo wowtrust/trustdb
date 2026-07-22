@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/ryan-wong-coder/trustdb/internal/model"
+	"github.com/wowtrust/trustdb/internal/model"
 )
 
 // NoopSinkName is the stable identifier for the NoopSink. It is

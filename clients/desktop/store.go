@@ -13,7 +13,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ryan-wong-coder/trustdb/internal/model"
+	"github.com/wowtrust/trustdb/internal/model"
 )
 
 // Identity is the signing persona the desktop client uses. Keys are

@@ -8,14 +8,14 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/ryan-wong-coder/trustdb/internal/anchor"
-	"github.com/ryan-wong-coder/trustdb/internal/claim"
-	"github.com/ryan-wong-coder/trustdb/internal/globallog"
-	"github.com/ryan-wong-coder/trustdb/internal/merkle"
-	"github.com/ryan-wong-coder/trustdb/internal/model"
-	"github.com/ryan-wong-coder/trustdb/internal/prooflevel"
-	"github.com/ryan-wong-coder/trustdb/internal/receipt"
-	"github.com/ryan-wong-coder/trustdb/internal/trustcrypto"
+	"github.com/wowtrust/trustdb/internal/anchor"
+	"github.com/wowtrust/trustdb/internal/claim"
+	"github.com/wowtrust/trustdb/internal/globallog"
+	"github.com/wowtrust/trustdb/internal/merkle"
+	"github.com/wowtrust/trustdb/internal/model"
+	"github.com/wowtrust/trustdb/internal/prooflevel"
+	"github.com/wowtrust/trustdb/internal/receipt"
+	"github.com/wowtrust/trustdb/internal/trustcrypto"
 )
 
 type TrustedKeys struct {

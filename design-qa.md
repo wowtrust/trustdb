@@ -66,7 +66,7 @@ No actionable P0, P1 or P2 differences remain.
 
 - Desktop client: selected `合同条款.pdf`; right inspector updated to the selected file and L5 completed status. Sidebar `验证证据` route reached `#/verify` and returned to dashboard.
 - Web admin: `刷新数据` executed, advanced the last-updated time and retained the healthy dashboard state; the data APIs also have unit coverage for full and partial responses.
-- Website: `文档` anchor reached `#quick-start`; terminal copy button changed from `复制命令` to `命令已复制`; GitHub link resolves to `https://github.com/ryan-wong-coder/trustdb`.
+- Website: `文档` anchor reached `#quick-start`; terminal copy button changed from `复制命令` to `命令已复制`; GitHub link resolves to `https://github.com/wowtrust/trustdb`.
 
 ## Console errors checked
 

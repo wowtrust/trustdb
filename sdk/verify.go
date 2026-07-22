@@ -3,8 +3,8 @@ package sdk
 import (
 	"io"
 
-	"github.com/ryan-wong-coder/trustdb/internal/sproof"
-	"github.com/ryan-wong-coder/trustdb/internal/verify"
+	"github.com/wowtrust/trustdb/internal/sproof"
+	"github.com/wowtrust/trustdb/internal/verify"
 )
 
 func ReadSingleProofFile(path string) (SingleProof, error) {

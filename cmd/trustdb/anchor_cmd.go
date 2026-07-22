@@ -6,10 +6,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ryan-wong-coder/trustdb/internal/anchor"
-	"github.com/ryan-wong-coder/trustdb/internal/model"
-	"github.com/ryan-wong-coder/trustdb/internal/proofstore"
-	"github.com/ryan-wong-coder/trustdb/internal/trusterr"
+	"github.com/wowtrust/trustdb/internal/anchor"
+	"github.com/wowtrust/trustdb/internal/model"
+	"github.com/wowtrust/trustdb/internal/proofstore"
+	"github.com/wowtrust/trustdb/internal/trusterr"
 	"github.com/spf13/cobra"
 )
 

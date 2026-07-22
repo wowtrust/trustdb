@@ -5,11 +5,11 @@ import (
 	"context"
 	"testing"
 
-	"github.com/ryan-wong-coder/trustdb/internal/model"
-	"github.com/ryan-wong-coder/trustdb/internal/proofstore"
-	pebblestore "github.com/ryan-wong-coder/trustdb/internal/proofstore/pebble"
-	"github.com/ryan-wong-coder/trustdb/internal/proofstore/proofstoretest"
-	"github.com/ryan-wong-coder/trustdb/internal/trusterr"
+	"github.com/wowtrust/trustdb/internal/model"
+	"github.com/wowtrust/trustdb/internal/proofstore"
+	pebblestore "github.com/wowtrust/trustdb/internal/proofstore/pebble"
+	"github.com/wowtrust/trustdb/internal/proofstore/proofstoretest"
+	"github.com/wowtrust/trustdb/internal/trusterr"
 )
 
 // TestPebbleStoreConformance exercises every Store contract against a

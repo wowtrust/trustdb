@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/ryan-wong-coder/trustdb/internal/trusterr"
+	"github.com/wowtrust/trustdb/internal/trusterr"
 )
 
 // TestRepairDirNoOpWhenClean runs RepairDir on a healthy multi-segment WAL

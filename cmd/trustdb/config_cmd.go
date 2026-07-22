@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"os"
 
-	trustconfig "github.com/ryan-wong-coder/trustdb/internal/config"
-	"github.com/ryan-wong-coder/trustdb/internal/trusterr"
+	trustconfig "github.com/wowtrust/trustdb/internal/config"
+	"github.com/wowtrust/trustdb/internal/trusterr"
 	"github.com/spf13/cobra"
 )
 

@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ryan-wong-coder/trustdb/internal/sproof"
+	"github.com/wowtrust/trustdb/internal/sproof"
 )
 
 const defaultHTTPTimeout = 15 * time.Second

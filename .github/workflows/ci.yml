@@ -50,6 +50,15 @@ jobs:
             exit 1
           fi
 
+      - name: Reject retired repository references
+        shell: bash
+        run: |
+          retired_repo_path="ryan-wong-coder""/trustdb"
+          if git grep -nF "$retired_repo_path"; then
+            echo "::error::replace retired repository references with github.com/wowtrust/trustdb"
+            exit 1
+          fi
+
   backend:
     name: Backend unit tests
     runs-on: ubuntu-latest

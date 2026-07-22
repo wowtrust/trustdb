@@ -4,7 +4,7 @@ import (
 	"context"
 	"io"
 
-	"github.com/ryan-wong-coder/trustdb/internal/model"
+	"github.com/wowtrust/trustdb/internal/model"
 )
 
 // Store is the unified persistence interface implemented by every proof

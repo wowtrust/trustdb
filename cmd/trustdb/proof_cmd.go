@@ -3,7 +3,7 @@ package main
 import (
 	"encoding/base64"
 
-	"github.com/ryan-wong-coder/trustdb/internal/model"
+	"github.com/wowtrust/trustdb/internal/model"
 	"github.com/spf13/cobra"
 )
 

@@ -9,7 +9,7 @@ import (
 	"hash"
 	"io"
 
-	"github.com/ryan-wong-coder/trustdb/internal/model"
+	"github.com/wowtrust/trustdb/internal/model"
 )
 
 const (

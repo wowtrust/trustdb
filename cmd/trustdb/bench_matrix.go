@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ryan-wong-coder/trustdb/sdk"
+	"github.com/wowtrust/trustdb/sdk"
 	"github.com/spf13/cobra"
 )
 

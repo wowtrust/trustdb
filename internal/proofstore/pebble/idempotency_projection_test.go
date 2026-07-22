@@ -11,12 +11,12 @@ import (
 
 	pdb "github.com/cockroachdb/pebble"
 
-	"github.com/ryan-wong-coder/trustdb/internal/claim"
-	"github.com/ryan-wong-coder/trustdb/internal/idempotency"
-	"github.com/ryan-wong-coder/trustdb/internal/model"
-	"github.com/ryan-wong-coder/trustdb/internal/receipt"
-	"github.com/ryan-wong-coder/trustdb/internal/trustcrypto"
-	"github.com/ryan-wong-coder/trustdb/internal/trusterr"
+	"github.com/wowtrust/trustdb/internal/claim"
+	"github.com/wowtrust/trustdb/internal/idempotency"
+	"github.com/wowtrust/trustdb/internal/model"
+	"github.com/wowtrust/trustdb/internal/receipt"
+	"github.com/wowtrust/trustdb/internal/trustcrypto"
+	"github.com/wowtrust/trustdb/internal/trusterr"
 )
 
 func TestIdempotencyProjectionFreshStoreReadyAcrossReopen(t *testing.T) {

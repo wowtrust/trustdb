@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ryan-wong-coder/trustdb/internal/merkle"
-	"github.com/ryan-wong-coder/trustdb/internal/model"
-	"github.com/ryan-wong-coder/trustdb/internal/receipt"
+	"github.com/wowtrust/trustdb/internal/merkle"
+	"github.com/wowtrust/trustdb/internal/model"
+	"github.com/wowtrust/trustdb/internal/receipt"
 )
 
 func TestComputeBatchPlanOnlyAndMaterialized(t *testing.T) {

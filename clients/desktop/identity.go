@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/ryan-wong-coder/trustdb/internal/trustcrypto"
+	"github.com/wowtrust/trustdb/internal/trustcrypto"
 )
 
 // decodeKeyField accepts both base64-url (RawURL, what the CLI writes)
