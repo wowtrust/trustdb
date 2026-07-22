@@ -5,7 +5,7 @@ go 1.26.5
 require (
 	github.com/cockroachdb/pebble v1.1.5
 	github.com/fxamacker/cbor/v2 v2.9.1
-	github.com/golang/snappy v0.0.4
+	github.com/golang/snappy v1.0.0
 	github.com/prometheus/client_golang v1.23.2
 	github.com/prometheus/client_model v0.6.2
 	github.com/prometheus/common v0.66.1
