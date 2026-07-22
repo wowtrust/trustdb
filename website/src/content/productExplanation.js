@@ -16,8 +16,8 @@ const content = {
     },
     comparison: {
       eyebrow: "Positioning / July 2026",
-      title: "不是另一个数据库，也不只是时间戳。",
-      lead: "TrustDB 把业务系统中的文件、日志和事件变成可携带、可离线复算的证据。下面的项目都很优秀，但它们解决的是不同层次的问题。",
+      title: "TrustDB 把证据链做完整。",
+      lead: "从客户端身份签名、服务端收据，到 Merkle 证明、全局透明日志和外部时间锚定，TrustDB 将分散的环节整合为一套业务证据系统，最终输出可携带、可完全离线验证的 .sproof。",
       columns: ["系统", "主要任务", "形成什么证据", "如何验证", "优先选择它的情况"],
       products: [
         ["TrustDB", "业务证据工作流", "客户端签名、服务端收据、Merkle 包含证明、透明日志与可选外部锚定", "原文件 + .sproof + 本地信任公钥，完全离线复算", "需要自托管地为业务文件或日志生成可交付证据"],
@@ -25,9 +25,9 @@ const content = {
         ["Sigstore Rekor", "软件供应链透明日志", "软件项目签名元数据的防篡改日志记录", "查询条目与包含证明，并审计日志一致性", "需要公开或私有的软件制品签名透明度"],
         ["OpenTimestamps", "区块链时间戳标准", "文档哈希的可升级时间戳证明", "用证明文件和区块链数据验证时间边界", "只需要证明某个摘要不晚于某个时间存在"],
       ],
-      note: "这不是功能胜负表。不可变数据库、透明日志、时间戳协议和业务证据数据库可以组合使用；应按信任边界和交付物选择。",
+      note: "TrustDB 的优势是端到端证据交付：原文无需进入透明日志，验证方也无需访问 TrustDB 服务，只凭原文件、.sproof 与可信公钥即可独立复算最高 L1–L5 证据等级。",
       sourceLabel: "比较依据：各项目官方文档（核对于 2026-07-22）",
-      cta: "先理解 TrustDB 的证据链",
+      cta: "查看 TrustDB 如何完成整条证据链",
     },
     concepts: {
       title: "理解 TrustDB",
@@ -104,8 +104,8 @@ const content = {
       evidenceDescription: "L4 proof covering the batch and its exactly matched L5 anchor",
     },
     comparison: {
-      eyebrow: "Positioning / July 2026", title: "Not another database. More than a timestamp.",
-      lead: "TrustDB turns files, logs, and events from business systems into portable evidence that can be recomputed offline. These are all strong projects, but they solve different layers of the problem.",
+      eyebrow: "Positioning / July 2026", title: "TrustDB completes the evidence chain.",
+      lead: "TrustDB integrates client identity signatures, server receipts, Merkle proofs, a global transparency log, and external time anchoring into one business evidence system, producing a portable .sproof that can be verified fully offline.",
       columns: ["System", "Primary job", "Evidence produced", "Verification model", "Choose it when"],
       products: [
         ["TrustDB", "Business evidence workflow", "Client signatures, server receipts, Merkle inclusion, transparency log, and optional external anchoring", "Original content + .sproof + local trusted keys; fully offline", "You need self-hosted, deliverable evidence for business files or logs"],
@@ -113,8 +113,8 @@ const content = {
         ["Sigstore Rekor", "Software supply-chain transparency log", "Tamper-resistant log entries for signed software metadata", "Query entries and inclusion proofs; audit log consistency", "You need public or private signature transparency for software artifacts"],
         ["OpenTimestamps", "Blockchain timestamping standard", "Upgradable timestamp proofs for document hashes", "Verify a proof file against blockchain data", "You only need to prove a digest existed no later than a time boundary"],
       ],
-      note: "This is not a winner table. Immutable databases, transparency logs, timestamp protocols, and evidence databases can be composed; choose by trust boundary and deliverable.",
-      sourceLabel: "Compared against official project documentation (checked 2026-07-22)", cta: "Understand the TrustDB evidence chain",
+      note: "TrustDB's advantage is end-to-end evidence delivery: source content never needs to enter the transparency log, and a verifier needs no TrustDB connection—only the original content, .sproof, and trusted public keys to recompute the highest valid L1–L5 level.",
+      sourceLabel: "Compared against official project documentation (checked 2026-07-22)", cta: "See how TrustDB completes the evidence chain",
     },
     concepts: {
       title: "Understand TrustDB", summary: "Learn the system boundaries, evidence lifecycle, L1–L5, and trust model first.", cta: "Understand the system first", lead: "TrustDB is a verifiable evidence database: business systems submit content digests and identity signatures, the server organizes them into auditable proofs, and verifiers can recompute the result without the server.", updated: "Updated 2026.07.22 · Current main branch",
@@ -143,28 +143,28 @@ const cloneEnglish = (locale, overrides) => ({
 });
 
 content.ru = cloneEnglish("ru", {
-  comparison: { title: "Не ещё одна база данных — и больше, чем метка времени.", lead: "TrustDB превращает файлы, журналы и события бизнес-систем в переносимые доказательства, которые можно пересчитать офлайн.", columns: ["Система","Основная задача","Результат","Проверка","Когда выбирать"], note: "Это не таблица победителей: системы решают разные уровни задачи и могут использоваться вместе.", sourceLabel: "Сопоставлено с официальной документацией проектов (22.07.2026)", cta: "Понять цепочку доказательств TrustDB" },
+  comparison: { title: "TrustDB завершает всю цепочку доказательств.", lead: "TrustDB объединяет подписи клиентов, серверные квитанции, доказательства Merkle, глобальный журнал прозрачности и внешнюю временную привязку в единую систему с переносимым файлом .sproof для полной офлайн-проверки.", columns: ["Система","Основная задача","Результат","Проверка","Когда выбирать"], note: "Преимущество TrustDB — сквозная доставка доказательств: исходные данные не попадают в журнал прозрачности, а проверяющему достаточно оригинала, .sproof и доверенных открытых ключей для независимого вычисления уровня L1–L5.", sourceLabel: "Сопоставлено с официальной документацией проектов (22.07.2026)", cta: "Посмотреть полную цепочку TrustDB" },
   concepts: { title: "Как устроена TrustDB", summary: "Сначала разберитесь в границах системы, уровнях L1–L5 и модели доверия.", cta: "Сначала понять систему", lead: "TrustDB — база проверяемых доказательств: система получает хеш и подпись, строит проверяемые материалы, а получатель пересчитывает результат без сервера.", updated: "Обновлено 22.07.2026 · текущая ветка main", sections: {
     plain: { ...content.en.concepts.sections.plain, title: "Объяснение в одном предложении", body: "TrustDB не заменяет хранилище исходных файлов. Она доказывает, кто подписал хеш, как запись прошла обработку и получила ли внешний временной рубеж.", exampleTitle: "Пример: invoice.pdf" },
     flow: { ...content.en.concepts.sections.flow, title: "Как запись становится доказательством" }, stored: { ...content.en.concepts.sections.stored, title: "Что хранится, а что нет" }, levels: { ...content.en.concepts.sections.levels, title: "Что означают L1–L5", intro: "Уровень вычисляется по реально проверяемым материалам, а не принимается со слов сервера." }, components: { ...content.en.concepts.sections.components, title: "Компоненты системы" }, paths: { ...content.en.concepts.sections.paths, title: "Что читать дальше" },
   } },
 });
 content.ja = cloneEnglish("ja", {
-  comparison: { title: "別のデータベースではなく、タイムスタンプ以上のもの。", lead: "TrustDB は業務システムのファイル、ログ、イベントを、オフラインで再計算できる持ち運び可能な証拠に変えます。", columns: ["システム","主な役割","生成する証拠","検証方法","選ぶ場面"], note: "優劣表ではありません。各システムは異なる層を解決し、組み合わせて利用できます。", sourceLabel: "各プロジェクトの公式文書を確認（2026-07-22）", cta: "TrustDB の証拠チェーンを理解する" },
+  comparison: { title: "TrustDB は証拠チェーン全体を完成させます。", lead: "TrustDB はクライアント署名、サーバー受領証、Merkle 証明、グローバル透明性ログ、外部時刻アンカーを一つの業務証拠システムに統合し、完全にオフライン検証できる .sproof を出力します。", columns: ["システム","主な役割","生成する証拠","検証方法","選ぶ場面"], note: "TrustDB の強みはエンドツーエンドの証拠受け渡しです。原文を透明性ログへ入れず、検証者は元データ、.sproof、信頼済み公開鍵だけで L1–L5 の最高有効レベルを独立再計算できます。", sourceLabel: "各プロジェクトの公式文書を確認（2026-07-22）", cta: "TrustDB の完全な証拠チェーンを見る" },
   concepts: { title: "TrustDB を理解する", summary: "システム境界、証拠ライフサイクル、L1–L5、信頼モデルを先に理解します。", cta: "まずシステムを理解する", lead: "TrustDB は検証可能な証拠データベースです。内容のダイジェストと署名を受け取り、監査可能な証明を構成し、検証者はサーバーなしで再計算できます。", updated: "更新 2026.07.22 · 現在の main ブランチ", sections: {
     plain: { ...content.en.concepts.sections.plain, title: "一文で説明すると", body: "元の業務ファイルを保存・表示する仕組みの代わりではなく、誰が内容ハッシュを署名し、どの処理段階を通り、外部時刻境界を得たかを証明します。", exampleTitle: "invoice.pdf の例" },
     flow: { ...content.en.concepts.sections.flow, title: "1件の記録が証拠になるまで" }, stored: { ...content.en.concepts.sections.stored, title: "保存するもの・しないもの" }, levels: { ...content.en.concepts.sections.levels, title: "L1–L5 の意味", intro: "レベルはサーバーの自己申告ではなく、実際の検証可能な材料から再計算されます。" }, components: { ...content.en.concepts.sections.components, title: "システム構成" }, paths: { ...content.en.concepts.sections.paths, title: "次に読むページ" },
   } },
 });
 content.fr = cloneEnglish("fr", {
-  comparison: { title: "Pas une base de données de plus — davantage qu’un horodatage.", lead: "TrustDB transforme fichiers, journaux et événements métier en preuves portables, recalculables hors ligne.", columns: ["Système","Rôle principal","Preuve produite","Vérification","À choisir quand"], note: "Ce tableau ne désigne aucun vainqueur : ces systèmes traitent des couches différentes et peuvent être combinés.", sourceLabel: "Comparaison fondée sur les documentations officielles (22/07/2026)", cta: "Comprendre la chaîne de preuve TrustDB" },
+  comparison: { title: "TrustDB complète toute la chaîne de preuve.", lead: "TrustDB réunit signatures clientes, reçus serveur, preuves Merkle, journal global de transparence et ancrage temporel externe dans un seul système métier, avec un .sproof portable et entièrement vérifiable hors ligne.", columns: ["Système","Rôle principal","Preuve produite","Vérification","À choisir quand"], note: "L’avantage de TrustDB est la livraison de preuve de bout en bout : le contenu original n’entre pas dans le journal et le vérificateur n’a besoin que de l’original, du .sproof et de clés publiques fiables pour recalculer le niveau L1–L5 valide.", sourceLabel: "Comparaison fondée sur les documentations officielles (22/07/2026)", cta: "Voir la chaîne complète de TrustDB" },
   concepts: { title: "Comprendre TrustDB", summary: "Commencez par les limites du système, le cycle de preuve, L1–L5 et le modèle de confiance.", cta: "Comprendre d’abord le système", lead: "TrustDB est une base de preuves vérifiables : elle reçoit empreintes et signatures, construit des preuves auditables, puis permet au destinataire de tout recalculer sans serveur.", updated: "Mis à jour le 22/07/2026 · branche main actuelle", sections: {
     plain: { ...content.en.concepts.sections.plain, title: "L’explication en une phrase", body: "TrustDB ne remplace pas le stockage des fichiers métier : elle prouve qui a signé une empreinte, son parcours de traitement et l’existence éventuelle d’une limite temporelle externe.", exampleTitle: "Exemple : invoice.pdf" },
     flow: { ...content.en.concepts.sections.flow, title: "Comment un enregistrement devient une preuve" }, stored: { ...content.en.concepts.sections.stored, title: "Ce qui est stocké — ou non" }, levels: { ...content.en.concepts.sections.levels, title: "Ce que signifient L1–L5", intro: "Le niveau est recalculé depuis les éléments réellement vérifiables ; ce n’est pas une étiquette déclarée par le serveur." }, components: { ...content.en.concepts.sections.components, title: "Composants du système" }, paths: { ...content.en.concepts.sections.paths, title: "Que lire ensuite" },
   } },
 });
 content.ko = cloneEnglish("ko", {
-  comparison: { title: "또 하나의 데이터베이스가 아니라, 타임스탬프 그 이상.", lead: "TrustDB는 업무 시스템의 파일, 로그, 이벤트를 오프라인에서 다시 계산할 수 있는 휴대형 증거로 바꿉니다.", columns: ["시스템","주요 역할","생성 증거","검증 방식","선택할 때"], note: "승패표가 아닙니다. 각 시스템은 서로 다른 계층을 해결하며 함께 사용할 수 있습니다.", sourceLabel: "각 프로젝트의 공식 문서 기준(2026-07-22 확인)", cta: "TrustDB 증거 사슬 이해하기" },
+  comparison: { title: "TrustDB는 증거 사슬 전체를 완성합니다.", lead: "TrustDB는 클라이언트 신원 서명, 서버 영수증, Merkle 증명, 글로벌 투명성 로그, 외부 시간 앵커를 하나의 업무 증거 시스템으로 통합하고 완전한 오프라인 검증이 가능한 휴대형 .sproof를 출력합니다.", columns: ["시스템","주요 역할","생성 증거","검증 방식","선택할 때"], note: "TrustDB의 강점은 종단 간 증거 전달입니다. 원문을 투명성 로그에 넣지 않고도 검증자는 원본, .sproof, 신뢰 공개키만으로 유효한 최고 L1–L5 등급을 독립적으로 다시 계산할 수 있습니다.", sourceLabel: "각 프로젝트의 공식 문서 기준(2026-07-22 확인)", cta: "TrustDB의 완전한 증거 사슬 보기" },
   concepts: { title: "TrustDB 이해하기", summary: "시스템 경계, 증거 수명주기, L1–L5, 신뢰 모델을 먼저 이해합니다.", cta: "먼저 시스템 이해하기", lead: "TrustDB는 검증 가능한 증거 데이터베이스입니다. 콘텐츠 요약과 서명을 받아 감사 가능한 증명을 구성하고, 검증자는 서버 없이 결과를 다시 계산합니다.", updated: "2026.07.22 업데이트 · 현재 main 브랜치", sections: {
     plain: { ...content.en.concepts.sections.plain, title: "한 문장으로 설명하면", body: "원본 업무 파일 저장소를 대체하지 않습니다. 누가 콘텐츠 해시에 서명했고 어떤 처리 단계를 거쳤으며 외부 시간 경계를 얻었는지를 증명합니다.", exampleTitle: "invoice.pdf 예시" },
     flow: { ...content.en.concepts.sections.flow, title: "한 건의 기록이 증거가 되는 과정" }, stored: { ...content.en.concepts.sections.stored, title: "저장하는 것과 저장하지 않는 것" }, levels: { ...content.en.concepts.sections.levels, title: "L1–L5의 의미", intro: "등급은 서버가 주장하는 값이 아니라 실제 검증 가능한 자료에서 다시 계산됩니다." }, components: { ...content.en.concepts.sections.components, title: "시스템 구성 요소" }, paths: { ...content.en.concepts.sections.paths, title: "다음에 읽을 문서" },
