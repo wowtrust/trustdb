@@ -28,10 +28,43 @@ jobs:
         with:
           github-token: ${{ github.token }}
 
-      - name: Queue safe security update for squash merge
+      - name: Reject semantic-major or unparseable grouped updates
+        id: version-safety
         if: >-
           steps.metadata.outputs.dependency-group == 'security-patches' &&
           steps.metadata.outputs.maintainer-changes == 'false'
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          python3 - <<'PY'
+          import os
+          import re
+
+          body = os.environ.get("PR_BODY", "")
+          pairs = re.findall(
+              r"Updates `[^`]+` from `?([^`\s]+)`? to `?([^`\s]+)`?",
+              body,
+          )
+
+          def major(version: str):
+              match = re.fullmatch(r"v?(\d+)\.\d+\.\d+(?:[-+].*)?", version)
+              return int(match.group(1)) if match else None
+
+          safe = bool(pairs) and all(
+              major(previous) is not None
+              and major(previous) == major(current)
+              for previous, current in pairs
+          )
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"safe={'true' if safe else 'false'}\n")
+              output.write(f"updates={len(pairs)}\n")
+          PY
+
+      - name: Queue safe security update for squash merge
+        if: >-
+          steps.metadata.outputs.dependency-group == 'security-patches' &&
+          steps.metadata.outputs.maintainer-changes == 'false' &&
+          steps.version-safety.outputs.safe == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           PR_URL: ${{ github.event.pull_request.html_url }}
@@ -40,11 +73,16 @@ jobs:
       - name: Explain why automatic merge was not queued
         if: >-
           steps.metadata.outputs.dependency-group != 'security-patches' ||
-          steps.metadata.outputs.maintainer-changes != 'false'
+          steps.metadata.outputs.maintainer-changes != 'false' ||
+          steps.version-safety.outputs.safe != 'true'
         env:
           DEPENDENCY_GROUP: ${{ steps.metadata.outputs.dependency-group }}
           MAINTAINER_CHANGES: ${{ steps.metadata.outputs.maintainer-changes }}
+          VERSION_SAFE: ${{ steps.version-safety.outputs.safe }}
+          UPDATE_COUNT: ${{ steps.version-safety.outputs.updates }}
         run: |
-          echo "Automatic merge is limited to untouched Dependabot security-patches groups, which are constrained to patch and minor updates in dependabot.yml."
+          echo "Automatic merge is limited to untouched, parseable Dependabot security-patches groups without semantic-major changes."
           echo "dependency_group=$DEPENDENCY_GROUP"
           echo "maintainer_changes=$MAINTAINER_CHANGES"
+          echo "version_safe=$VERSION_SAFE"
+          echo "update_count=$UPDATE_COUNT"

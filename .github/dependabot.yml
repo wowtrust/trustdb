@@ -28,9 +28,6 @@ updates:
         applies-to: security-updates
         patterns:
           - "*"
-        update-types:
-          - minor
-          - patch
       routine-minor-patch:
         applies-to: version-updates
         patterns:
@@ -66,9 +63,6 @@ updates:
         applies-to: security-updates
         patterns:
           - "*"
-        update-types:
-          - minor
-          - patch
       routine-minor-patch:
         applies-to: version-updates
         patterns:
@@ -98,9 +92,6 @@ updates:
         applies-to: security-updates
         patterns:
           - "*"
-        update-types:
-          - minor
-          - patch
       routine-minor-patch:
         applies-to: version-updates
         patterns:
@@ -130,9 +121,6 @@ updates:
         applies-to: security-updates
         patterns:
           - "*"
-        update-types:
-          - minor
-          - patch
       routine-minor-patch:
         applies-to: version-updates
         patterns:
