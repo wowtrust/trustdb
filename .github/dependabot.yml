@@ -8,7 +8,9 @@ updates:
       day: monday
       time: "03:00"
       timezone: Asia/Shanghai
-    open-pull-requests-limit: 5
+    # Security updates use GitHub's separate internal limit. Keep routine
+    # version PRs disabled so urgent fixes are not hidden in large groups.
+    open-pull-requests-limit: 0
     rebase-strategy: auto
     labels:
       - dependencies
@@ -28,13 +30,6 @@ updates:
         applies-to: security-updates
         patterns:
           - "*"
-      routine-minor-patch:
-        applies-to: version-updates
-        patterns:
-          - "*"
-        update-types:
-          - minor
-          - patch
 
   - package-ecosystem: gomod
     directory: /clients/desktop
@@ -43,7 +38,7 @@ updates:
       day: monday
       time: "03:15"
       timezone: Asia/Shanghai
-    open-pull-requests-limit: 5
+    open-pull-requests-limit: 0
     rebase-strategy: auto
     labels:
       - dependencies
@@ -63,13 +58,6 @@ updates:
         applies-to: security-updates
         patterns:
           - "*"
-      routine-minor-patch:
-        applies-to: version-updates
-        patterns:
-          - "*"
-        update-types:
-          - minor
-          - patch
 
   - package-ecosystem: npm
     directory: /clients/web
@@ -78,7 +66,7 @@ updates:
       day: monday
       time: "03:30"
       timezone: Asia/Shanghai
-    open-pull-requests-limit: 5
+    open-pull-requests-limit: 0
     rebase-strategy: auto
     versioning-strategy: increase-if-necessary
     labels:
@@ -92,13 +80,6 @@ updates:
         applies-to: security-updates
         patterns:
           - "*"
-      routine-minor-patch:
-        applies-to: version-updates
-        patterns:
-          - "*"
-        update-types:
-          - minor
-          - patch
 
   - package-ecosystem: npm
     directory: /clients/desktop/frontend
@@ -107,7 +88,7 @@ updates:
       day: monday
       time: "03:45"
       timezone: Asia/Shanghai
-    open-pull-requests-limit: 5
+    open-pull-requests-limit: 0
     rebase-strategy: auto
     versioning-strategy: increase-if-necessary
     labels:
@@ -121,10 +102,3 @@ updates:
         applies-to: security-updates
         patterns:
           - "*"
-      routine-minor-patch:
-        applies-to: version-updates
-        patterns:
-          - "*"
-        update-types:
-          - minor
-          - patch
