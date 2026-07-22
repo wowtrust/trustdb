@@ -17,7 +17,7 @@ export function ChangelogPage() {
   return (
     <>
       <PageHero eyebrow="Development log" title={<>TrustDB<br />版本记录。</>} lead="按版本记录功能变化、兼容性要求、已知问题和下载信息。" meta="开发日志 · 更新于 2026.07.20">
-        <div className="page-hero__actions"><Link className="button button--solid" href="/downloads">下载 1.0.0-beta.1 <ArrowRight /></Link><a className="button button--ghost" href="https://github.com/ryan-wong-coder/trustdb/commits/main" target="_blank" rel="noreferrer">全部提交</a></div>
+        <div className="page-hero__actions"><Link className="button button--solid" href="/downloads">下载 1.0.0-beta.1 <ArrowRight /></Link><a className="button button--ghost" href="https://github.com/wowtrust/trustdb/commits/main" target="_blank" rel="noreferrer">全部提交</a></div>
       </PageHero>
       <section className="release-state section-shell" data-reveal><WarningCircle /><div><p>Release status</p><h2>1.0.0-beta.1 已进入公开测试</h2><span>桌面客户端采用自签名证书，系统仍会提示未知开发者；请从 GitHub Release 下载并核对 SHA-256。</span></div><Link href="/downloads">查看全部产物 <ArrowRight /></Link></section>
       <section className="timeline section-shell">

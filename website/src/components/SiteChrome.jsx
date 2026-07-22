@@ -36,7 +36,7 @@ export function SiteHeader({ route }) {
         </nav>
         <div className="site-header__actions">
           <LanguageSwitcher compact />
-          <a className="header-github" href="https://github.com/ryan-wong-coder/trustdb" target="_blank" rel="noreferrer" aria-label="打开 TrustDB GitHub 仓库">
+          <a className="header-github" href="https://github.com/wowtrust/trustdb" target="_blank" rel="noreferrer" aria-label="打开 TrustDB GitHub 仓库">
             <GithubLogo weight="fill" /><span>GitHub</span>
           </a>
           <button className="menu-toggle" type="button" onClick={() => setOpen((value) => !value)} aria-label={open ? "关闭导航" : "打开导航"} aria-expanded={open}>
@@ -69,7 +69,7 @@ export function SiteFooter() {
         <Link href="/downloads">下载</Link>
       </nav>
       <div className="site-footer__meta">
-        <a href="https://github.com/ryan-wong-coder/trustdb" target="_blank" rel="noreferrer">源码 <ArrowUpRight /></a>
+        <a href="https://github.com/wowtrust/trustdb" target="_blank" rel="noreferrer">源码 <ArrowUpRight /></a>
         <a className="site-footer__community" href="https://linux.do/" target="_blank" rel="noreferrer" aria-label="访问 LINUX DO 社区">感谢 LINUX DO 社区 <ArrowUpRight /></a>
         <small>AGPL-3.0 · © 2026 TrustDB</small>
       </div>

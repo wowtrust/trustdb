@@ -1,5 +1,5 @@
 blank_issues_enabled: false
 contact_links:
   - name: TrustDB contribution guide
-    url: https://github.com/ryan-wong-coder/trustdb/blob/main/CONTRIBUTING.md
+    url: https://github.com/wowtrust/trustdb/blob/main/CONTRIBUTING.md
     about: Read the branch, issue, PR, commit, proof-boundary, and validation standards before opening work.
