@@ -80,6 +80,7 @@ const (
 // applied before certificate, BCOS, CBOR, or signature parsing so hostile
 // evidence cannot force unbounded allocation or verification work.
 const (
+	MaxNATSTransportBytesV1          = (1 << 20) + (64 << 10)
 	MaxCertificateCountV2            = 16
 	MaxCertificateBytesV2            = 128 << 10
 	MaxCertificateChainBytesV2       = 1 << 20
@@ -129,7 +130,7 @@ var registry = map[string]Descriptor{
 	GRPCV1: descriptor(FamilyGRPC, GRPCV1, 1, AvailabilityAvailable, EncodingGRPCCBOR, []cryptosuite.ID{cryptosuite.INTLV1}, "", MigrationRetireOnCutover, 16<<20),
 	GRPCV2: descriptor(FamilyGRPC, GRPCV2, 2, AvailabilityReserved, EncodingGRPCCBOR, []cryptosuite.ID{cryptosuite.CNSMV1, cryptosuite.INTLV1}, "crypto_suite", MigrationDestructiveCutover, MaxTransportMessageBytesV2),
 
-	NATSV1: descriptor(FamilyNATS, NATSV1, 1, AvailabilityAvailable, EncodingNATSJetStreamCBOR, []cryptosuite.ID{cryptosuite.INTLV1}, "", MigrationRetireOnCutover, 1<<20),
+	NATSV1: descriptor(FamilyNATS, NATSV1, 1, AvailabilityAvailable, EncodingNATSJetStreamCBOR, []cryptosuite.ID{cryptosuite.INTLV1}, "", MigrationRetireOnCutover, MaxNATSTransportBytesV1),
 	NATSV2: descriptor(FamilyNATS, NATSV2, 2, AvailabilityReserved, EncodingNATSJetStreamCBOR, []cryptosuite.ID{cryptosuite.CNSMV1, cryptosuite.INTLV1}, "crypto_suite", MigrationDestructiveCutover, MaxTransportMessageBytesV2),
 
 	SDKV1: descriptor(FamilySDK, SDKV1, 1, AvailabilityAvailable, EncodingGoSDKCBOR, []cryptosuite.ID{cryptosuite.INTLV1}, "", MigrationRetireOnCutover, 16<<20),
