@@ -98,7 +98,7 @@ func TestOpenProvisionsBoundedJetStreamTopology(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Stream.Info() error = %v", err)
 	}
-	if err := validateStreamConfig(streamInfo.Config, desiredStreamConfig(cfg, topology)); err != nil {
+	if err := validateStreamConfig(streamInfo.Config, desiredStreamConfig(cfg, topology), "ingress"); err != nil {
 		t.Fatal(err)
 	}
 	consumerInfo, err := runtime.Consumer().Info(context.Background())
@@ -107,6 +107,26 @@ func TestOpenProvisionsBoundedJetStreamTopology(t *testing.T) {
 	}
 	if err := validateConsumerConfig(consumerInfo.Config, desiredConsumerConfig(cfg, topology)); err != nil {
 		t.Fatal(err)
+	}
+	resultInfo, err := runtime.ResultStream().Info(context.Background())
+	if err != nil {
+		t.Fatalf("ResultStream.Info() error = %v", err)
+	}
+	if err := validateStreamConfig(resultInfo.Config, desiredResultStreamConfig(cfg, topology), "result"); err != nil {
+		t.Fatal(err)
+	}
+	deadLetterInfo, err := runtime.DeadLetterStream().Info(context.Background())
+	if err != nil {
+		t.Fatalf("DeadLetterStream.Info() error = %v", err)
+	}
+	if err := validateStreamConfig(deadLetterInfo.Config, desiredDeadLetterStreamConfig(cfg, topology), "dead-letter"); err != nil {
+		t.Fatal(err)
+	}
+	if resultInfo.Config.Retention != jetstream.LimitsPolicy || resultInfo.Config.Discard != jetstream.DiscardNew || !resultInfo.Config.DiscardNewPerSubject || resultInfo.Config.MaxMsgsPerSubject != 1 {
+		t.Fatalf("result stream is not immutable and bounded: %+v", resultInfo.Config)
+	}
+	if deadLetterInfo.Config.Retention != jetstream.LimitsPolicy || deadLetterInfo.Config.Discard != jetstream.DiscardNew || !deadLetterInfo.Config.DiscardNewPerSubject || deadLetterInfo.Config.MaxMsgsPerSubject != 1 {
+		t.Fatalf("dead-letter stream is not immutable and bounded: %+v", deadLetterInfo.Config)
 	}
 
 	if _, err := runtime.JetStream().Publish(context.Background(), cfg.Subject, make([]byte, 800)); err != nil {
@@ -214,6 +234,48 @@ func TestOpenRejectsIncompatibleExistingConsumerWithoutUpdatingIt(t *testing.T) 
 	}
 	if info.Config.AckWait != bad.AckWait {
 		t.Fatalf("consumer ack wait = %v, want unchanged %v", info.Config.AckWait, bad.AckWait)
+	}
+}
+
+func TestOpenRejectsIncompatibleOutcomeStreamWithoutUpdatingIt(t *testing.T) {
+	t.Parallel()
+
+	s := startTestServer(t, nil)
+	cfg := testNATSConfig(s.ClientURL())
+	conn, js := connectTestJetStream(t, s.ClientURL())
+	t.Cleanup(conn.Close)
+
+	topology, err := parseTopology(cfg)
+	if err != nil {
+		t.Fatalf("parseTopology() error = %v", err)
+	}
+	ingress, err := js.CreateStream(context.Background(), desiredStreamConfig(cfg, topology))
+	if err != nil {
+		t.Fatalf("CreateStream(ingress) error = %v", err)
+	}
+	if _, err := ingress.CreateConsumer(context.Background(), desiredConsumerConfig(cfg, topology)); err != nil {
+		t.Fatalf("CreateConsumer() error = %v", err)
+	}
+	bad := desiredResultStreamConfig(cfg, topology)
+	bad.MaxBytes++
+	resultStream, err := js.CreateStream(context.Background(), bad)
+	if err != nil {
+		t.Fatalf("CreateStream(result) error = %v", err)
+	}
+
+	_, err = Open(context.Background(), cfg)
+	if err == nil || !strings.Contains(err.Error(), "NATS result stream") || !strings.Contains(err.Error(), "incompatible configuration") {
+		t.Fatalf("Open() error = %v, want incompatible result stream error", err)
+	}
+	info, err := resultStream.Info(context.Background())
+	if err != nil {
+		t.Fatalf("ResultStream.Info() error = %v", err)
+	}
+	if info.Config.MaxBytes != bad.MaxBytes {
+		t.Fatalf("result stream max bytes = %d, want unchanged %d", info.Config.MaxBytes, bad.MaxBytes)
+	}
+	if _, err := js.Stream(context.Background(), cfg.DLQStream); !errors.Is(err, jetstream.ErrStreamNotFound) {
+		t.Fatalf("DLQ lookup error = %v, want no mutation after incompatible result stream", err)
 	}
 }
 
@@ -463,8 +525,14 @@ func testNATSConfig(url string) config.NATS {
 	cfg.Stream = "TRUSTDB_INGRESS_TEST"
 	cfg.Subject = "trustdb.ingress.test.claims"
 	cfg.Durable = "trustdb-ingress-test"
+	cfg.ResultStream = "TRUSTDB_INGRESS_RESULTS_TEST"
+	cfg.ResultSubject = "trustdb.ingress.test.results.*"
+	cfg.DLQStream = "TRUSTDB_INGRESS_DLQ_TEST"
+	cfg.DLQSubject = "trustdb.ingress.test.dlq.*"
 	cfg.StreamStorage = "memory"
 	cfg.StreamMaxBytes = 1024
+	cfg.ResultMaxBytes = 64 << 10
+	cfg.DLQMaxBytes = 64 << 10
 	cfg.ConnectTimeout = "1s"
 	cfg.ReconnectWait = "50ms"
 	cfg.MaxReconnects = 0
