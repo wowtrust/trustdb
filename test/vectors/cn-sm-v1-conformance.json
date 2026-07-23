@@ -1,0 +1,80 @@
+{
+  "schema": "trustdb.sm.conformance-v1",
+  "suite": "CN_SM_V1",
+  "sources": [
+    "GB/T 32905-2016",
+    "GB/T 32907-2016",
+    "GB/T 32918.5-2017",
+    "https://github.com/openssl/openssl/blob/master/test/sm2_internal_test.c",
+    "https://github.com/openssl/openssl/blob/master/test/recipes/30-test_evp_data/evpmd_sm3.txt"
+  ],
+  "sm2": {
+    "user_id_ascii": "1234567812345678",
+    "private_key_hex": "3945208f7b2144b13f36e38ac6d39f95889393692860b51a42fb81ef4df7c5b8",
+    "public_key_uncompressed_hex": "0409f9df311e5421a150dd7d161e4bc5c672179fad1833fc076bb08ff356f35020ccea490ce26775a52dc6ea718cc1aa600aed05fbf35e084a6632f6072da9ad13",
+    "message_utf8": "message digest",
+    "ephemeral_k_hex": "59276e27d506861a16680f3ad9c02dccef3cc1fa3cdbe4ce6d54b80deac1bc21",
+    "za_hex": "b2e14c5c79c6df5b85f4fe7ed8db7a262b9da7e07ccb0ea9f4747b8ccda8a4f3",
+    "message_digest_hex": "f0b43e94ba45accaace692ed534382eb17e6ab5a19ce7b31f4486fdfc0d28640",
+    "signature_encoding": "ASN.1 DER SEQUENCE(INTEGER r, INTEGER s)",
+    "signature_der_hex": "3046022100f5a03b0648d2c4630eeac513e1bb81a15944da3827d5b74143ac7eaceee720b3022100b1b6aa29df212fd8763182bc0d421ca1bb9038fd1f7f42d4840b69c485bbc1aa"
+  },
+  "sm3": [
+    {
+      "id": "gbt-32905-abc",
+      "message_ascii": "abc",
+      "repeat": 1,
+      "digest_hex": "66c7f0f462eeedd9d1f2d46bdc10e4e24167c4875cf2f7a2297da02b8f4ba8e0"
+    },
+    {
+      "id": "gbt-32905-abcd-x16",
+      "message_ascii": "abcd",
+      "repeat": 16,
+      "digest_hex": "debe9ff92275b8a138604889c18e5a4d6fdb70e5387e5765293dcba39c0c5732"
+    }
+  ],
+  "merkle_sm3": {
+    "leaf_prefix_hex": "00",
+    "node_prefix_hex": "01",
+    "empty_root_hex": "1ab21d8355cfa17f8e61194831e81a8f22bec8c728fefb747ed035eb5082aa2b",
+    "leaves": [
+      {
+        "payload_utf8": "alpha",
+        "hash_hex": "8f305348d6bcdb9a12c3ddf6a57f15b0a6dccb6f65844c7697480796f72c7ce3"
+      },
+      {
+        "payload_utf8": "beta",
+        "hash_hex": "4d90e49bb5066d85b0b0d860111f96b357cddd919146ff82e263f3213dcff5f6"
+      }
+    ],
+    "two_leaf_root_hex": "dd2c9f9eaa2bddde1dc837ae282f04b9301e668afb98d3281a4b0b0eb49ce1cf"
+  },
+  "sm4": {
+    "block": {
+      "key_hex": "0123456789abcdeffedcba9876543210",
+      "plaintext_hex": "0123456789abcdeffedcba9876543210",
+      "ciphertext_hex": "681edf34d206965e86b3e94f536e4246",
+      "million_iterations_ciphertext_hex": "595298c7c6fd271f0402f804c33d3f66"
+    },
+    "envelope": {
+      "algorithm": "SM4-GCM",
+      "nonce_bytes": 12,
+      "tag_bytes": 16,
+      "nonce_unique_per_key": true,
+      "key_hex": "0123456789abcdeffedcba9876543210",
+      "nonce_hex": "000102030405060708090a0b",
+      "aad_length_prefix_bytes": 2,
+      "aad_fields_utf8": [
+        "trustdb.sm4-envelope.v2",
+        "CN_SM_V1",
+        "logical-backup",
+        "tenant-01",
+        "key-01",
+        "manifest"
+      ],
+      "aad_hex": "0017747275737464622e736d342d656e76656c6f70652e76320008434e5f534d5f5631000e6c6f676963616c2d6261636b7570000974656e616e742d303100066b65792d303100086d616e6966657374",
+      "plaintext_utf8": "TrustDB CN_SM_V1 backup envelope",
+      "sealed_hex": "01536de2c5f5eb3f27cedcf896033064a89b48ce2b24ce9f23dadf4afc82631ebb4c850df99186a6dd87687a0a5622fc"
+    }
+  }
+}

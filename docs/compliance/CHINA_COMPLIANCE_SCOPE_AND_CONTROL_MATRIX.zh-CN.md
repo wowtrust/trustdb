@@ -2,7 +2,7 @@
 
 > 文档编号：`TDB-CN-CM-001`
 >
-> 版本：`0.1.3`
+> 版本：`0.1.4`
 >
 > 基线日期：`2026-07-23`
 >
@@ -311,10 +311,10 @@ SDF/HSM 接口实现应在开发启动时从[国家密码管理局](https://www.
 
 | ID | 依据与控制目标 | TrustDB 产品责任 / 当前状态 | 部署方责任 | Owner | 证据 | Gate |
 | --- | --- | --- | --- | --- | --- | --- |
-| `CRY-01` | `STD-39786` `STD-43207`：密码套件明确且不可静默切换 | [`ADR-0001`](ADR-0001-CRYPTOGRAPHIC-SUITES.zh-CN.md)、[`ADR-0002`](ADR-0002-CRYPTO-AGILITY-FORMATS.zh-CN.md)、`internal/cryptosuite` 与 `internal/formatregistry` 已固定 suite、格式代际、大小限制和 V2/V5 破坏性切换规则；不保留 v1/v4 双读、迁移或并行 API，持久 marker 与 v2 实现待 #446 及后续任务，`Partial` | 选择经批准 Profile，不在同一日志中切换 | Security & Cryptography | ADR、registry tests、schema、混用拒绝测试 | `G1` |
-| `CRY-02` | `STD-SM3`：SM3 覆盖内容和树语义 | 实现显式 SM3 hash factory、domain separation 和 RFC6962-SM3 profile。`Planned` | 固定参数和实现版本 | Security & Cryptography | 官方/交叉向量、Merkle golden vectors | `G2` |
-| `CRY-03` | `STD-SM2` `STD-SM2-USE`：SM2 签名互操作 | 固定 ZA/user ID、签名编码、canonical input 和负向解析规则。`Planned` | 管理身份参数并禁止 SDK 自设默认值 | Security & Cryptography | SM2 向量、跨 SDK/CLI/Desktop 测试 | `G2` |
-| `CRY-04` | `STD-SM4` `STD-BLOCK-MODE`：静态秘密和备份保护 | 定义 versioned SM4 认证加密 envelope：首选 SM4-GCM，AAD 绑定格式版本、suite、对象类型、tenant、KeyID 和上下文；每个 key 下 nonce 唯一，tag 固定 128 bit；DEK 由 HSM/KMS 的 KEK 包装，若使用 KDF 则固定经批准的 SM3-based profile 与 salt/context。拒绝 ECB、未认证 CBC/CTR、nonce 重用以及缺失或截短 tag。先覆盖软件私钥信封与逻辑备份，再评估 WAL/object/proofstore value。`Planned` | KEK 存 HSM/KMS，实施分权、轮换、nonce 生命周期和恢复 | Security & Cryptography + Platform / SRE | envelope 规范、AAD/nonce/tag/KDF 负向测试、轮换和恢复报告 | `G3` `G5` |
+| `CRY-01` | `STD-39786` `STD-43207`：密码套件明确且不可静默切换 | [`ADR-0001`](ADR-0001-CRYPTOGRAPHIC-SUITES.zh-CN.md)、[`ADR-0002`](ADR-0002-CRYPTO-AGILITY-FORMATS.zh-CN.md)、[`ADR-0003`](ADR-0003-SM-CRYPTO-DEPENDENCIES-AND-VECTORS.zh-CN.md)、`internal/cryptosuite` 与 `internal/formatregistry` 已固定 suite、格式代际、依赖边界、大小限制和 V2/V5 破坏性切换规则；不保留 v1/v4 双读、迁移或并行 API，持久 marker 与 v2 实现待 #446 及后续任务，`Partial` | 选择经批准 Profile，不在同一日志中切换 | Security & Cryptography | ADR、registry tests、schema、混用拒绝测试 | `G1` |
+| `CRY-02` | `STD-SM3`：SM3 覆盖内容和树语义 | 已固定纯 Go 依赖、标准 digest、streaming 和 RFC6962-SM3 `0x00/0x01` domain vectors，并由 OpenSSL/LibreSSL oracle 交叉验证；生产 hash factory 与全链路调用待 #445/#448，`Partial` | 固定参数和实现版本 | Security & Cryptography | 官方/交叉向量、Merkle golden vectors | `G2` |
+| `CRY-03` | `STD-SM2` `STD-SM2-USE`：SM2 签名互操作 | 已固定 user ID、ZA、严格 DER 和负向向量；GmSSL/Tongsuo、SDK/CLI/Desktop/provider 跨组件实现仍待后续任务，`Partial` | 管理身份参数并禁止 SDK 自设默认值 | Security & Cryptography | SM2 向量、跨 SDK/CLI/Desktop 测试 | `G2` |
+| `CRY-04` | `STD-SM4` `STD-BLOCK-MODE`：静态秘密和备份保护 | 已固定 SM4 primitive、百万次迭代与 V2 SM4-GCM envelope 参数：AAD 绑定 domain、suite、对象类型、tenant、KeyID 和上下文；nonce 96 bit 且每个 key 唯一，tag 固定 128 bit。生产实现仍需 DEK/KEK provider、持久 nonce 策略、轮换与恢复测试，`Partial` | KEK 存 HSM/KMS，实施分权、轮换、nonce 生命周期和恢复 | Security & Cryptography + Platform / SRE | envelope 规范、AAD/nonce/tag/KDF 负向测试、轮换和恢复报告 | `G3` `G5` |
 | `CRY-05` | `STD-MODULE` `RULE-CII-CRYPT`：生产私钥处于受控密码模块 | provider-neutral signer；支持 PKCS#11 与可选 SDF adapter/sidecar。`Planned` | 采购适用且在触发时经检测认证合格的设备/服务，并执行密钥仪式 | Security & Cryptography + Certification Applicant | 产品证书、provider contract tests、密钥仪式 | `G3` `G7` |
 | `CRY-06` | `STD-39786`：完整密钥生命周期 | 记录 KeyID、算法、证书、状态、有效期、轮换/撤销/损毁；历史证据不改写。registry 已有部分事件，`Partial` | 审批生成、分发、启用、备份、恢复、销毁 | Security & Cryptography | 密钥台账、事件链、轮换与撤销验证 | `G3` |
 | `CRY-07` | `STD-CERT`：证书链和状态可验证 | 保存必要证书标识、链和签名时状态材料；信任根外置。`Planned` | 管理 CA、CRL/OCSP、双证书和有效期 | Security & Cryptography + External Crypto & BCOS Operators | 证书链测试、吊销/过期负向测试、台账 | `G3` |
@@ -365,7 +365,7 @@ SDF/HSM 接口实现应在开发启动时从[国家密码管理局](https://www.
 2. 将 hash/sign/verify/key handle 从 Ed25519 具体类型解耦。
 3. 在 file、Pebble 和 TiKV namespace 中持久化不可变 suite marker。
 4. 按 [`ADR-0002`](ADR-0002-CRYPTO-AGILITY-FORMATS.zh-CN.md) 实现 proof、STH、record ID、WAL、backup 和 `.sproof` 的 v2/v5 显式格式边界。
-5. 完成 SM2 user ID/ZA、签名编码和跨组件测试向量决策。
+5. 复用 [`ADR-0003`](ADR-0003-SM-CRYPTO-DEPENDENCIES-AND-VECTORS.zh-CN.md) 已固定的 SM2 user ID/ZA、严格 DER、SM3/Merkle 和 SM4-GCM vectors，补齐 GmSSL/Tongsuo 与跨组件 Gate。
 
 ### 9.2 P0：国密核心与密钥边界
 
@@ -448,5 +448,8 @@ compliance-evidence/
 
 | 版本 | 日期 | 变化 | 状态 |
 | --- | --- | --- | --- |
+| `0.1.4` | 2026-07-23 | 固定国密依赖、软件/硬件/网关边界和 SM2/SM3/SM4 canonical vectors | Engineering baseline |
+| `0.1.3` | 2026-07-23 | 确认 V2/V5 破坏性切换，不保留 v1/v4 双读、迁移或并行 API | Engineering baseline |
+| `0.1.2` | 2026-07-23 | 建立密码敏捷格式 registry、V2/V5 代际和存储/API 边界 | Engineering baseline |
 | `0.1.1` | 2026-07-23 | 固定 `INTL_V1` / `CN_SM_V1` registry，并链接密码套件 ADR | Engineering baseline |
 | `0.1.0` | 2026-07-22 | 建立范围、责任、依据、控制矩阵、Gate、证据和发布声明基线 | Review candidate |

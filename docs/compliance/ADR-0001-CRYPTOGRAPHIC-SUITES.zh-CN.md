@@ -17,7 +17,7 @@ TrustDB 使用不可变、大小写敏感、不得使用别名的密码套件标
 
 套件不是可在同一条日志中热切换的算法选项。每个非空 Global Log、WAL/proofstore namespace、key registry 和 backup lineage 只能绑定一个 suite。切换 suite 必须同时创建新的 `LogID` 和新的存储 namespace，旧日志保持只读可验证；禁止在原 namespace 内重算或覆盖历史对象。
 
-本 ADR 固定标识、算法参数和组合边界，不给现有 v1 对象增加字段，也不启用 SM2/SM3。格式版本化由 #442 完成，provider 抽象与算法实现由后续 issue 完成。
+本 ADR 固定标识、算法参数和组合边界，不给现有 v1 对象增加字段，也不启用 SM2/SM3。格式版本化由 #442 完成，国密依赖与一致性向量由 [`ADR-0003`](ADR-0003-SM-CRYPTO-DEPENDENCIES-AND-VECTORS.zh-CN.md) 固定，provider 抽象与算法实现由后续 issue 完成。
 
 ## 2. 为什么必须是 suite，而不是独立算法开关
 
@@ -37,7 +37,7 @@ TrustDB 的密码语义跨越内容摘要、record ID、客户端签名、服务
 | Suite ID | 注册表状态 | 可生成新证据 | 可作为配置启动 | 说明 |
 | --- | --- | --- | --- | --- |
 | `INTL_V1` | `available` | 是 | 是 | 当前 v1 行为，必须字节级兼容 |
-| `CN_SM_V1` | `reserved` | 否 | 否 | 参数已固定，等待 #443、#445–#460 完成 |
+| `CN_SM_V1` | `reserved` | 否 | 否 | 参数、依赖与向量已固定，等待 #445–#460 完成 |
 
 `reserved` 不是“尽力而为”。任何生成路径调用 `RequireAvailable(CN_SM_V1)` 都必须失败。读取器将来可以在具备完整实现后识别该标识，但不得把未知或未实现 suite 回退为 `INTL_V1`。
 

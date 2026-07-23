@@ -8,7 +8,7 @@
 >
 > 破坏性切换修订：[#529](https://github.com/wowtrust/trustdb/issues/529)
 >
-> 依赖：[`ADR-0001`](ADR-0001-CRYPTOGRAPHIC-SUITES.zh-CN.md)
+> 依赖：[`ADR-0001`](ADR-0001-CRYPTOGRAPHIC-SUITES.zh-CN.md)、[`ADR-0003`](ADR-0003-SM-CRYPTO-DEPENDENCIES-AND-VECTORS.zh-CN.md)
 >
 > 代码注册表：`internal/formatregistry`
 
