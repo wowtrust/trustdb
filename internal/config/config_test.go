@@ -139,10 +139,13 @@ func TestValidateRejectsInvalidEnabledNATSConfig(t *testing.T) {
 		{name: "negative max age", mutate: func(n *NATS) { n.StreamMaxAge = "-1s" }, want: "nats.stream_max_age"},
 		{name: "zero duplicate window", mutate: func(n *NATS) { n.DuplicateWindow = "0s" }, want: "nats.duplicate_window"},
 		{name: "negative workers", mutate: func(n *NATS) { n.Workers = -1 }, want: "nats.workers"},
+		{name: "workers exceed pending", mutate: func(n *NATS) { n.Workers = n.MaxAckPending + 1 }, want: "nats.workers"},
 		{name: "zero fetch batch", mutate: func(n *NATS) { n.FetchBatch = 0 }, want: "nats.fetch_batch"},
 		{name: "fetch exceeds pending", mutate: func(n *NATS) { n.FetchBatch = n.MaxAckPending + 1 }, want: "must not exceed"},
 		{name: "zero max deliver", mutate: func(n *NATS) { n.MaxDeliver = 0 }, want: "nats.max_deliver"},
 		{name: "invalid ack wait", mutate: func(n *NATS) { n.AckWait = "soon" }, want: "nats.ack_wait"},
+		{name: "zero nak delay", mutate: func(n *NATS) { n.NakDelay = "0s" }, want: "nats.nak_delay"},
+		{name: "invalid outcome retry", mutate: func(n *NATS) { n.ResultRetryWait = "later" }, want: "nats.outcome_retry_wait"},
 		{name: "invalid reconnects", mutate: func(n *NATS) { n.MaxReconnects = -2 }, want: "nats.max_reconnects"},
 		{name: "password without username", mutate: func(n *NATS) { n.Password = "secret" }, want: "configured together"},
 		{name: "multiple auth modes", mutate: func(n *NATS) { n.CredentialsFile = "/run/nats.creds"; n.Token = "secret" }, want: "mutually exclusive"},
@@ -181,6 +184,8 @@ func TestFromViperMapsNATSConfig(t *testing.T) {
 	v.Set("nats.fetch_batch", 128)
 	v.Set("nats.fetch_wait", "250ms")
 	v.Set("nats.ack_wait", "45s")
+	v.Set("nats.nak_delay", "2s")
+	v.Set("nats.outcome_retry_wait", "3s")
 	v.Set("nats.max_ack_pending", 1024)
 	v.Set("nats.max_deliver", 20)
 	v.Set("nats.connect_timeout", "3s")
@@ -204,6 +209,9 @@ func TestFromViperMapsNATSConfig(t *testing.T) {
 	}
 	if got.FetchBatch != 128 || got.MaxAckPending != 1024 || got.MaxDeliver != 20 || got.MaxReconnects != 50 {
 		t.Fatalf("NATS limits = %+v", got)
+	}
+	if got.NakDelay != "2s" || got.ResultRetryWait != "3s" {
+		t.Fatalf("NATS delivery retry settings = %+v", got)
 	}
 	if got.CredentialsFile != "/run/nats.creds" || !got.TLS.Enabled || got.TLS.CAFile != "/run/ca.crt" || got.TLS.ServerName != "nats.internal" {
 		t.Fatalf("NATS auth/TLS = %+v", got)

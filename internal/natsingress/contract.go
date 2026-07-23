@@ -24,6 +24,7 @@ const (
 	SchemaResult  = "trustdb.nats-ingress-result.v1"
 
 	ContentType         = "application/vnd.trustdb.nats-ingress+cbor"
+	HeaderContentType   = "Content-Type"
 	HeaderSchemaVersion = "TrustDB-Schema-Version"
 	HeaderMessageID     = "Nats-Msg-Id"
 
