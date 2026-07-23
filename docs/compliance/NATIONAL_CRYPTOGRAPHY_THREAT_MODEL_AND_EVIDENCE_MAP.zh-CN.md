@@ -10,7 +10,7 @@
 >
 > 关联 Issue：[#444](https://github.com/wowtrust/trustdb/issues/444)
 >
-> 上位基线：[`TDB-CN-CM-001`](CHINA_COMPLIANCE_SCOPE_AND_CONTROL_MATRIX.zh-CN.md)、[`ADR-0001`](ADR-0001-CRYPTOGRAPHIC-SUITES.zh-CN.md)、[`ADR-0002`](ADR-0002-CRYPTO-AGILITY-FORMATS.zh-CN.md)、[`ADR-0003`](ADR-0003-SM-CRYPTO-DEPENDENCIES-AND-VECTORS.zh-CN.md)
+> 上位基线：[`TDB-CN-CM-001`](CHINA_COMPLIANCE_SCOPE_AND_CONTROL_MATRIX.zh-CN.md)、[`ADR-0001`](ADR-0001-CRYPTOGRAPHIC-SUITES.zh-CN.md)、[`ADR-0002`](ADR-0002-CRYPTO-AGILITY-FORMATS.zh-CN.md)、[`ADR-0003`](ADR-0003-SM-CRYPTO-DEPENDENCIES-AND-VECTORS.zh-CN.md)、[`ADR-0004`](ADR-0004-PROVIDER-NEUTRAL-CRYPTO-CONTRACTS.zh-CN.md)
 
 ## 1. 结论先行
 
@@ -146,7 +146,7 @@ flowchart LR
 
 - **风险**：Critical。攻击者可伪造 claim、receipt、STH、Anchor publisher 操作，或解密备份。
 - **攻击路径**：软件私钥明文落盘、provider 权限过宽、密钥用途未隔离、管理员单人导出、日志泄露、HSM/KMS 凭据失陷。
-- **控制**：`Decision`：provider-neutral non-exportable key handle、用途/算法/KeyID 绑定和禁止软件回退；`Planned`：HSM/SDF/KMS policy、双人审批、轮换/撤销和不可变审计。生产实现尚未完成。
+- **控制**：`Existing`：provider-neutral non-exportable key handle、suite/算法/编码/KeyID 绑定、capability gate 和禁止软件回退；`Planned`：真实 HSM/SDF/KMS provider policy、双人审批、轮换/撤销和不可变审计。软件 adapter 仍在进程内持有私钥，不属于硬件保护。
 - **Owner**：Security & Cryptography；Platform / SRE；部署方 Key Administrator。
 - **验证与证据**：provider contract negative tests、导出拒绝、错误算法/用途拒绝、轮换/撤销演练、密钥仪式、设备/服务材料、审计事件。
 - **Gate / Issues**：`G3`、`G5`、`G7`；#445、#449–#453、#475、#476、#481、#488。

@@ -245,6 +245,7 @@ mkdir -p .trustdb-dev
 
 - [ARCHITECTURE.zh-CN.md](ARCHITECTURE.zh-CN.md)：TrustDB 服务端、持久化、Global Log、Anchor、SDK、备份和离线验证的详细架构设计。
 - [docs/compliance/NATIONAL_CRYPTOGRAPHY_THREAT_MODEL_AND_EVIDENCE_MAP.zh-CN.md](docs/compliance/NATIONAL_CRYPTOGRAPHY_THREAT_MODEL_AND_EVIDENCE_MAP.zh-CN.md)：国产密码威胁模型、禁止的信任捷径、tabletop 场景、残余风险与合规证据映射。
+- [docs/compliance/ADR-0004-PROVIDER-NEUTRAL-CRYPTO-CONTRACTS.zh-CN.md](docs/compliance/ADR-0004-PROVIDER-NEUTRAL-CRYPTO-CONTRACTS.zh-CN.md)：suite-aware hash、不可导出 KeyHandle、Signer/Verifier 与 provider fail-closed 契约。
 - [COMMUNITY.md](COMMUNITY.md)：使用支持、讨论和首次贡献入口。
 - [ROADMAP.md](ROADMAP.md)：公开产品方向以及影响路线图的方式。
 - [SECURITY.md](SECURITY.md)：漏洞私密报告和支持版本策略。
