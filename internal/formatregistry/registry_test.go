@@ -21,22 +21,22 @@ func TestRegistryPinsCurrentAndReservedGenerations(t *testing.T) {
 		migration    MigrationPolicy
 		maxBytes     int64
 	}{
-		ModelV1:       {FamilyModel, 1, AvailabilityAvailable, MigrationFreshNamespace, 0},
-		ModelV2:       {FamilyModel, 2, AvailabilityReserved, MigrationFreshNamespace, MaxStoredObjectBytesV2},
-		SingleProofV1: {FamilySingleProof, 1, AvailabilityAvailable, MigrationImmutableArtifact, 16 << 20},
-		SingleProofV2: {FamilySingleProof, 2, AvailabilityReserved, MigrationImmutableArtifact, MaxSingleProofBytesV2},
-		BackupV4:      {FamilyBackup, 4, AvailabilityAvailable, MigrationFreshNamespace, 128 << 20},
-		BackupV5:      {FamilyBackup, 5, AvailabilityReserved, MigrationFreshNamespace, MaxBackupEntryBytesV2},
-		WALV1:         {FamilyWAL, 1, AvailabilityAvailable, MigrationFreshNamespace, 0},
-		WALV2:         {FamilyWAL, 2, AvailabilityReserved, MigrationFreshNamespace, MaxStoredObjectBytesV2},
-		ProofstoreV4:  {FamilyProofstore, 4, AvailabilityAvailable, MigrationFreshNamespace, 64 << 20},
-		ProofstoreV5:  {FamilyProofstore, 5, AvailabilityReserved, MigrationFreshNamespace, MaxStoredObjectBytesV2},
-		HTTPV1:        {FamilyHTTP, 1, AvailabilityAvailable, MigrationParallelEndpoint, 16 << 20},
-		HTTPV2:        {FamilyHTTP, 2, AvailabilityReserved, MigrationParallelEndpoint, MaxTransportMessageBytesV2},
-		GRPCV1:        {FamilyGRPC, 1, AvailabilityAvailable, MigrationParallelEndpoint, 16 << 20},
-		GRPCV2:        {FamilyGRPC, 2, AvailabilityReserved, MigrationParallelEndpoint, MaxTransportMessageBytesV2},
-		SDKV1:         {FamilySDK, 1, AvailabilityAvailable, MigrationParallelEndpoint, 16 << 20},
-		SDKV2:         {FamilySDK, 2, AvailabilityReserved, MigrationParallelEndpoint, MaxTransportMessageBytesV2},
+		ModelV1:       {FamilyModel, 1, AvailabilityAvailable, MigrationRetireOnCutover, 0},
+		ModelV2:       {FamilyModel, 2, AvailabilityReserved, MigrationDestructiveCutover, MaxStoredObjectBytesV2},
+		SingleProofV1: {FamilySingleProof, 1, AvailabilityAvailable, MigrationRetireOnCutover, 16 << 20},
+		SingleProofV2: {FamilySingleProof, 2, AvailabilityReserved, MigrationDestructiveCutover, MaxSingleProofBytesV2},
+		BackupV4:      {FamilyBackup, 4, AvailabilityAvailable, MigrationRetireOnCutover, 128 << 20},
+		BackupV5:      {FamilyBackup, 5, AvailabilityReserved, MigrationDestructiveCutover, MaxBackupEntryBytesV2},
+		WALV1:         {FamilyWAL, 1, AvailabilityAvailable, MigrationRetireOnCutover, 0},
+		WALV2:         {FamilyWAL, 2, AvailabilityReserved, MigrationDestructiveCutover, MaxStoredObjectBytesV2},
+		ProofstoreV4:  {FamilyProofstore, 4, AvailabilityAvailable, MigrationRetireOnCutover, 64 << 20},
+		ProofstoreV5:  {FamilyProofstore, 5, AvailabilityReserved, MigrationDestructiveCutover, MaxStoredObjectBytesV2},
+		HTTPV1:        {FamilyHTTP, 1, AvailabilityAvailable, MigrationRetireOnCutover, 16 << 20},
+		HTTPV2:        {FamilyHTTP, 2, AvailabilityReserved, MigrationDestructiveCutover, MaxTransportMessageBytesV2},
+		GRPCV1:        {FamilyGRPC, 1, AvailabilityAvailable, MigrationRetireOnCutover, 16 << 20},
+		GRPCV2:        {FamilyGRPC, 2, AvailabilityReserved, MigrationDestructiveCutover, MaxTransportMessageBytesV2},
+		SDKV1:         {FamilySDK, 1, AvailabilityAvailable, MigrationRetireOnCutover, 16 << 20},
+		SDKV2:         {FamilySDK, 2, AvailabilityReserved, MigrationDestructiveCutover, MaxTransportMessageBytesV2},
 	}
 
 	all := All()
@@ -255,7 +255,7 @@ func TestRegistrySnapshotCanonicalCBORGolden(t *testing.T) {
 		t.Fatalf("marshal registry snapshot: %v", err)
 	}
 	digest := sha256.Sum256(encoded)
-	const wantSHA256 = "665249b57bda73fdcdea26891cc8e3575b8a34e532520d1724dce2476e00dc04"
+	const wantSHA256 = "800b2ad93872d8236262364c1a089f1932101e4b288fd3dc67e022839c123c8b"
 	if got := hex.EncodeToString(digest[:]); got != wantSHA256 {
 		t.Fatalf("registry snapshot SHA-256 = %s, want %s", got, wantSHA256)
 	}

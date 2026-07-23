@@ -36,9 +36,8 @@ const (
 type MigrationPolicy string
 
 const (
-	MigrationImmutableArtifact MigrationPolicy = "immutable-artifact"
-	MigrationFreshNamespace    MigrationPolicy = "fresh-namespace"
-	MigrationParallelEndpoint  MigrationPolicy = "parallel-endpoint"
+	MigrationRetireOnCutover    MigrationPolicy = "retire-on-cutover"
+	MigrationDestructiveCutover MigrationPolicy = "destructive-cutover"
 )
 
 const (
@@ -105,29 +104,29 @@ type Descriptor struct {
 }
 
 var registry = map[string]Descriptor{
-	ModelV1: descriptor(FamilyModel, ModelV1, 1, AvailabilityAvailable, EncodingDeterministicCBOR, []cryptosuite.ID{cryptosuite.INTLV1}, "", MigrationFreshNamespace, 0),
-	ModelV2: descriptor(FamilyModel, ModelV2, 2, AvailabilityReserved, EncodingDeterministicCBOR, []cryptosuite.ID{cryptosuite.CNSMV1, cryptosuite.INTLV1}, "crypto_suite", MigrationFreshNamespace, MaxStoredObjectBytesV2),
+	ModelV1: descriptor(FamilyModel, ModelV1, 1, AvailabilityAvailable, EncodingDeterministicCBOR, []cryptosuite.ID{cryptosuite.INTLV1}, "", MigrationRetireOnCutover, 0),
+	ModelV2: descriptor(FamilyModel, ModelV2, 2, AvailabilityReserved, EncodingDeterministicCBOR, []cryptosuite.ID{cryptosuite.CNSMV1, cryptosuite.INTLV1}, "crypto_suite", MigrationDestructiveCutover, MaxStoredObjectBytesV2),
 
-	SingleProofV1: descriptor(FamilySingleProof, SingleProofV1, 1, AvailabilityAvailable, EncodingDeterministicCBOR, []cryptosuite.ID{cryptosuite.INTLV1}, "", MigrationImmutableArtifact, 16<<20),
-	SingleProofV2: descriptor(FamilySingleProof, SingleProofV2, 2, AvailabilityReserved, EncodingDeterministicCBOR, []cryptosuite.ID{cryptosuite.CNSMV1, cryptosuite.INTLV1}, "crypto_suite", MigrationImmutableArtifact, MaxSingleProofBytesV2),
+	SingleProofV1: descriptor(FamilySingleProof, SingleProofV1, 1, AvailabilityAvailable, EncodingDeterministicCBOR, []cryptosuite.ID{cryptosuite.INTLV1}, "", MigrationRetireOnCutover, 16<<20),
+	SingleProofV2: descriptor(FamilySingleProof, SingleProofV2, 2, AvailabilityReserved, EncodingDeterministicCBOR, []cryptosuite.ID{cryptosuite.CNSMV1, cryptosuite.INTLV1}, "crypto_suite", MigrationDestructiveCutover, MaxSingleProofBytesV2),
 
-	BackupV4: descriptorWithStrictness(FamilyBackup, BackupV4, 4, AvailabilityAvailable, EncodingBackupArchiveV4, []cryptosuite.ID{cryptosuite.INTLV1}, "", MigrationFreshNamespace, 128<<20, false, false),
-	BackupV5: descriptorWithStrictness(FamilyBackup, BackupV5, 5, AvailabilityReserved, EncodingBackupArchiveV5, []cryptosuite.ID{cryptosuite.CNSMV1, cryptosuite.INTLV1}, "crypto_suite", MigrationFreshNamespace, MaxBackupEntryBytesV2, true, true),
+	BackupV4: descriptorWithStrictness(FamilyBackup, BackupV4, 4, AvailabilityAvailable, EncodingBackupArchiveV4, []cryptosuite.ID{cryptosuite.INTLV1}, "", MigrationRetireOnCutover, 128<<20, false, false),
+	BackupV5: descriptorWithStrictness(FamilyBackup, BackupV5, 5, AvailabilityReserved, EncodingBackupArchiveV5, []cryptosuite.ID{cryptosuite.CNSMV1, cryptosuite.INTLV1}, "crypto_suite", MigrationDestructiveCutover, MaxBackupEntryBytesV2, true, true),
 
-	WALV1: descriptor(FamilyWAL, WALV1, 1, AvailabilityAvailable, EncodingWALFrames, []cryptosuite.ID{cryptosuite.INTLV1}, "", MigrationFreshNamespace, 0),
-	WALV2: descriptor(FamilyWAL, WALV2, 2, AvailabilityReserved, EncodingWALFrames, []cryptosuite.ID{cryptosuite.CNSMV1, cryptosuite.INTLV1}, "crypto_suite", MigrationFreshNamespace, MaxStoredObjectBytesV2),
+	WALV1: descriptor(FamilyWAL, WALV1, 1, AvailabilityAvailable, EncodingWALFrames, []cryptosuite.ID{cryptosuite.INTLV1}, "", MigrationRetireOnCutover, 0),
+	WALV2: descriptor(FamilyWAL, WALV2, 2, AvailabilityReserved, EncodingWALFrames, []cryptosuite.ID{cryptosuite.CNSMV1, cryptosuite.INTLV1}, "crypto_suite", MigrationDestructiveCutover, MaxStoredObjectBytesV2),
 
-	ProofstoreV4: descriptor(FamilyProofstore, ProofstoreV4, 4, AvailabilityAvailable, EncodingProofstore, []cryptosuite.ID{cryptosuite.INTLV1}, "", MigrationFreshNamespace, 64<<20),
-	ProofstoreV5: descriptor(FamilyProofstore, ProofstoreV5, 5, AvailabilityReserved, EncodingProofstore, []cryptosuite.ID{cryptosuite.CNSMV1, cryptosuite.INTLV1}, "crypto_suite", MigrationFreshNamespace, MaxStoredObjectBytesV2),
+	ProofstoreV4: descriptor(FamilyProofstore, ProofstoreV4, 4, AvailabilityAvailable, EncodingProofstore, []cryptosuite.ID{cryptosuite.INTLV1}, "", MigrationRetireOnCutover, 64<<20),
+	ProofstoreV5: descriptor(FamilyProofstore, ProofstoreV5, 5, AvailabilityReserved, EncodingProofstore, []cryptosuite.ID{cryptosuite.CNSMV1, cryptosuite.INTLV1}, "crypto_suite", MigrationDestructiveCutover, MaxStoredObjectBytesV2),
 
-	HTTPV1: descriptor(FamilyHTTP, HTTPV1, 1, AvailabilityAvailable, EncodingHTTPCBOR, []cryptosuite.ID{cryptosuite.INTLV1}, "", MigrationParallelEndpoint, 16<<20),
-	HTTPV2: descriptor(FamilyHTTP, HTTPV2, 2, AvailabilityReserved, EncodingHTTPCBOR, []cryptosuite.ID{cryptosuite.CNSMV1, cryptosuite.INTLV1}, "crypto_suite", MigrationParallelEndpoint, MaxTransportMessageBytesV2),
+	HTTPV1: descriptor(FamilyHTTP, HTTPV1, 1, AvailabilityAvailable, EncodingHTTPCBOR, []cryptosuite.ID{cryptosuite.INTLV1}, "", MigrationRetireOnCutover, 16<<20),
+	HTTPV2: descriptor(FamilyHTTP, HTTPV2, 2, AvailabilityReserved, EncodingHTTPCBOR, []cryptosuite.ID{cryptosuite.CNSMV1, cryptosuite.INTLV1}, "crypto_suite", MigrationDestructiveCutover, MaxTransportMessageBytesV2),
 
-	GRPCV1: descriptor(FamilyGRPC, GRPCV1, 1, AvailabilityAvailable, EncodingGRPCCBOR, []cryptosuite.ID{cryptosuite.INTLV1}, "", MigrationParallelEndpoint, 16<<20),
-	GRPCV2: descriptor(FamilyGRPC, GRPCV2, 2, AvailabilityReserved, EncodingGRPCCBOR, []cryptosuite.ID{cryptosuite.CNSMV1, cryptosuite.INTLV1}, "crypto_suite", MigrationParallelEndpoint, MaxTransportMessageBytesV2),
+	GRPCV1: descriptor(FamilyGRPC, GRPCV1, 1, AvailabilityAvailable, EncodingGRPCCBOR, []cryptosuite.ID{cryptosuite.INTLV1}, "", MigrationRetireOnCutover, 16<<20),
+	GRPCV2: descriptor(FamilyGRPC, GRPCV2, 2, AvailabilityReserved, EncodingGRPCCBOR, []cryptosuite.ID{cryptosuite.CNSMV1, cryptosuite.INTLV1}, "crypto_suite", MigrationDestructiveCutover, MaxTransportMessageBytesV2),
 
-	SDKV1: descriptor(FamilySDK, SDKV1, 1, AvailabilityAvailable, EncodingGoSDKCBOR, []cryptosuite.ID{cryptosuite.INTLV1}, "", MigrationParallelEndpoint, 16<<20),
-	SDKV2: descriptor(FamilySDK, SDKV2, 2, AvailabilityReserved, EncodingGoSDKCBOR, []cryptosuite.ID{cryptosuite.CNSMV1, cryptosuite.INTLV1}, "crypto_suite", MigrationParallelEndpoint, MaxTransportMessageBytesV2),
+	SDKV1: descriptor(FamilySDK, SDKV1, 1, AvailabilityAvailable, EncodingGoSDKCBOR, []cryptosuite.ID{cryptosuite.INTLV1}, "", MigrationRetireOnCutover, 16<<20),
+	SDKV2: descriptor(FamilySDK, SDKV2, 2, AvailabilityReserved, EncodingGoSDKCBOR, []cryptosuite.ID{cryptosuite.CNSMV1, cryptosuite.INTLV1}, "crypto_suite", MigrationDestructiveCutover, MaxTransportMessageBytesV2),
 }
 
 func descriptor(
@@ -346,9 +345,10 @@ type NamespaceBinding struct {
 	NonEmpty         bool
 }
 
-// ValidateNamespaceTransition requires a new LogID and storage namespace when
-// the format identifier changes. It validates transition shape, not whether a
-// reserved target is ready for production writes.
+// ValidateNamespaceTransition requires a new LogID and storage namespace
+// identity when the format identifier changes, including a destructive
+// cutover. It validates transition shape, not whether a reserved target is
+// ready for production writes.
 func ValidateNamespaceTransition(current, next NamespaceBinding) error {
 	if _, err := RequireKnown(next.FormatIdentifier); err != nil {
 		return fmt.Errorf("next binding: %w", err)
