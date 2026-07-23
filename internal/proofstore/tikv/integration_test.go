@@ -299,25 +299,31 @@ func TestTiKVPreparedManifestIndexIntegration(t *testing.T) {
 	requireTiKVIntegration(t)
 
 	ctx := context.Background()
-	store := openIntegrationStoreWithoutProjection(t, integrationNamespace(t, "prepared-index"), "integration-node", "integration-wal")
+	store := openIntegrationStore(t, integrationNamespace(t, "prepared-index"))
 	defer store.Close()
-	ready := model.BatchManifest{
-		SchemaVersion:          model.SchemaBatchManifest,
-		BatchID:                "ready",
-		NodeID:                 "node-a",
-		State:                  model.BatchStatePrepared,
-		MaterializeNextUnixN:   10,
-		MaterializeAttempts:    1,
-		MaterializeFailureCode: "retry",
+	committed, committedBundle := tikvCommittedManifestFixture("committed")
+	if err := store.PutBundle(ctx, committedBundle); err != nil {
+		t.Fatalf("PutBundle(committed): %v", err)
+	}
+	if _, err := store.PublishCommittedBatch(ctx, committed, []model.ProofBundle{committedBundle}); err != nil {
+		t.Fatalf("PublishCommittedBatch(committed): %v", err)
+	}
+
+	ready, readyBundle := tikvCommittedManifestFixture("ready")
+	ready.NodeID = "node-a"
+	ready.State = model.BatchStatePrepared
+	ready.MaterializeNextUnixN = 10
+	ready.MaterializeAttempts = 1
+	ready.MaterializeFailureCode = "retry"
+	if err := store.PutBundle(ctx, readyBundle); err != nil {
+		t.Fatalf("PutBundle(ready): %v", err)
 	}
 	future := ready
 	future.BatchID = "future"
+	future.RecordIDs = nil
+	future.TreeSize = 0
 	future.MaterializeNextUnixN = 1_000
-	for _, manifest := range []model.BatchManifest{
-		{SchemaVersion: model.SchemaBatchManifest, BatchID: "committed", State: model.BatchStateCommitted},
-		future,
-		ready,
-	} {
+	for _, manifest := range []model.BatchManifest{future, ready} {
 		if err := store.PutManifest(ctx, manifest); err != nil {
 			t.Fatalf("PutManifest(%s): %v", manifest.BatchID, err)
 		}
@@ -331,8 +337,8 @@ func TestTiKVPreparedManifestIndexIntegration(t *testing.T) {
 		t.Fatalf("prepared manifests = %#v", got)
 	}
 	ready.State = model.BatchStateCommitted
-	if err := store.PutManifest(ctx, ready); err != nil {
-		t.Fatalf("PutManifest(commit ready): %v", err)
+	if _, err := store.PublishCommittedBatch(ctx, ready, []model.ProofBundle{readyBundle}); err != nil {
+		t.Fatalf("PublishCommittedBatch(ready): %v", err)
 	}
 	got, err = store.ListPreparedManifests(ctx, "node-a", 100, 10)
 	if err != nil {
@@ -341,6 +347,42 @@ func TestTiKVPreparedManifestIndexIntegration(t *testing.T) {
 	if len(got) != 0 {
 		t.Fatalf("prepared manifests after commit = %#v", got)
 	}
+}
+
+func tikvCommittedManifestFixture(batchID string) (model.BatchManifest, model.ProofBundle) {
+	recordID := batchID + "-record"
+	manifest := model.BatchManifest{
+		SchemaVersion: model.SchemaBatchManifest,
+		BatchID:       batchID,
+		State:         model.BatchStateCommitted,
+		RecordIDs:     []string{recordID},
+		TreeSize:      1,
+	}
+	bundle := model.ProofBundle{
+		SchemaVersion: model.SchemaProofBundle,
+		RecordID:      recordID,
+		ServerRecord: model.ServerRecord{
+			SchemaVersion: model.SchemaServerRecord,
+			RecordID:      recordID,
+		},
+		AcceptedReceipt: model.AcceptedReceipt{
+			SchemaVersion: model.SchemaAcceptedReceipt,
+			RecordID:      recordID,
+		},
+		CommittedReceipt: model.CommittedReceipt{
+			SchemaVersion: model.SchemaCommittedReceipt,
+			RecordID:      recordID,
+			Status:        "committed",
+			BatchID:       batchID,
+			LeafIndex:     0,
+		},
+		BatchProof: model.BatchProof{
+			TreeAlg:   model.DefaultMerkleTreeAlg,
+			LeafIndex: 0,
+			TreeSize:  1,
+		},
+	}
+	return manifest, bundle
 }
 
 func TestTiKVBatchTreeSnapshotIntegration(t *testing.T) {
