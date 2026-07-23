@@ -152,7 +152,12 @@ func (r *Runtime) Close(ctx context.Context) error {
 	}
 	r.closeOnce.Do(func() {
 		go func() {
-			r.closeErr = r.conn.Drain()
+			if !r.conn.IsClosed() {
+				r.closeErr = r.conn.Drain()
+				if errors.Is(r.closeErr, nats.ErrConnectionClosed) {
+					r.closeErr = nil
+				}
+			}
 			if !r.conn.IsClosed() {
 				r.conn.Close()
 			}

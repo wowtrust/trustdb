@@ -160,6 +160,7 @@ func TestValidateRejectsInvalidEnabledNATSConfig(t *testing.T) {
 		{name: "fetch exceeds pending", mutate: func(n *NATS) { n.FetchBatch = n.MaxAckPending + 1 }, want: "must not exceed"},
 		{name: "zero max deliver", mutate: func(n *NATS) { n.MaxDeliver = 0 }, want: "nats.max_deliver"},
 		{name: "invalid ack wait", mutate: func(n *NATS) { n.AckWait = "soon" }, want: "nats.ack_wait"},
+		{name: "short fetch wait", mutate: func(n *NATS) { n.FetchWait = "999ms" }, want: "nats.fetch_wait"},
 		{name: "zero nak delay", mutate: func(n *NATS) { n.NakDelay = "0s" }, want: "nats.nak_delay"},
 		{name: "invalid outcome retry", mutate: func(n *NATS) { n.ResultRetryWait = "later" }, want: "nats.outcome_retry_wait"},
 		{name: "invalid reconnects", mutate: func(n *NATS) { n.MaxReconnects = -2 }, want: "nats.max_reconnects"},

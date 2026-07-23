@@ -377,6 +377,21 @@ func TestCloseHonorsCanceledContext(t *testing.T) {
 	}
 }
 
+func TestCloseAlreadyClosedConnectionIsIdempotent(t *testing.T) {
+	t.Parallel()
+
+	s := startTestServer(t, nil)
+	cfg := testNATSConfig(s.ClientURL())
+	runtime, err := Open(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	runtime.Conn().Close()
+	if err := runtime.Close(context.Background()); err != nil {
+		t.Fatalf("Runtime.Close() error = %v", err)
+	}
+}
+
 func startTestServer(t *testing.T, custom *server.Options) *server.Server {
 	t.Helper()
 	opts := &server.Options{

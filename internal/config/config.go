@@ -773,6 +773,9 @@ func validateNATS(n NATS) error {
 			return err
 		}
 	}
+	if fetchWait, _ := time.ParseDuration(n.FetchWait); fetchWait < time.Second {
+		return fmt.Errorf("nats.fetch_wait must be at least 1s")
+	}
 	if n.MaxReconnects < -1 {
 		return fmt.Errorf("nats.max_reconnects must be -1 or greater")
 	}
