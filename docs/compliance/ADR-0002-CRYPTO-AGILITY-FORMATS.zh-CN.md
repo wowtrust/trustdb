@@ -80,21 +80,23 @@ cryptosuite.RequireAvailable(suite)
 | --- | --- | --- | --- | --- | --- | --- |
 | Model evidence | `trustdb.model-generation.v1` | 隐式且仅为 `INTL_V1` | `trustdb.model-generation.v2` | 必填 `crypto_suite`；`INTL_V1` / `CN_SM_V1` | RFC 8949 Core Deterministic CBOR | 删除 v1，空 namespace 初始化 V2 |
 | Single proof | `trustdb.sproof.v1` / format 1 | 隐式 `INTL_V1` | `trustdb.sproof.v2` / format 2 | 外层与全部内嵌对象 suite 精确相等 | RFC 8949 Core Deterministic CBOR | 删除 v1 reader/writer，仅接受 V2 |
-| Logical backup | `trustdb.backup.v4` | 隐式 `INTL_V1` | `trustdb.backup.v5` | manifest、entry 和目标 namespace suite 精确相等 | PAX tar；v5 manifest/entries 为确定性 CBOR | 删除 v4 restore，仅恢复 V5 到空 namespace |
+| Logical backup | `trustdb.backup.v4` | payload 对象仍为 v1；#446 后 PAX control metadata 显式绑定 namespace suite | `trustdb.backup.v5` | manifest、entry 和目标 namespace suite 精确相等 | PAX tar；v5 manifest/entries 为确定性 CBOR | 删除 v4 restore，仅恢复 V5 到空 namespace |
 | WAL | header version 1 / `trustdb.wal.v1` | payload 隐式 `INTL_V1` | header version 2 / `trustdb.wal.v2` | segment binding 与 payload suite 必须相等 | versioned WAL frame + deterministic CBOR payload | 删除旧 WAL 目录，初始化 V2 |
-| Proofstore | `trustdb-proofstore-v4` | 隐式 `INTL_V1` | `trustdb-proofstore-v5` | durable marker 绑定 suite、format、NodeID、LogID | backend keyspace + deterministic CBOR values | 删除旧 namespace，初始化 v5 |
+| Proofstore | `trustdb-proofstore-v4` | payload 对象仍为 v1；#446 后 namespace schema metadata 显式绑定 suite | `trustdb-proofstore-v5` | durable marker 绑定 suite、format、NodeID、LogID | backend keyspace + deterministic CBOR values | 删除旧 namespace，初始化 v5 |
 | HTTP | `/v1` | v1 model | `/v2` | v2 model；不做 content negotiation 回退 | HTTP + `application/cbor` | `/v2` 直接替换 `/v1` |
 | gRPC | `trustdb.v1.TrustDB` | v1 model | `trustdb.v2.TrustDB` | v2 model | gRPC + `trustdb-cbor` | v2 service 直接替换 v1 service |
 | Go SDK | SDK model v1 | v1 client/server model | SDK model v2 | 构造时必须选择 suite | Go types + deterministic CBOR | v2 types/client 直接替换 v1 |
 
 `identifier` 必须精确匹配。`trustdb.sproof`、`v2`、`CN_SM`、大小写不同的 suite 名、未知 minor 字段或由文件扩展名推断格式都不被接受。
 
+#446 在全量 V2/V5 切换前先建立了后端通用的不可变 suite-marker 控制：当前 generation 4 的 string-only schema 不再被接受，空库改用结构化 marker，backup 和 migration 也必须校验 suite。这是防止配置漂移的前置安全控制，不代表 proofstore v5 或 model/API v2 已启用；最终切换仍必须按本 ADR 删除当前 V1/V4 生产实现并写入包含 NodeID、LogID 和 namespace identity 的 v5 binding。
+
 ### 4.1 切换前当前格式的处理规则
 
 在 V2 完整实现并进入切换 PR 之前，当前格式不为国产化新增字段：
 
-- v1 model、`.sproof v1`、WAL v1、proofstore v4、HTTP/gRPC v1 和 SDK v1 继续表示 `INTL_V1`。
-- `.tdbackup v4` 保留现有 JSON manifest、确定性 CBOR entries、SHA-256 PAX digest 与 128 MiB entry limit。
+- v1 model、`.sproof v1`、WAL v1、HTTP/gRPC v1 和 SDK v1 继续表示 `INTL_V1`；proofstore v4 payload 对象仍是 v1，但 namespace 已由 #446 的 marker 单独绑定 suite。
+- `.tdbackup v4` 保留 JSON manifest、确定性 CBOR payload entries、SHA-256 PAX digest 与 128 MiB entry limit；#446 额外要求每个 PAX entry 携带一致的 namespace suite，缺失该 control metadata 的 archive 明确失败。
 - backup v4 当前会忽略 manifest 的未知 JSON 字段和未识别的普通 tar entry。注册表如实标记这一行为；v5 必须改为严格拒绝，不能把 v4 的宽松解析带入 v5。
 - proofstore v4 内部已有的 legacy bundle decoding 属于冻结的 v4 行为；proofstore v5 不包含该 fallback。
 - 切换 PR 删除上述 v1/v4 parser、writer、兼容分支、测试夹具和公开入口；后续版本遇到旧 schema/marker/magic 只返回 unsupported version，不尝试验证或迁移。

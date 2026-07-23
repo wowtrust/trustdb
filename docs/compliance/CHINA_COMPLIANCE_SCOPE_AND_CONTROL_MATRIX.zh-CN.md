@@ -2,7 +2,7 @@
 
 > 文档编号：`TDB-CN-CM-001`
 >
-> 版本：`0.1.6`
+> 版本：`0.1.7`
 >
 > 基线日期：`2026-07-23`
 >
@@ -313,7 +313,7 @@ SDF/HSM 接口实现应在开发启动时从[国家密码管理局](https://www.
 
 | ID | 依据与控制目标 | TrustDB 产品责任 / 当前状态 | 部署方责任 | Owner | 证据 | Gate |
 | --- | --- | --- | --- | --- | --- | --- |
-| `CRY-01` | `STD-39786` `STD-43207`：密码套件明确且不可静默切换 | [`ADR-0001`](ADR-0001-CRYPTOGRAPHIC-SUITES.zh-CN.md)、[`ADR-0002`](ADR-0002-CRYPTO-AGILITY-FORMATS.zh-CN.md)、[`ADR-0003`](ADR-0003-SM-CRYPTO-DEPENDENCIES-AND-VECTORS.zh-CN.md)、[`ADR-0004`](ADR-0004-PROVIDER-NEUTRAL-CRYPTO-CONTRACTS.zh-CN.md)、`internal/cryptosuite` 与 `internal/formatregistry` 已固定 suite、格式代际、provider 边界、大小限制和 V2/V5 破坏性切换规则；不保留 v1/v4 双读、迁移或并行 API，持久 marker 与 v2 实现待 #446 及后续任务，`Partial` | 选择经批准 Profile，不在同一日志中切换 | Security & Cryptography | ADR、registry/provider contract tests、schema、混用拒绝测试 | `G1` |
+| `CRY-01` | `STD-39786` `STD-43207`：密码套件明确且不可静默切换 | [`ADR-0001`](ADR-0001-CRYPTOGRAPHIC-SUITES.zh-CN.md)、[`ADR-0002`](ADR-0002-CRYPTO-AGILITY-FORMATS.zh-CN.md)、[`ADR-0003`](ADR-0003-SM-CRYPTO-DEPENDENCIES-AND-VECTORS.zh-CN.md)、[`ADR-0004`](ADR-0004-PROVIDER-NEUTRAL-CRYPTO-CONTRACTS.zh-CN.md)、[`ADR-0005`](ADR-0005-IMMUTABLE-PROOFSTORE-SUITE-MARKERS.zh-CN.md)、`internal/cryptosuite`、`internal/formatregistry` 与 file/Pebble/TiKV marker contract 已固定 suite、格式代际、provider 和持久 namespace 边界；非空缺失、未知、损坏、配置 mismatch、backup restore 与 metastore migration 均 fail closed。V2 业务对象传播仍待 #454，`Partial` | 选择经批准 Profile，不在同一日志中切换 | Security & Cryptography | ADR、registry/provider/marker contract tests、schema、混用拒绝测试 | `G1` |
 | `CRY-02` | `STD-SM3`：SM3 覆盖内容和树语义 | suite-aware hash factory 与核心 Provider 传递已完成，SM3 依赖、标准 digest、streaming 和 RFC6962-SM3 `0x00/0x01` domain vectors已固定并由 OpenSSL/LibreSSL oracle 交叉验证；生产 SM3 factory 与全链路启用待 #447/#448/#454，`Partial` | 固定参数和实现版本 | Security & Cryptography | provider contract、官方/交叉向量、Merkle golden vectors | `G2` |
 | `CRY-03` | `STD-SM2` `STD-SM2-USE`：SM2 签名互操作 | 已固定 user ID、ZA、严格 DER 和负向向量；GmSSL/Tongsuo、SDK/CLI/Desktop/provider 跨组件实现仍待后续任务，`Partial` | 管理身份参数并禁止 SDK 自设默认值 | Security & Cryptography | SM2 向量、跨 SDK/CLI/Desktop 测试 | `G2` |
 | `CRY-04` | `STD-SM4` `STD-BLOCK-MODE`：静态秘密和备份保护 | 已固定 SM4 primitive、百万次迭代与 V2 SM4-GCM envelope 参数：AAD 绑定 domain、suite、对象类型、tenant、KeyID 和上下文；nonce 96 bit 且每个 key 唯一，tag 固定 128 bit。生产实现仍需 DEK/KEK provider、持久 nonce 策略、轮换与恢复测试，`Partial` | KEK 存 HSM/KMS，实施分权、轮换、nonce 生命周期和恢复 | Security & Cryptography + Platform / SRE | envelope 规范、AAD/nonce/tag/KDF 负向测试、轮换和恢复报告 | `G3` `G5` |
@@ -328,7 +328,7 @@ SDF/HSM 接口实现应在开发启动时从[国家密码管理局](https://www.
 | --- | --- | --- | --- | --- | --- | --- |
 | `EVD-01` | `LAW-ESIGN` `SPC-INTERNET`：生成和保存方法可复核 | 保持 L1–L5、canonical CBOR、签名、Merkle path 和耐久边界可复算。`Existing` | 保存原文来源、授权、取证过程和业务上下文 | Engineering + Deployment Owner | 格式规范、测试向量、业务取证记录 | `G2` `G6` |
 | `EVD-02` | `STD-39786`：完整性与真实性验证 | `.sproof` 携带完整 SM3 path、Signed STH、SM2 参数和导出的不可变 anchor/BCOS evidence bundle；验证器只读取本地证据和本地 trust roots，禁止网络/provider fallback。`Planned` | 在验证端本地提供可信公钥、CA/BCOS checkpoint 等 trust roots | Engineering + Local Evidence Verifier | 断网测试、网络调用拒绝测试、篡改矩阵、trust config | `G2` `G4` |
-| `EVD-03` | 证明连续性：算法和 LogID 不可混用 | 非空 namespace 固定 suite；V2/V5 采用破坏性切换，创建新 LogID/namespace，不迁移或重写旧证据。`Planned` | 审批停机、清空和重新初始化，确认无生产历史需要保留 | Engineering + Deployment Owner | suite marker、旧格式拒绝测试、切换记录 | `G1` `G2` |
+| `EVD-03` | 证明连续性：算法和 LogID 不可混用 | file/Pebble/TiKV 非空 namespace 已固定 suite，backup/restore 与 metastore migration 已拒绝跨 suite 数据；V2/V5 仍采用破坏性切换并创建新 LogID/namespace，不迁移或重写旧证据。`Partial` | 审批停机、清空和重新初始化，确认无生产历史需要保留 | Engineering + Deployment Owner | suite marker、旧格式拒绝测试、切换记录 | `G1` `G2` |
 | `EVD-04` | `SPC-INTERNET`：Anchor 绑定精确 | 当前严格比较 TreeSize、RootHash，并仅在两侧身份均非空时比较 NodeID/LogID；双方身份为空仍会通过。后续必须要求身份非空且四项精确一致，并增加缺失身份负向测试。`Partial` | 固定 sink 信任策略，禁止以空身份作为生产兼容策略 | Security & Cryptography | anchor consistency tests、缺失身份/篡改负向测试 | `G2` |
 | `EVD-05` | BCOS 外部锚定：幂等和单调 | 不可变合约；同 anchor ID 异 payload 拒绝；TreeSize 单调；重试不替换 InFlight STH。`Planned` | 管理 chain/group、合约、发布者角色和治理 | Engineering + External Crypto & BCOS Operators | 合约源码/字节码、事件、崩溃恢复测试 | `G4` |
 | `EVD-06` | BCOS 离线信任：包含与终局性分离 | 分别验证交易/回执 Merkle proof 与 PBFT quorum 签名；验证静态集合或认证的成员变更链。`Planned` | 安全分发 genesis/checkpoint、验证者和合约 pin | Security & Cryptography + External Crypto & BCOS Operators + Local Evidence Verifier | 交易、回执、proof、header、签名、成员变更材料 | `G4` |
@@ -451,6 +451,7 @@ compliance-evidence/
 
 | 版本 | 日期 | 变化 | 状态 |
 | --- | --- | --- | --- |
+| `0.1.7` | 2026-07-24 | 为 file、Pebble、TiKV 建立不可变 suite marker，并绑定 backup/restore 与 metastore migration | Engineering baseline |
 | `0.1.6` | 2026-07-24 | 建立 suite-aware provider、不可导出 KeyHandle、公钥描述和统一 provider contract gate | Engineering baseline |
 | `0.1.5` | 2026-07-23 | 建立国产密码威胁模型、禁止信任捷径、tabletop 与合规 evidence map | Engineering baseline |
 | `0.1.4` | 2026-07-23 | 固定国密依赖、软件/硬件/网关边界和 SM2/SM3/SM4 canonical vectors | Engineering baseline |

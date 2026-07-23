@@ -167,7 +167,7 @@ suite_id + node_id + log_id + storage_namespace + format_generation
 6. 备份恢复必须恢复原 suite 绑定；恢复到不同 suite 的 namespace 等同于导入失败，不做算法迁移。
 7. 多节点部署中，参与同一逻辑日志的所有节点必须使用相同 suite marker；配置分歧在写入前失败。
 
-`internal/cryptosuite.ValidateNamespaceTransition` 提供上述切换规则的公共校验。真正的 file/Pebble/TiKV 持久 marker 在 #446 实现。
+`internal/cryptosuite.ValidateNamespaceTransition` 提供上述切换规则的公共校验。file/Pebble/TiKV 的持久 marker、并发初始化、backup/restore 与 metastore migration 约束已由 #446 和 [`ADR-0005`](ADR-0005-IMMUTABLE-PROOFSTORE-SUITE-MARKERS.zh-CN.md) 实现。
 
 ## 7. 混用时的 fail-closed 行为
 
@@ -235,6 +235,6 @@ suite_id + node_id + log_id + storage_namespace + format_generation
 
 成本与限制：
 
-- #442 和 #446 完成前，持久对象还没有 suite marker，因此只有 `INTL_V1` 可以运行。
+- proofstore 已持久化不可变 suite marker；server 仍需由 #454 将 suite 显式传播到全部 V2 业务对象后，才能启用 `CN_SM_V1` 端到端写路径。
 - 现有 OTS sink 固定 SHA-256，不是 `CN_SM_V1` anchor provider。
 - 如果未来需要不同 SM2 user ID、raw signature、其他证书 Profile 或 Merkle framing，必须定义新的 suite，不能覆盖 `CN_SM_V1`。
