@@ -18,9 +18,12 @@ import (
 	dto "github.com/prometheus/client_model/go"
 	"github.com/prometheus/common/expfmt"
 	prommodel "github.com/prometheus/common/model"
+	"github.com/spf13/cobra"
+	"github.com/wowtrust/trustdb/internal/claim"
+	"github.com/wowtrust/trustdb/internal/model"
+	"github.com/wowtrust/trustdb/internal/trustcrypto"
 	"github.com/wowtrust/trustdb/internal/trusterr"
 	"github.com/wowtrust/trustdb/sdk"
-	"github.com/spf13/cobra"
 )
 
 func newBenchCommand(rt *runtimeConfig) *cobra.Command {
@@ -109,11 +112,18 @@ func newBenchIngestCommand(rt *runtimeConfig) *cobra.Command {
 			}
 			cfg.ReportFile = strings.TrimSpace(cfg.ReportFile)
 
-			priv, err := readPrivateKey(cfg.PrivateKeyPath)
+			signer, descriptor, err := readSigner(cmd.Context(), cfg.PrivateKeyPath)
 			if err != nil {
 				return err
 			}
-			cfg.Identity.PrivateKey = priv
+			if err := requireKeyID(cfg.Identity.KeyID, descriptor); err != nil {
+				return err
+			}
+			cfg.Signer = signer
+			cfg.CryptoProvider, err = trustcrypto.ProviderForSuite(descriptor.CryptoSuite)
+			if err != nil {
+				return err
+			}
 
 			client, err := newBenchSDKClient(cfg.Transport, cfg.Endpoint, cfg.Concurrency)
 			if err != nil {
@@ -132,7 +142,7 @@ func newBenchIngestCommand(rt *runtimeConfig) *cobra.Command {
 	cmd.Flags().StringVar(&cfg.Endpoint, "server", "", "TrustDB server HTTP base URL or gRPC target")
 	cmd.Flags().StringVar(&cfg.Transport, "transport", "http", "transport: http or grpc")
 	addCommonIdentityFlags(cmd)
-	cmd.Flags().StringVar(&cfg.PrivateKeyPath, "private-key", "", "client private key")
+	cmd.Flags().StringVar(&cfg.PrivateKeyPath, "private-key", "", "client signer descriptor")
 	cmd.Flags().IntVar(&cfg.Count, "count", 1000, "number of synthetic claims to submit")
 	cmd.Flags().IntVar(&cfg.Concurrency, "concurrency", 16, "number of concurrent submit workers")
 	cmd.Flags().IntVar(&cfg.PayloadBytes, "payload-bytes", 1024, "payload size in bytes per synthetic claim")
@@ -158,6 +168,8 @@ type benchIngestConfig struct {
 	Transport         string
 	PrivateKeyPath    string
 	Identity          sdk.Identity
+	Signer            trustcrypto.Signer
+	CryptoProvider    trustcrypto.Provider
 	Count             int
 	Concurrency       int
 	PayloadBytes      int
@@ -303,7 +315,7 @@ func runBenchIngest(ctx context.Context, rt *runtimeConfig, client *sdk.Client, 
 				}
 				buf = buf[:cfg.PayloadBytes]
 				fillBenchPayload(buf, seq)
-				result, err := client.SubmitFile(ctx, bytes.NewReader(buf), cfg.Identity, sdk.FileClaimOptions{
+				result, err := submitBenchFile(ctx, client, buf, cfg, sdk.FileClaimOptions{
 					ProducedAt:     time.Now().UTC(),
 					Nonce:          benchNonce(seq),
 					IdempotencyKey: fmt.Sprintf("bench-%s-%d", runID, seq),
@@ -509,6 +521,51 @@ func runBenchIngest(ctx context.Context, rt *runtimeConfig, client *sdk.Client, 
 		result.SubmitThroughputPerSec = float64(submitted) / submitDuration.Seconds()
 	}
 	return result, nil
+}
+
+func submitBenchFile(ctx context.Context, client *sdk.Client, raw []byte, cfg benchIngestConfig, opts sdk.FileClaimOptions) (sdk.SubmitResult, error) {
+	if cfg.Signer == nil {
+		return client.SubmitFile(ctx, bytes.NewReader(raw), cfg.Identity, opts)
+	}
+	if cfg.CryptoProvider == nil {
+		return sdk.SubmitResult{}, errors.New("bench: descriptor signer has no crypto provider")
+	}
+	hashAlg := opts.HashAlg
+	if hashAlg == "" {
+		hashAlg = model.DefaultHashAlg
+	}
+	contentHash, err := trustcrypto.HashBytesWithProvider(cfg.CryptoProvider, hashAlg, raw)
+	if err != nil {
+		return sdk.SubmitResult{}, err
+	}
+	claimValue, err := claim.NewFileClaim(
+		cfg.Identity.TenantID,
+		cfg.Identity.ClientID,
+		cfg.Identity.KeyID,
+		opts.ProducedAt,
+		opts.Nonce,
+		opts.IdempotencyKey,
+		model.Content{
+			HashAlg:       hashAlg,
+			ContentHash:   contentHash,
+			ContentLength: int64(len(raw)),
+			MediaType:     opts.MediaType,
+			StorageURI:    opts.StorageURI,
+		},
+		model.Metadata{
+			EventType: opts.EventType,
+			Source:    opts.Source,
+			Custom:    opts.CustomMetadata,
+		},
+	)
+	if err != nil {
+		return sdk.SubmitResult{}, err
+	}
+	signed, err := claim.SignWithProvider(ctx, cfg.CryptoProvider, claimValue, cfg.Signer)
+	if err != nil {
+		return sdk.SubmitResult{}, err
+	}
+	return client.SubmitSignedClaim(ctx, signed)
 }
 
 func newBenchSDKClient(transport, endpoint string, concurrency int) (*sdk.Client, error) {

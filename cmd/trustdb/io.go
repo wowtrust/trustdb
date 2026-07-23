@@ -1,8 +1,7 @@
 package main
 
 import (
-	"bytes"
-	"crypto/ed25519"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -12,15 +11,14 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/wowtrust/trustdb/internal/cborx"
-	"github.com/wowtrust/trustdb/internal/trusterr"
 	"github.com/spf13/cobra"
+	"github.com/wowtrust/trustdb/internal/cborx"
+	"github.com/wowtrust/trustdb/internal/keydescriptor"
+	"github.com/wowtrust/trustdb/internal/trustcrypto"
+	"github.com/wowtrust/trustdb/internal/trusterr"
 )
 
-const (
-	encodedOutputNamePrefix = "~"
-	maxEncodedKeyFileBytes  = 1 << 10
-)
+const encodedOutputNamePrefix = "~"
 
 type multiFlag []string
 
@@ -142,8 +140,12 @@ func writeExportObject(rt *runtimeConfig, outPath, format string, v any) (string
 	}
 }
 
-func writeKey(path string, key []byte) error {
-	return writeFileAtomic(path, []byte(base64.RawURLEncoding.EncodeToString(key)), 0o600)
+func writeKeyDescriptor(path string, descriptor keydescriptor.Descriptor) error {
+	data, err := keydescriptor.Marshal(descriptor)
+	if err != nil {
+		return err
+	}
+	return writeFileAtomic(path, data, 0o600)
 }
 
 func writeFileAtomic(path string, data []byte, mode fs.FileMode) error {
@@ -213,40 +215,37 @@ func rejectDirectoryTarget(path string) error {
 	return err
 }
 
-func readPublicKey(path string) (ed25519.PublicKey, error) {
-	key, err := readKey(path)
+func readPublicKeyDescriptor(path string) (trustcrypto.PublicKeyDescriptor, keydescriptor.Descriptor, error) {
+	descriptor, err := keydescriptor.ReadFile(path)
 	if err != nil {
-		return nil, err
+		return trustcrypto.PublicKeyDescriptor{}, keydescriptor.Descriptor{}, err
 	}
-	if len(key) != ed25519.PublicKeySize {
-		return nil, fmt.Errorf("invalid public key size %d", len(key))
+	if descriptor.Kind != keydescriptor.KindVerifier || descriptor.Provider != keydescriptor.ProviderPublic {
+		return trustcrypto.PublicKeyDescriptor{}, keydescriptor.Descriptor{}, fmt.Errorf("key descriptor must be a public verifier descriptor")
 	}
-	return ed25519.PublicKey(key), nil
+	publicKey, err := descriptor.PublicKeyDescriptor()
+	if err != nil {
+		return trustcrypto.PublicKeyDescriptor{}, keydescriptor.Descriptor{}, err
+	}
+	return publicKey, descriptor, nil
 }
 
-func readPrivateKey(path string) (ed25519.PrivateKey, error) {
-	key, err := readKey(path)
+func readSigner(ctx context.Context, path string) (trustcrypto.Signer, keydescriptor.Descriptor, error) {
+	signer, descriptor, err := keydescriptor.NewDefaultResolver().ResolveSignerFile(ctx, path)
 	if err != nil {
-		return nil, err
+		return nil, keydescriptor.Descriptor{}, err
 	}
-	if len(key) != ed25519.PrivateKeySize {
-		return nil, fmt.Errorf("invalid private key size %d", len(key))
-	}
-	return ed25519.PrivateKey(key), nil
+	return signer, descriptor, nil
 }
 
-func readKey(path string) ([]byte, error) {
-	data, err := readFileLimit(path, maxEncodedKeyFileBytes)
-	if err != nil {
-		return nil, err
+func requireKeyID(configured string, descriptor keydescriptor.Descriptor) error {
+	if configured == "" {
+		return usageError("key-id is required")
 	}
-	data = bytes.TrimSpace(data)
-	key := make([]byte, base64.RawURLEncoding.DecodedLen(len(data)))
-	n, err := base64.RawURLEncoding.Decode(key, data)
-	if err != nil {
-		return nil, err
+	if configured != descriptor.KeyID {
+		return usageError(fmt.Sprintf("configured key-id %q does not match descriptor key_id %q", configured, descriptor.KeyID))
 	}
-	return key[:n], nil
+	return nil
 }
 
 func readFileLimit(path string, maxBytes int64) ([]byte, error) {

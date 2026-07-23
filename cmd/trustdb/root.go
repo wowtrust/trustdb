@@ -516,7 +516,7 @@ func addCommonIdentityFlags(cmd *cobra.Command) {
 
 func addRegistryFlags(cmd *cobra.Command) {
 	cmd.Flags().String("registry", "", "key registry path")
-	cmd.Flags().String("registry-public-key", "", "registry public key")
+	cmd.Flags().String("registry-public-key", "", "registry verifier descriptor")
 }
 
 func addServerFlags(cmd *cobra.Command) {

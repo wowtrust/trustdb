@@ -242,7 +242,7 @@ func newServeCommand(rt *runtimeConfig) *cobra.Command {
 			if batchProofWorkers < 0 {
 				return usageError("batch-proof-workers must be zero or greater")
 			}
-			serverPriv, err := readPrivateKey(serverKeyPath)
+			serverSigner, serverKey, err := readSigner(cmd.Context(), serverKeyPath)
 			if err != nil {
 				return err
 			}
@@ -344,9 +344,8 @@ func newServeCommand(rt *runtimeConfig) *cobra.Command {
 				logID = nodeID
 			}
 			serverKeyID := stringValue(cmd, rt, "server-key-id", "server_key_id")
-			serverSigner, err := trustcrypto.NewEd25519Signer(serverKeyID, serverPriv)
-			if err != nil {
-				return trusterr.Wrap(trusterr.CodeInvalidArgument, "build server signer", err)
+			if err := requireKeyID(serverKeyID, serverKey); err != nil {
+				return err
 			}
 			engine := app.LocalEngine{
 				ServerID:        nodeID,
@@ -717,12 +716,12 @@ func newServeCommand(rt *runtimeConfig) *cobra.Command {
 	addServerFlags(cmd)
 	cmd.Flags().StringVar(&listen, "listen", "", "listen address")
 	cmd.Flags().StringVar(&grpcListen, "grpc-listen", "", "optional gRPC listen address; empty disables gRPC")
-	cmd.Flags().StringVar(&serverKeyPath, "server-private-key", "", "server private key")
+	cmd.Flags().StringVar(&serverKeyPath, "server-private-key", "", "server signer descriptor")
 	cmd.Flags().StringVar(&walPath, "wal", "", "wal path")
 	cmd.Flags().StringVar(&proofDir, "proof-dir", "", "proof bundle and root directory")
-	cmd.Flags().StringVar(&clientPubPath, "client-public-key", "", "client public key")
+	cmd.Flags().StringVar(&clientPubPath, "client-public-key", "", "client verifier descriptor")
 	cmd.Flags().StringVar(&registryPath, "key-registry", "", "key registry path")
-	cmd.Flags().StringVar(&registryPubPath, "registry-public-key", "", "registry public key")
+	cmd.Flags().StringVar(&registryPubPath, "registry-public-key", "", "registry verifier descriptor")
 	cmd.Flags().IntVar(&queueSize, "queue-size", 0, "bounded ingest queue size")
 	cmd.Flags().IntVar(&workers, "workers", 0, "ingest worker count")
 	cmd.Flags().IntVar(&batchQueueSize, "batch-queue-size", 0, "bounded batch queue size")

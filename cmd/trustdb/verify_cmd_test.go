@@ -4,9 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
-	"encoding/base64"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -21,9 +19,11 @@ import (
 	"github.com/wowtrust/trustdb/internal/batch"
 	"github.com/wowtrust/trustdb/internal/cborx"
 	"github.com/wowtrust/trustdb/internal/claim"
+	"github.com/wowtrust/trustdb/internal/cryptosuite"
 	"github.com/wowtrust/trustdb/internal/globallog"
 	"github.com/wowtrust/trustdb/internal/httpapi"
 	"github.com/wowtrust/trustdb/internal/ingest"
+	"github.com/wowtrust/trustdb/internal/keydescriptor"
 	"github.com/wowtrust/trustdb/internal/model"
 	"github.com/wowtrust/trustdb/internal/observability"
 	"github.com/wowtrust/trustdb/internal/proofstore"
@@ -70,8 +70,8 @@ func TestVerifyCmdRemoteAnchor(t *testing.T) {
 
 	server, clientPriv, clientPub, serverPub, contentPath, recordID := runServeForVerify(t, ctx)
 
-	clientPubPath := writePubKey(t, clientPub)
-	serverPubPath := writePubKey(t, serverPub)
+	clientPubPath := writePubKey(t, "client-key", clientPub)
+	serverPubPath := writePubKey(t, "server-key", serverPub)
 	_ = clientPriv // captured so it stays alive for the server's lifetime
 
 	rt, outBuf := newVerifyRuntime(t)
@@ -126,8 +126,8 @@ func TestVerifyCmdRemoteSkipAnchor(t *testing.T) {
 		"--file", contentPath,
 		"--server", server.URL,
 		"--record", recordID,
-		"--client-public-key", writePubKey(t, clientPub),
-		"--server-public-key", writePubKey(t, serverPub),
+		"--client-public-key", writePubKey(t, "client-key", clientPub),
+		"--server-public-key", writePubKey(t, "server-key", serverPub),
 		"--skip-anchor",
 	})
 	cmd.SetContext(ctx)
@@ -171,8 +171,8 @@ func TestVerifyCmdLocalSingleProof(t *testing.T) {
 		cmd.SetArgs([]string{
 			"--file", contentPath,
 			"--sproof", sproofPath,
-			"--client-public-key", writePubKey(t, clientPub),
-			"--server-public-key", writePubKey(t, serverPub),
+			"--client-public-key", writePubKey(t, "client-key", clientPub),
+			"--server-public-key", writePubKey(t, "server-key", serverPub),
 		})
 		cmd.SetContext(ctx)
 		if err := cmd.Execute(); err != nil {
@@ -187,8 +187,8 @@ func TestVerifyCmdLocalSingleProof(t *testing.T) {
 		cmd.SetArgs([]string{
 			"--file", contentPath,
 			"--sproof", sproofPath,
-			"--client-public-key", writePubKey(t, clientPub),
-			"--server-public-key", writePubKey(t, serverPub),
+			"--client-public-key", writePubKey(t, "client-key", clientPub),
+			"--server-public-key", writePubKey(t, "server-key", serverPub),
 			"--skip-anchor",
 		})
 		cmd.SetContext(ctx)
@@ -204,7 +204,7 @@ func TestVerifyCmdLocalSingleProof(t *testing.T) {
 func TestVerifyCmdRejectsConflictingFlags(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
-	pub := writePubKey(t, mustPub(t))
+	pub := writePubKey(t, "client-key", mustPub(t))
 	cases := []struct {
 		name string
 		args []string
@@ -298,14 +298,14 @@ func TestVerifyCmdRejectsConflictingFlags(t *testing.T) {
 func TestResolveVerifyClientPubPrefersExplicitKey(t *testing.T) {
 	t.Parallel()
 	pub := mustPub(t)
-	pubPath := writePubKey(t, pub)
+	pubPath := writePubKey(t, "client-key", pub)
 	missingRegistry := filepath.Join(t.TempDir(), "missing-registry.cbor")
 
 	got, err := resolveVerifyClientPub(model.ProofBundle{}, pubPath, missingRegistry, "")
 	if err != nil {
 		t.Fatalf("resolveVerifyClientPub: %v", err)
 	}
-	if !bytes.Equal(got, pub) {
+	if !bytes.Equal(got.Bytes, pub) {
 		t.Fatal("resolveVerifyClientPub did not return the explicit client public key")
 	}
 }
@@ -513,14 +513,24 @@ func newVerifyRuntime(t *testing.T) (*runtimeConfig, *bytes.Buffer) {
 	}, buf
 }
 
-// writePubKey serialises an ed25519.PublicKey in the base64-url
-// format readPublicKey expects. Using the real encoder keeps the
-// tests honest: any future change to readPublicKey is reflected
-// automatically.
-func writePubKey(t *testing.T, pub ed25519.PublicKey) string {
+// writePubKey serialises an Ed25519 verifier descriptor using the same helper
+// as the CLI tests.
+func writePubKey(t *testing.T, keyID string, pub ed25519.PublicKey) string {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), fmt.Sprintf("pubkey-%d", time.Now().UnixNano()))
-	if err := os.WriteFile(path, []byte(base64.RawURLEncoding.EncodeToString(pub)), 0o600); err != nil {
+	path := filepath.Join(t.TempDir(), keyID+".pub")
+	descriptor := keydescriptor.Descriptor{
+		SchemaVersion: keydescriptor.SchemaV1,
+		Kind:          keydescriptor.KindVerifier,
+		Provider:      keydescriptor.ProviderPublic,
+		CryptoSuite:   cryptosuite.INTLV1,
+		KeyID:         keyID,
+		Algorithm:     cryptosuite.SignatureEd25519,
+		PublicKey: keydescriptor.PublicKeyMaterial{
+			Encoding: cryptosuite.Ed25519PublicKeyEncoding,
+			Bytes:    append([]byte(nil), pub...),
+		},
+	}
+	if err := writeKeyDescriptor(path, descriptor); err != nil {
 		t.Fatalf("write pubkey: %v", err)
 	}
 	return path

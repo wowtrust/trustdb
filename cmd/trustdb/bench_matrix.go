@@ -10,8 +10,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/wowtrust/trustdb/sdk"
 	"github.com/spf13/cobra"
+	"github.com/wowtrust/trustdb/internal/trustcrypto"
+	"github.com/wowtrust/trustdb/sdk"
 )
 
 const (
@@ -198,11 +199,18 @@ func newBenchMatrixCommand(rt *runtimeConfig) *cobra.Command {
 				cfg.Base.Source = "trustdb-bench"
 			}
 
-			priv, err := readPrivateKey(cfg.Base.PrivateKeyPath)
+			signer, descriptor, err := readSigner(cmd.Context(), cfg.Base.PrivateKeyPath)
 			if err != nil {
 				return err
 			}
-			cfg.Base.Identity.PrivateKey = priv
+			if err := requireKeyID(cfg.Base.Identity.KeyID, descriptor); err != nil {
+				return err
+			}
+			cfg.Base.Signer = signer
+			cfg.Base.CryptoProvider, err = trustcrypto.ProviderForSuite(descriptor.CryptoSuite)
+			if err != nil {
+				return err
+			}
 
 			matrix, err := readBenchMatrixFile(cfg.MatrixFile)
 			if err != nil {
@@ -232,7 +240,7 @@ func newBenchMatrixCommand(rt *runtimeConfig) *cobra.Command {
 	cmd.Flags().StringVar(&cfg.Base.Endpoint, "server", "", "TrustDB server HTTP base URL or gRPC target")
 	cmd.Flags().StringVar(&cfg.Base.Transport, "transport", cfg.Base.Transport, "transport: http or grpc")
 	addCommonIdentityFlags(cmd)
-	cmd.Flags().StringVar(&cfg.Base.PrivateKeyPath, "private-key", "", "client private key")
+	cmd.Flags().StringVar(&cfg.Base.PrivateKeyPath, "private-key", "", "client signer descriptor")
 	cmd.Flags().StringVar(&cfg.MatrixFile, "matrix-file", "", "JSON matrix file describing benchmark cases")
 	cmd.Flags().StringVar(&cfg.ReportDir, "report-dir", "", "optional directory to persist per-case and summary JSON reports")
 	cmd.Flags().StringVar(&cfg.OutputFormat, "output", "text", "output format: text or json")

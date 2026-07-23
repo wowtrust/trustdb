@@ -1,15 +1,14 @@
 package main
 
 import (
-	"crypto/ed25519"
-	"crypto/sha256"
+	"bytes"
 	"encoding/base64"
-	"fmt"
 	"time"
 
 	"github.com/spf13/cobra"
+	"github.com/wowtrust/trustdb/internal/cryptosuite"
+	"github.com/wowtrust/trustdb/internal/keydescriptor"
 	"github.com/wowtrust/trustdb/internal/keystore"
-	"github.com/wowtrust/trustdb/internal/model"
 	"github.com/wowtrust/trustdb/internal/trustcrypto"
 )
 
@@ -27,11 +26,11 @@ func newKeyCommand(rt *runtimeConfig) *cobra.Command {
 }
 
 func newKeygenCommand(rt *runtimeConfig, hidden bool) *cobra.Command {
-	var outDir, prefix string
+	var outDir, prefix, keyID string
 	cmd := &cobra.Command{
 		Use:     "keygen",
 		Aliases: []string{"gen"},
-		Short:   "Generate an Ed25519 key pair",
+		Short:   "Generate an Ed25519 key descriptor pair",
 		Hidden:  hidden,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			pub, priv, err := trustcrypto.GenerateEd25519Key()
@@ -44,24 +43,57 @@ func newKeygenCommand(rt *runtimeConfig, hidden bool) *cobra.Command {
 			prefixName := safeOutputFileName(prefix)
 			pubPath := joinPath(outDir, prefixName+".pub")
 			privPath := joinPath(outDir, prefixName+".key")
-			if err := writeKey(pubPath, pub); err != nil {
+			materialName := prefixName + ".material"
+			materialPath := joinPath(outDir, materialName)
+			resolvedKeyID := keyID
+			if resolvedKeyID == "" {
+				resolvedKeyID = prefixName + "-key"
+			}
+			signerDescriptor := keydescriptor.Descriptor{
+				SchemaVersion: keydescriptor.SchemaV1,
+				Kind:          keydescriptor.KindSigner,
+				Provider:      keydescriptor.ProviderSoftware,
+				CryptoSuite:   cryptosuite.INTLV1,
+				KeyID:         resolvedKeyID,
+				Algorithm:     cryptosuite.SignatureEd25519,
+				PublicKey: keydescriptor.PublicKeyMaterial{
+					Encoding: cryptosuite.Ed25519PublicKeyEncoding,
+					Bytes:    append([]byte(nil), pub...),
+				},
+				Software: &keydescriptor.SoftwareKeyReference{
+					MaterialPath: materialName,
+					Encoding:     cryptosuite.Ed25519PrivateKeyEncoding,
+					Protection:   keydescriptor.SoftwareProtectionPlaintextDev,
+				},
+			}
+			verifierDescriptor := signerDescriptor.Clone()
+			verifierDescriptor.Kind = keydescriptor.KindVerifier
+			verifierDescriptor.Provider = keydescriptor.ProviderPublic
+			verifierDescriptor.Software = nil
+			if err := writeFileAtomic(materialPath, []byte(base64.RawURLEncoding.EncodeToString(priv)), 0o600); err != nil {
 				return err
 			}
-			if err := writeKey(privPath, priv); err != nil {
+			if err := writeKeyDescriptor(privPath, signerDescriptor); err != nil {
+				return err
+			}
+			if err := writeKeyDescriptor(pubPath, verifierDescriptor); err != nil {
 				return err
 			}
 			rt.logger.Info().
-				Str("public_key", pubPath).
-				Str("private_key", privPath).
+				Str("verifier_descriptor", pubPath).
+				Str("signer_descriptor", privPath).
+				Str("key_id", resolvedKeyID).
 				Msg("generated key pair")
 			return rt.writeJSON(map[string]string{
-				"public_key":  pubPath,
-				"private_key": privPath,
+				"verifier_descriptor": pubPath,
+				"signer_descriptor":   privPath,
+				"key_id":              resolvedKeyID,
 			})
 		},
 	}
 	cmd.Flags().StringVar(&outDir, "out", ".", "output directory")
 	cmd.Flags().StringVar(&prefix, "prefix", "client", "key filename prefix")
+	cmd.Flags().StringVar(&keyID, "key-id", "", "descriptor key ID (defaults to <prefix>-key)")
 	return cmd
 }
 
@@ -69,35 +101,39 @@ func newKeyInspectCommand(rt *runtimeConfig) *cobra.Command {
 	var keyPath string
 	cmd := &cobra.Command{
 		Use:   "inspect",
-		Short: "Inspect an Ed25519 public or private key file",
+		Short: "Inspect a key descriptor without opening private material",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if keyPath == "" {
 				return usageError("key inspect requires key")
 			}
-			key, err := readKey(keyPath)
+			descriptor, err := keydescriptor.ReadFile(keyPath)
 			if err != nil {
 				return err
 			}
-			var kind string
-			var pub ed25519.PublicKey
-			switch len(key) {
-			case ed25519.PublicKeySize:
-				kind = "public"
-				pub = ed25519.PublicKey(key)
-			case ed25519.PrivateKeySize:
-				kind = "private"
-				priv := ed25519.PrivateKey(key)
-				pub = priv.Public().(ed25519.PublicKey)
-			default:
-				return fmt.Errorf("invalid Ed25519 key size %d", len(key))
+			suite, err := cryptosuite.RequireKnown(descriptor.CryptoSuite)
+			if err != nil {
+				return err
 			}
-			fp := sha256.Sum256(pub)
-			return rt.writeJSON(map[string]string{
-				"path":        keyPath,
-				"kind":        kind,
-				"alg":         model.DefaultSignatureAlg,
-				"public_key":  base64.RawURLEncoding.EncodeToString(pub),
-				"fingerprint": base64.RawURLEncoding.EncodeToString(fp[:]),
+			fingerprint, err := trustcrypto.HashBytesForSuite(descriptor.CryptoSuite, suite.KeyFingerprintHash.Algorithm, descriptor.PublicKey.Bytes)
+			if err != nil {
+				return err
+			}
+			kind := descriptor.Kind
+			if descriptor.Kind == keydescriptor.KindVerifier {
+				kind = "public"
+			}
+			return rt.writeJSON(map[string]any{
+				"path":              keyPath,
+				"schema_version":    descriptor.SchemaVersion,
+				"kind":              kind,
+				"provider":          descriptor.Provider,
+				"crypto_suite":      descriptor.CryptoSuite,
+				"key_id":            descriptor.KeyID,
+				"alg":               descriptor.Algorithm,
+				"public_key":        base64.RawURLEncoding.EncodeToString(descriptor.PublicKey.Bytes),
+				"fingerprint":       base64.RawURLEncoding.EncodeToString(fingerprint),
+				"certificate_count": len(descriptor.CertificateChain),
+				"descriptor":        descriptor,
 			})
 		},
 	}
@@ -123,16 +159,18 @@ func newKeyRegisterCommand(rt *runtimeConfig, hidden bool) *cobra.Command {
 			if registryPrivate == "" || clientID == "" || keyID == "" || publicKeyPath == "" {
 				return usageError("key-register requires registry-private-key, client, key-id, and public-key")
 			}
-			regPriv, err := readPrivateKey(registryPrivate)
+			registrySigner, registryKey, err := readSigner(cmd.Context(), registryPrivate)
 			if err != nil {
 				return err
 			}
-			clientPub, err := readPublicKey(publicKeyPath)
+			if err := requireKeyID(registryKeyID, registryKey); err != nil {
+				return err
+			}
+			clientPub, clientKey, err := readPublicKeyDescriptor(publicKeyPath)
 			if err != nil {
 				return err
 			}
-			registrySigner, err := trustcrypto.NewEd25519Signer(registryKeyID, regPriv)
-			if err != nil {
+			if err := requireKeyID(keyID, clientKey); err != nil {
 				return err
 			}
 			registryPub, err := registrySigner.PublicKey(cmd.Context())
@@ -147,11 +185,7 @@ func newKeyRegisterCommand(rt *runtimeConfig, hidden bool) *cobra.Command {
 			if validUntilUnix != 0 {
 				validUntil = time.Unix(validUntilUnix, 0).UTC()
 			}
-			clientDescriptor, err := trustcrypto.NewEd25519PublicKey(keyID, clientPub)
-			if err != nil {
-				return err
-			}
-			ev, err := reg.RegisterClientKey(tenantID, clientID, keyID, clientDescriptor, time.Unix(validFromUnix, 0).UTC(), validUntil)
+			ev, err := reg.RegisterClientKey(tenantID, clientID, keyID, clientPub, time.Unix(validFromUnix, 0).UTC(), validUntil)
 			if err != nil {
 				return err
 			}
@@ -171,8 +205,8 @@ func newKeyRegisterCommand(rt *runtimeConfig, hidden bool) *cobra.Command {
 	addRegistryFlags(cmd)
 	addCommonIdentityFlags(cmd)
 	cmd.Flags().String("registry-key-id", "", "registry signing key id")
-	cmd.Flags().StringVar(&registryPrivate, "registry-private-key", "", "registry private key")
-	cmd.Flags().StringVar(&publicKeyPath, "public-key", "", "client public key")
+	cmd.Flags().StringVar(&registryPrivate, "registry-private-key", "", "registry signer descriptor")
+	cmd.Flags().StringVar(&publicKeyPath, "public-key", "", "client verifier descriptor")
 	cmd.Flags().Int64Var(&validFromUnix, "valid-from-unix", time.Now().UTC().Unix(), "valid from unix seconds")
 	cmd.Flags().Int64Var(&validUntilUnix, "valid-until-unix", 0, "valid until unix seconds, 0 means no expiry")
 	return cmd
@@ -196,26 +230,27 @@ func newKeyRevokeCommand(rt *runtimeConfig, hidden bool) *cobra.Command {
 			if registryPrivate == "" || clientID == "" || keyID == "" {
 				return usageError("key-revoke requires registry-private-key, client, and key-id")
 			}
-			regPriv, err := readPrivateKey(registryPrivate)
+			registrySigner, registryKey, err := readSigner(cmd.Context(), registryPrivate)
 			if err != nil {
 				return err
 			}
-			regPub := regPriv.Public().(ed25519.PublicKey)
+			if err := requireKeyID(registryKeyID, registryKey); err != nil {
+				return err
+			}
+			regPub, err := registrySigner.PublicKey(cmd.Context())
+			if err != nil {
+				return err
+			}
 			if registryPublic != "" {
-				regPub, err = readPublicKey(registryPublic)
+				configuredPub, _, err := readPublicKeyDescriptor(registryPublic)
 				if err != nil {
 					return err
 				}
+				if configuredPub.Suite != regPub.Suite || configuredPub.Algorithm != regPub.Algorithm || configuredPub.Encoding != regPub.Encoding || !bytes.Equal(configuredPub.Bytes, regPub.Bytes) {
+					return usageError("registry public descriptor does not match registry signer descriptor")
+				}
 			}
-			registrySigner, err := trustcrypto.NewEd25519Signer(registryKeyID, regPriv)
-			if err != nil {
-				return err
-			}
-			registryDescriptor, err := trustcrypto.NewEd25519PublicKey(registryKeyID, regPub)
-			if err != nil {
-				return err
-			}
-			reg, err := keystore.Open(registryPath, registrySigner, registryDescriptor)
+			reg, err := keystore.Open(registryPath, registrySigner, regPub)
 			if err != nil {
 				return err
 			}
@@ -239,7 +274,7 @@ func newKeyRevokeCommand(rt *runtimeConfig, hidden bool) *cobra.Command {
 	addRegistryFlags(cmd)
 	addCommonIdentityFlags(cmd)
 	cmd.Flags().String("registry-key-id", "", "registry signing key id")
-	cmd.Flags().StringVar(&registryPrivate, "registry-private-key", "", "registry private key")
+	cmd.Flags().StringVar(&registryPrivate, "registry-private-key", "", "registry signer descriptor")
 	cmd.Flags().StringVar(&reason, "reason", "", "revocation reason")
 	cmd.Flags().Int64Var(&revokedAtUnix, "revoked-at-unix", time.Now().UTC().Unix(), "revoked at unix seconds")
 	return cmd
@@ -253,17 +288,10 @@ func newKeyListCommand(rt *runtimeConfig, hidden bool) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			registryPath := stringValue(cmd, rt, "registry", "key_registry")
 			registryPublic := stringOrConfig(cmd, rt, "registry-public-key", "", "keys.registry_public")
-			var regPub ed25519.PublicKey
-			var err error
-			if registryPublic != "" {
-				regPub, err = readPublicKey(registryPublic)
-				if err != nil {
-					return err
-				}
-			}
 			registryDescriptor := trustcrypto.PublicKeyDescriptor{}
-			if len(regPub) != 0 {
-				registryDescriptor, err = trustcrypto.NewEd25519PublicKey("", regPub)
+			if registryPublic != "" {
+				var err error
+				registryDescriptor, _, err = readPublicKeyDescriptor(registryPublic)
 				if err != nil {
 					return err
 				}

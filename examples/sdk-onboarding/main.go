@@ -12,6 +12,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/wowtrust/trustdb/internal/claim"
+	"github.com/wowtrust/trustdb/internal/cryptosuite"
+	"github.com/wowtrust/trustdb/internal/keydescriptor"
+	"github.com/wowtrust/trustdb/internal/model"
+	"github.com/wowtrust/trustdb/internal/trustcrypto"
 	"github.com/wowtrust/trustdb/sdk"
 )
 
@@ -43,9 +48,12 @@ func run(args []string) error {
 		return err
 	}
 
-	clientPrivateKey, err := readPrivateKey(opts.clientPrivateKey)
+	clientSigner, clientSignerDescriptor, err := keydescriptor.NewDefaultResolver().ResolveSignerFile(context.Background(), opts.clientPrivateKey)
 	if err != nil {
-		return err
+		return fmt.Errorf("resolve client signer descriptor: %w", err)
+	}
+	if clientSignerDescriptor.KeyID != opts.keyID {
+		return fmt.Errorf("client signer descriptor key_id %q does not match --key-id %q", clientSignerDescriptor.KeyID, opts.keyID)
 	}
 	clientPublicKey, err := readPublicKey(opts.clientPublicKey)
 	if err != nil {
@@ -55,8 +63,12 @@ func run(args []string) error {
 	if err != nil {
 		return err
 	}
-	if !bytes.Equal(clientPrivateKey.Public().(ed25519.PublicKey), clientPublicKey) {
-		return errors.New("client private and public keys do not form a matching Ed25519 key pair")
+	resolvedClientPublic, err := clientSigner.PublicKey(context.Background())
+	if err != nil {
+		return fmt.Errorf("read client signer public key: %w", err)
+	}
+	if !bytes.Equal(resolvedClientPublic.Bytes, clientPublicKey) {
+		return errors.New("client signer and verifier descriptors do not identify the same Ed25519 key")
 	}
 
 	client, err := sdk.NewClient(opts.serverURL)
@@ -71,7 +83,7 @@ func run(args []string) error {
 		return fmt.Errorf("check server health: %w", err)
 	}
 
-	result, err := submitFile(ctx, client, opts, clientPrivateKey)
+	result, err := submitFile(ctx, client, opts, clientSigner)
 	if err != nil {
 		return err
 	}
@@ -126,9 +138,9 @@ func parseFlags(args []string) (options, error) {
 	flags := flag.NewFlagSet("sdk-onboarding", flag.ContinueOnError)
 	flags.StringVar(&opts.serverURL, "server", "http://127.0.0.1:8080", "TrustDB server URL")
 	flags.StringVar(&opts.filePath, "file", "", "original file to submit and verify (required)")
-	flags.StringVar(&opts.clientPrivateKey, "client-private-key", "", "raw URL-safe Base64 Ed25519 client private key file (required)")
-	flags.StringVar(&opts.clientPublicKey, "client-public-key", "", "raw URL-safe Base64 Ed25519 client public key file (required)")
-	flags.StringVar(&opts.serverPublicKey, "server-public-key", "", "raw URL-safe Base64 Ed25519 server public key file (required)")
+	flags.StringVar(&opts.clientPrivateKey, "client-private-key", "", "TrustDB client signer descriptor (required)")
+	flags.StringVar(&opts.clientPublicKey, "client-public-key", "", "TrustDB client verifier descriptor (required)")
+	flags.StringVar(&opts.serverPublicKey, "server-public-key", "", "TrustDB server verifier descriptor (required)")
 	flags.StringVar(&opts.outputPath, "output", "proof.sproof", "output .sproof path")
 	flags.StringVar(&opts.tenantID, "tenant", "default", "claim tenant ID")
 	flags.StringVar(&opts.clientID, "client", "sdk-onboarding", "claim client ID")
@@ -160,27 +172,53 @@ func parseFlags(args []string) (options, error) {
 	return opts, nil
 }
 
-func submitFile(ctx context.Context, client *sdk.Client, opts options, privateKey ed25519.PrivateKey) (sdk.SubmitResult, error) {
+func submitFile(ctx context.Context, client *sdk.Client, opts options, signer trustcrypto.Signer) (sdk.SubmitResult, error) {
 	original, err := os.Open(opts.filePath)
 	if err != nil {
 		return sdk.SubmitResult{}, fmt.Errorf("open original file: %w", err)
 	}
-	result, submitErr := client.SubmitFile(ctx, original, sdk.Identity{
-		TenantID:   opts.tenantID,
-		ClientID:   opts.clientID,
-		KeyID:      opts.keyID,
-		PrivateKey: privateKey,
-	}, sdk.FileClaimOptions{
-		MediaType: "application/octet-stream",
-		EventType: "file.snapshot",
-		Source:    "sdk-onboarding",
-	})
+	contentHash, contentLength, hashErr := trustcrypto.HashReader(model.DefaultHashAlg, original)
 	closeErr := original.Close()
-	if submitErr != nil {
-		return sdk.SubmitResult{}, fmt.Errorf("submit file: %w", submitErr)
+	if hashErr != nil {
+		return sdk.SubmitResult{}, fmt.Errorf("hash original file: %w", hashErr)
 	}
 	if closeErr != nil {
-		return sdk.SubmitResult{}, fmt.Errorf("close submitted file: %w", closeErr)
+		return sdk.SubmitResult{}, fmt.Errorf("close original file: %w", closeErr)
+	}
+	nonce, err := trustcrypto.NewNonce(16)
+	if err != nil {
+		return sdk.SubmitResult{}, err
+	}
+	idempotencyBytes, err := trustcrypto.NewNonce(18)
+	if err != nil {
+		return sdk.SubmitResult{}, err
+	}
+	claimValue, err := claim.NewFileClaim(
+		opts.tenantID,
+		opts.clientID,
+		opts.keyID,
+		time.Now().UTC(),
+		nonce,
+		"sdk-"+base64.RawURLEncoding.EncodeToString(idempotencyBytes),
+		model.Content{
+			HashAlg:       model.DefaultHashAlg,
+			ContentHash:   contentHash,
+			ContentLength: contentLength,
+			MediaType:     "application/octet-stream",
+			StorageURI:    opts.filePath,
+		},
+		model.Metadata{EventType: "file.snapshot", Source: "sdk-onboarding"},
+	)
+	if err != nil {
+		return sdk.SubmitResult{}, err
+	}
+	signed, err := claim.SignWithSigner(ctx, claimValue, signer)
+	if err != nil {
+		return sdk.SubmitResult{}, fmt.Errorf("sign claim: %w", err)
+	}
+	result, err := client.SubmitSignedClaim(ctx, signed)
+	if err != nil {
+		return sdk.SubmitResult{}, fmt.Errorf("submit signed claim: %w", err)
 	}
 	return result, nil
 }
@@ -212,33 +250,14 @@ func waitForGlobalProof(ctx context.Context, client *sdk.Client, recordID string
 	}
 }
 
-func readPrivateKey(path string) (ed25519.PrivateKey, error) {
-	key, err := readRawURLKey(path, ed25519.PrivateKeySize)
-	if err != nil {
-		return nil, err
-	}
-	return ed25519.PrivateKey(key), nil
-}
-
 func readPublicKey(path string) (ed25519.PublicKey, error) {
-	key, err := readRawURLKey(path, ed25519.PublicKeySize)
+	descriptor, err := keydescriptor.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
-	return ed25519.PublicKey(key), nil
-}
-
-func readRawURLKey(path string, expectedSize int) ([]byte, error) {
-	encoded, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("read key %s: %w", path, err)
+	if descriptor.Kind != keydescriptor.KindVerifier || descriptor.Provider != keydescriptor.ProviderPublic ||
+		descriptor.CryptoSuite != cryptosuite.INTLV1 || descriptor.Algorithm != cryptosuite.SignatureEd25519 {
+		return nil, fmt.Errorf("public key descriptor %s is not an INTL_V1 Ed25519 verifier", path)
 	}
-	key, err := base64.RawURLEncoding.DecodeString(strings.TrimSpace(string(encoded)))
-	if err != nil {
-		return nil, fmt.Errorf("decode key %s as raw URL-safe Base64: %w", path, err)
-	}
-	if len(key) != expectedSize {
-		return nil, fmt.Errorf("key %s decodes to %d bytes, want %d", path, len(key), expectedSize)
-	}
-	return key, nil
+	return ed25519.PublicKey(append([]byte(nil), descriptor.PublicKey.Bytes...)), nil
 }

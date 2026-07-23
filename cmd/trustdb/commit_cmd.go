@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"crypto/ed25519"
 	"fmt"
 	"path/filepath"
 	"time"
@@ -43,8 +42,11 @@ func newCommitCommand(rt *runtimeConfig) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			serverPriv, err := readPrivateKey(serverKeyPath)
+			serverSigner, serverKey, err := readSigner(cmd.Context(), serverKeyPath)
 			if err != nil {
+				return err
+			}
+			if err := requireKeyID(serverKeyID, serverKey); err != nil {
 				return err
 			}
 			writer, _, err := openWALWriter(walPath, 0)
@@ -52,10 +54,6 @@ func newCommitCommand(rt *runtimeConfig) *cobra.Command {
 				return err
 			}
 			defer writer.Close()
-			serverSigner, err := trustcrypto.NewEd25519Signer(serverKeyID, serverPriv)
-			if err != nil {
-				return err
-			}
 			engine := app.LocalEngine{
 				ServerID:        serverID,
 				ServerKeyID:     serverKeyID,
@@ -92,10 +90,10 @@ func newCommitCommand(rt *runtimeConfig) *cobra.Command {
 	}
 	addServerFlags(cmd)
 	cmd.Flags().StringVar(&claimPath, "claim", "", "signed claim path")
-	cmd.Flags().StringVar(&clientPubPath, "client-public-key", "", "client public key")
+	cmd.Flags().StringVar(&clientPubPath, "client-public-key", "", "client verifier descriptor")
 	cmd.Flags().StringVar(&registryPath, "key-registry", "", "key registry path")
-	cmd.Flags().StringVar(&registryPubPath, "registry-public-key", "", "registry public key")
-	cmd.Flags().StringVar(&serverKeyPath, "server-private-key", "", "server private key")
+	cmd.Flags().StringVar(&registryPubPath, "registry-public-key", "", "registry verifier descriptor")
+	cmd.Flags().StringVar(&serverKeyPath, "server-private-key", "", "server signer descriptor")
 	cmd.Flags().StringVar(&walPath, "wal", "", "wal path")
 	cmd.Flags().StringVar(&outPath, "out", "proof.tdproof", "proof output path")
 	return cmd
@@ -131,8 +129,11 @@ func newCommitBatchCommand(rt *runtimeConfig) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			serverPriv, err := readPrivateKey(serverKeyPath)
+			serverSigner, serverKey, err := readSigner(cmd.Context(), serverKeyPath)
 			if err != nil {
+				return err
+			}
+			if err := requireKeyID(serverKeyID, serverKey); err != nil {
 				return err
 			}
 			writer, _, err := openWALWriter(walPath, 0)
@@ -140,10 +141,6 @@ func newCommitBatchCommand(rt *runtimeConfig) *cobra.Command {
 				return err
 			}
 			defer writer.Close()
-			serverSigner, err := trustcrypto.NewEd25519Signer(serverKeyID, serverPriv)
-			if err != nil {
-				return err
-			}
 			engine := app.LocalEngine{
 				ServerID:        serverID,
 				ServerKeyID:     serverKeyID,
@@ -193,10 +190,10 @@ func newCommitBatchCommand(rt *runtimeConfig) *cobra.Command {
 	}
 	addServerFlags(cmd)
 	cmd.Flags().Var(&claimPaths, "claim", "signed claim path, repeatable")
-	cmd.Flags().StringVar(&clientPubPath, "client-public-key", "", "client public key")
+	cmd.Flags().StringVar(&clientPubPath, "client-public-key", "", "client verifier descriptor")
 	cmd.Flags().StringVar(&registryPath, "key-registry", "", "key registry path")
-	cmd.Flags().StringVar(&registryPubPath, "registry-public-key", "", "registry public key")
-	cmd.Flags().StringVar(&serverKeyPath, "server-private-key", "", "server private key")
+	cmd.Flags().StringVar(&registryPubPath, "registry-public-key", "", "registry verifier descriptor")
+	cmd.Flags().StringVar(&serverKeyPath, "server-private-key", "", "server signer descriptor")
 	cmd.Flags().StringVar(&walPath, "wal", "", "wal path")
 	cmd.Flags().StringVar(&outDir, "out-dir", "proofs", "proof output directory")
 	cmd.Flags().StringVar(&batchID, "batch-id", "local-batch-1", "batch id")
@@ -222,17 +219,10 @@ func newCommitBatchCommand(rt *runtimeConfig) *cobra.Command {
 func resolveClientKeys(clientPubPath, registryPath, registryPubPath string, registryExplicit bool) (trustcrypto.PublicKeyDescriptor, app.ClientKeyResolver, error) {
 	useRegistry := registryPath != "" && (registryExplicit || clientPubPath == "")
 	if useRegistry {
-		var registryPub ed25519.PublicKey
-		var err error
-		if registryPubPath != "" {
-			registryPub, err = readPublicKey(registryPubPath)
-			if err != nil {
-				return trustcrypto.PublicKeyDescriptor{}, nil, err
-			}
-		}
 		registryDescriptor := trustcrypto.PublicKeyDescriptor{}
-		if len(registryPub) != 0 {
-			registryDescriptor, err = trustcrypto.NewEd25519PublicKey("", registryPub)
+		if registryPubPath != "" {
+			var err error
+			registryDescriptor, _, err = readPublicKeyDescriptor(registryPubPath)
 			if err != nil {
 				return trustcrypto.PublicKeyDescriptor{}, nil, err
 			}
@@ -240,10 +230,9 @@ func resolveClientKeys(clientPubPath, registryPath, registryPubPath string, regi
 		clientKeys, err := keystore.Open(registryPath, nil, registryDescriptor)
 		return trustcrypto.PublicKeyDescriptor{}, clientKeys, err
 	}
-	clientPub, err := readPublicKey(clientPubPath)
+	descriptor, _, err := readPublicKeyDescriptor(clientPubPath)
 	if err != nil {
 		return trustcrypto.PublicKeyDescriptor{}, nil, err
 	}
-	descriptor, err := trustcrypto.NewEd25519PublicKey("", clientPub)
-	return descriptor, nil, err
+	return descriptor, nil, nil
 }

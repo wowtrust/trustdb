@@ -11,6 +11,7 @@ import (
 
 	"github.com/spf13/viper"
 	trustconfig "github.com/wowtrust/trustdb/internal/config"
+	"github.com/wowtrust/trustdb/internal/keydescriptor"
 	"github.com/wowtrust/trustdb/internal/wal"
 )
 
@@ -645,6 +646,65 @@ func TestKeyInspectCommand(t *testing.T) {
 	}
 }
 
+func TestKeygenProducesResolvableDescriptorsAndRejectsLegacyRawKeys(t *testing.T) {
+	t.Parallel()
+
+	tmp := t.TempDir()
+	var out, errOut bytes.Buffer
+	cmd := newRootCommand(&out, &errOut)
+	cmd.SetArgs([]string{"keygen", "--out", tmp, "--prefix", "client"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("keygen error = %v stderr=%s", err, errOut.String())
+	}
+
+	signerPath := filepath.Join(tmp, "client.key")
+	verifierPath := filepath.Join(tmp, "client.pub")
+	materialPath := filepath.Join(tmp, "client.material")
+	signerDescriptor, err := keydescriptor.ReadFile(signerPath)
+	if err != nil {
+		t.Fatalf("ReadFile(signer) error = %v", err)
+	}
+	verifierDescriptor, err := keydescriptor.ReadFile(verifierPath)
+	if err != nil {
+		t.Fatalf("ReadFile(verifier) error = %v", err)
+	}
+	if signerDescriptor.Kind != keydescriptor.KindSigner || verifierDescriptor.Kind != keydescriptor.KindVerifier {
+		t.Fatalf("descriptor kinds = %q/%q", signerDescriptor.Kind, verifierDescriptor.Kind)
+	}
+	if signerDescriptor.KeyID != "client-key" || verifierDescriptor.KeyID != "client-key" {
+		t.Fatalf("descriptor key IDs = %q/%q", signerDescriptor.KeyID, verifierDescriptor.KeyID)
+	}
+	if _, _, err := keydescriptor.NewDefaultResolver().ResolveSignerFile(context.Background(), signerPath); err != nil {
+		t.Fatalf("ResolveSignerFile() error = %v", err)
+	}
+	if _, err := os.Stat(materialPath); err != nil {
+		t.Fatalf("material file missing: %v", err)
+	}
+
+	out.Reset()
+	errOut.Reset()
+	cmd = newRootCommand(&out, &errOut)
+	cmd.SetArgs([]string{"key", "inspect", "--key", signerPath})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("key inspect signer error = %v stderr=%s", err, errOut.String())
+	}
+	if strings.Contains(out.String(), "client.material") {
+		t.Fatalf("key inspect leaked material path: %s", out.String())
+	}
+
+	legacyPath := filepath.Join(tmp, "legacy.key")
+	if err := os.WriteFile(legacyPath, bytes.Repeat([]byte("A"), 86), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	errOut.Reset()
+	cmd = newRootCommand(&out, &errOut)
+	cmd.SetArgs([]string{"key", "inspect", "--key", legacyPath})
+	if err := cmd.Execute(); err == nil {
+		t.Fatal("key inspect accepted a legacy raw key file")
+	}
+}
+
 func TestKeygenPrefixCannotEscapeOutputDir(t *testing.T) {
 	t.Parallel()
 
@@ -664,7 +724,7 @@ func TestKeygenPrefixCannotEscapeOutputDir(t *testing.T) {
 	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
 		t.Fatalf("keygen output is not json: %q err=%v", out.String(), err)
 	}
-	for _, path := range []string{got["public_key"], got["private_key"]} {
+	for _, path := range []string{got["verifier_descriptor"], got["signer_descriptor"]} {
 		if path == "" {
 			t.Fatalf("keygen output missing key path: %#v", got)
 		}

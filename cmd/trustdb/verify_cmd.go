@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"context"
-	"crypto/ed25519"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -131,7 +130,14 @@ L5 always verifies an STH/global-root anchor; local --anchor requires
 			if err != nil {
 				return err
 			}
-			serverPub, err := readPublicKey(serverPubPath)
+			serverDescriptor, _, err := readPublicKeyDescriptor(serverPubPath)
+			if err != nil {
+				return err
+			}
+			if clientPub.Suite != serverDescriptor.Suite {
+				return usageError("client and server key descriptors use different cryptographic suites")
+			}
+			provider, err := trustcrypto.ProviderForSuite(serverDescriptor.Suite)
 			if err != nil {
 				return err
 			}
@@ -175,17 +181,13 @@ L5 always verifies an STH/global-root anchor; local --anchor requires
 				opts = append(opts, verify.WithAnchorVerifier(pluginSink))
 			}
 
-			clientDescriptor, err := trustcrypto.NewEd25519PublicKey(bundle.SignedClaim.Claim.KeyID, clientPub)
-			if err != nil {
-				return err
-			}
-			serverDescriptor, err := trustcrypto.NewEd25519PublicKey("", serverPub)
-			if err != nil {
-				return err
+			if clientPub.KeyID != "" && clientPub.KeyID != bundle.SignedClaim.Claim.KeyID {
+				return usageError("client public descriptor key_id does not match proof claim key_id")
 			}
 			result, err := verify.ProofBundle(f, bundle, verify.TrustedKeys{
-				ClientPublicKey: clientDescriptor,
+				ClientPublicKey: clientPub,
 				ServerPublicKey: serverDescriptor,
+				CryptoProvider:  provider,
 			}, opts...)
 			if err != nil {
 				return err
@@ -208,10 +210,10 @@ L5 always verifies an STH/global-root anchor; local --anchor requires
 	cmd.Flags().StringVar(&proofPath, "proof", "", "proof bundle path (local mode)")
 	cmd.Flags().StringVar(&globalProofPath, "global-proof", "", "global log proof path (local mode; required with --anchor)")
 	cmd.Flags().StringVar(&anchorPath, "anchor", "", "anchor result path (local mode, optional)")
-	cmd.Flags().StringVar(&clientPubPath, "client-public-key", "", "client public key")
+	cmd.Flags().StringVar(&clientPubPath, "client-public-key", "", "client verifier descriptor")
 	cmd.Flags().StringVar(&registryPath, "key-registry", "", "key registry path")
-	cmd.Flags().StringVar(&registryPubPath, "registry-public-key", "", "registry public key")
-	cmd.Flags().StringVar(&serverPubPath, "server-public-key", "", "server public key")
+	cmd.Flags().StringVar(&registryPubPath, "registry-public-key", "", "registry verifier descriptor")
+	cmd.Flags().StringVar(&serverPubPath, "server-public-key", "", "server verifier descriptor")
 	cmd.Flags().StringVar(&serverURL, "server", "", "TrustDB server URL (remote mode)")
 	cmd.Flags().StringVar(&recordID, "record", "", "record id to verify (remote mode)")
 	cmd.Flags().BoolVar(&skipAnchor, "skip-anchor", false, "do not fetch or verify L5 anchor")
@@ -437,29 +439,23 @@ func joinURL(base, prefix, suffix string) (string, error) {
 	return u.String(), nil
 }
 
-func resolveVerifyClientPub(bundle model.ProofBundle, clientPubPath, registryPath, registryPubPath string) (ed25519.PublicKey, error) {
+func resolveVerifyClientPub(bundle model.ProofBundle, clientPubPath, registryPath, registryPubPath string) (trustcrypto.PublicKeyDescriptor, error) {
 	if clientPubPath != "" {
-		return readPublicKey(clientPubPath)
+		descriptor, _, err := readPublicKeyDescriptor(clientPubPath)
+		return descriptor, err
 	}
 	if registryPath != "" {
-		var registryPub ed25519.PublicKey
-		var err error
-		if registryPubPath != "" {
-			registryPub, err = readPublicKey(registryPubPath)
-			if err != nil {
-				return nil, err
-			}
-		}
 		registryDescriptor := trustcrypto.PublicKeyDescriptor{}
-		if len(registryPub) != 0 {
-			registryDescriptor, err = trustcrypto.NewEd25519PublicKey("", registryPub)
+		if registryPubPath != "" {
+			var err error
+			registryDescriptor, _, err = readPublicKeyDescriptor(registryPubPath)
 			if err != nil {
-				return nil, err
+				return trustcrypto.PublicKeyDescriptor{}, err
 			}
 		}
 		reg, err := keystore.Open(registryPath, nil, registryDescriptor)
 		if err != nil {
-			return nil, err
+			return trustcrypto.PublicKeyDescriptor{}, err
 		}
 		key, err := reg.LookupClientKeyAt(
 			bundle.SignedClaim.Claim.TenantID,
@@ -468,9 +464,9 @@ func resolveVerifyClientPub(bundle model.ProofBundle, clientPubPath, registryPat
 			time.Unix(0, bundle.AcceptedReceipt.ReceivedAtUnixN),
 		)
 		if err != nil {
-			return nil, err
+			return trustcrypto.PublicKeyDescriptor{}, err
 		}
-		return ed25519.PublicKey(key.PublicKey), nil
+		return trustcrypto.NewEd25519PublicKey(key.KeyID, key.PublicKey)
 	}
-	return nil, usageError("verify requires either client-public-key or key-registry")
+	return trustcrypto.PublicKeyDescriptor{}, usageError("verify requires either client-public-key or key-registry")
 }

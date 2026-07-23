@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/wowtrust/trustdb/internal/cborx"
+	"github.com/wowtrust/trustdb/internal/keydescriptor"
 )
 
 func TestReadFileLimitBoundsInputBeforeDecode(t *testing.T) {
@@ -46,11 +47,11 @@ func TestCLIInputHelpersRejectOversizedFiles(t *testing.T) {
 	}
 
 	keyPath := filepath.Join(t.TempDir(), "oversized.key")
-	if err := os.WriteFile(keyPath, bytes.Repeat([]byte{'A'}, maxEncodedKeyFileBytes+1), 0o600); err != nil {
+	if err := os.WriteFile(keyPath, bytes.Repeat([]byte{'A'}, (2<<20)+1), 0o600); err != nil {
 		t.Fatalf("WriteFile(key) error = %v", err)
 	}
-	if _, err := readKey(keyPath); err == nil {
-		t.Fatal("readKey(oversized) error = nil")
+	if _, err := keydescriptor.ReadFile(keyPath); err == nil {
+		t.Fatal("ReadFile(oversized key descriptor) error = nil")
 	}
 }
 

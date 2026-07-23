@@ -2,18 +2,17 @@ package main
 
 import (
 	"context"
-	"crypto/ed25519"
 	"encoding/base64"
 	"os"
 	"path/filepath"
 	"time"
 
+	"github.com/spf13/cobra"
 	"github.com/wowtrust/trustdb/internal/cborx"
 	"github.com/wowtrust/trustdb/internal/claim"
 	"github.com/wowtrust/trustdb/internal/model"
 	"github.com/wowtrust/trustdb/internal/objectstore"
 	"github.com/wowtrust/trustdb/internal/trustcrypto"
-	"github.com/spf13/cobra"
 )
 
 func newClaimFileCommand(rt *runtimeConfig) *cobra.Command {
@@ -30,7 +29,14 @@ func newClaimFileCommand(rt *runtimeConfig) *cobra.Command {
 			if filePath == "" || clientID == "" || keyID == "" || privateKeyPath == "" {
 				return usageError("claim-file requires file, client, key-id, and private-key")
 			}
-			priv, err := readPrivateKey(privateKeyPath)
+			signer, key, err := readSigner(cmd.Context(), privateKeyPath)
+			if err != nil {
+				return err
+			}
+			if err := requireKeyID(keyID, key); err != nil {
+				return err
+			}
+			provider, err := trustcrypto.ProviderForSuite(key.CryptoSuite)
 			if err != nil {
 				return err
 			}
@@ -92,7 +98,7 @@ func newClaimFileCommand(rt *runtimeConfig) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			signed, err := claim.Sign(c, priv)
+			signed, err := claim.SignWithProvider(cmd.Context(), provider, c, signer)
 			if err != nil {
 				return err
 			}
@@ -103,7 +109,11 @@ func newClaimFileCommand(rt *runtimeConfig) *cobra.Command {
 			if err := writeFileAtomic(outPath, data, 0o600); err != nil {
 				return err
 			}
-			verified, err := claim.Verify(signed, priv.Public().(ed25519.PublicKey))
+			publicKey, err := signer.PublicKey(cmd.Context())
+			if err != nil {
+				return err
+			}
+			verified, err := claim.VerifyWithProvider(cmd.Context(), signed, publicKey, provider)
 			if err != nil {
 				return err
 			}
@@ -119,7 +129,7 @@ func newClaimFileCommand(rt *runtimeConfig) *cobra.Command {
 	}
 	addCommonIdentityFlags(cmd)
 	cmd.Flags().StringVar(&filePath, "file", "", "file to claim")
-	cmd.Flags().StringVar(&privateKeyPath, "private-key", "", "client private key")
+	cmd.Flags().StringVar(&privateKeyPath, "private-key", "", "client signer descriptor")
 	cmd.Flags().StringVar(&objectDir, "object-dir", "", "optional local object store directory")
 	cmd.Flags().StringVar(&outPath, "out", "claim.tdclaim", "output signed claim")
 	return cmd
