@@ -9,9 +9,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/spf13/viper"
 	trustconfig "github.com/wowtrust/trustdb/internal/config"
 	"github.com/wowtrust/trustdb/internal/wal"
-	"github.com/spf13/viper"
 )
 
 func TestConfigInitAndShow(t *testing.T) {
@@ -65,6 +65,10 @@ func TestConfigEnvOverride(t *testing.T) {
 	t.Setenv("TRUSTDB_TIKV_NAMESPACE", "tenant-a/log-a")
 	t.Setenv("TRUSTDB_SERVER_READ_HEADER_TIMEOUT", "3s")
 	t.Setenv("TRUSTDB_SERVER_IDLE_TIMEOUT", "45s")
+	t.Setenv("TRUSTDB_NATS_ENABLED", "true")
+	t.Setenv("TRUSTDB_NATS_URLS", "nats://10.0.0.1:4222,tls://10.0.0.2:4222")
+	t.Setenv("TRUSTDB_NATS_WORKERS", "24")
+	t.Setenv("TRUSTDB_NATS_TOKEN", "nats-secret")
 
 	var out, errOut bytes.Buffer
 	cmd := newRootCommand(&out, &errOut)
@@ -110,6 +114,20 @@ func TestConfigEnvOverride(t *testing.T) {
 	}
 	if server["idle_timeout"] != "45s" {
 		t.Fatalf("server.idle_timeout = %v", server["idle_timeout"])
+	}
+	nats, ok := cfg["nats"].(map[string]any)
+	if !ok {
+		t.Fatalf("nats is not an object: %#v", cfg["nats"])
+	}
+	if nats["enabled"] != true || nats["workers"] != float64(24) {
+		t.Fatalf("nats enabled/workers = %#v", nats)
+	}
+	natsURLs, ok := nats["urls"].([]any)
+	if !ok || len(natsURLs) != 2 || natsURLs[1] != "tls://10.0.0.2:4222" {
+		t.Fatalf("nats.urls = %#v", nats["urls"])
+	}
+	if nats["token"] != "<redacted>" {
+		t.Fatalf("nats.token = %v, want redacted", nats["token"])
 	}
 	proofstore, ok := cfg["proofstore"].(map[string]any)
 	if !ok {
