@@ -1,0 +1,188 @@
+{
+  "schema_version": "trustdb.performance.assessment.v1",
+  "date": "2026-07-23",
+  "title": "Dual-host multi-semantics sustained-stream and evidence-path assessment",
+  "report": "../trustdb-sustained-stream-persistence-assessment-2026-07-23.zh-CN.md",
+  "commit": "f29addd64e5c77df2a51c7a337a2a6649e1dd70d",
+  "binary": {
+    "version": "perf-main-f29addd",
+    "go_version": "1.26.5",
+    "platform": "linux/amd64",
+    "sha256": "949270da54dce7ec5469b6b5052698db1dc70192a7a48cfb533a9bc393e8acbd"
+  },
+  "totals": {
+    "included_cases": 30,
+    "submitted": 7311000,
+    "failed": 0,
+    "batch_errors": 0,
+    "l3_complete_records": 5091000,
+    "l4_complete_records": 3451000,
+    "l5_covering_anchor_records": 51000,
+    "proof_checks_ready": 176,
+    "proof_check_timeouts": 0,
+    "proof_check_failures": 0,
+    "global_evidence_binding_checks_ready": 16,
+    "global_evidence_binding_check_failures": 0
+  },
+  "environment": {
+    "server_logical_cpus": 48,
+    "load_generator_logical_cpus": 48,
+    "cpu_model": "AMD EPYC 9K84 96-Core Processor",
+    "physical_cores_per_host": 24,
+    "threads_per_core": 2,
+    "numa_nodes_per_host": 1,
+    "nominal_memory_gib_per_host": 192,
+    "visible_memory_gib_per_host": 184,
+    "os": "OpenCloudOS Server 9",
+    "kernel": "6.6.119-49.23.oc9.x86_64",
+    "data_disk_gib": 70,
+    "filesystem": "ext4",
+    "mount_options": ["rw", "noatime", "nodiratime", "stripe=64"],
+    "io_scheduler": "none",
+    "network_rtt_avg_ms": 0.126,
+    "network_rtt_max_ms": 0.410,
+    "network_packet_loss_percent": 0,
+    "network_throughput_gbps_min": 16.44,
+    "network_throughput_gbps_max": 16.50
+  },
+  "storage_baseline": [
+    {
+      "round": "A",
+      "randwrite_4k_iops": 28349.91,
+      "randwrite_4k_p95_ms": 7.897,
+      "randwrite_4k_p99_ms": 20.054,
+      "sequential_write_mib_s": 351.51,
+      "fdatasync_4k_iops": 1463.00,
+      "fdatasync_sync_p95_ms": 1.036,
+      "fdatasync_sync_p99_ms": 1.434
+    },
+    {
+      "round": "B",
+      "randwrite_4k_iops": 50090.69,
+      "randwrite_4k_p95_ms": 3.883,
+      "randwrite_4k_p99_ms": 4.227,
+      "sequential_write_mib_s": 351.47,
+      "fdatasync_4k_iops": 1201.83,
+      "fdatasync_sync_p95_ms": 1.155,
+      "fdatasync_sync_p99_ms": 1.597
+    }
+  ],
+  "semantic_profiles": {
+    "BTO-L2": {
+      "wal_fsync_mode": "batch",
+      "record_index_mode": "time_only",
+      "artifact_sync_mode": "batch",
+      "proof_mode": "on_demand",
+      "max_proof_level": "L3",
+      "global_log_enabled": false
+    },
+    "BTA-L3": {
+      "wal_fsync_mode": "batch",
+      "record_index_mode": "time_only",
+      "artifact_sync_mode": "batch",
+      "proof_mode": "async",
+      "max_proof_level": "L3",
+      "global_log_enabled": false
+    },
+    "GFCI-L3": {
+      "wal_fsync_mode": "group",
+      "wal_group_commit_interval_ms": 10,
+      "record_index_mode": "full",
+      "artifact_sync_mode": "chunk",
+      "proof_mode": "inline",
+      "max_proof_level": "L3",
+      "global_log_enabled": false
+    },
+    "GNA-L4": {
+      "wal_fsync_mode": "group",
+      "wal_group_commit_interval_ms": 10,
+      "record_index_mode": "no_storage_tokens",
+      "artifact_sync_mode": "batch",
+      "proof_mode": "async",
+      "max_proof_level": "L4",
+      "global_log_enabled": true
+    },
+    "GFCA-L4": {
+      "wal_fsync_mode": "group",
+      "wal_group_commit_interval_ms": 10,
+      "record_index_mode": "full",
+      "artifact_sync_mode": "chunk",
+      "proof_mode": "async",
+      "max_proof_level": "L4",
+      "global_log_enabled": true
+    },
+    "SFCA-L4": {
+      "wal_fsync_mode": "strict",
+      "record_index_mode": "full",
+      "artifact_sync_mode": "chunk",
+      "proof_mode": "async",
+      "max_proof_level": "L4",
+      "global_log_enabled": true
+    }
+  },
+  "l2_burst_curve": [
+    {"transport":"grpc","count":10000,"concurrency":256,"duration_seconds":0.176754640,"submit_tps":56575.601,"latency_avg_ms":4.391994,"p50_ms":5,"p95_ms":10,"p99_ms":20,"max_ms":18.389886,"failed":0,"batch_errors":0},
+    {"transport":"grpc","count":50000,"concurrency":256,"duration_seconds":1.351679928,"submit_tps":36991.006,"latency_avg_ms":6.834629,"p50_ms":5,"p95_ms":50,"p99_ms":50,"max_ms":33.652033,"failed":0,"batch_errors":0},
+    {"transport":"grpc","count":100000,"concurrency":256,"duration_seconds":4.591529199,"submit_tps":21779.236,"latency_avg_ms":11.704361,"p50_ms":20,"p95_ms":50,"p99_ms":50,"max_ms":54.014103,"failed":0,"batch_errors":0},
+    {"transport":"grpc","count":500000,"concurrency":256,"duration_seconds":39.580614467,"submit_tps":12632.447,"latency_avg_ms":20.236859,"p50_ms":20,"p95_ms":50,"p99_ms":50,"max_ms":109.992365,"failed":0,"batch_errors":0},
+    {"transport":"http","count":10000,"concurrency":256,"duration_seconds":0.225490415,"submit_tps":44347.783,"latency_avg_ms":5.623006,"p50_ms":5,"p95_ms":10,"p99_ms":50,"max_ms":49.248703,"failed":0,"batch_errors":0},
+    {"transport":"http","count":50000,"concurrency":256,"duration_seconds":1.472106998,"submit_tps":33964.922,"latency_avg_ms":7.432026,"p50_ms":5,"p95_ms":50,"p99_ms":50,"max_ms":66.641622,"failed":0,"batch_errors":0},
+    {"transport":"http","count":500000,"concurrency":256,"duration_seconds":40.918775640,"submit_tps":12219.329,"latency_avg_ms":20.921168,"p50_ms":50,"p95_ms":50,"p99_ms":50,"max_ms":121.910500,"failed":0,"batch_errors":0}
+  ],
+  "l2_bounded_buffer_500k": [
+    {"transport":"grpc","batch_queue_size":262144,"count":500000,"submit_tps":12728.607,"duration_seconds":39.281597199,"failed":0,"batch_errors":0},
+    {"transport":"http","batch_queue_size":262144,"count":500000,"submit_tps":12862.279,"duration_seconds":38.873359801,"failed":0,"batch_errors":0}
+  ],
+  "on_demand_first_proof": {
+    "transport": "grpc",
+    "count": 100000,
+    "submit_tps": 21779.236,
+    "immediate_record_query_avg_ms": 0.343994,
+    "proof_samples": 8,
+    "proof_ready": 8,
+    "proof_wait_avg_ms": 1827.111763,
+    "proof_wait_max_ms": 14598.235960,
+    "post_proof_record_query_avg_ms": 0.359114
+  },
+  "sustained_l3": [
+    {"profile":"BTA-L3","transport":"grpc","count":500000,"concurrency":256,"payload_bytes":1024,"submit_tps":7702.013,"l3_tps":5473.416,"total_seconds":91.351493,"batch_count":111,"p50_ms":10,"p95_ms":100,"p99_ms":1000,"failed":0,"batch_errors":0,"proof_ready":8},
+    {"profile":"BTA-L3","transport":"http","count":500000,"concurrency":256,"payload_bytes":1024,"submit_tps":6840.303,"l3_tps":5230.674,"total_seconds":95.590916,"batch_count":123,"p50_ms":10,"p95_ms":100,"p99_ms":1000,"failed":0,"batch_errors":0,"proof_ready":8},
+    {"profile":"GFCI-L3","transport":"grpc","count":100000,"concurrency":64,"payload_bytes":1024,"submit_tps":8911.050,"l3_tps":5229.303,"total_seconds":19.123913,"batch_count":98,"proof_sample_avg_ms":0.721159,"failed":0,"batch_errors":0,"proof_ready":8},
+    {"profile":"GFCI-L3","transport":"http","count":100000,"concurrency":64,"payload_bytes":1024,"submit_tps":9041.906,"l3_tps":5264.398,"total_seconds":18.996385,"batch_count":98,"proof_sample_avg_ms":0.573956,"failed":0,"batch_errors":0,"proof_ready":8}
+  ],
+  "gfca_l4_worker_scaling_fresh_500k": [
+    {"transport":"grpc","ingest_workers":2,"materializer_workers":4,"submit_tps":2463.034,"l3_tps":2069.464,"l4_tps":2068.325,"total_seconds":241.742321,"batch_count":537,"failed":0,"batch_errors":0},
+    {"transport":"grpc","ingest_workers":3,"materializer_workers":4,"submit_tps":2759.717,"l3_tps":2238.542,"l4_tps":2237.201,"total_seconds":223.494364,"batch_count":509,"failed":0,"batch_errors":0},
+    {"transport":"grpc","ingest_workers":4,"materializer_workers":4,"submit_tps":2412.582,"l3_tps":1984.414,"l4_tps":1983.371,"total_seconds":252.096946,"batch_count":509,"failed":0,"batch_errors":0},
+    {"transport":"grpc","ingest_workers":8,"materializer_workers":4,"submit_tps":2352.410,"l3_tps":1960.998,"l4_tps":1959.982,"total_seconds":255.105296,"batch_count":498,"failed":0,"batch_errors":0},
+    {"transport":"http","ingest_workers":3,"materializer_workers":4,"submit_tps":2665.721,"l3_tps":2206.870,"l4_tps":2205.579,"total_seconds":226.698716,"batch_count":517,"failed":0,"batch_errors":0}
+  ],
+  "database_growth": [
+    {"profile":"GFCA-L4","transport":"grpc","ingest_workers":2,"database_records_before":0,"database_records_after":500000,"submit_tps":2463.034,"l4_tps":2068.325,"peak_compaction_debt_bytes":2293045550},
+    {"profile":"GFCA-L4","transport":"grpc","ingest_workers":2,"database_records_before":500000,"database_records_after":1000000,"submit_tps":1963.918,"l4_tps":1647.999,"peak_compaction_debt_bytes":4039154376}
+  ],
+  "other_l4_semantics": [
+    {"profile":"GNA-L4","transport":"grpc","count":300000,"concurrency":128,"submit_tps":4317.079,"l3_tps":4222.354,"l4_tps":4206.840,"total_seconds":71.313244,"batch_count":101,"failed":0,"batch_errors":0,"proof_ready":8},
+    {"profile":"SFCA-L4","transport":"grpc","count":50000,"concurrency":64,"submit_tps":667.529,"l3_tps":666.657,"l4_tps":666.625,"total_seconds":75.005551,"batch_count":698,"failed":0,"batch_errors":0,"proof_ready":8},
+    {"profile":"SFCA-L4","transport":"http","count":50000,"concurrency":64,"submit_tps":665.798,"l3_tps":664.865,"l4_tps":664.834,"total_seconds":75.207600,"batch_count":699,"failed":0,"batch_errors":0,"proof_ready":8}
+  ],
+  "file_hash_input_cases": [
+    {"transport":"grpc","payload_bytes":16384,"count":50000,"concurrency":64,"submit_tps":8834.079,"l3_tps":7472.779,"total_seconds":6.691813,"input_mib_per_second":116.751,"failed":0,"batch_errors":0},
+    {"transport":"http","payload_bytes":16384,"count":50000,"concurrency":64,"submit_tps":7982.840,"l3_tps":7065.154,"total_seconds":7.077815,"input_mib_per_second":110.381,"failed":0,"batch_errors":0},
+    {"transport":"grpc","payload_bytes":65536,"count":20000,"concurrency":32,"submit_tps":14019.055,"l3_tps":7899.733,"total_seconds":2.532541,"input_mib_per_second":493.576,"failed":0,"batch_errors":0},
+    {"transport":"http","payload_bytes":65536,"count":20000,"concurrency":32,"submit_tps":13938.852,"l3_tps":7861.240,"total_seconds":2.544944,"input_mib_per_second":491.170,"failed":0,"batch_errors":0},
+    {"transport":"grpc","payload_bytes":16384,"count":200000,"concurrency":64,"submit_tps":6773.919,"l3_tps":6516.124,"total_seconds":30.693931,"input_mib_per_second":101.812,"failed":0,"batch_errors":0},
+    {"transport":"grpc","payload_bytes":65536,"count":100000,"concurrency":32,"submit_tps":7371.292,"l3_tps":7102.694,"total_seconds":14.079996,"input_mib_per_second":443.892,"failed":0,"batch_errors":0}
+  ],
+  "l5_cases": [
+    {"sink":"file","transport":"grpc","count":50000,"anchor_max_delay_seconds":5,"submit_tps":3093.728,"l4_tps":2776.150,"l5_ready_seconds":21.532073,"l5_covering_tps":2322.117,"batch_roots":53,"anchor_results":4,"final_sth_tree_size":53,"latest_anchor_tree_size":53,"evidence_samples":8,"evidence_ready":8,"evidence_query_seconds":0.082358},
+    {"sink":"ots","transport":"grpc","count":1000,"anchor_max_delay_seconds":2,"ots_min_accepted":1,"submit_tps":18939.419,"l4_ready_seconds":0.404572,"l5_ready_seconds":4.798751,"l5_covering_tps":208.388,"batch_roots":1,"anchor_results":1,"final_sth_tree_size":1,"latest_anchor_tree_size":1,"evidence_samples":8,"evidence_ready":8,"evidence_query_seconds":0.081397}
+  ],
+  "backpressure_resource_samples": [
+    {"id":"i2-r1","ingest_workers":2,"database_records_after":500000,"peak_batch_queue":62522,"peak_ingest_queue":62,"peak_accepted_to_materialized_lag":64570,"peak_heap_bytes":554460288,"peak_rss_kib":640984,"peak_goroutines":173,"peak_compaction_debt_bytes":2293045550,"avg_process_cpu_percent":246.78,"peak_process_cpu_percent":451,"peak_cpu_wait_percent":23,"avg_disk_util_percent":58.47,"peak_disk_util_percent":96.60,"peak_disk_write_await_ms":16.14},
+    {"id":"i2-r2","ingest_workers":2,"database_records_after":1000000,"peak_batch_queue":65536,"peak_ingest_queue":62,"peak_accepted_to_materialized_lag":67650,"peak_heap_bytes":545270800,"peak_rss_kib":661880,"peak_goroutines":170,"peak_compaction_debt_bytes":4039154376,"avg_process_cpu_percent":222.06,"peak_process_cpu_percent":479,"peak_cpu_wait_percent":39,"avg_disk_util_percent":61.73,"peak_disk_util_percent":96.60,"peak_disk_write_await_ms":16.92},
+    {"id":"i3-r1","ingest_workers":3,"database_records_after":500000,"monitor_samples":223,"peak_batch_queue":65536,"peak_ingest_queue":61,"peak_accepted_to_materialized_lag":67648,"peak_heap_bytes":579479104,"peak_rss_kib":634640,"peak_goroutines":178,"peak_compaction_debt_bytes":2213844036,"avg_process_cpu_percent":319.40,"peak_process_cpu_percent":607,"peak_cpu_wait_percent":24,"avg_process_write_kib_s":215173.02,"peak_process_write_kib_s":331024,"avg_disk_write_mib_s":213.96,"peak_disk_write_mib_s":329.58,"avg_disk_util_percent":53.52,"peak_disk_util_percent":96.80,"avg_disk_write_await_ms":4.16,"peak_disk_write_await_ms":18.42},
+    {"id":"i4-r1","ingest_workers":4,"database_records_after":500000,"peak_batch_queue":65536,"peak_ingest_queue":60,"peak_accepted_to_materialized_lag":67668,"peak_heap_bytes":551037728,"peak_rss_kib":633924,"peak_goroutines":150,"peak_compaction_debt_bytes":2176472252,"avg_process_cpu_percent":249.57,"peak_process_cpu_percent":641,"peak_cpu_wait_percent":25,"avg_disk_util_percent":60.90,"peak_disk_util_percent":97.40,"peak_disk_write_await_ms":17.71},
+    {"id":"i8-r1","ingest_workers":8,"database_records_after":500000,"peak_batch_queue":65536,"peak_ingest_queue":56,"peak_accepted_to_materialized_lag":67718,"peak_heap_bytes":581131688,"peak_rss_kib":713108,"peak_goroutines":182,"peak_compaction_debt_bytes":2209989792,"avg_process_cpu_percent":251.49,"peak_process_cpu_percent":756,"avg_disk_write_kib_s":183467,"peak_disk_write_kib_s":325252,"avg_disk_util_percent":63.76,"peak_disk_util_percent":95.20,"peak_disk_write_await_ms":15.47}
+  ]
+}
