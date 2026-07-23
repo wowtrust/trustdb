@@ -1,12 +1,34 @@
 # TrustDB
 
 ![CI](https://github.com/wowtrust/trustdb/actions/workflows/ci.yml/badge.svg)
+![GitHub release](https://img.shields.io/github/v/release/wowtrust/trustdb)
+![License](https://img.shields.io/github/license/wowtrust/trustdb)
+![Go version](https://img.shields.io/github/go-mod/go-version/wowtrust/trustdb)
 
-[Official Website](https://www.trustdb.ryan-wong.cn/) | [中文说明](README.zh-CN.md) | [Architecture](ARCHITECTURE.zh-CN.md) | [Contributing](CONTRIBUTING.md) | [`.sproof` format](formats/SPROOF_V1.md)
+[Official Website](https://www.trustdb.ryan-wong.cn/) | [Quick Start](#quick-start) | [中文说明](README.zh-CN.md) | [Community](COMMUNITY.md) | [Roadmap](ROADMAP.md) | [Contributing](CONTRIBUTING.md)
 
-TrustDB is a verifiable evidence database for file claims and proof exchange. It turns a local file hash into a signed claim, a server acceptance receipt, a batch Merkle proof, a global transparency-log proof, and optionally an externally anchored Signed Tree Head (STH).
+**TrustDB is a self-hosted tamper-evident evidence database for files, audit events, and data handoffs.** It turns a local content hash into a portable proof that another party can verify offline, without uploading the original content or trusting the source database administrator.
 
-Documentation, quick start guides, releases, and feedback channels are available on the [TrustDB official website](https://www.trustdb.ryan-wong.cn/).
+Use it when a workflow must later answer: **what was submitted, who signed it, whether it was accepted, and whether the supplied content still matches the recorded evidence.**
+
+- Keep original business data in its existing system; TrustDB stores hashes, signatures, receipts, and proofs.
+- Export a single `.sproof` evidence file for independent and offline verification.
+- Build evidence from signed claims through Merkle batches and a global transparency log.
+- Run locally or self-host with the CLI, Go SDK, Docker image, desktop client, and optional TiKV proofstore.
+
+Typical uses include release-artifact verification, data and report delivery, privileged-operation evidence, dataset/model provenance, and cross-organization handoffs. TrustDB does not make blanket legal-validity claims and does not by itself bind a cryptographic key to a real-world identity.
+
+## See tamper detection in one command
+
+With Go installed, clone the repository and run:
+
+```sh
+./scripts/demo.sh
+```
+
+The script builds the CLI in a temporary directory, proves a sample file, verifies the original, then changes a copy and confirms that verification fails. It does not start a server or retain generated keys.
+
+For prebuilt binaries, Docker, Windows instructions, L4/L5 evidence, and production deployment, use the [official documentation](https://www.trustdb.ryan-wong.cn/docs/quick-start).
 
 ![TrustDB system architecture](assets/readme/system-architecture.png)
 
@@ -212,6 +234,11 @@ The screenshot below is rendered directly from the current desktop client code:
 ## Project Documents
 
 - [ARCHITECTURE.zh-CN.md](ARCHITECTURE.zh-CN.md): detailed TrustDB server, persistence, Global Log, anchoring, SDK, backup, and offline-verification architecture (Chinese).
+- [COMMUNITY.md](COMMUNITY.md): support, discussion, and first-contribution entry points.
+- [ROADMAP.md](ROADMAP.md): public product direction and ways to influence it.
+- [SECURITY.md](SECURITY.md): private vulnerability reporting and supported-version policy.
+- [LICENSE-FAQ.md](LICENSE-FAQ.md): practical AGPL adoption questions and project boundaries.
+- [ADOPTERS.md](ADOPTERS.md): public evaluations, pilots, and production users.
 - [docs/compliance/CHINA_COMPLIANCE_SCOPE_AND_CONTROL_MATRIX.zh-CN.md](docs/compliance/CHINA_COMPLIANCE_SCOPE_AND_CONTROL_MATRIX.zh-CN.md): versioned China compliance scope, control ownership, release gates, evidence requirements, and assessment boundaries (Chinese).
 - [CONTRIBUTING.md](CONTRIBUTING.md): issue, PR, commit, validation, and review standards.
 - [formats/SPROOF_V1.md](formats/SPROOF_V1.md): stable `.sproof` v1 exchange format.
@@ -223,6 +250,8 @@ The screenshot below is rendered directly from the current desktop client code:
 ## Community Acknowledgements
 
 TrustDB gratefully acknowledges the [LINUX DO community](https://linux.do/) for fostering open technical discussion and open-source collaboration.
+
+Questions and integration ideas belong in [GitHub Discussions](https://github.com/wowtrust/trustdb/discussions). Confirmed bugs and accepted engineering work belong in [GitHub Issues](https://github.com/wowtrust/trustdb/issues). See the [community guide](COMMUNITY.md), [roadmap](ROADMAP.md), [security policy](SECURITY.md), [license FAQ](LICENSE-FAQ.md), and [adopters page](ADOPTERS.md).
 
 ## Development Checks
 

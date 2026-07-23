@@ -1,5 +1,11 @@
 blank_issues_enabled: false
 contact_links:
+  - name: Questions, ideas, and integrations
+    url: https://github.com/wowtrust/trustdb/discussions
+    about: Ask for help, propose an integration, or validate an idea before opening a scoped issue.
+  - name: Report a security vulnerability
+    url: https://github.com/wowtrust/trustdb/security/advisories/new
+    about: Privately report vulnerabilities. Do not disclose security issues in public.
   - name: TrustDB contribution guide
     url: https://github.com/wowtrust/trustdb/blob/main/CONTRIBUTING.md
     about: Read the branch, issue, PR, commit, proof-boundary, and validation standards before opening work.

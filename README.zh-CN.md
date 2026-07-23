@@ -1,12 +1,34 @@
 # TrustDB
 
 ![CI](https://github.com/wowtrust/trustdb/actions/workflows/ci.yml/badge.svg)
+![GitHub release](https://img.shields.io/github/v/release/wowtrust/trustdb)
+![License](https://img.shields.io/github/license/wowtrust/trustdb)
+![Go version](https://img.shields.io/github/go-mod/go-version/wowtrust/trustdb)
 
-[官方网站](https://www.trustdb.ryan-wong.cn/) | [English README](README.md) | [架构设计](ARCHITECTURE.zh-CN.md) | [贡献指南](CONTRIBUTING.md) | [`.sproof` 格式](formats/SPROOF_V1.md)
+[官方网站](https://www.trustdb.ryan-wong.cn/) | [快速开始](#快速开始) | [English README](README.md) | [社区](COMMUNITY.md) | [路线图](ROADMAP.md) | [贡献指南](CONTRIBUTING.md)
 
-TrustDB 是一个面向文件存证和证明交换的可验证证据数据库。它把本地文件哈希转换为客户端签名声明、服务端接受收据、批次 Merkle 证明、Global Transparency Log 证明，以及可选的外部 Signed Tree Head（STH）锚定结果。
+**TrustDB 是一个面向文件、审计事件和数据交接的可自托管防篡改证据数据库。** 它把本地内容哈希转换为可移植证明，让接收方不必取得原始数据、不必信任源系统管理员，也能离线独立验证。
 
-文档、快速开始、版本发布和反馈渠道统一维护在 [TrustDB 官方网站](https://www.trustdb.ryan-wong.cn/)。
+当业务以后必须回答“提交了什么、谁签过、服务端是否接受、当前材料是否仍与当时一致”时，可以把 TrustDB 作为业务数据库之外的独立证据层：
+
+- 原始业务数据继续留在原系统；TrustDB 保存哈希、签名、收据和证明。
+- 导出单个 `.sproof` 证据文件，交给另一方离线验证。
+- 从签名声明、Merkle 批次逐步形成全局透明日志证据。
+- 可通过 CLI、Go SDK、Docker、桌面客户端自托管，并可选使用 TiKV proofstore。
+
+典型场景包括发布产物核验、数据和报告交付、高危操作凭证、数据集/模型来源追踪以及跨组织数据交接。TrustDB 不作笼统的法律效力承诺，也不会自动把密码学密钥绑定到现实身份。
+
+## 一条命令体验篡改检测
+
+安装 Go 并克隆仓库后运行：
+
+```sh
+./scripts/demo.sh
+```
+
+脚本会在临时目录构建 CLI，为样例文件生成证明，验证原文件，然后修改一份副本并确认验证失败。它不会启动服务，也不会保留生成的密钥。
+
+预编译包、Docker、Windows 指引、L4/L5 证明和生产部署请查看[官方快速开始](https://www.trustdb.ryan-wong.cn/docs/quick-start)。
 
 ![TrustDB 系统架构](assets/readme/system-architecture.png)
 
@@ -199,6 +221,11 @@ mkdir -p .trustdb-dev
 ## 项目文档
 
 - [ARCHITECTURE.zh-CN.md](ARCHITECTURE.zh-CN.md)：TrustDB 服务端、持久化、Global Log、Anchor、SDK、备份和离线验证的详细架构设计。
+- [COMMUNITY.md](COMMUNITY.md)：使用支持、讨论和首次贡献入口。
+- [ROADMAP.md](ROADMAP.md)：公开产品方向以及影响路线图的方式。
+- [SECURITY.md](SECURITY.md)：漏洞私密报告和支持版本策略。
+- [LICENSE-FAQ.md](LICENSE-FAQ.md)：AGPL 采用常见问题和项目边界。
+- [ADOPTERS.md](ADOPTERS.md)：公开评估、试点和生产采用者。
 - [CONTRIBUTING.md](CONTRIBUTING.md)：Issue、PR、Commit、验证和 Review 标准。
 - [formats/SPROOF_V1.md](formats/SPROOF_V1.md)：稳定 `.sproof` v1 交换格式。
 - [formats/DISTRIBUTED_ARCHITECTURE.md](formats/DISTRIBUTED_ARCHITECTURE.md)：分布式/存算分离说明。
@@ -209,6 +236,8 @@ mkdir -p .trustdb-dev
 ## 社区致谢
 
 TrustDB 感谢 [LINUX DO 社区](https://linux.do/) 对开放技术交流与开源协作的推动。
+
+使用问题和集成想法请进入 [GitHub Discussions](https://github.com/wowtrust/trustdb/discussions)，确认的缺陷和已接受的工程任务请进入 [GitHub Issues](https://github.com/wowtrust/trustdb/issues)。更多入口见[社区指南](COMMUNITY.md)、[路线图](ROADMAP.md)、[安全策略](SECURITY.md)、[许可证 FAQ](LICENSE-FAQ.md)和[采用者列表](ADOPTERS.md)。
 
 ## 开发检查
 

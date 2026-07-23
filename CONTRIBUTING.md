@@ -6,6 +6,13 @@ This guide is bilingual. The Chinese section is authoritative for day-to-day pro
 
 ## 中文版
 
+### 第一次参与
+
+- 使用问题、部署讨论和尚未收敛的集成想法先发到 [GitHub Discussions](https://github.com/wowtrust/trustdb/discussions)。
+- 首次代码或文档贡献优先选择 [`good first issue`](https://github.com/wowtrust/trustdb/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22)。需要社区协作的任务见 [`help wanted`](https://github.com/wowtrust/trustdb/issues?q=is%3Aissue+is%3Aopen+label%3A%22help+wanted%22)。
+- 在 Issue 下留言说明准备处理的范围，维护者确认后再开始较大的改动，避免重复工作。
+- 安全漏洞必须按照 [SECURITY.md](SECURITY.md) 私密报告，不要创建公开 Issue。
+
 ### 基本原则
 
 - 先有 Issue，再有实现。Bug、功能、重构、文档、CI、发布和运维工作都要先说明背景、范围、验收标准和验证方式。
@@ -168,6 +175,13 @@ go test -race ./...
 - 不提交本地密钥、数据库、备份包、构建产物、日志或临时演示文件。
 
 ## English Version
+
+### First contribution
+
+- Use [GitHub Discussions](https://github.com/wowtrust/trustdb/discussions) for support, deployment questions, and integration ideas that are not yet scoped.
+- Start with a [`good first issue`](https://github.com/wowtrust/trustdb/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22), or browse [`help wanted`](https://github.com/wowtrust/trustdb/issues?q=is%3Aissue+is%3Aopen+label%3A%22help+wanted%22) for community work.
+- Comment on the issue with the scope you plan to handle and wait for maintainer confirmation before beginning a large change.
+- Report vulnerabilities privately according to [SECURITY.md](SECURITY.md), never through a public issue.
 
 ### Core Rules
 
