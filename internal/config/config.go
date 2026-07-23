@@ -72,6 +72,8 @@ nats:
   fetch_batch: 256
   fetch_wait: "1s"
   ack_wait: "30s"
+  nak_delay: "1s"
+  outcome_retry_wait: "1s"
   max_ack_pending: 2048
   max_deliver: 10
   connect_timeout: "5s"
@@ -238,6 +240,8 @@ type NATS struct {
 	FetchBatch      int      `mapstructure:"fetch_batch" json:"fetch_batch"`
 	FetchWait       string   `mapstructure:"fetch_wait" json:"fetch_wait"`
 	AckWait         string   `mapstructure:"ack_wait" json:"ack_wait"`
+	NakDelay        string   `mapstructure:"nak_delay" json:"nak_delay"`
+	ResultRetryWait string   `mapstructure:"outcome_retry_wait" json:"outcome_retry_wait"`
 	MaxAckPending   int      `mapstructure:"max_ack_pending" json:"max_ack_pending"`
 	MaxDeliver      int      `mapstructure:"max_deliver" json:"max_deliver"`
 	ConnectTimeout  string   `mapstructure:"connect_timeout" json:"connect_timeout"`
@@ -386,6 +390,8 @@ func Default() Config {
 			FetchBatch:      256,
 			FetchWait:       "1s",
 			AckWait:         "30s",
+			NakDelay:        "1s",
+			ResultRetryWait: "1s",
 			MaxAckPending:   2048,
 			MaxDeliver:      10,
 			ConnectTimeout:  "5s",
@@ -689,12 +695,17 @@ func validateNATS(n NATS) error {
 	if n.FetchBatch > n.MaxAckPending {
 		return fmt.Errorf("nats.fetch_batch must not exceed nats.max_ack_pending")
 	}
+	if n.Workers > n.MaxAckPending {
+		return fmt.Errorf("nats.workers must not exceed nats.max_ack_pending")
+	}
 	for _, tc := range []struct {
 		name  string
 		value string
 	}{
 		{name: "nats.fetch_wait", value: n.FetchWait},
 		{name: "nats.ack_wait", value: n.AckWait},
+		{name: "nats.nak_delay", value: n.NakDelay},
+		{name: "nats.outcome_retry_wait", value: n.ResultRetryWait},
 		{name: "nats.connect_timeout", value: n.ConnectTimeout},
 		{name: "nats.reconnect_wait", value: n.ReconnectWait},
 		{name: "nats.drain_timeout", value: n.DrainTimeout},

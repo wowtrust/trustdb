@@ -71,6 +71,8 @@ func FromViper(v *viper.Viper) Config {
 			FetchBatch:      v.GetInt("nats.fetch_batch"),
 			FetchWait:       v.GetString("nats.fetch_wait"),
 			AckWait:         v.GetString("nats.ack_wait"),
+			NakDelay:        v.GetString("nats.nak_delay"),
+			ResultRetryWait: v.GetString("nats.outcome_retry_wait"),
 			MaxAckPending:   v.GetInt("nats.max_ack_pending"),
 			MaxDeliver:      v.GetInt("nats.max_deliver"),
 			ConnectTimeout:  v.GetString("nats.connect_timeout"),
