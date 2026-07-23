@@ -1,5 +1,7 @@
 package model
 
+import "github.com/wowtrust/trustdb/internal/cryptosuite"
+
 const (
 	SchemaClientClaim          = "trustdb.claim.v1"
 	SchemaSignedClaim          = "trustdb.signed-claim.v1"
@@ -27,9 +29,10 @@ const (
 	SchemaSTHAnchorLatest      = "trustdb.sth-anchor-latest.v1"
 	SchemaSTHAnchorLatestEmpty = "trustdb.sth-anchor-latest-empty.v1"
 	SchemaL5Coverage           = "trustdb.l5-coverage-checkpoint.v1"
-	DefaultHashAlg             = "sha256"
-	DefaultSignatureAlg        = "ed25519"
-	DefaultMerkleTreeAlg       = "rfc6962-sha256"
+	DefaultCryptoSuite         = string(cryptosuite.INTLV1)
+	DefaultHashAlg             = cryptosuite.HashSHA256
+	DefaultSignatureAlg        = cryptosuite.SignatureEd25519
+	DefaultMerkleTreeAlg       = cryptosuite.MerkleRFC6962SHA256
 	DefaultValidationPolicy    = "trustdb.policy.v1"
 )
 

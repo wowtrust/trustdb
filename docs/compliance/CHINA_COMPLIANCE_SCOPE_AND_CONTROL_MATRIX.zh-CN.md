@@ -2,11 +2,11 @@
 
 > 文档编号：`TDB-CN-CM-001`
 >
-> 版本：`0.1.0`
+> 版本：`0.1.1`
 >
-> 基线日期：`2026-07-22`
+> 基线日期：`2026-07-23`
 >
-> 状态：评审候选；合入 `main` 后作为国产合规工程基线
+> 状态：国产合规工程基线；不代表具体部署已经通过测评或认证
 >
 > 适用对象：TrustDB Server/CLI、Go SDK、Desktop、proofstore、Global Log、Anchor、逻辑备份、发布制品和参考部署
 
@@ -311,7 +311,7 @@ SDF/HSM 接口实现应在开发启动时从[国家密码管理局](https://www.
 
 | ID | 依据与控制目标 | TrustDB 产品责任 / 当前状态 | 部署方责任 | Owner | 证据 | Gate |
 | --- | --- | --- | --- | --- | --- | --- |
-| `CRY-01` | `STD-39786` `STD-43207`：密码套件明确且不可静默切换 | 定义 `INTL_V1` 与 `CN_SM_V1`；suite 进入 LogID、STH、proof、backup 和 API。当前固定 SHA-256/Ed25519，`Planned` | 选择经批准 Profile，不在同一日志中切换 | Security & Cryptography | ADR、schema、混用拒绝测试 | `G1` |
+| `CRY-01` | `STD-39786` `STD-43207`：密码套件明确且不可静默切换 | [`ADR-0001`](ADR-0001-CRYPTOGRAPHIC-SUITES.zh-CN.md) 和 `internal/cryptosuite` 已固定 `INTL_V1` / `CN_SM_V1`、domain、SM2 user ID、编码和 namespace 切换规则；持久 marker 与格式字段待 #442/#446，`Partial` | 选择经批准 Profile，不在同一日志中切换 | Security & Cryptography | ADR、registry tests、schema、混用拒绝测试 | `G1` |
 | `CRY-02` | `STD-SM3`：SM3 覆盖内容和树语义 | 实现显式 SM3 hash factory、domain separation 和 RFC6962-SM3 profile。`Planned` | 固定参数和实现版本 | Security & Cryptography | 官方/交叉向量、Merkle golden vectors | `G2` |
 | `CRY-03` | `STD-SM2` `STD-SM2-USE`：SM2 签名互操作 | 固定 ZA/user ID、签名编码、canonical input 和负向解析规则。`Planned` | 管理身份参数并禁止 SDK 自设默认值 | Security & Cryptography | SM2 向量、跨 SDK/CLI/Desktop 测试 | `G2` |
 | `CRY-04` | `STD-SM4` `STD-BLOCK-MODE`：静态秘密和备份保护 | 定义 versioned SM4 认证加密 envelope：首选 SM4-GCM，AAD 绑定格式版本、suite、对象类型、tenant、KeyID 和上下文；每个 key 下 nonce 唯一，tag 固定 128 bit；DEK 由 HSM/KMS 的 KEK 包装，若使用 KDF 则固定经批准的 SM3-based profile 与 salt/context。拒绝 ECB、未认证 CBC/CTR、nonce 重用以及缺失或截短 tag。先覆盖软件私钥信封与逻辑备份，再评估 WAL/object/proofstore value。`Planned` | KEK 存 HSM/KMS，实施分权、轮换、nonce 生命周期和恢复 | Security & Cryptography + Platform / SRE | envelope 规范、AAD/nonce/tag/KDF 负向测试、轮换和恢复报告 | `G3` `G5` |
@@ -448,4 +448,5 @@ compliance-evidence/
 
 | 版本 | 日期 | 变化 | 状态 |
 | --- | --- | --- | --- |
+| `0.1.1` | 2026-07-23 | 固定 `INTL_V1` / `CN_SM_V1` registry，并链接密码套件 ADR | Engineering baseline |
 | `0.1.0` | 2026-07-22 | 建立范围、责任、依据、控制矩阵、Gate、证据和发布声明基线 | Review candidate |
