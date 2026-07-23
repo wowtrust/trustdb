@@ -2,7 +2,7 @@
 
 > 文档编号：`TDB-CN-CM-001`
 >
-> 版本：`0.1.4`
+> 版本：`0.1.5`
 >
 > 基线日期：`2026-07-23`
 >
@@ -22,6 +22,8 @@
 - 阻止发布的 Gate。
 
 本文是工程和测评准备基线，不是法律意见、测评报告或认证证书。支持 SM2、SM3、SM4、TLCP 或 FISCO BCOS，只能证明产品具备相应技术能力，不能单独推出某个部署已经通过商用密码应用安全性评估、网络安全等级保护测评、商用密码产品认证或司法真实性审查。
+
+配套的[`国产密码威胁模型与合规证据映射`](NATIONAL_CRYPTOGRAPHY_THREAT_MODEL_AND_EVIDENCE_MAP.zh-CN.md)固定资产、攻击者、信任边界、高风险场景、禁止的信任捷径、tabletop 和 evidence family；具体部署仍需基于实际人员、网络、数据、密码设备和联盟治理形成自己的风险登记册。
 
 ## 2. 合规目标与判定边界
 
@@ -285,7 +287,7 @@ SDF/HSM 接口实现应在开发启动时从[国家密码管理局](https://www.
 | `GOV-02` | `LAW-CRYPT` `REG-CRYPT`：密码应用同步规划建设运行 | 将密码方案、实现、运行和退役放入同一路线图。`Planned` | 批准密码应用方案、预算、采购和运行制度 | Security & Cryptography + Deployment Owner | 密码应用方案、项目计划、评审纪要 | `G1` `G6` |
 | `GOV-03` | `LAW-DSL` `LAW-PIPL` `REG-NETDATA`：数据角色和处理目的明确 | 提供数据字段目录及配置默认值。`Partial` | 记录法律基础、处理目的、数据角色和数据主体流程 | Data Controller / Legal | 数据处理活动记录、字段清单、影响评估 | `G0` `G6` |
 | `GOV-04` | `REG-CII` `RULE-CII-CRYPT`：关基义务只按正式认定触发 | 提供 CII 强化 Profile，覆盖认证产品、专岗、年度密评/报告和事件证据。`Deployment` | 配合保护工作部门认定；被认定后执行专项义务 | Protection Working Department + Deployment Owner | 正式认定/告知、年度评估/报告、人员和供应链记录 | `G6` `G7` |
-| `GOV-05` | 全部依据：风险接受可追溯 | CI 不允许静默跳过关键 Gate；例外有期限和 Owner。`Planned` | 建立风险审批、到期复审和补偿措施 | Product Owner | 风险台账、例外审批、到期记录 | `G0`–`G6` |
+| `GOV-05` | 全部依据：风险接受可追溯 | [`TDB-CN-TM-001`](NATIONAL_CRYPTOGRAPHY_THREAT_MODEL_AND_EVIDENCE_MAP.zh-CN.md) 已为 High/Critical 威胁记录 Owner、计划控制、测试、证据、Gate 和残余风险；CI 例外审批、到期复审和部署级风险台账仍待运行流程，`Partial` | 建立风险审批、到期复审和补偿措施 | Product Owner | 威胁模型、风险台账、tabletop、例外审批、到期记录 | `G0`–`G6` |
 
 ### 8.2 数据分类、最小化、留存和出境
 
@@ -401,6 +403,7 @@ compliance-evidence/
   deployment-id/
     scope/
     asset-and-data-inventory/
+    threat-model-and-risk-register/
     crypto-design/
     key-and-certificate-register/
     access-and-audit/
@@ -448,6 +451,7 @@ compliance-evidence/
 
 | 版本 | 日期 | 变化 | 状态 |
 | --- | --- | --- | --- |
+| `0.1.5` | 2026-07-23 | 建立国产密码威胁模型、禁止信任捷径、tabletop 与合规 evidence map | Engineering baseline |
 | `0.1.4` | 2026-07-23 | 固定国密依赖、软件/硬件/网关边界和 SM2/SM3/SM4 canonical vectors | Engineering baseline |
 | `0.1.3` | 2026-07-23 | 确认 V2/V5 破坏性切换，不保留 v1/v4 双读、迁移或并行 API | Engineering baseline |
 | `0.1.2` | 2026-07-23 | 建立密码敏捷格式 registry、V2/V5 代际和存储/API 边界 | Engineering baseline |
