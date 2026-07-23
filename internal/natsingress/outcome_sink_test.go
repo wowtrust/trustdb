@@ -42,6 +42,23 @@ func TestJetStreamOutcomeSinkStoresResultsAndDeadLetters(t *testing.T) {
 		t.Fatalf("stored result = %+v", decodedResult)
 	}
 	assertOutcomeHeaders(t, storedResult.Header, SchemaResult, request.MessageID)
+	acceptedRequest := mustRequestWithIdempotencyKey(t, "accepted-result")
+	acceptedResult, err := NewAcceptedResult(acceptedRequest, fixtureOutcome())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sink.Store(context.Background(), DeliveryOutcome{Request: &acceptedRequest, Result: &acceptedResult}); err != nil {
+		t.Fatalf("Store(accepted result) error = %v", err)
+	}
+	acceptedSubject := mustOutcomeSubject(t, cfg.ResultSubject, acceptedRequest.MessageID)
+	storedAccepted, err := runtime.ResultStream().GetLastMsgForSubject(context.Background(), acceptedSubject)
+	if err != nil {
+		t.Fatalf("GetLastMsgForSubject(accepted result) error = %v", err)
+	}
+	decodedAccepted, err := DecodeResult(storedAccepted.Data)
+	if err != nil || decodedAccepted.Accepted == nil || decodedAccepted.Accepted.RecordID != fixtureOutcome().RecordID {
+		t.Fatalf("stored accepted result = %+v error=%v", decodedAccepted, err)
+	}
 
 	rejection := rejectionForConfig(cfg)
 	if err := sink.Store(context.Background(), DeliveryOutcome{Rejection: &rejection}); err != nil {
@@ -247,6 +264,48 @@ func TestJetStreamOutcomeSinkAppliesBackpressureWhenResultStreamIsFull(t *testin
 	}
 	if info.State.Msgs == 0 || info.State.Bytes > uint64(cfg.ResultMaxBytes) {
 		t.Fatalf("bounded result state = %+v, max_bytes=%d", info.State, cfg.ResultMaxBytes)
+	}
+}
+
+func TestJetStreamOutcomeSinkAppliesBackpressureWhenDeadLetterStreamIsFull(t *testing.T) {
+	t.Parallel()
+
+	runtime, cfg := openOutcomeTestRuntime(t, func(cfg *config.NATS) {
+		cfg.DLQMaxBytes = 2048
+	})
+	sink := mustOutcomeSink(t, runtime, cfg)
+
+	var firstSubject string
+	var capacityErr error
+	for i := range 100 {
+		rejection := rejectionForConfig(cfg)
+		rejection.StreamSequence = uint64(i + 1)
+		rejection.ConsumerSequence = uint64(i + 1)
+		rejection.Data = []byte(fmt.Sprintf("malformed-%03d-%s", i, strings.Repeat("x", 64)))
+		rejection.ID = rejectionIdentity(rejection.Stream, rejection.StreamSequence, rejection.Subject, rejection.Reply, rejection.Headers, rejection.Data)
+		if i == 0 {
+			firstSubject = mustOutcomeSubject(t, cfg.DLQSubject, rejection.ID)
+		}
+		if err := sink.Store(context.Background(), DeliveryOutcome{Rejection: &rejection}); err != nil {
+			capacityErr = err
+			break
+		}
+	}
+	if capacityErr == nil {
+		t.Fatal("dead-letter stream accepted every outcome despite the configured max_bytes limit")
+	}
+	if errors.Is(capacityErr, ErrOutcomeConflict) {
+		t.Fatalf("dead-letter capacity error was reported as an immutable conflict: %v", capacityErr)
+	}
+	if _, err := runtime.DeadLetterStream().GetLastMsgForSubject(context.Background(), firstSubject); err != nil {
+		t.Fatalf("oldest dead-letter message was evicted after capacity was reached: %v", err)
+	}
+	info, err := runtime.DeadLetterStream().Info(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.State.Msgs == 0 || info.State.Bytes > uint64(cfg.DLQMaxBytes) {
+		t.Fatalf("bounded dead-letter state = %+v, max_bytes=%d", info.State, cfg.DLQMaxBytes)
 	}
 }
 
