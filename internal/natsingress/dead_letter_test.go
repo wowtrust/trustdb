@@ -9,6 +9,7 @@ import (
 
 	"github.com/nats-io/nats.go"
 	"github.com/wowtrust/trustdb/internal/cborx"
+	"github.com/wowtrust/trustdb/internal/formatregistry"
 	"github.com/wowtrust/trustdb/internal/trusterr"
 )
 
@@ -55,6 +56,18 @@ func TestDeadLetterCanonicalRoundTripPreservesCompleteRejection(t *testing.T) {
 	const wantSHA256 = "32fb7ceab5489f187b7bdaeeb05cf4ffd7601f54face466f853794b9da33547f"
 	if got := hex.EncodeToString(digest[:]); got != wantSHA256 {
 		t.Fatalf("dead-letter CBOR SHA-256 = %s, want %s", got, wantSHA256)
+	}
+}
+
+func TestDeadLetterLimitMatchesAvailableNATSGeneration(t *testing.T) {
+	t.Parallel()
+
+	descriptor, ok := formatregistry.Lookup(formatregistry.NATSV1)
+	if !ok {
+		t.Fatal("NATS v1 format generation is not registered")
+	}
+	if descriptor.Availability != formatregistry.AvailabilityAvailable || descriptor.MaxBytes != MaxDeadLetterBytes {
+		t.Fatalf("NATS v1 descriptor = %+v, dead-letter max = %d", descriptor, MaxDeadLetterBytes)
 	}
 }
 

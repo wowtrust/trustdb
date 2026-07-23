@@ -180,6 +180,37 @@ func TestJetStreamOutcomeSinkRejectsForeignDeadLetterMetadata(t *testing.T) {
 	}
 }
 
+func TestJetStreamOutcomeSinkKeepsDeadLetterImmutableBeyondDuplicateWindow(t *testing.T) {
+	t.Parallel()
+
+	runtime, cfg := openOutcomeTestRuntime(t, func(cfg *config.NATS) {
+		cfg.DuplicateWindow = "100ms"
+	})
+	sink := mustOutcomeSink(t, runtime, cfg)
+	rejection := rejectionForConfig(cfg)
+	outcome := DeliveryOutcome{Rejection: &rejection}
+	if err := sink.Store(context.Background(), outcome); err != nil {
+		t.Fatalf("Store(first rejection) error = %v", err)
+	}
+	time.Sleep(150 * time.Millisecond)
+	if err := sink.Store(context.Background(), outcome); err != nil {
+		t.Fatalf("Store(exact rejection retry) error = %v", err)
+	}
+
+	conflict := rejection
+	conflict.Message = "different rejection explanation"
+	if err := sink.Store(context.Background(), DeliveryOutcome{Rejection: &conflict}); !errors.Is(err, ErrOutcomeConflict) {
+		t.Fatalf("Store(rejection conflict) error = %v, want ErrOutcomeConflict", err)
+	}
+	info, err := runtime.DeadLetterStream().Info(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.State.Msgs != 1 {
+		t.Fatalf("dead-letter stream messages = %d, want exactly 1", info.State.Msgs)
+	}
+}
+
 func TestJetStreamOutcomeSinkAppliesBackpressureWhenResultStreamIsFull(t *testing.T) {
 	t.Parallel()
 
