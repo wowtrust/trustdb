@@ -314,7 +314,7 @@ SDF/HSM 接口实现应在开发启动时从[国家密码管理局](https://www.
 | ID | 依据与控制目标 | TrustDB 产品责任 / 当前状态 | 部署方责任 | Owner | 证据 | Gate |
 | --- | --- | --- | --- | --- | --- | --- |
 | `CRY-01` | `STD-39786` `STD-43207`：密码套件明确且不可静默切换 | [`ADR-0001`](ADR-0001-CRYPTOGRAPHIC-SUITES.zh-CN.md)、[`ADR-0002`](ADR-0002-CRYPTO-AGILITY-FORMATS.zh-CN.md)、[`ADR-0003`](ADR-0003-SM-CRYPTO-DEPENDENCIES-AND-VECTORS.zh-CN.md)、[`ADR-0004`](ADR-0004-PROVIDER-NEUTRAL-CRYPTO-CONTRACTS.zh-CN.md)、[`ADR-0005`](ADR-0005-IMMUTABLE-PROOFSTORE-SUITE-MARKERS.zh-CN.md)、`internal/cryptosuite`、`internal/formatregistry` 与 file/Pebble/TiKV marker contract 已固定 suite、格式代际、provider 和持久 namespace 边界；非空缺失、未知、损坏、配置 mismatch、backup restore 与 metastore migration 均 fail closed。V2 业务对象传播仍待 #454，`Partial` | 选择经批准 Profile，不在同一日志中切换 | Security & Cryptography | ADR、registry/provider/marker contract tests、schema、混用拒绝测试 | `G1` |
-| `CRY-02` | `STD-SM3`：SM3 覆盖内容和树语义 | suite-aware hash factory 与核心 Provider 传递已完成，SM3 依赖、标准 digest、streaming 和 RFC6962-SM3 `0x00/0x01` domain vectors已固定并由 OpenSSL/LibreSSL oracle 交叉验证；生产 SM3 factory 与全链路启用待 #447/#448/#454，`Partial` | 固定参数和实现版本 | Security & Cryptography | provider contract、官方/交叉向量、Merkle golden vectors | `G2` |
+| `CRY-02` | `STD-SM3`：SM3 覆盖内容和树语义 | [`ADR-0006`](ADR-0006-SM3-AND-RFC6962-MERKLE-PROFILES.zh-CN.md) 已实现 suite-aware SM3 byte/streaming/fixed-width hash、RFC6962-SM3、Batch/Global Log/proof core 绑定、suite-specific idempotency key 和跨 suite fail-closed；4096 叶全证明、零分配验证与 OpenSSL oracle 已通过。`CN_SM_V1` 生产启用仍待 SM2 与 V2 全链路 #448/#454，`Partial` | 固定参数和实现版本 | Security & Cryptography | provider contract、官方/交叉向量、Merkle golden vectors、property/fuzz/benchmark | `G2` |
 | `CRY-03` | `STD-SM2` `STD-SM2-USE`：SM2 签名互操作 | 已固定 user ID、ZA、严格 DER 和负向向量；GmSSL/Tongsuo、SDK/CLI/Desktop/provider 跨组件实现仍待后续任务，`Partial` | 管理身份参数并禁止 SDK 自设默认值 | Security & Cryptography | SM2 向量、跨 SDK/CLI/Desktop 测试 | `G2` |
 | `CRY-04` | `STD-SM4` `STD-BLOCK-MODE`：静态秘密和备份保护 | 已固定 SM4 primitive、百万次迭代与 V2 SM4-GCM envelope 参数：AAD 绑定 domain、suite、对象类型、tenant、KeyID 和上下文；nonce 96 bit 且每个 key 唯一，tag 固定 128 bit。生产实现仍需 DEK/KEK provider、持久 nonce 策略、轮换与恢复测试，`Partial` | KEK 存 HSM/KMS，实施分权、轮换、nonce 生命周期和恢复 | Security & Cryptography + Platform / SRE | envelope 规范、AAD/nonce/tag/KDF 负向测试、轮换和恢复报告 | `G3` `G5` |
 | `CRY-05` | `STD-MODULE` `RULE-CII-CRYPT`：生产私钥处于受控密码模块 | 核心已使用 provider-neutral Signer、不可导出 KeyHandle、公钥描述和 capability gate，并通过 software/remote/PKCS#11/SDF fake-provider contract；真实 PKCS#11 与可选 SDF adapter/sidecar 待 #452/#453，`Partial` | 采购适用且在触发时经检测认证合格的设备/服务，并执行密钥仪式 | Security & Cryptography + Certification Applicant | ADR-0004、provider contract tests、产品证书、密钥仪式 | `G3` `G7` |
@@ -451,6 +451,7 @@ compliance-evidence/
 
 | 版本 | 日期 | 变化 | 状态 |
 | --- | --- | --- | --- |
+| `0.1.8` | 2026-07-24 | 实现 SM3 primitive、RFC6962-SM3 Merkle Profile、suite-aware proof core 与跨 suite 拒绝 | Engineering baseline |
 | `0.1.7` | 2026-07-24 | 为 file、Pebble、TiKV 建立不可变 suite marker，并绑定 backup/restore 与 metastore migration | Engineering baseline |
 | `0.1.6` | 2026-07-24 | 建立 suite-aware provider、不可导出 KeyHandle、公钥描述和统一 provider contract gate | Engineering baseline |
 | `0.1.5` | 2026-07-23 | 建立国产密码威胁模型、禁止信任捷径、tabletop 与合规 evidence map | Engineering baseline |

@@ -235,6 +235,6 @@ suite_id + node_id + log_id + storage_namespace + format_generation
 
 成本与限制：
 
-- proofstore 已持久化不可变 suite marker；server 仍需由 #454 将 suite 显式传播到全部 V2 业务对象后，才能启用 `CN_SM_V1` 端到端写路径。
+- proofstore 已持久化不可变 suite marker；SM3 primitive、RFC6962-SM3 Merkle Profile 和 suite-aware proof core 已由 #447 与 [`ADR-0006`](ADR-0006-SM3-AND-RFC6962-MERKLE-PROFILES.zh-CN.md) 实现。server 仍需由 #448/#454 补齐 SM2 并将 suite 显式传播到全部 V2 业务对象后，才能启用 `CN_SM_V1` 端到端写路径。
 - 现有 OTS sink 固定 SHA-256，不是 `CN_SM_V1` anchor provider。
 - 如果未来需要不同 SM2 user ID、raw signature、其他证书 Profile 或 Merkle framing，必须定义新的 suite，不能覆盖 `CN_SM_V1`。

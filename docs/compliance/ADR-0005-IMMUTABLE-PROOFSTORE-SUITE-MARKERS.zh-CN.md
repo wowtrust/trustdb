@@ -77,7 +77,7 @@ crypto_suite       = INTL_V1 | CN_SM_V1
 
 本 marker 只解决“一个 namespace 只能有一个 suite”的持久不变量。以下工作仍由后续 Issue 完成：
 
-- #447：SM3 与 RFC6962-SM3；
+- #447：SM3 与 RFC6962-SM3 核心已完成，见 [`ADR-0006`](ADR-0006-SM3-AND-RFC6962-MERKLE-PROFILES.zh-CN.md)；
 - #448：SM2-SM3；
 - #454：server 将 suite 显式传播到 claim、receipt、batch、Global Log、STH 和 anchor；
 - V2/V5 cutover：将 NodeID、LogID、namespace identity 与新格式代际一起绑定，删除当前 V1/V4 生产实现。
