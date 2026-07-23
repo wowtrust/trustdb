@@ -105,6 +105,8 @@ type Provider interface {
 
 type intlV1Provider struct{}
 
+type cnSMV1Provider struct{}
+
 func (intlV1Provider) Suite() cryptosuite.ID { return cryptosuite.INTLV1 }
 
 func (intlV1Provider) HashFactory(algorithm string) (HashFactory, error) {
@@ -121,13 +123,38 @@ func (intlV1Provider) Verifier(algorithm, encoding string) (Verifier, error) {
 	return ed25519Verifier{}, nil
 }
 
+func (cnSMV1Provider) Suite() cryptosuite.ID { return cryptosuite.CNSMV1 }
+
+func (cnSMV1Provider) HashFactory(algorithm string) (HashFactory, error) {
+	return HashFactoryForSuite(cryptosuite.CNSMV1, algorithm)
+}
+
+func (cnSMV1Provider) Verifier(algorithm, encoding string) (Verifier, error) {
+	if algorithm != cryptosuite.SignatureSM2SM3 {
+		return nil, fmt.Errorf("%w: signature %q for suite %s", ErrUnsupportedAlgorithm, algorithm, cryptosuite.CNSMV1)
+	}
+	if encoding != cryptosuite.SM2PublicKeyEncoding {
+		return nil, fmt.Errorf("%w: public key %q for %s", ErrUnsupportedEncoding, encoding, algorithm)
+	}
+	return sm2Verifier{}, nil
+}
+
 func ProviderForSuite(suiteID cryptosuite.ID) (Provider, error) {
 	if _, err := cryptosuite.RequireAvailable(suiteID); err != nil {
+		return nil, err
+	}
+	return providerForKnownSuite(suiteID)
+}
+
+func providerForKnownSuite(suiteID cryptosuite.ID) (Provider, error) {
+	if _, err := cryptosuite.RequireKnown(suiteID); err != nil {
 		return nil, err
 	}
 	switch suiteID {
 	case cryptosuite.INTLV1:
 		return intlV1Provider{}, nil
+	case cryptosuite.CNSMV1:
+		return cnSMV1Provider{}, nil
 	default:
 		return nil, fmt.Errorf("%w: provider for suite %s", ErrUnsupportedAlgorithm, suiteID)
 	}
@@ -195,6 +222,10 @@ func ValidatePublicKey(provider Provider, descriptor PublicKeyDescriptor) error 
 		if len(descriptor.Bytes) != ed25519.PublicKeySize {
 			return fmt.Errorf("%w: ed25519 public key size %d", ErrInvalidKeyDescriptor, len(descriptor.Bytes))
 		}
+	case cryptosuite.SignatureSM2SM3:
+		if err := validateSM2PublicKey(descriptor.Bytes); err != nil {
+			return err
+		}
 	default:
 		return fmt.Errorf("%w: public key validation for %q", ErrUnsupportedAlgorithm, verifier.Algorithm())
 	}
@@ -251,6 +282,22 @@ func ValidateSignerHandle(suiteID cryptosuite.ID, signer Signer) error {
 }
 
 func Sign(ctx context.Context, suiteID cryptosuite.ID, signer Signer, message []byte) (model.Signature, error) {
+	suite, err := cryptosuite.RequireAvailable(suiteID)
+	if err != nil {
+		return model.Signature{}, err
+	}
+	return signWithSuite(ctx, suite, signer, message)
+}
+
+func signForKnownSuite(ctx context.Context, suiteID cryptosuite.ID, signer Signer, message []byte) (model.Signature, error) {
+	suite, err := cryptosuite.RequireKnown(suiteID)
+	if err != nil {
+		return model.Signature{}, err
+	}
+	return signWithSuite(ctx, suite, signer, message)
+}
+
+func signWithSuite(ctx context.Context, suite cryptosuite.Suite, signer Signer, message []byte) (model.Signature, error) {
 	if signer == nil {
 		return model.Signature{}, fmt.Errorf("%w: signer is nil", ErrInvalidKeyHandle)
 	}
@@ -264,12 +311,8 @@ func Sign(ctx context.Context, suiteID cryptosuite.ID, signer Signer, message []
 	if err := handle.Validate(); err != nil {
 		return model.Signature{}, err
 	}
-	suite, err := cryptosuite.RequireAvailable(suiteID)
-	if err != nil {
-		return model.Signature{}, err
-	}
 	if handle.Algorithm != suite.Signature.Algorithm {
-		return model.Signature{}, fmt.Errorf("%w: signer algorithm %q for suite %s", ErrUnsupportedAlgorithm, handle.Algorithm, suiteID)
+		return model.Signature{}, fmt.Errorf("%w: signer algorithm %q for suite %s", ErrUnsupportedAlgorithm, handle.Algorithm, suite.ID)
 	}
 	sig, err := signer.Sign(ctx, message)
 	if err != nil {
@@ -281,8 +324,8 @@ func Sign(ctx context.Context, suiteID cryptosuite.ID, signer Signer, message []
 	if sig.KeyID != handle.KeyID {
 		return model.Signature{}, fmt.Errorf("%w: provider returned signature key_id %q for handle %q", ErrInvalidKeyHandle, sig.KeyID, handle.KeyID)
 	}
-	if suite.Signature.Encoding == cryptosuite.Ed25519SignatureEncoding && len(sig.Signature) != ed25519.SignatureSize {
-		return model.Signature{}, fmt.Errorf("%w: ed25519 signature size %d", ErrUnsupportedEncoding, len(sig.Signature))
+	if err := validateSignatureEncoding(suite, sig.Signature); err != nil {
+		return model.Signature{}, err
 	}
 	sig.Signature = append([]byte(nil), sig.Signature...)
 	return sig, nil
@@ -303,6 +346,17 @@ func Verify(ctx context.Context, provider Provider, descriptor PublicKeyDescript
 		return err
 	}
 	return verifier.Verify(ctx, descriptor, message, sig)
+}
+
+// VerifySignatureForSuite exposes public verification for a known suite
+// without enabling its production signing/generation paths. Reserved suites
+// use this for conformance fixtures and offline-verifier development.
+func VerifySignatureForSuite(ctx context.Context, suiteID cryptosuite.ID, descriptor PublicKeyDescriptor, message []byte, sig model.Signature) error {
+	provider, err := providerForKnownSuite(suiteID)
+	if err != nil {
+		return err
+	}
+	return Verify(ctx, provider, descriptor, message, sig)
 }
 
 type sha256Factory struct{}

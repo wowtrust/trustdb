@@ -2,11 +2,13 @@ package smconformance
 
 import (
 	"bytes"
+	"context"
 	"crypto/cipher"
 	"crypto/elliptic"
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"io"
 	"os"
@@ -18,6 +20,11 @@ import (
 	"github.com/emmansun/gmsm/sm2"
 	"github.com/emmansun/gmsm/sm3"
 	"github.com/emmansun/gmsm/sm4"
+	"github.com/emmansun/gmsm/smx509"
+
+	"github.com/wowtrust/trustdb/internal/cryptosuite"
+	"github.com/wowtrust/trustdb/internal/model"
+	"github.com/wowtrust/trustdb/internal/trustcrypto"
 )
 
 const (
@@ -210,8 +217,16 @@ func TestSM2OfficialSignatureVector(t *testing.T) {
 	if want := decodeHex(t, v.MessageDigestHex); !bytes.Equal(digest, want) {
 		t.Fatalf("SM3(ZA || message) = %x, want %x", digest, want)
 	}
-
 	signature := decodeHex(t, v.SignatureDERHex)
+	descriptor, err := trustcrypto.NewSM2PublicKey("official-vector", wantPublic)
+	if err != nil {
+		t.Fatalf("trustcrypto.NewSM2PublicKey: %v", err)
+	}
+	if err := trustcrypto.VerifySignatureForSuite(context.Background(), cryptosuite.CNSMV1, descriptor, []byte(v.MessageUTF8), model.Signature{
+		Alg: cryptosuite.SignatureSM2SM3, KeyID: descriptor.KeyID, Signature: signature,
+	}); err != nil {
+		t.Fatalf("TrustDB SM2 provider rejected official signature: %v", err)
+	}
 	if !sm2.VerifyASN1WithSM2(publicKey, uid, []byte(v.MessageUTF8), signature) {
 		t.Fatal("official SM2 signature did not verify")
 	}
@@ -308,6 +323,43 @@ func TestIndependentOpenSSLOracle(t *testing.T) {
 		t.Skip("OpenSSL/LibreSSL executable not installed")
 	}
 	v := loadVectors(t)
+
+	t.Run("SM2", func(t *testing.T) {
+		publicKey, err := sm2.NewPublicKey(decodeHex(t, v.SM2.PublicKeyUncompressedHex))
+		if err != nil {
+			t.Fatal(err)
+		}
+		publicDER, err := smx509.MarshalPKIXPublicKey(publicKey)
+		if err != nil {
+			t.Fatal(err)
+		}
+		dir := t.TempDir()
+		publicPath := filepath.Join(dir, "sm2-public.pem")
+		signaturePath := filepath.Join(dir, "sm2-signature.der")
+		if err := os.WriteFile(publicPath, pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: publicDER}), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(signaturePath, decodeHex(t, v.SM2.SignatureDERHex), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		output, err := runOpenSSL(path, []byte(v.SM2.MessageUTF8),
+			"dgst", "-sm3", "-verify", publicPath, "-signature", signaturePath,
+			"-sigopt", "distid:"+v.SM2.UserIDASCII)
+		if err != nil {
+			if os.Getenv("CI") != "" {
+				t.Fatalf("OpenSSL SM2 is required by the CI conformance gate: %v", err)
+			}
+			t.Skipf("OpenSSL/LibreSSL SM2 unavailable: %v", err)
+		}
+		if !strings.Contains(string(output), "Verified OK") {
+			t.Fatalf("OpenSSL SM2 output = %q", output)
+		}
+		if _, err := runOpenSSL(path, []byte(v.SM2.MessageUTF8),
+			"dgst", "-sm3", "-verify", publicPath, "-signature", signaturePath,
+			"-sigopt", "distid:wrong-user-id"); err == nil {
+			t.Fatal("OpenSSL SM2 accepted the wrong user ID")
+		}
+	})
 
 	t.Run("SM3", func(t *testing.T) {
 		for _, tc := range v.SM3 {
