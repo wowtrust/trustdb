@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/wowtrust/trustdb/internal/anchorschedule"
 	"github.com/wowtrust/trustdb/internal/cborx"
@@ -175,6 +176,53 @@ func TestSubmitClaimEnqueuesBatch(t *testing.T) {
 	}
 	if batchSvc.enqueuedRecordID() != "tr1batch" {
 		t.Fatalf("enqueued record id = %s", batchSvc.enqueuedRecordID())
+	}
+}
+
+func TestSubmitClaimKeepsAcceptedBatchEnqueueAliveAfterRequestCancellation(t *testing.T) {
+	t.Parallel()
+
+	p := processorFunc(func(ctx context.Context, signed model.SignedClaim) (model.ServerRecord, model.AcceptedReceipt, bool, error) {
+		return model.ServerRecord{RecordID: "tr1backpressure"}, model.AcceptedReceipt{RecordID: "tr1backpressure", Status: "accepted"}, false, nil
+	})
+	ingestSvc := ingest.New(p, ingest.Options{QueueSize: 1, Workers: 1}, nil)
+	defer ingestSvc.Shutdown(context.Background())
+	batchSvc := &blockingBatchService{
+		entered: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	handler := Handler{Ingest: ingestSvc, Batch: batchSvc}
+	ctx, cancel := context.WithCancel(context.Background())
+	type result struct {
+		response submitClaimResponse
+		err      error
+	}
+	done := make(chan result, 1)
+	go func() {
+		response, err := handler.submitSignedClaim(ctx, model.SignedClaim{SchemaVersion: model.SchemaSignedClaim})
+		done <- result{response: response, err: err}
+	}()
+
+	select {
+	case <-batchSvc.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("batch enqueue was not reached")
+	}
+	cancel()
+	select {
+	case got := <-done:
+		t.Fatalf("submit returned while accepted batch enqueue was blocked: response=%+v err=%v", got.response, got.err)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(batchSvc.release)
+	select {
+	case got := <-done:
+		if got.err != nil || !got.response.BatchEnqueued || got.response.BatchError != "" {
+			t.Fatalf("submit result after releasing backpressure = %+v err=%v", got.response, got.err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("submit did not finish after releasing batch backpressure")
 	}
 }
 
@@ -826,6 +874,22 @@ type fakeBatchService struct {
 	manifests  map[string]model.BatchManifest
 	treeLeaves []model.BatchTreeLeaf
 	treeNodes  []model.BatchTreeNode
+}
+
+type blockingBatchService struct {
+	BatchService
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (f *blockingBatchService) Enqueue(ctx context.Context, _ model.SignedClaim, _ model.ServerRecord, _ model.AcceptedReceipt) error {
+	close(f.entered)
+	select {
+	case <-f.release:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func (f *fakeBatchService) Enqueue(ctx context.Context, signed model.SignedClaim, record model.ServerRecord, accepted model.AcceptedReceipt) error {

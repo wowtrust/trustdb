@@ -73,16 +73,12 @@ func TestServiceShutdownFlushesPartialBatch(t *testing.T) {
 	}
 }
 
-func TestServiceRejectsFullQueue(t *testing.T) {
+func TestServiceBlocksWhenQueueIsFullUntilCapacityIsAvailable(t *testing.T) {
 	t.Parallel()
 
 	block := make(chan struct{})
 	entered := make(chan struct{}, 1)
 	svc := New(blockingEngine{block: block, entered: entered}, proofstore.LocalStore{Root: t.TempDir()}, Options{QueueSize: 1, MaxRecords: 1, MaxDelay: time.Hour}, nil)
-	defer func() {
-		close(block)
-		_ = svc.Shutdown(context.Background())
-	}()
 	if err := svc.Enqueue(context.Background(), signed("tr1a"), record("tr1a"), accepted("tr1a")); err != nil {
 		t.Fatalf("Enqueue(a) error = %v", err)
 	}
@@ -90,9 +86,113 @@ func TestServiceRejectsFullQueue(t *testing.T) {
 	if err := svc.Enqueue(context.Background(), signed("tr1b"), record("tr1b"), accepted("tr1b")); err != nil {
 		t.Fatalf("Enqueue(b) error = %v", err)
 	}
-	err := svc.Enqueue(context.Background(), signed("tr1c"), record("tr1c"), accepted("tr1c"))
-	if trusterr.CodeOf(err) != trusterr.CodeResourceExhausted {
-		t.Fatalf("Enqueue(c) code = %s err=%v", trusterr.CodeOf(err), err)
+
+	enqueueDone := make(chan error, 1)
+	go func() {
+		enqueueDone <- svc.Enqueue(context.Background(), signed("tr1c"), record("tr1c"), accepted("tr1c"))
+	}()
+	select {
+	case err := <-enqueueDone:
+		t.Fatalf("Enqueue(c) returned while queue was full: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(block)
+	select {
+	case err := <-enqueueDone:
+		if err != nil {
+			t.Fatalf("Enqueue(c) error after capacity became available = %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Enqueue(c) did not resume after capacity became available")
+	}
+	if err := svc.Shutdown(context.Background()); err != nil {
+		t.Fatalf("Shutdown() error = %v", err)
+	}
+}
+
+func TestServiceFullQueueWaitHonorsCancellation(t *testing.T) {
+	t.Parallel()
+
+	block := make(chan struct{})
+	entered := make(chan struct{}, 1)
+	svc := New(blockingEngine{block: block, entered: entered}, proofstore.LocalStore{Root: t.TempDir()}, Options{QueueSize: 1, MaxRecords: 1, MaxDelay: time.Hour}, nil)
+	if err := svc.Enqueue(context.Background(), signed("tr1a"), record("tr1a"), accepted("tr1a")); err != nil {
+		t.Fatalf("Enqueue(a) error = %v", err)
+	}
+	<-entered
+	if err := svc.Enqueue(context.Background(), signed("tr1b"), record("tr1b"), accepted("tr1b")); err != nil {
+		t.Fatalf("Enqueue(b) error = %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	enqueueDone := make(chan error, 1)
+	go func() {
+		enqueueDone <- svc.Enqueue(ctx, signed("tr1c"), record("tr1c"), accepted("tr1c"))
+	}()
+	select {
+	case err := <-enqueueDone:
+		t.Fatalf("Enqueue(c) returned while queue was full: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	cancel()
+	select {
+	case err := <-enqueueDone:
+		if trusterr.CodeOf(err) != trusterr.CodeDeadlineExceeded {
+			t.Fatalf("Enqueue(c) code = %s err=%v", trusterr.CodeOf(err), err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Enqueue(c) did not stop after cancellation")
+	}
+
+	close(block)
+	if err := svc.Shutdown(context.Background()); err != nil {
+		t.Fatalf("Shutdown() error = %v", err)
+	}
+}
+
+func TestServiceShutdownWakesFullQueueWaiters(t *testing.T) {
+	t.Parallel()
+
+	block := make(chan struct{})
+	entered := make(chan struct{}, 1)
+	svc := New(blockingEngine{block: block, entered: entered}, proofstore.LocalStore{Root: t.TempDir()}, Options{QueueSize: 1, MaxRecords: 1, MaxDelay: time.Hour}, nil)
+	if err := svc.Enqueue(context.Background(), signed("tr1a"), record("tr1a"), accepted("tr1a")); err != nil {
+		t.Fatalf("Enqueue(a) error = %v", err)
+	}
+	<-entered
+	if err := svc.Enqueue(context.Background(), signed("tr1b"), record("tr1b"), accepted("tr1b")); err != nil {
+		t.Fatalf("Enqueue(b) error = %v", err)
+	}
+
+	enqueueDone := make(chan error, 1)
+	go func() {
+		enqueueDone <- svc.Enqueue(context.Background(), signed("tr1c"), record("tr1c"), accepted("tr1c"))
+	}()
+	select {
+	case err := <-enqueueDone:
+		t.Fatalf("Enqueue(c) returned while queue was full: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	err := svc.Shutdown(shutdownCtx)
+	cancelShutdown()
+	if trusterr.CodeOf(err) != trusterr.CodeDeadlineExceeded {
+		t.Fatalf("Shutdown() code = %s err=%v, want blocked engine timeout", trusterr.CodeOf(err), err)
+	}
+	select {
+	case err := <-enqueueDone:
+		if trusterr.CodeOf(err) != trusterr.CodeFailedPrecondition {
+			t.Fatalf("Enqueue(c) code = %s err=%v", trusterr.CodeOf(err), err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Enqueue(c) did not stop after shutdown started")
+	}
+
+	close(block)
+	if err := svc.Shutdown(context.Background()); err != nil {
+		t.Fatalf("Shutdown() after release error = %v", err)
 	}
 }
 

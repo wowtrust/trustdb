@@ -127,7 +127,13 @@ type Service struct {
 	store   Store
 	metrics *observability.Metrics
 	queue   chan Accepted
-	opts    Options
+	// queueSlots counts queued items plus producers that have reserved a queue
+	// slot. Producers block on this bounded semaphore before taking mu, so a
+	// full queue applies backpressure without preventing Shutdown from closing
+	// the queue and waking every waiter.
+	queueSlots      chan struct{}
+	shutdownStarted chan struct{}
+	opts            Options
 
 	mu      sync.RWMutex
 	closed  bool
@@ -214,6 +220,8 @@ func New(engine Engine, store Store, opts Options, metrics *observability.Metric
 		store:                store,
 		metrics:              metrics,
 		queue:                make(chan Accepted, opts.QueueSize),
+		queueSlots:           make(chan struct{}, opts.QueueSize),
+		shutdownStarted:      make(chan struct{}),
 		opts:                 opts,
 		seq:                  opts.InitialSeq,
 		ingestDone:           make(chan struct{}),
@@ -270,48 +278,42 @@ func (s *Service) Enqueue(ctx context.Context, signed model.SignedClaim, record 
 		return trusterr.Wrap(trusterr.CodeDeadlineExceeded, "batch enqueue canceled", err)
 	}
 	item := Accepted{Signed: signed, Record: record, Accepted: accepted}
-	return s.enqueue(ctx, item, false)
+	return s.enqueue(ctx, item)
 }
 
 func (s *Service) EnqueueRecovered(ctx context.Context, item Accepted) error {
 	if err := ctx.Err(); err != nil {
 		return trusterr.Wrap(trusterr.CodeDeadlineExceeded, "batch enqueue canceled", err)
 	}
-	return s.enqueue(ctx, item, true)
+	return s.enqueue(ctx, item)
 }
 
-func (s *Service) enqueue(ctx context.Context, item Accepted, wait bool) error {
-	for {
-		s.mu.RLock()
-		if s.closed {
-			s.mu.RUnlock()
-			return trusterr.New(trusterr.CodeFailedPrecondition, "batch service is shutting down")
-		}
-		select {
-		case s.queue <- item:
-			s.setQueueDepth()
-			s.mu.RUnlock()
-			return nil
-		default:
-			s.mu.RUnlock()
-		}
-
-		if !wait {
-			return trusterr.New(trusterr.CodeResourceExhausted, "batch queue is full")
-		}
-		timer := time.NewTimer(10 * time.Millisecond)
-		select {
-		case <-timer.C:
-		case <-ctx.Done():
-			if !timer.Stop() {
-				select {
-				case <-timer.C:
-				default:
-				}
-			}
-			return trusterr.Wrap(trusterr.CodeDeadlineExceeded, "batch enqueue canceled", ctx.Err())
-		}
+func (s *Service) enqueue(ctx context.Context, item Accepted) error {
+	select {
+	case s.queueSlots <- struct{}{}:
+	case <-s.shutdownStarted:
+		return trusterr.New(trusterr.CodeFailedPrecondition, "batch service is shutting down")
+	case <-ctx.Done():
+		return trusterr.Wrap(trusterr.CodeDeadlineExceeded, "batch enqueue canceled", ctx.Err())
 	}
+
+	// Cancellation or shutdown may race with acquiring a slot. Recheck both
+	// before publishing to the queue and return the reservation on failure.
+	if err := ctx.Err(); err != nil {
+		<-s.queueSlots
+		return trusterr.Wrap(trusterr.CodeDeadlineExceeded, "batch enqueue canceled", err)
+	}
+
+	s.mu.RLock()
+	if s.closed {
+		s.mu.RUnlock()
+		<-s.queueSlots
+		return trusterr.New(trusterr.CodeFailedPrecondition, "batch service is shutting down")
+	}
+	s.queue <- item
+	s.setQueueDepth()
+	s.mu.RUnlock()
+	return nil
 }
 
 func (s *Service) Proof(ctx context.Context, recordID string) (model.ProofBundle, error) {
@@ -448,6 +450,7 @@ func (s *Service) Shutdown(ctx context.Context) error {
 	startedShutdown := false
 	if !s.closed {
 		s.closed = true
+		close(s.shutdownStarted)
 		close(s.queue)
 		startedShutdown = true
 	}
@@ -510,6 +513,7 @@ func (s *Service) worker() {
 				s.commit(batch)
 				return
 			}
+			<-s.queueSlots
 			s.setQueueDepth()
 			batch = append(batch, item)
 			if len(batch) == 1 {
