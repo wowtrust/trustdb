@@ -38,6 +38,21 @@ func TestReadGlobalProofFileExplainsAnchorResultMixup(t *testing.T) {
 	}
 }
 
+func TestDesktopAnchorPluginArgs(t *testing.T) {
+	t.Parallel()
+
+	got := desktopAnchorPluginArgs("--network\r\n consortium-a \n\n--strict")
+	want := []string{"--network", "consortium-a", "--strict"}
+	if len(got) != len(want) {
+		t.Fatalf("desktopAnchorPluginArgs() = %#v", got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("desktopAnchorPluginArgs()[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
 func TestReadGlobalProofFileExplainsLegacyBatchAnchorMixup(t *testing.T) {
 	t.Parallel()
 

@@ -90,7 +90,7 @@ Desktop packages carry a release-specific self-signed certificate and its public
 - WAL-backed ingest with bounded queues, configurable fsync policy, replay, checkpoints, and graceful shutdown.
 - Batch Merkle proofs, persisted record indexes, and paginated record/root APIs.
 - Global Transparency Log with persisted STHs, inclusion proofs, consistency proofs, and history tiles.
-- L5 STH/global-root anchoring through `off`, `noop`, file, and OpenTimestamps sinks.
+- L5 STH/global-root anchoring through `off`, `noop`, file, OpenTimestamps, and supervised external gRPC plugin sinks.
 - File, Pebble, and TiKV proofstore backends. TiKV enables storage-compute separation, with one logical `(node_id, log_id)` stream per namespace and no same-namespace active-active writers.
 - Portable `.tdbackup` create, verify, and resumable restore.
 - Go SDK for claim signing, HTTP/gRPC calls, proof export, and local verification.
@@ -240,6 +240,7 @@ Configuration examples live in [configs](configs):
 | `configs/benchmark.yaml` | Benchmark profile with throughput-oriented settings. Not a production audit profile. |
 
 See [configs/README.md](configs/README.md) for `run_profile` semantics and startup notes.
+Custom provider development and deployment are documented in [L5 external anchor plugins](formats/ANCHOR_PLUGIN_V1.md).
 
 ## Admin Web And Desktop
 

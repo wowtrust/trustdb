@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -24,6 +25,26 @@ func TestStoreLoadMissingConfigUsesDefaults(t *testing.T) {
 	}
 	if cfg.ServerTransport != serverTransportHTTP {
 		t.Fatalf("ServerTransport = %q, want http", cfg.ServerTransport)
+	}
+	if cfg.AnchorPluginStartTimeout != "10s" || cfg.AnchorPluginRPCTimeout != "30s" {
+		t.Fatalf("anchor plugin defaults = %+v", cfg)
+	}
+}
+
+func TestSaveSettingsValidatesAnchorPluginTimeouts(t *testing.T) {
+	t.Parallel()
+
+	store, err := newStore(filepath.Join(t.TempDir(), "config.json"))
+	if err != nil {
+		t.Fatalf("newStore: %v", err)
+	}
+	defer store.close()
+	app := NewApp()
+	app.store = store
+	settings := defaultSettings()
+	settings.AnchorPluginRPCTimeout = "0s"
+	if err := app.SaveSettings(settings); err == nil || !strings.Contains(err.Error(), "RPC timeout") {
+		t.Fatalf("SaveSettings() error = %v", err)
 	}
 }
 

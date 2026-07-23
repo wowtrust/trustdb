@@ -116,7 +116,7 @@ func Validate(proof model.SingleProof) error {
 		if proof.GlobalProof == nil {
 			return errors.New("sproof: anchor_result requires global_proof")
 		}
-		if err := verify.AnchorConsistency(*proof.GlobalProof, *proof.AnchorResult); err != nil {
+		if err := verify.AnchorContainerConsistency(*proof.GlobalProof, *proof.AnchorResult); err != nil {
 			return fmt.Errorf("sproof: anchor_result: %w", err)
 		}
 	}

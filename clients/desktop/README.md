@@ -9,7 +9,8 @@ Current capabilities:
 - local records stored in a Pebble-backed indexed store;
 - record list search, filters, pagination, details, deletion, and proof refresh;
 - primary `.sproof` export plus advanced `.tdproof`, `.tdgproof`, and `.tdanchor-result` exports;
-- local proof verification with optional GlobalLogProof and STHAnchorResult.
+- local proof verification with optional GlobalLogProof and STHAnchorResult;
+- configured subprocess gRPC verifier support for custom L5 anchor sinks.
 
 `.sproof` uses the repository-level v1 format documented in `formats/SPROOF_V1.md`.
 

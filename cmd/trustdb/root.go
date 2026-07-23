@@ -202,6 +202,10 @@ func setDefaults(v *viper.Viper) {
 	// calendars. Callers have to opt in with --anchor-sink=ots.
 	v.SetDefault("anchor.sink", "")
 	v.SetDefault("anchor.path", "")
+	v.SetDefault("anchor.plugin.command", defaults.Anchor.Plugin.Command)
+	v.SetDefault("anchor.plugin.args", defaults.Anchor.Plugin.Args)
+	v.SetDefault("anchor.plugin.start_timeout", defaults.Anchor.Plugin.StartTimeout)
+	v.SetDefault("anchor.plugin.rpc_timeout", defaults.Anchor.Plugin.RPCTimeout)
 	v.SetDefault("anchor.ots.calendars", []string{})
 	v.SetDefault("anchor.ots.min_accepted", 0)
 	v.SetDefault("anchor.ots.timeout", "")
@@ -317,6 +321,10 @@ func setDefaults(v *viper.Viper) {
 	bindEnv(v, "keys.registry_public", "TRUSTDB_KEYS_REGISTRY_PUBLIC")
 	bindEnv(v, "anchor.sink", "TRUSTDB_ANCHOR_SINK")
 	bindEnv(v, "anchor.path", "TRUSTDB_ANCHOR_PATH")
+	bindEnv(v, "anchor.plugin.command", "TRUSTDB_ANCHOR_PLUGIN_COMMAND")
+	bindEnv(v, "anchor.plugin.args", "TRUSTDB_ANCHOR_PLUGIN_ARGS")
+	bindEnv(v, "anchor.plugin.start_timeout", "TRUSTDB_ANCHOR_PLUGIN_START_TIMEOUT")
+	bindEnv(v, "anchor.plugin.rpc_timeout", "TRUSTDB_ANCHOR_PLUGIN_RPC_TIMEOUT")
 	bindEnv(v, "anchor.ots.calendars", "TRUSTDB_ANCHOR_OTS_CALENDARS")
 	bindEnv(v, "anchor.ots.min_accepted", "TRUSTDB_ANCHOR_OTS_MIN_ACCEPTED")
 	bindEnv(v, "anchor.ots.timeout", "TRUSTDB_ANCHOR_OTS_TIMEOUT")
@@ -543,6 +551,12 @@ func configString(cfg trustconfig.Config, key string) string {
 		return cfg.Anchor.Sink
 	case "anchor.path":
 		return cfg.Anchor.Path
+	case "anchor.plugin.command":
+		return cfg.Anchor.Plugin.Command
+	case "anchor.plugin.start_timeout":
+		return cfg.Anchor.Plugin.StartTimeout
+	case "anchor.plugin.rpc_timeout":
+		return cfg.Anchor.Plugin.RPCTimeout
 	case "batch.proof_mode":
 		return cfg.Batch.ProofMode
 	case "proofstore.artifact_sync_mode":

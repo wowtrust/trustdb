@@ -1,10 +1,12 @@
 package sdk
 
 import (
+	"context"
 	"crypto/ed25519"
 	"time"
 
 	"github.com/wowtrust/trustdb/internal/model"
+	"github.com/wowtrust/trustdb/sdk/anchorplugin"
 )
 
 type ClientClaim = model.ClientClaim
@@ -146,7 +148,15 @@ type TrustedKeys struct {
 }
 
 type VerifyOptions struct {
-	SkipAnchor bool
+	SkipAnchor     bool
+	AnchorVerifier AnchorVerifier
+}
+
+// AnchorVerifier is satisfied by *anchorplugin.Process. It lets SDK callers
+// verify provider-specific L5 proof bytes without importing TrustDB internals.
+type AnchorVerifier interface {
+	Info() anchorplugin.GetInfoResponse
+	Verify(context.Context, anchorplugin.SignedTreeHead, anchorplugin.AnchorResult) error
 }
 
 type ProofArtifacts struct {

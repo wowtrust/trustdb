@@ -56,6 +56,8 @@ func newServeCommand(rt *runtimeConfig) *cobra.Command {
 	var batchProofMode, proofstoreArtifactSyncMode, proofstoreRecordIndexMode string
 	var proofstoreIndexStorageTokens bool
 	var anchorSinkKind, anchorPath, anchorMaxDelayText, anchorPollIntervalText string
+	var anchorPluginCommand, anchorPluginStartTimeoutText, anchorPluginRPCTimeoutText string
+	var anchorPluginArgs []string
 	var anchorOtsCalendars []string
 	var anchorOtsMinAccepted int
 	var anchorOtsTimeoutText string
@@ -93,6 +95,14 @@ func newServeCommand(rt *runtimeConfig) *cobra.Command {
 			proofstoreArtifactSyncMode = stringOrLiteral(cmd, "proofstore-artifact-sync-mode", proofstoreArtifactSyncMode, rt.cfg.Proofstore.ArtifactSyncMode)
 			anchorSinkKind = stringOrConfig(cmd, rt, "anchor-sink", anchorSinkKind, "anchor.sink")
 			anchorPath = stringOrConfig(cmd, rt, "anchor-path", anchorPath, "anchor.path")
+			anchorPluginCommand = stringOrLiteral(cmd, "anchor-plugin-command", anchorPluginCommand, rt.cfg.Anchor.Plugin.Command)
+			if cmd.Flags().Changed("anchor-plugin-arg") {
+				anchorPluginArgs, _ = cmd.Flags().GetStringArray("anchor-plugin-arg")
+			} else {
+				anchorPluginArgs = append([]string(nil), rt.cfg.Anchor.Plugin.Args...)
+			}
+			anchorPluginStartTimeoutText = stringOrLiteral(cmd, "anchor-plugin-start-timeout", anchorPluginStartTimeoutText, rt.cfg.Anchor.Plugin.StartTimeout)
+			anchorPluginRPCTimeoutText = stringOrLiteral(cmd, "anchor-plugin-rpc-timeout", anchorPluginRPCTimeoutText, rt.cfg.Anchor.Plugin.RPCTimeout)
 			// OTS sink options: calendars live as a list in viper
 			// ("anchor.ots.calendars"), other scalars via the usual
 			// stringOrConfig / intValue helpers so env override and
@@ -473,7 +483,12 @@ func newServeCommand(rt *runtimeConfig) *cobra.Command {
 			if !globalLogEnabled {
 				anchorSinkKind = "off"
 			}
-			anchorSvc, anchorAPI, anchorShutdown, err := buildAnchorService(rt, proofStore, metrics, nodeID, logID, anchorSinkKind, anchorPath, proofDir, anchorPollInterval, otsSinkParams{
+			anchorSvc, anchorAPI, anchorShutdown, err := buildAnchorService(rt, proofStore, metrics, nodeID, logID, anchorSinkKind, anchorPath, proofDir, anchorPollInterval, pluginSinkParams{
+				Command:          anchorPluginCommand,
+				Args:             anchorPluginArgs,
+				StartTimeoutText: anchorPluginStartTimeoutText,
+				RPCTimeoutText:   anchorPluginRPCTimeoutText,
+			}, otsSinkParams{
 				Calendars:   anchorOtsCalendars,
 				MinAccepted: anchorOtsMinAccepted,
 				TimeoutText: anchorOtsTimeoutText,
@@ -715,8 +730,12 @@ func newServeCommand(rt *runtimeConfig) *cobra.Command {
 	cmd.Flags().StringVar(&proofstoreArtifactSyncMode, "proofstore-artifact-sync-mode", "", "proof artifact durability mode: chunk (default) or batch")
 	cmd.Flags().StringVar(&proofstoreRecordIndexMode, "proofstore-record-index-mode", "", "record secondary index mode: full (default), no_storage_tokens, or time_only")
 	cmd.Flags().BoolVar(&proofstoreIndexStorageTokens, "proofstore-index-storage-tokens", true, "write StorageURI/FileName token secondary indexes in the proofstore; disable for high-write ingest profiles")
-	cmd.Flags().StringVar(&anchorSinkKind, "anchor-sink", "", "external anchor sink: off (default; no L5 proofs), file, noop, or ots (OpenTimestamps)")
+	cmd.Flags().StringVar(&anchorSinkKind, "anchor-sink", "", "external anchor sink: off (default; no L5 proofs), file, noop, ots (OpenTimestamps), or plugin")
 	cmd.Flags().StringVar(&anchorPath, "anchor-path", "", "file anchor sink output path (JSONL). Defaults to <proof-dir>/anchors.jsonl when --anchor-sink=file and this flag is empty")
+	cmd.Flags().StringVar(&anchorPluginCommand, "anchor-plugin-command", "", "external anchor plugin executable (required when --anchor-sink=plugin)")
+	cmd.Flags().StringArrayVar(&anchorPluginArgs, "anchor-plugin-arg", nil, "argument passed to the external anchor plugin; may be repeated")
+	cmd.Flags().StringVar(&anchorPluginStartTimeoutText, "anchor-plugin-start-timeout", "", "maximum time to start and handshake with an external anchor plugin (default 10s)")
+	cmd.Flags().StringVar(&anchorPluginRPCTimeoutText, "anchor-plugin-rpc-timeout", "", "per-RPC timeout for an external anchor plugin (default 30s)")
 	cmd.Flags().StringVar(&anchorMaxDelayText, "anchor-max-delay", "", "fixed coalescing window before publishing the latest pending STH")
 	cmd.Flags().StringVar(&anchorPollIntervalText, "anchor-poll-interval", "", "interval for recovering durable pending anchor jobs")
 	cmd.Flags().StringSliceVar(&anchorOtsCalendars, "anchor-ots-calendars", nil, "comma-separated OpenTimestamps calendar URLs. When empty a built-in public pool is used (only honored when --anchor-sink=ots)")
@@ -792,18 +811,43 @@ type otsSinkParams struct {
 	TimeoutText string
 }
 
+type pluginSinkParams struct {
+	Command          string
+	Args             []string
+	StartTimeoutText string
+	RPCTimeoutText   string
+}
+
+func newPluginSinkFromParams(ctx context.Context, plugin pluginSinkParams) (*anchor.PluginSink, error) {
+	startTimeout, err := parsePositiveDurationFlag("anchor-plugin-start-timeout", plugin.StartTimeoutText)
+	if err != nil {
+		return nil, err
+	}
+	rpcTimeout, err := parsePositiveDurationFlag("anchor-plugin-rpc-timeout", plugin.RPCTimeoutText)
+	if err != nil {
+		return nil, err
+	}
+	return anchor.NewPluginSink(ctx, anchor.PluginSinkOptions{
+		Command:      plugin.Command,
+		Args:         plugin.Args,
+		StartTimeout: startTimeout,
+		RPCTimeout:   rpcTimeout,
+	})
+}
+
 // buildAnchorService wires the configured Sink and returns both the
 // worker Service and a read-only API suitable for the HTTP layer. The
 // shutdown closure is always non-nil so `defer anchorShutdown()` is
 // safe even when anchoring is off. Legal sink kinds: "" / "off" (L5
-// disabled), "file", "noop".
-func buildAnchorService(rt *runtimeConfig, store proofstore.Store, metrics *observability.Metrics, nodeID, logID, sinkKind, anchorPath, proofDir string, pollInterval time.Duration, ots otsSinkParams) (*anchor.Service, httpapi.AnchorService, func(), error) {
+// disabled), "file", "noop", "ots", and "plugin".
+func buildAnchorService(rt *runtimeConfig, store proofstore.Store, metrics *observability.Metrics, nodeID, logID, sinkKind, anchorPath, proofDir string, pollInterval time.Duration, plugin pluginSinkParams, ots otsSinkParams) (*anchor.Service, httpapi.AnchorService, func(), error) {
 	kind := strings.ToLower(strings.TrimSpace(sinkKind))
 	switch kind {
 	case "", "off", "disabled", "none":
 		return nil, nil, func() {}, nil
 	}
 	var sink anchor.Sink
+	var sinkShutdown func()
 	switch kind {
 	case "file":
 		path := anchorPath
@@ -832,6 +876,18 @@ func buildAnchorService(rt *runtimeConfig, store proofstore.Store, metrics *obse
 			Strs("calendars", os.Calendars()).
 			Msg("anchor sink enabled (opentimestamps)")
 		sink = os
+	case "plugin":
+		ps, err := newPluginSinkFromParams(context.Background(), plugin)
+		if err != nil {
+			return nil, nil, nil, trusterr.Wrap(trusterr.CodeFailedPrecondition, "start anchor plugin", err)
+		}
+		rt.logger.Info().Str("sink", ps.Name()).Str("command", plugin.Command).Msg("anchor sink enabled (external plugin)")
+		sink = ps
+		sinkShutdown = func() {
+			if err := ps.Close(); err != nil {
+				rt.logger.Warn().Err(err).Msg("anchor: close external plugin")
+			}
+		}
 	default:
 		return nil, nil, nil, trusterr.New(trusterr.CodeInvalidArgument, "unknown anchor sink: "+sinkKind)
 	}
@@ -844,11 +900,17 @@ func buildAnchorService(rt *runtimeConfig, store proofstore.Store, metrics *obse
 		PollInterval: pollInterval,
 	})
 	if err != nil {
+		if sinkShutdown != nil {
+			sinkShutdown()
+		}
 		return nil, nil, nil, err
 	}
 	api := anchor.NewAPI(store)
 	return svc, api, func() {
 		svc.Stop()
+		if sinkShutdown != nil {
+			sinkShutdown()
+		}
 	}, nil
 }
 

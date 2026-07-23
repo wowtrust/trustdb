@@ -43,8 +43,15 @@ type Result struct {
 type Option func(*options)
 
 type options struct {
-	global *model.GlobalLogProof
-	anchor *model.STHAnchorResult
+	global         *model.GlobalLogProof
+	anchor         *model.STHAnchorResult
+	anchorVerifier AnchorVerifier
+}
+
+// AnchorVerifier validates proof bytes for a dynamically configured sink.
+// Generic binding to the immutable STH is always checked by TrustDB first.
+type AnchorVerifier interface {
+	VerifyAnchor(model.SignedTreeHead, model.STHAnchorResult) error
 }
 
 func WithGlobalProof(p model.GlobalLogProof) Option {
@@ -56,6 +63,10 @@ func WithGlobalProof(p model.GlobalLogProof) Option {
 // longer directly anchored.
 func WithAnchor(a model.STHAnchorResult) Option {
 	return func(o *options) { o.anchor = &a }
+}
+
+func WithAnchorVerifier(verifier AnchorVerifier) Option {
+	return func(o *options) { o.anchorVerifier = verifier }
 }
 
 func ProofBundle(raw io.Reader, bundle model.ProofBundle, keys TrustedKeys, opts ...Option) (Result, error) {
@@ -125,7 +136,7 @@ func ProofBundle(raw io.Reader, bundle model.ProofBundle, keys TrustedKeys, opts
 		if o.global == nil {
 			return Result{}, fmt.Errorf("verify: L5 anchor requires a global log proof")
 		}
-		if err := AnchorConsistency(*o.global, *o.anchor); err != nil {
+		if err := AnchorConsistencyWithVerifier(*o.global, *o.anchor, o.anchorVerifier); err != nil {
 			return Result{}, err
 		}
 		evidence.STHAnchorResult = true
@@ -262,6 +273,64 @@ func GlobalLogConsistency(bundle model.ProofBundle, proof model.GlobalLogProof) 
 // services; built-in sinks are checked locally for deterministic IDs and
 // proof envelope consistency.
 func AnchorConsistency(proof model.GlobalLogProof, ar model.STHAnchorResult) error {
+	return AnchorConsistencyWithVerifier(proof, ar, nil)
+}
+
+func AnchorConsistencyWithVerifier(proof model.GlobalLogProof, ar model.STHAnchorResult, verifier AnchorVerifier) error {
+	if err := AnchorBindingConsistency(proof, ar); err != nil {
+		return err
+	}
+	supported, err := verifyBuiltInAnchor(proof, ar)
+	if supported {
+		return err
+	}
+	if verifier == nil {
+		return fmt.Errorf("verify: unsupported anchor sink: %s", ar.SinkName)
+	}
+	if err := verifier.VerifyAnchor(proof.STH, ar); err != nil {
+		return err
+	}
+	return nil
+}
+
+// AnchorContainerConsistency validates built-in proofs completely while
+// allowing a structurally valid custom proof to be transported in .sproof.
+// A custom proof still requires AnchorConsistencyWithVerifier before L5 is
+// granted.
+func AnchorContainerConsistency(proof model.GlobalLogProof, ar model.STHAnchorResult) error {
+	if err := AnchorBindingConsistency(proof, ar); err != nil {
+		return err
+	}
+	_, err := verifyBuiltInAnchor(proof, ar)
+	return err
+}
+
+func verifyBuiltInAnchor(proof model.GlobalLogProof, ar model.STHAnchorResult) (bool, error) {
+	switch ar.SinkName {
+	case anchor.FileSinkName:
+		if got, want := ar.AnchorID, anchor.DeterministicFileAnchorID(proof.STH); got != want {
+			return true, fmt.Errorf("verify: file sink anchor_id mismatch: got %s want %s", got, want)
+		}
+	case anchor.NoopSinkName:
+		if got, want := ar.AnchorID, anchor.DeterministicNoopAnchorID(proof.STH); got != want {
+			return true, fmt.Errorf("verify: noop sink anchor_id mismatch: got %s want %s", got, want)
+		}
+	case anchor.OtsSinkName:
+		if got, want := ar.AnchorID, anchor.DeterministicOtsAnchorID(proof.STH); got != want {
+			return true, fmt.Errorf("verify: ots sink anchor_id mismatch: got %s want %s", got, want)
+		}
+		if err := validateOtsAnchorProof(proof.STH, ar); err != nil {
+			return true, err
+		}
+	default:
+		return false, nil
+	}
+	return true, nil
+}
+
+// AnchorBindingConsistency validates the sink-independent immutable fields.
+// It intentionally does not interpret provider proof bytes.
+func AnchorBindingConsistency(proof model.GlobalLogProof, ar model.STHAnchorResult) error {
 	if ar.SchemaVersion != model.SchemaSTHAnchorResult {
 		return fmt.Errorf("verify: unexpected anchor result schema: %s", ar.SchemaVersion)
 	}
@@ -277,29 +346,29 @@ func AnchorConsistency(proof model.GlobalLogProof, ar model.STHAnchorResult) err
 	if !bytes.Equal(ar.RootHash, proof.STH.RootHash) {
 		return fmt.Errorf("verify: anchor root_hash does not match STH root")
 	}
+	if ar.SinkName == "" {
+		return fmt.Errorf("verify: anchor result is missing sink_name")
+	}
 	if ar.AnchorID == "" {
 		return fmt.Errorf("verify: anchor result is missing anchor_id")
 	}
-	switch ar.SinkName {
-	case anchor.FileSinkName:
-		if got, want := ar.AnchorID, anchor.DeterministicFileAnchorID(proof.STH); got != want {
-			return fmt.Errorf("verify: file sink anchor_id mismatch: got %s want %s", got, want)
-		}
-	case anchor.NoopSinkName:
-		if got, want := ar.AnchorID, anchor.DeterministicNoopAnchorID(proof.STH); got != want {
-			return fmt.Errorf("verify: noop sink anchor_id mismatch: got %s want %s", got, want)
-		}
-	case anchor.OtsSinkName:
-		if got, want := ar.AnchorID, anchor.DeterministicOtsAnchorID(proof.STH); got != want {
-			return fmt.Errorf("verify: ots sink anchor_id mismatch: got %s want %s", got, want)
-		}
-		if err := validateOtsAnchorProof(proof.STH, ar); err != nil {
-			return err
-		}
-	default:
-		return fmt.Errorf("verify: unsupported anchor sink: %s", ar.SinkName)
+	if !sameSignedTreeHead(ar.STH, proof.STH) {
+		return fmt.Errorf("verify: anchor signed tree head does not exactly match global proof STH")
 	}
 	return nil
+}
+
+func sameSignedTreeHead(left, right model.SignedTreeHead) bool {
+	return left.SchemaVersion == right.SchemaVersion &&
+		left.TreeAlg == right.TreeAlg &&
+		left.TreeSize == right.TreeSize &&
+		bytes.Equal(left.RootHash, right.RootHash) &&
+		left.TimestampUnixN == right.TimestampUnixN &&
+		left.NodeID == right.NodeID &&
+		left.LogID == right.LogID &&
+		left.Signature.Alg == right.Signature.Alg &&
+		left.Signature.KeyID == right.Signature.KeyID &&
+		bytes.Equal(left.Signature.Signature, right.Signature.Signature)
 }
 
 func validateOtsAnchorProof(sth model.SignedTreeHead, ar model.STHAnchorResult) error {

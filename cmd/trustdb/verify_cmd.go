@@ -13,11 +13,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/spf13/cobra"
+	"github.com/wowtrust/trustdb/internal/anchor"
 	"github.com/wowtrust/trustdb/internal/keystore"
 	"github.com/wowtrust/trustdb/internal/model"
 	"github.com/wowtrust/trustdb/internal/sproof"
 	"github.com/wowtrust/trustdb/internal/verify"
-	"github.com/spf13/cobra"
 )
 
 // httpFetchTimeout bounds a single GET against the TrustDB server.
@@ -30,11 +31,13 @@ const (
 
 func newVerifyCommand(rt *runtimeConfig) *cobra.Command {
 	var (
-		filePath, sproofPath, proofPath, globalProofPath, anchorPath string
-		clientPubPath, registryPath, registryPubPath                 string
-		serverPubPath                                                string
-		serverURL, recordID                                          string
-		skipAnchor                                                   bool
+		filePath, sproofPath, proofPath, globalProofPath, anchorPath          string
+		clientPubPath, registryPath, registryPubPath                          string
+		serverPubPath                                                         string
+		serverURL, recordID                                                   string
+		anchorPluginCommand, anchorPluginStartTimeout, anchorPluginRPCTimeout string
+		anchorPluginArgs                                                      []string
+		skipAnchor                                                            bool
 	)
 	cmd := &cobra.Command{
 		Use:   "verify",
@@ -69,6 +72,14 @@ L5 always verifies an STH/global-root anchor; local --anchor requires
 			registryPath = stringOrConfig(cmd, rt, "key-registry", registryPath, "key_registry")
 			registryPubPath = stringOrConfig(cmd, rt, "registry-public-key", registryPubPath, "keys.registry_public")
 			serverPubPath = stringOrConfig(cmd, rt, "server-public-key", serverPubPath, "keys.server_public")
+			anchorPluginCommand = stringOrLiteral(cmd, "anchor-plugin-command", anchorPluginCommand, rt.cfg.Anchor.Plugin.Command)
+			if cmd.Flags().Changed("anchor-plugin-arg") {
+				anchorPluginArgs, _ = cmd.Flags().GetStringArray("anchor-plugin-arg")
+			} else {
+				anchorPluginArgs = append([]string(nil), rt.cfg.Anchor.Plugin.Args...)
+			}
+			anchorPluginStartTimeout = stringOrLiteral(cmd, "anchor-plugin-start-timeout", anchorPluginStartTimeout, rt.cfg.Anchor.Plugin.StartTimeout)
+			anchorPluginRPCTimeout = stringOrLiteral(cmd, "anchor-plugin-rpc-timeout", anchorPluginRPCTimeout, rt.cfg.Anchor.Plugin.RPCTimeout)
 
 			if filePath == "" || serverPubPath == "" {
 				return usageError("verify requires file and server-public-key")
@@ -146,6 +157,22 @@ L5 always verifies an STH/global-root anchor; local --anchor requires
 				opts = append(opts, verify.WithAnchor(*remoteAnchor))
 				anchorInUse = remoteAnchor
 			}
+			if anchorInUse != nil && !isBuiltInAnchorSink(anchorInUse.SinkName) {
+				if strings.TrimSpace(anchorPluginCommand) == "" {
+					return usageError("verify: custom anchor sink requires --anchor-plugin-command")
+				}
+				pluginSink, err := newPluginSinkFromParams(cmd.Context(), pluginSinkParams{
+					Command:          anchorPluginCommand,
+					Args:             anchorPluginArgs,
+					StartTimeoutText: anchorPluginStartTimeout,
+					RPCTimeoutText:   anchorPluginRPCTimeout,
+				})
+				if err != nil {
+					return err
+				}
+				defer pluginSink.Close()
+				opts = append(opts, verify.WithAnchorVerifier(pluginSink))
+			}
 
 			result, err := verify.ProofBundle(f, bundle, verify.TrustedKeys{
 				ClientPublicKey: clientPub,
@@ -179,7 +206,20 @@ L5 always verifies an STH/global-root anchor; local --anchor requires
 	cmd.Flags().StringVar(&serverURL, "server", "", "TrustDB server URL (remote mode)")
 	cmd.Flags().StringVar(&recordID, "record", "", "record id to verify (remote mode)")
 	cmd.Flags().BoolVar(&skipAnchor, "skip-anchor", false, "do not fetch or verify L5 anchor")
+	cmd.Flags().StringVar(&anchorPluginCommand, "anchor-plugin-command", "", "external anchor plugin executable used to verify a custom L5 proof")
+	cmd.Flags().StringArrayVar(&anchorPluginArgs, "anchor-plugin-arg", nil, "argument passed to the external anchor plugin; may be repeated")
+	cmd.Flags().StringVar(&anchorPluginStartTimeout, "anchor-plugin-start-timeout", "", "maximum time to start and handshake with an external anchor plugin (default 10s)")
+	cmd.Flags().StringVar(&anchorPluginRPCTimeout, "anchor-plugin-rpc-timeout", "", "per-RPC timeout for an external anchor plugin (default 30s)")
 	return cmd
+}
+
+func isBuiltInAnchorSink(name string) bool {
+	switch name {
+	case anchor.FileSinkName, anchor.NoopSinkName, anchor.OtsSinkName:
+		return true
+	default:
+		return false
+	}
 }
 
 // loadVerifyInputs dispatches between local-file and HTTP-fetch modes

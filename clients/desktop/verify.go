@@ -8,11 +8,15 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
+	"time"
 
+	"github.com/wowtrust/trustdb/internal/anchor"
 	"github.com/wowtrust/trustdb/internal/cborx"
 	"github.com/wowtrust/trustdb/internal/model"
 	"github.com/wowtrust/trustdb/internal/sproof"
 	"github.com/wowtrust/trustdb/sdk"
+	"github.com/wowtrust/trustdb/sdk/anchorplugin"
 )
 
 // VerifyRequest covers both verify modes the UI offers:
@@ -155,6 +159,16 @@ func (a *App) VerifyProof(req VerifyRequest) (*VerifyResponse, error) {
 	}
 	defer f.Close()
 
+	var pluginVerifier sdk.AnchorVerifier
+	if anchor != nil && !req.SkipAnchor && !desktopBuiltInAnchorSink(anchor.SinkName) {
+		process, startErr := a.startAnchorPluginVerifier()
+		if startErr != nil {
+			return failedVerifyResponse(bundle, globalProof, anchor, startErr), nil
+		}
+		defer process.Close()
+		pluginVerifier = process
+	}
+
 	res, err := sdk.VerifyArtifacts(f, sdk.ProofArtifacts{
 		Bundle:       bundle,
 		GlobalProof:  globalProof,
@@ -162,7 +176,7 @@ func (a *App) VerifyProof(req VerifyRequest) (*VerifyResponse, error) {
 	}, sdk.TrustedKeys{
 		ClientPublicKey: clientPub,
 		ServerPublicKey: serverPub,
-	}, sdk.VerifyOptions{SkipAnchor: req.SkipAnchor})
+	}, sdk.VerifyOptions{SkipAnchor: req.SkipAnchor, AnchorVerifier: pluginVerifier})
 	if err != nil {
 		return &VerifyResponse{
 			Valid:        false,
@@ -185,6 +199,70 @@ func (a *App) VerifyProof(req VerifyRequest) (*VerifyResponse, error) {
 		Anchor:       anchor,
 		ContentBytes: bundle.SignedClaim.Claim.Content.ContentLength,
 	}, nil
+}
+
+func (a *App) startAnchorPluginVerifier() (*anchorplugin.Process, error) {
+	store, err := a.requireStore()
+	if err != nil {
+		return nil, err
+	}
+	cfg := store.getSettings()
+	if strings.TrimSpace(cfg.AnchorPluginCommand) == "" {
+		return nil, errors.New("custom L5 anchor requires an anchor plugin executable; configure it in Settings")
+	}
+	startTimeout, err := positiveDesktopDuration("anchor plugin start timeout", cfg.AnchorPluginStartTimeout)
+	if err != nil {
+		return nil, err
+	}
+	rpcTimeout, err := positiveDesktopDuration("anchor plugin RPC timeout", cfg.AnchorPluginRPCTimeout)
+	if err != nil {
+		return nil, err
+	}
+	return anchorplugin.StartProcess(a.ensureCtx(), anchorplugin.ProcessConfig{
+		Command:      cfg.AnchorPluginCommand,
+		Args:         desktopAnchorPluginArgs(cfg.AnchorPluginArgsText),
+		StartTimeout: startTimeout,
+		RPCTimeout:   rpcTimeout,
+	})
+}
+
+func desktopBuiltInAnchorSink(name string) bool {
+	switch name {
+	case anchor.FileSinkName, anchor.NoopSinkName, anchor.OtsSinkName:
+		return true
+	default:
+		return false
+	}
+}
+
+func desktopAnchorPluginArgs(text string) []string {
+	lines := strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n")
+	args := make([]string, 0, len(lines))
+	for _, line := range lines {
+		if arg := strings.TrimSpace(line); arg != "" {
+			args = append(args, arg)
+		}
+	}
+	return args
+}
+
+func positiveDesktopDuration(name, value string) (time.Duration, error) {
+	duration, err := time.ParseDuration(strings.TrimSpace(value))
+	if err != nil || duration <= 0 {
+		return 0, fmt.Errorf("%s must be a positive duration", name)
+	}
+	return duration, nil
+}
+
+func failedVerifyResponse(bundle model.ProofBundle, globalProof *model.GlobalLogProof, anchorResult *model.STHAnchorResult, err error) *VerifyResponse {
+	return &VerifyResponse{
+		Valid:        false,
+		Bundle:       &bundle,
+		GlobalProof:  globalProof,
+		Anchor:       anchorResult,
+		ContentBytes: bundle.SignedClaim.Claim.Content.ContentLength,
+		Error:        err.Error(),
+	}
 }
 
 func (a *App) remoteClient(override string) (*serverClient, error) {
