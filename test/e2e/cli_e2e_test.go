@@ -25,11 +25,12 @@ func TestCLILocalProofFlow(t *testing.T) {
 
 	runTrustDB(t, root, "keygen", "--out", tmp, "--prefix", "client")
 	runTrustDB(t, root, "keygen", "--out", tmp, "--prefix", "server")
+	runTrustDB(t, root, "keygen", "--out", tmp, "--prefix", "registry")
 	registry := filepath.Join(tmp, "keys.tdkeys")
 	runTrustDB(t, root,
 		"key-register",
 		"--registry", registry,
-		"--registry-private-key", filepath.Join(tmp, "server.key"),
+		"--registry-private-key", filepath.Join(tmp, "registry.key"),
 		"--registry-key-id", "registry-key",
 		"--tenant", "tenant-e2e",
 		"--client", "client-e2e",
@@ -55,7 +56,7 @@ func TestCLILocalProofFlow(t *testing.T) {
 		"commit",
 		"--claim", claimPath,
 		"--key-registry", registry,
-		"--registry-public-key", filepath.Join(tmp, "server.pub"),
+		"--registry-public-key", filepath.Join(tmp, "registry.pub"),
 		"--server-private-key", filepath.Join(tmp, "server.key"),
 		"--server-key-id", "server-key",
 		"--wal", filepath.Join(tmp, "trustdb.wal"),
@@ -78,7 +79,7 @@ func TestCLILocalProofFlow(t *testing.T) {
 		"--file", payload,
 		"--proof", proofPath,
 		"--key-registry", registry,
-		"--registry-public-key", filepath.Join(tmp, "server.pub"),
+		"--registry-public-key", filepath.Join(tmp, "registry.pub"),
 		"--server-public-key", filepath.Join(tmp, "server.pub"),
 	)
 	var result struct {
@@ -112,11 +113,12 @@ func TestCLIBatchProofFlow(t *testing.T) {
 	}
 	runTrustDB(t, root, "keygen", "--out", tmp, "--prefix", "client")
 	runTrustDB(t, root, "keygen", "--out", tmp, "--prefix", "server")
+	runTrustDB(t, root, "keygen", "--out", tmp, "--prefix", "registry")
 	registry := filepath.Join(tmp, "keys.tdkeys")
 	runTrustDB(t, root,
 		"key-register",
 		"--registry", registry,
-		"--registry-private-key", filepath.Join(tmp, "server.key"),
+		"--registry-private-key", filepath.Join(tmp, "registry.key"),
 		"--tenant", "tenant-e2e",
 		"--client", "client-e2e",
 		"--key-id", "client-key",
@@ -149,7 +151,7 @@ func TestCLIBatchProofFlow(t *testing.T) {
 		"--claim", claimA,
 		"--claim", claimB,
 		"--key-registry", registry,
-		"--registry-public-key", filepath.Join(tmp, "server.pub"),
+		"--registry-public-key", filepath.Join(tmp, "registry.pub"),
 		"--server-private-key", filepath.Join(tmp, "server.key"),
 		"--wal", filepath.Join(tmp, "batch.wal"),
 		"--out-dir", proofsDir,
@@ -172,7 +174,7 @@ func TestCLIBatchProofFlow(t *testing.T) {
 			"--file", item,
 			"--proof", committed[i].Proof,
 			"--key-registry", registry,
-			"--registry-public-key", filepath.Join(tmp, "server.pub"),
+			"--registry-public-key", filepath.Join(tmp, "registry.pub"),
 			"--server-public-key", filepath.Join(tmp, "server.pub"),
 		)
 		var result struct {
