@@ -359,6 +359,16 @@ func VerifySignatureForSuite(ctx context.Context, suiteID cryptosuite.ID, descri
 	return Verify(ctx, provider, descriptor, message, sig)
 }
 
+// ValidatePublicKeyForSuite validates a descriptor for a known suite without
+// enabling that suite for production signing or evidence generation.
+func ValidatePublicKeyForSuite(suiteID cryptosuite.ID, descriptor PublicKeyDescriptor) error {
+	provider, err := providerForKnownSuite(suiteID)
+	if err != nil {
+		return err
+	}
+	return ValidatePublicKey(provider, descriptor)
+}
+
 type sha256Factory struct{}
 
 func (sha256Factory) Algorithm() string { return cryptosuite.HashSHA256 }
