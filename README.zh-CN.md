@@ -1,5 +1,9 @@
 # TrustDB
 
+<p align="center">
+  <img src="clients/desktop/build/appicon.png" alt="TrustDB 对号标志" width="120">
+</p>
+
 ![CI](https://github.com/wowtrust/trustdb/actions/workflows/ci.yml/badge.svg)
 ![GitHub release](https://img.shields.io/github/v/release/wowtrust/trustdb)
 ![License](https://img.shields.io/github/license/wowtrust/trustdb)
