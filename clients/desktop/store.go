@@ -31,12 +31,16 @@ type Identity struct {
 // survive restarts: the target server, the server's signing key so
 // we can verify responses, and UI preferences.
 type Settings struct {
-	ServerURL       string `json:"server_url"`
-	ServerTransport string `json:"server_transport"`
-	ServerPubKeyB64 string `json:"server_public_key_b64"`
-	DefaultMedia    string `json:"default_media_type"`
-	DefaultEvent    string `json:"default_event_type"`
-	Theme           string `json:"theme"`
+	ServerURL                string `json:"server_url"`
+	ServerTransport          string `json:"server_transport"`
+	ServerPubKeyB64          string `json:"server_public_key_b64"`
+	AnchorPluginCommand      string `json:"anchor_plugin_command"`
+	AnchorPluginArgsText     string `json:"anchor_plugin_args_text"`
+	AnchorPluginStartTimeout string `json:"anchor_plugin_start_timeout"`
+	AnchorPluginRPCTimeout   string `json:"anchor_plugin_rpc_timeout"`
+	DefaultMedia             string `json:"default_media_type"`
+	DefaultEvent             string `json:"default_event_type"`
+	Theme                    string `json:"theme"`
 }
 
 const (
@@ -155,11 +159,13 @@ type store struct {
 
 func defaultSettings() Settings {
 	return Settings{
-		ServerURL:       "http://127.0.0.1:8080",
-		ServerTransport: serverTransportHTTP,
-		DefaultMedia:    "application/octet-stream",
-		DefaultEvent:    "file.snapshot",
-		Theme:           "auto",
+		ServerURL:                "http://127.0.0.1:8080",
+		ServerTransport:          serverTransportHTTP,
+		AnchorPluginStartTimeout: "10s",
+		AnchorPluginRPCTimeout:   "30s",
+		DefaultMedia:             "application/octet-stream",
+		DefaultEvent:             "file.snapshot",
+		Theme:                    "auto",
 	}
 }
 
@@ -224,6 +230,12 @@ func (s *store) load() error {
 	loaded.Settings.ServerTransport = normalizeServerTransport(loaded.Settings.ServerTransport)
 	if loaded.Settings.DefaultMedia == "" {
 		loaded.Settings.DefaultMedia = "application/octet-stream"
+	}
+	if loaded.Settings.AnchorPluginStartTimeout == "" {
+		loaded.Settings.AnchorPluginStartTimeout = "10s"
+	}
+	if loaded.Settings.AnchorPluginRPCTimeout == "" {
+		loaded.Settings.AnchorPluginRPCTimeout = "30s"
 	}
 	if loaded.Settings.DefaultEvent == "" {
 		loaded.Settings.DefaultEvent = "file.snapshot"
@@ -318,6 +330,12 @@ func (s *store) setSettings(cfg Settings) error {
 	cfg.ServerTransport = normalizeServerTransport(cfg.ServerTransport)
 	if cfg.DefaultMedia == "" {
 		cfg.DefaultMedia = "application/octet-stream"
+	}
+	if cfg.AnchorPluginStartTimeout == "" {
+		cfg.AnchorPluginStartTimeout = "10s"
+	}
+	if cfg.AnchorPluginRPCTimeout == "" {
+		cfg.AnchorPluginRPCTimeout = "30s"
 	}
 	if cfg.DefaultEvent == "" {
 		cfg.DefaultEvent = "file.snapshot"

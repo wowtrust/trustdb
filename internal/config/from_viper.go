@@ -20,6 +20,14 @@ func FromViper(v *viper.Viper) Config {
 	if anchorPollInterval == "" {
 		anchorPollInterval = defaults.Anchor.PollInterval
 	}
+	anchorPluginStartTimeout := strings.TrimSpace(v.GetString("anchor.plugin.start_timeout"))
+	if anchorPluginStartTimeout == "" {
+		anchorPluginStartTimeout = defaults.Anchor.Plugin.StartTimeout
+	}
+	anchorPluginRPCTimeout := strings.TrimSpace(v.GetString("anchor.plugin.rpc_timeout"))
+	if anchorPluginRPCTimeout == "" {
+		anchorPluginRPCTimeout = defaults.Anchor.Plugin.RPCTimeout
+	}
 	return Config{
 		RunProfile: v.GetString("run_profile"),
 		Paths: Paths{
@@ -105,6 +113,12 @@ func FromViper(v *viper.Viper) Config {
 			PollInterval: anchorPollInterval,
 			Sink:         v.GetString("anchor.sink"),
 			Path:         v.GetString("anchor.path"),
+			Plugin: AnchorPlugin{
+				Command:      v.GetString("anchor.plugin.command"),
+				Args:         append([]string(nil), v.GetStringSlice("anchor.plugin.args")...),
+				StartTimeout: anchorPluginStartTimeout,
+				RPCTimeout:   anchorPluginRPCTimeout,
+			},
 		},
 		History: History{
 			TileSize:        v.GetUint64("history.tile_size"),

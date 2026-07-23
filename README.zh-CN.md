@@ -90,7 +90,7 @@ curl --fail http://127.0.0.1:8080/healthz
 - WAL-backed ingest：有界队列、可配置 fsync、replay、checkpoint 和优雅关闭。
 - Batch Merkle proof、持久化 record index、分页 record/root API。
 - Global Transparency Log：持久化 STH、inclusion proof、consistency proof 和 history tile。
-- L5 STH/global-root 锚定：支持 `off`、`noop`、本地文件和 OpenTimestamps sink。
+- L5 STH/global-root 锚定：支持 `off`、`noop`、本地文件、OpenTimestamps 和受监管的外部 gRPC 子进程插件。
 - Proofstore 支持 file、Pebble 和 TiKV；TiKV 可实现存算分离，但每个 namespace 只属于一个逻辑 `(node_id, log_id)` 流，不支持同 namespace active-active writer。
 - `.tdbackup` 便携备份：创建、校验、带 checkpoint 的可恢复 restore。
 - Go SDK：claim 签名、HTTP/gRPC 调用、证明导出、本地验证。
@@ -231,6 +231,7 @@ mkdir -p .trustdb-dev
 | `configs/benchmark.yaml` | 吞吐压测配置；不代表生产审计语义。 |
 
 `run_profile` 语义和启动提示见 [configs/README.md](configs/README.md)。
+自定义 provider 的开发、部署和验证方式见 [L5 外部锚定插件](formats/ANCHOR_PLUGIN_V1.md)。
 
 ## Admin Web 和桌面客户端
 

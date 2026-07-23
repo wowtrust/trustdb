@@ -66,6 +66,11 @@ anchor:
   max_delay: "5m"
   sink: "noop"
   path: ".trustdb-dev/anchors/sth-anchors.jsonl"
+  plugin:
+    command: ""
+    args: []
+    start_timeout: "10s"
+    rpc_timeout: "30s"
   ots:
     calendars: []
     min_accepted: 0

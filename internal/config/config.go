@@ -111,6 +111,11 @@ anchor:
   scope: "global"
   max_delay: "5m"
   poll_interval: "2s"
+  plugin:
+    command: ""
+    args: []
+    start_timeout: "10s"
+    rpc_timeout: "30s"
 
 history:
   tile_size: 256
@@ -278,11 +283,19 @@ type GlobalLog struct {
 }
 
 type Anchor struct {
-	Scope        string `mapstructure:"scope" json:"scope"`
-	MaxDelay     string `mapstructure:"max_delay" json:"max_delay"`
-	PollInterval string `mapstructure:"poll_interval" json:"poll_interval"`
-	Sink         string `mapstructure:"sink" json:"sink"`
-	Path         string `mapstructure:"path" json:"path"`
+	Scope        string       `mapstructure:"scope" json:"scope"`
+	MaxDelay     string       `mapstructure:"max_delay" json:"max_delay"`
+	PollInterval string       `mapstructure:"poll_interval" json:"poll_interval"`
+	Sink         string       `mapstructure:"sink" json:"sink"`
+	Path         string       `mapstructure:"path" json:"path"`
+	Plugin       AnchorPlugin `mapstructure:"plugin" json:"plugin"`
+}
+
+type AnchorPlugin struct {
+	Command      string   `mapstructure:"command" json:"command"`
+	Args         []string `mapstructure:"args" json:"args"`
+	StartTimeout string   `mapstructure:"start_timeout" json:"start_timeout"`
+	RPCTimeout   string   `mapstructure:"rpc_timeout" json:"rpc_timeout"`
 }
 
 type History struct {
@@ -403,6 +416,10 @@ func Default() Config {
 			PollInterval: "2s",
 			Sink:         "",
 			Path:         "",
+			Plugin: AnchorPlugin{
+				StartTimeout: "10s",
+				RPCTimeout:   "30s",
+			},
 		},
 		History: History{
 			TileSize:        256,
@@ -549,6 +566,15 @@ func (c Config) Validate() error {
 	}
 	if err := validatePositiveDuration("anchor.poll_interval", c.Anchor.PollInterval); err != nil {
 		return err
+	}
+	if err := validatePositiveDuration("anchor.plugin.start_timeout", c.Anchor.Plugin.StartTimeout); err != nil {
+		return err
+	}
+	if err := validatePositiveDuration("anchor.plugin.rpc_timeout", c.Anchor.Plugin.RPCTimeout); err != nil {
+		return err
+	}
+	if strings.EqualFold(strings.TrimSpace(c.Anchor.Sink), "plugin") && strings.TrimSpace(c.Anchor.Plugin.Command) == "" {
+		return fmt.Errorf("anchor.plugin.command is required when anchor.sink is plugin")
 	}
 	if c.History.TileSize == 0 {
 		return fmt.Errorf("history.tile_size must be greater than 0")

@@ -164,6 +164,57 @@ func TestAnchorConsistencyRejectsUnknownSink(t *testing.T) {
 	}
 }
 
+type testAnchorVerifier struct {
+	called bool
+	err    error
+}
+
+func (v *testAnchorVerifier) VerifyAnchor(_ model.SignedTreeHead, _ model.STHAnchorResult) error {
+	v.called = true
+	return v.err
+}
+
+func TestAnchorConsistencyUsesExternalVerifier(t *testing.T) {
+	root := bytes.Repeat([]byte{0x91}, 32)
+	proof := newGlobalProofWithSTH(12, root)
+	ar := model.STHAnchorResult{
+		SchemaVersion: model.SchemaSTHAnchorResult,
+		TreeSize:      proof.STH.TreeSize,
+		SinkName:      "vendor-chain",
+		AnchorID:      "transaction-1",
+		RootHash:      root,
+		STH:           proof.STH,
+	}
+	verifier := &testAnchorVerifier{}
+	if err := AnchorConsistencyWithVerifier(proof, ar, verifier); err != nil {
+		t.Fatalf("AnchorConsistencyWithVerifier() error = %v", err)
+	}
+	if !verifier.called {
+		t.Fatal("external verifier was not called")
+	}
+}
+
+func TestAnchorContainerConsistencyAllowsBoundCustomProof(t *testing.T) {
+	t.Parallel()
+	root := bytes.Repeat([]byte{0x92}, 32)
+	proof := newGlobalProofWithSTH(13, root)
+	ar := model.STHAnchorResult{
+		SchemaVersion: model.SchemaSTHAnchorResult,
+		TreeSize:      proof.STH.TreeSize,
+		SinkName:      "vendor-chain",
+		AnchorID:      "transaction-2",
+		RootHash:      root,
+		STH:           proof.STH,
+		Proof:         []byte("opaque"),
+	}
+	if err := AnchorContainerConsistency(proof, ar); err != nil {
+		t.Fatalf("AnchorContainerConsistency() error = %v", err)
+	}
+	if err := AnchorConsistency(proof, ar); err == nil || !strings.Contains(err.Error(), "unsupported anchor sink") {
+		t.Fatalf("AnchorConsistency() error = %v, want fail closed", err)
+	}
+}
+
 func TestAnchorConsistencyRejectsSchema(t *testing.T) {
 	t.Parallel()
 	proof := newGlobalProofWithSTH(1, []byte{1})
@@ -222,6 +273,7 @@ func TestAnchorConsistencyRejectsFileAnchorIDTamper(t *testing.T) {
 		SinkName:      anchor.FileSinkName,
 		AnchorID:      "file-tampered-0000000000000000000",
 		RootHash:      root,
+		STH:           proof.STH,
 	}
 	err := AnchorConsistency(proof, ar)
 	if err == nil || !strings.Contains(err.Error(), "file sink anchor_id") {

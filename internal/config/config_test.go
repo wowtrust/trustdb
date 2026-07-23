@@ -64,6 +64,9 @@ func TestDefaultYAMLIsStructured(t *testing.T) {
 	if Default().Anchor.MaxDelay != "5m" {
 		t.Fatalf("default anchor.max_delay = %q, want 5m", Default().Anchor.MaxDelay)
 	}
+	if Default().Anchor.Plugin.StartTimeout != "10s" || Default().Anchor.Plugin.RPCTimeout != "30s" {
+		t.Fatalf("default anchor plugin timeouts = %+v", Default().Anchor.Plugin)
+	}
 	if Default().Server.ReadHeaderTimeout != "5s" {
 		t.Fatalf("default server.read_header_timeout = %q, want 5s", Default().Server.ReadHeaderTimeout)
 	}
@@ -78,6 +81,24 @@ func TestDefaultYAMLIsStructured(t *testing.T) {
 	}
 	if Default().NATS.Workers != 0 {
 		t.Fatalf("default nats.workers = %d, want automatic sizing (0)", Default().NATS.Workers)
+	}
+}
+
+func TestValidateAnchorPluginIsConditional(t *testing.T) {
+	t.Parallel()
+
+	cfg := Default()
+	cfg.Anchor.Sink = "plugin"
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "anchor.plugin.command") {
+		t.Fatalf("Validate() error = %v, want plugin command requirement", err)
+	}
+	cfg.Anchor.Plugin.Command = "/usr/local/bin/trustdb-anchor"
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() rejected configured plugin: %v", err)
+	}
+	cfg.Anchor.Plugin.RPCTimeout = "0s"
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "anchor.plugin.rpc_timeout") {
+		t.Fatalf("Validate() error = %v, want rpc timeout error", err)
 	}
 }
 

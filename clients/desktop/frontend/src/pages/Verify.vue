@@ -154,6 +154,9 @@ function stepState(s: Step): 'pass' | 'current' | 'todo' | 'fail' {
           拉取 proof bundle、GlobalLogProof 和 STH anchor 并就地验证。
         </template>
       </p>
+      <p v-if="settings.settings.anchor_plugin_command" class="mb-4 text-[11.5px] text-ink-500">
+        自定义 L5 verifier：<span class="font-mono">{{ settings.settings.anchor_plugin_command }}</span>
+      </p>
 
       <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
         <!-- Common: file -->

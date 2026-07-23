@@ -384,6 +384,10 @@ export namespace main {
 	    server_url: string;
 	    server_transport: string;
 	    server_public_key_b64: string;
+	    anchor_plugin_command: string;
+	    anchor_plugin_args_text: string;
+	    anchor_plugin_start_timeout: string;
+	    anchor_plugin_rpc_timeout: string;
 	    default_media_type: string;
 	    default_event_type: string;
 	    theme: string;
@@ -397,6 +401,10 @@ export namespace main {
 	        this.server_url = source["server_url"];
 	        this.server_transport = source["server_transport"];
 	        this.server_public_key_b64 = source["server_public_key_b64"];
+	        this.anchor_plugin_command = source["anchor_plugin_command"];
+	        this.anchor_plugin_args_text = source["anchor_plugin_args_text"];
+	        this.anchor_plugin_start_timeout = source["anchor_plugin_start_timeout"];
+	        this.anchor_plugin_rpc_timeout = source["anchor_plugin_rpc_timeout"];
 	        this.default_media_type = source["default_media_type"];
 	        this.default_event_type = source["default_event_type"];
 	        this.theme = source["theme"];
@@ -1086,4 +1094,3 @@ export namespace model {
 	
 
 }
-
