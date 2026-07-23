@@ -284,7 +284,7 @@ export function QuickStartPage({ route }) {
 export function ServerDocsPage({ route }) {
   const locale = useLocale();
   const { lang, ui, server, troubleshooting } = useDocsOnboarding(locale);
-  const dockerImage = `wsy19990317/trustdb:${release.version}`;
+  const dockerImage = `${release.containerImage}:${release.version}`;
   return (
     <DocsShell route={route}>
       <div lang={lang} data-i18n-ignore>
@@ -301,7 +301,8 @@ export function ServerDocsPage({ route }) {
           <CodeBlock>{`docker run -d \\\n  --name trustdb \\\n  -p 127.0.0.1:8080:8080 \\\n  -v trustdb-data:/var/lib/trustdb \\\n  ${dockerImage}\n\ndocker logs trustdb\ncurl --fail http://127.0.0.1:8080/healthz`}</CodeBlock>
           <ExpectedResult label={ui.expected}>{server.dockerExpected}</ExpectedResult>
           <Note tone="warn" title={ui.checkpoint}>{server.dockerBoundary}</Note>
-          <InlineLink href={release.dockerUrl}>Docker Hub</InlineLink>
+          <InlineLink href={release.containerUrl}>GitHub Container Registry</InlineLink>
+          <InlineLink href={release.dockerHubUrl}>Docker Hub</InlineLink>
         </section>
         <section className="doc-section">
           <h2>{server.templateTitle}</h2><p>{server.templateBody}</p>

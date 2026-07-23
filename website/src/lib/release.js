@@ -3,7 +3,9 @@ export const release = {
   tag: "v1.0.0",
   published: "2026.07.22",
   pageUrl: "https://github.com/wowtrust/trustdb/releases/tag/v1.0.0",
-  dockerUrl: "https://hub.docker.com/r/wsy19990317/trustdb",
+  containerImage: "ghcr.io/wowtrust/trustdb",
+  containerUrl: "https://github.com/wowtrust/trustdb/pkgs/container/trustdb",
+  dockerHubUrl: "https://hub.docker.com/r/wsy19990317/trustdb",
 };
 
 const releaseBase = "https://github.com/wowtrust/trustdb/releases/download/v1.0.0";
