@@ -5,8 +5,8 @@ This checked example submits a file, waits for a portable proof with Global Log 
 ## Prerequisites
 
 - Run all commands from the TrustDB repository root with the Go version declared in `go.mod`.
-- Use a fresh working directory. `keygen` writes the named key files; do not overwrite keys used by an existing server.
-- The server must use the public half of `client.key`, and Global Log must be enabled. The default configuration enables Global Log. No anchor is required for this L4 walkthrough.
+- Use a fresh working directory. `keygen` writes signer/verifier descriptors and separate development material; do not overwrite an identity used by an existing server.
+- The server must trust `client.pub`, and Global Log must be enabled. The default configuration enables Global Log. No anchor is required for this L4 walkthrough.
 
 Build the CLI and generate separate client and server Ed25519 key pairs:
 

@@ -2,6 +2,13 @@
 
 Shipped YAML files are **starting points** only: adjust paths, keys, `server.listen`, anchor calendars, and TiKV endpoints for your environment.
 
+Every `keys.*` path points to a canonical
+`trustdb.key-descriptor.v1` file, not raw Base64 key bytes. A software signer
+descriptor references separate private material relative to the descriptor;
+PKCS#11, SDF, and remote descriptors reference non-exportable provider keys.
+Legacy raw-key files are rejected. See
+[`formats/KEY_DESCRIPTOR_V1.md`](../formats/KEY_DESCRIPTOR_V1.md).
+
 `anchor.poll_interval` controls the O(1) durable scheduler recovery lookup. Triggered work normally starts immediately; polling resumes pending or in-flight work after missed triggers and restarts. Benchmark profiles use `250ms`, while the default remains `2s` to limit idle store reads.
 
 | File | `run_profile` | Purpose |

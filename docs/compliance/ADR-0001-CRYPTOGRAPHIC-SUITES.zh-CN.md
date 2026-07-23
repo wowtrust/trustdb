@@ -59,8 +59,8 @@ TrustDB 的密码语义跨越内容摘要、record ID、客户端签名、服务
 | 签名 | Ed25519 |
 | 签名编码 | RFC 8032 64-byte raw signature |
 | 公钥编码 | RFC 8032 32-byte raw public key |
-| 私钥编码 | 当前 TrustDB 64-byte Ed25519 private key 表示 |
-| 证书 Profile | 使用证书时为 RFC 8410 X.509 Ed25519；当前 raw-key 流程不要求证书 |
+| 私钥编码 | software provider material 为 64-byte Ed25519 private key；descriptor 本身不包含私钥 bytes |
+| 证书 Profile | 使用证书时为 RFC 8410 X.509 Ed25519；descriptor 可携带 leaf-first DER chain，但信任根仍由验证端本地提供 |
 | Canonical encoding | RFC 8949 Core Deterministic CBOR |
 | Merkle | `rfc6962-sha256`，leaf prefix `0x00`，node prefix `0x01` |
 | Anchor digest | STH 的 32-byte SHA-256 root；sink 不得静默转换 |

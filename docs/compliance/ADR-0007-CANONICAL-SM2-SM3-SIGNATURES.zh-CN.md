@@ -98,7 +98,7 @@ OpenSSL 是测试 oracle，不进入生产路径。`CN_SM_V1` 正式可用前仍
 
 ## 6. 后续边界
 
-- #449：版本化 software/hardware key descriptor 和 key lifecycle；
+- #449：版本化 software/hardware key descriptor 已完成，见 [`ADR-0008`](ADR-0008-VERSIONED-KEY-DESCRIPTORS.zh-CN.md)；
 - #452/#453：真实 PKCS#11 与 SDF/HSM provider；
 - #454：V2 Server 全链路携带 suite，并在完整 gate 中启用 `CN_SM_V1`；
 - #455：`.sproof v2` 完整携带 SM2 STH、SM3 path 和离线 trust material；

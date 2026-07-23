@@ -153,12 +153,22 @@ printf 'hello TrustDB\n' > example.txt
 mkdir -p .trustdb-dev
 ```
 
-Generate one-time client and server keys. `keygen` replaces same-name key files, so do not rerun it for an identity that has already issued evidence:
+Generate one-time client and server identities. Each command writes a signer
+descriptor (`.key`), a public verifier descriptor (`.pub`), and separate
+development software material (`.material`). The descriptor files are
+canonical CBOR, not raw private keys. `keygen` replaces same-name files, so do
+not rerun it for an identity that has already issued evidence:
 
 ```bash
 ./bin/trustdb keygen --out .trustdb-dev --prefix client
 ./bin/trustdb keygen --out .trustdb-dev --prefix server
 ```
+
+The generated `plaintext-dev-v1` material is protected by owner-only file
+permissions and is intended for local evaluation. Production deployments
+should provision a versioned PKCS#11, SDF, or remote-provider descriptor; the
+SM4 encrypted software envelope is tracked by #451. TrustDB does not read or
+fall back to legacy raw-base64 key files.
 
 Create and sign a local file claim:
 
@@ -262,6 +272,7 @@ The screenshot below is rendered directly from the current desktop client code:
 - [docs/compliance/ADR-0005-IMMUTABLE-PROOFSTORE-SUITE-MARKERS.zh-CN.md](docs/compliance/ADR-0005-IMMUTABLE-PROOFSTORE-SUITE-MARKERS.zh-CN.md): immutable suite markers, atomic backend initialization, and backup/migration binding rules (Chinese).
 - [docs/compliance/ADR-0006-SM3-AND-RFC6962-MERKLE-PROFILES.zh-CN.md](docs/compliance/ADR-0006-SM3-AND-RFC6962-MERKLE-PROFILES.zh-CN.md): SM3 hashing, exact suite-bound RFC6962 Merkle profiles, cross-suite rejection, and performance contracts (Chinese).
 - [docs/compliance/ADR-0007-CANONICAL-SM2-SM3-SIGNATURES.zh-CN.md](docs/compliance/ADR-0007-CANONICAL-SM2-SM3-SIGNATURES.zh-CN.md): canonical SM2-SM3 signing, strict DER/public-key validation, fixed user ID, suite-bound signature inputs, and production enablement boundaries (Chinese).
+- [docs/compliance/ADR-0008-VERSIONED-KEY-DESCRIPTORS.zh-CN.md](docs/compliance/ADR-0008-VERSIONED-KEY-DESCRIPTORS.zh-CN.md): canonical software, PKCS#11, SDF, remote, certificate, resolver, redaction, and destructive migration rules (Chinese).
 - [COMMUNITY.md](COMMUNITY.md): support, discussion, and first-contribution entry points.
 - [ROADMAP.md](ROADMAP.md): public product direction and ways to influence it.
 - [SECURITY.md](SECURITY.md): private vulnerability reporting and supported-version policy.
@@ -271,6 +282,7 @@ The screenshot below is rendered directly from the current desktop client code:
 - [docs/compliance/CHINA_COMPLIANCE_SCOPE_AND_CONTROL_MATRIX.zh-CN.md](docs/compliance/CHINA_COMPLIANCE_SCOPE_AND_CONTROL_MATRIX.zh-CN.md): versioned China compliance scope, control ownership, release gates, evidence requirements, and assessment boundaries (Chinese).
 - [CONTRIBUTING.md](CONTRIBUTING.md): issue, PR, commit, validation, and review standards.
 - [formats/SPROOF_V1.md](formats/SPROOF_V1.md): stable `.sproof` v1 exchange format.
+- [formats/KEY_DESCRIPTOR_V1.md](formats/KEY_DESCRIPTOR_V1.md): canonical key descriptor schema, provider union, resolution contract, redaction, and migration rules.
 - [formats/DISTRIBUTED_ARCHITECTURE.md](formats/DISTRIBUTED_ARCHITECTURE.md): distributed/storage-compute separation notes.
 - [docs/performance/trustdb-sustained-stream-persistence-assessment-2026-07-23.zh-CN.md](docs/performance/trustdb-sustained-stream-persistence-assessment-2026-07-23.zh-CN.md): the single performance reference for L2-L5, HTTP/gRPC, backpressure, persistence, and configuration semantics (Chinese).
 - [docs/performance/trustdb-performance-optimization-2026-07.zh-CN.md](docs/performance/trustdb-performance-optimization-2026-07.zh-CN.md): performance implementation notes (Chinese).

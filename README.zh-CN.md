@@ -144,12 +144,14 @@ printf 'hello TrustDB\n' > example.txt
 mkdir -p .trustdb-dev
 ```
 
-生成一次性客户端和服务端密钥。`keygen` 会替换同名密钥文件；已经签发过证据的身份不能重复执行：
+生成一次性客户端和服务端身份。每条命令会写入 signer descriptor（`.key`）、公开 verifier descriptor（`.pub`）和独立的软件私钥材料（`.material`）。两个 descriptor 都是 canonical CBOR，不是裸私钥。`keygen` 会替换同名文件；已经签发过证据的身份不能重复执行：
 
 ```bash
 ./bin/trustdb keygen --out .trustdb-dev --prefix client
 ./bin/trustdb keygen --out .trustdb-dev --prefix server
 ```
+
+`plaintext-dev-v1` 材料只依靠 owner-only 文件权限，适用于本地评估。生产环境应配置版本化 PKCS#11、SDF 或 remote provider descriptor；SM4 加密软件 envelope 由 #451 跟进。TrustDB 不再读取或回退到旧 raw-base64 key file。
 
 在本地创建并签名文件 claim：
 
@@ -246,6 +248,7 @@ mkdir -p .trustdb-dev
 - [ARCHITECTURE.zh-CN.md](ARCHITECTURE.zh-CN.md)：TrustDB 服务端、持久化、Global Log、Anchor、SDK、备份和离线验证的详细架构设计。
 - [docs/compliance/NATIONAL_CRYPTOGRAPHY_THREAT_MODEL_AND_EVIDENCE_MAP.zh-CN.md](docs/compliance/NATIONAL_CRYPTOGRAPHY_THREAT_MODEL_AND_EVIDENCE_MAP.zh-CN.md)：国产密码威胁模型、禁止的信任捷径、tabletop 场景、残余风险与合规证据映射。
 - [docs/compliance/ADR-0004-PROVIDER-NEUTRAL-CRYPTO-CONTRACTS.zh-CN.md](docs/compliance/ADR-0004-PROVIDER-NEUTRAL-CRYPTO-CONTRACTS.zh-CN.md)：suite-aware hash、不可导出 KeyHandle、Signer/Verifier 与 provider fail-closed 契约。
+- [docs/compliance/ADR-0008-VERSIONED-KEY-DESCRIPTORS.zh-CN.md](docs/compliance/ADR-0008-VERSIONED-KEY-DESCRIPTORS.zh-CN.md)：canonical software、PKCS#11、SDF、remote 与证书描述符、脱敏、解析和破坏性迁移规则。
 - [COMMUNITY.md](COMMUNITY.md)：使用支持、讨论和首次贡献入口。
 - [ROADMAP.md](ROADMAP.md)：公开产品方向以及影响路线图的方式。
 - [SECURITY.md](SECURITY.md)：漏洞私密报告和支持版本策略。
@@ -254,6 +257,7 @@ mkdir -p .trustdb-dev
 - [CHANGELOG.md](CHANGELOG.md)：面向用户整理的版本变化和已知限制。
 - [CONTRIBUTING.md](CONTRIBUTING.md)：Issue、PR、Commit、验证和 Review 标准。
 - [formats/SPROOF_V1.md](formats/SPROOF_V1.md)：稳定 `.sproof` v1 交换格式。
+- [formats/KEY_DESCRIPTOR_V1.md](formats/KEY_DESCRIPTOR_V1.md)：canonical key descriptor schema、provider union、解析、脱敏与迁移契约。
 - [formats/DISTRIBUTED_ARCHITECTURE.md](formats/DISTRIBUTED_ARCHITECTURE.md)：分布式/存算分离说明。
 - [docs/performance/trustdb-sustained-stream-persistence-assessment-2026-07-23.zh-CN.md](docs/performance/trustdb-sustained-stream-persistence-assessment-2026-07-23.zh-CN.md)：唯一双机性能口径，覆盖 L2-L5、HTTP/gRPC、背压、持久化与多种配置语义。
 - [docs/performance/trustdb-performance-optimization-2026-07.zh-CN.md](docs/performance/trustdb-performance-optimization-2026-07.zh-CN.md)：性能优化实现说明。
