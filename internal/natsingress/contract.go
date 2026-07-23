@@ -28,7 +28,8 @@ const (
 	HeaderSchemaVersion = "TrustDB-Schema-Version"
 	HeaderMessageID     = "Nats-Msg-Id"
 
-	MaxMessageBytes = 1 << 20
+	MaxMessageBytes    = 1 << 20
+	MaxDeadLetterBytes = MaxMessageBytes + (64 << 10)
 )
 
 const (

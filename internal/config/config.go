@@ -67,6 +67,14 @@ nats:
   stream_replicas: 1
   stream_max_bytes: 10737418240
   stream_max_age: "0s"
+  result_stream: "TRUSTDB_INGRESS_RESULTS"
+  result_subject: "trustdb.ingress.v1.results.*"
+  result_max_bytes: 10737418240
+  result_max_age: "24h"
+  dlq_stream: "TRUSTDB_INGRESS_DLQ"
+  dlq_subject: "trustdb.ingress.v1.dlq.*"
+  dlq_max_bytes: 1073741824
+  dlq_max_age: "0s"
   duplicate_window: "2m"
   workers: 0
   fetch_batch: 256
@@ -235,6 +243,14 @@ type NATS struct {
 	StreamReplicas  int      `mapstructure:"stream_replicas" json:"stream_replicas"`
 	StreamMaxBytes  int64    `mapstructure:"stream_max_bytes" json:"stream_max_bytes"`
 	StreamMaxAge    string   `mapstructure:"stream_max_age" json:"stream_max_age"`
+	ResultStream    string   `mapstructure:"result_stream" json:"result_stream"`
+	ResultSubject   string   `mapstructure:"result_subject" json:"result_subject"`
+	ResultMaxBytes  int64    `mapstructure:"result_max_bytes" json:"result_max_bytes"`
+	ResultMaxAge    string   `mapstructure:"result_max_age" json:"result_max_age"`
+	DLQStream       string   `mapstructure:"dlq_stream" json:"dlq_stream"`
+	DLQSubject      string   `mapstructure:"dlq_subject" json:"dlq_subject"`
+	DLQMaxBytes     int64    `mapstructure:"dlq_max_bytes" json:"dlq_max_bytes"`
+	DLQMaxAge       string   `mapstructure:"dlq_max_age" json:"dlq_max_age"`
 	DuplicateWindow string   `mapstructure:"duplicate_window" json:"duplicate_window"`
 	Workers         int      `mapstructure:"workers" json:"workers"`
 	FetchBatch      int      `mapstructure:"fetch_batch" json:"fetch_batch"`
@@ -385,6 +401,14 @@ func Default() Config {
 			StreamReplicas:  1,
 			StreamMaxBytes:  10 << 30,
 			StreamMaxAge:    "0s",
+			ResultStream:    "TRUSTDB_INGRESS_RESULTS",
+			ResultSubject:   "trustdb.ingress.v1.results.*",
+			ResultMaxBytes:  10 << 30,
+			ResultMaxAge:    "24h",
+			DLQStream:       "TRUSTDB_INGRESS_DLQ",
+			DLQSubject:      "trustdb.ingress.v1.dlq.*",
+			DLQMaxBytes:     1 << 30,
+			DLQMaxAge:       "0s",
 			DuplicateWindow: "2m",
 			Workers:         0,
 			FetchBatch:      256,
@@ -677,6 +701,41 @@ func validateNATS(n NATS) error {
 	if err := validateNonNegativeDuration("nats.stream_max_age", n.StreamMaxAge); err != nil {
 		return err
 	}
+	for _, stream := range []struct {
+		field string
+		value string
+	}{
+		{field: "nats.result_stream", value: n.ResultStream},
+		{field: "nats.dlq_stream", value: n.DLQStream},
+	} {
+		if err := validateNATSName(stream.field, stream.value); err != nil {
+			return err
+		}
+	}
+	if n.Stream == n.ResultStream || n.Stream == n.DLQStream || n.ResultStream == n.DLQStream {
+		return fmt.Errorf("nats.stream, nats.result_stream, and nats.dlq_stream must be distinct")
+	}
+	if err := validateNATSOutcomeSubject("nats.result_subject", n.ResultSubject); err != nil {
+		return err
+	}
+	if err := validateNATSOutcomeSubject("nats.dlq_subject", n.DLQSubject); err != nil {
+		return err
+	}
+	if n.ResultSubject == n.DLQSubject || natsSubjectMatches(n.ResultSubject, n.Subject) || natsSubjectMatches(n.DLQSubject, n.Subject) {
+		return fmt.Errorf("nats.subject, nats.result_subject, and nats.dlq_subject must not overlap")
+	}
+	if n.ResultMaxBytes <= 0 {
+		return fmt.Errorf("nats.result_max_bytes must be greater than 0")
+	}
+	if err := validateNonNegativeDuration("nats.result_max_age", n.ResultMaxAge); err != nil {
+		return err
+	}
+	if n.DLQMaxBytes <= 0 {
+		return fmt.Errorf("nats.dlq_max_bytes must be greater than 0")
+	}
+	if err := validateNonNegativeDuration("nats.dlq_max_age", n.DLQMaxAge); err != nil {
+		return err
+	}
 	if err := validatePositiveDuration("nats.duplicate_window", n.DuplicateWindow); err != nil {
 		return err
 	}
@@ -770,6 +829,26 @@ func validateNATSSubject(value string) error {
 		return fmt.Errorf("nats.subject must be a concrete NATS subject without wildcards or empty tokens")
 	}
 	return nil
+}
+
+func validateNATSOutcomeSubject(field, value string) error {
+	trimmed := strings.TrimSpace(value)
+	if !strings.HasSuffix(trimmed, ".*") || strings.Count(trimmed, "*") != 1 || strings.Contains(trimmed, ">") {
+		return fmt.Errorf("%s must be a NATS subject pattern ending in .*", field)
+	}
+	prefix := strings.TrimSuffix(trimmed, ".*")
+	if err := validateNATSSubject(prefix); err != nil {
+		return fmt.Errorf("%s must be a valid NATS subject pattern ending in .*", field)
+	}
+	return nil
+}
+
+func natsSubjectMatches(pattern, subject string) bool {
+	prefix := strings.TrimSuffix(pattern, "*")
+	if !strings.HasPrefix(subject, prefix) {
+		return false
+	}
+	return !strings.Contains(strings.TrimPrefix(subject, prefix), ".")
 }
 
 func validateNATSAuth(n NATS) error {

@@ -23,10 +23,12 @@ const connectionName = "trustdb-nats-ingress"
 // ingress resources. Message consumption is intentionally implemented by a
 // separate worker layer.
 type Runtime struct {
-	conn     *nats.Conn
-	js       jetstream.JetStream
-	stream   jetstream.Stream
-	consumer jetstream.Consumer
+	conn             *nats.Conn
+	js               jetstream.JetStream
+	stream           jetstream.Stream
+	consumer         jetstream.Consumer
+	resultStream     jetstream.Stream
+	deadLetterStream jetstream.Stream
 
 	closeOnce sync.Once
 	closeDone chan struct{}
@@ -80,13 +82,23 @@ func Open(ctx context.Context, cfg config.NATS) (*Runtime, error) {
 	if err != nil {
 		return fail(err)
 	}
+	resultStream, err := ensureOutcomeStream(ctx, js, desiredResultStreamConfig(cfg, topology), cfg.Provision, "result")
+	if err != nil {
+		return fail(err)
+	}
+	deadLetterStream, err := ensureOutcomeStream(ctx, js, desiredDeadLetterStreamConfig(cfg, topology), cfg.Provision, "dead-letter")
+	if err != nil {
+		return fail(err)
+	}
 
 	return &Runtime{
-		conn:      conn,
-		js:        js,
-		stream:    stream,
-		consumer:  consumer,
-		closeDone: make(chan struct{}),
+		conn:             conn,
+		js:               js,
+		stream:           stream,
+		consumer:         consumer,
+		resultStream:     resultStream,
+		deadLetterStream: deadLetterStream,
+		closeDone:        make(chan struct{}),
 	}, nil
 }
 
@@ -118,6 +130,20 @@ func (r *Runtime) Consumer() jetstream.Consumer {
 	return r.consumer
 }
 
+func (r *Runtime) ResultStream() jetstream.Stream {
+	if r == nil {
+		return nil
+	}
+	return r.resultStream
+}
+
+func (r *Runtime) DeadLetterStream() jetstream.Stream {
+	if r == nil {
+		return nil
+	}
+	return r.deadLetterStream
+}
+
 // Close drains buffered protocol traffic before closing the connection. The
 // configured drain timeout bounds the NATS drain; ctx can shorten that bound.
 func (r *Runtime) Close(ctx context.Context) error {
@@ -145,14 +171,16 @@ func (r *Runtime) Close(ctx context.Context) error {
 }
 
 type topologyConfig struct {
-	connectTimeout  time.Duration
-	reconnectWait   time.Duration
-	drainTimeout    time.Duration
-	streamMaxAge    time.Duration
-	duplicateWindow time.Duration
-	ackWait         time.Duration
-	fetchWait       time.Duration
-	storage         jetstream.StorageType
+	connectTimeout   time.Duration
+	reconnectWait    time.Duration
+	drainTimeout     time.Duration
+	streamMaxAge     time.Duration
+	resultMaxAge     time.Duration
+	deadLetterMaxAge time.Duration
+	duplicateWindow  time.Duration
+	ackWait          time.Duration
+	fetchWait        time.Duration
+	storage          jetstream.StorageType
 }
 
 func parseTopology(cfg config.NATS) (topologyConfig, error) {
@@ -176,6 +204,12 @@ func parseTopology(cfg config.NATS) (topologyConfig, error) {
 		return topologyConfig{}, err
 	}
 	if result.streamMaxAge, err = parse("nats.stream_max_age", cfg.StreamMaxAge); err != nil {
+		return topologyConfig{}, err
+	}
+	if result.resultMaxAge, err = parse("nats.result_max_age", cfg.ResultMaxAge); err != nil {
+		return topologyConfig{}, err
+	}
+	if result.deadLetterMaxAge, err = parse("nats.dlq_max_age", cfg.DLQMaxAge); err != nil {
 		return topologyConfig{}, err
 	}
 	if result.duplicateWindow, err = parse("nats.duplicate_window", cfg.DuplicateWindow); err != nil {
@@ -263,42 +297,78 @@ func buildTLSConfig(cfg config.NATSTLS) (*tls.Config, error) {
 
 func desiredStreamConfig(cfg config.NATS, topology topologyConfig) jetstream.StreamConfig {
 	return jetstream.StreamConfig{
-		Name:       cfg.Stream,
-		Subjects:   []string{cfg.Subject},
-		Retention:  jetstream.WorkQueuePolicy,
-		MaxBytes:   cfg.StreamMaxBytes,
-		MaxAge:     topology.streamMaxAge,
-		MaxMsgSize: MaxMessageBytes,
-		Storage:    topology.storage,
-		Discard:    jetstream.DiscardNew,
-		Replicas:   cfg.StreamReplicas,
-		Duplicates: topology.duplicateWindow,
+		Name:              cfg.Stream,
+		Subjects:          []string{cfg.Subject},
+		Retention:         jetstream.WorkQueuePolicy,
+		MaxMsgs:           -1,
+		MaxBytes:          cfg.StreamMaxBytes,
+		MaxAge:            topology.streamMaxAge,
+		MaxMsgsPerSubject: -1,
+		MaxMsgSize:        MaxMessageBytes,
+		Storage:           topology.storage,
+		Discard:           jetstream.DiscardNew,
+		Replicas:          cfg.StreamReplicas,
+		Duplicates:        topology.duplicateWindow,
+	}
+}
+
+func desiredResultStreamConfig(cfg config.NATS, topology topologyConfig) jetstream.StreamConfig {
+	return desiredOutcomeStreamConfig(cfg.ResultStream, cfg.ResultSubject, cfg.ResultMaxBytes, topology.resultMaxAge, MaxMessageBytes, cfg, topology)
+}
+
+func desiredDeadLetterStreamConfig(cfg config.NATS, topology topologyConfig) jetstream.StreamConfig {
+	return desiredOutcomeStreamConfig(cfg.DLQStream, cfg.DLQSubject, cfg.DLQMaxBytes, topology.deadLetterMaxAge, MaxDeadLetterBytes, cfg, topology)
+}
+
+func desiredOutcomeStreamConfig(name, subject string, maxBytes int64, maxAge time.Duration, maxMessageBytes int32, cfg config.NATS, topology topologyConfig) jetstream.StreamConfig {
+	return jetstream.StreamConfig{
+		Name:                 name,
+		Subjects:             []string{subject},
+		Retention:            jetstream.LimitsPolicy,
+		MaxMsgs:              -1,
+		MaxBytes:             maxBytes,
+		Discard:              jetstream.DiscardNew,
+		DiscardNewPerSubject: true,
+		MaxAge:               maxAge,
+		MaxMsgsPerSubject:    1,
+		MaxMsgSize:           maxMessageBytes,
+		Storage:              topology.storage,
+		Replicas:             cfg.StreamReplicas,
+		Duplicates:           topology.duplicateWindow,
 	}
 }
 
 func ensureStream(ctx context.Context, js jetstream.JetStream, cfg config.NATS, topology topologyConfig) (jetstream.Stream, error) {
 	desired := desiredStreamConfig(cfg, topology)
-	stream, err := js.Stream(ctx, cfg.Stream)
+	return ensureConfiguredStream(ctx, js, desired, cfg.Provision, "ingress")
+}
+
+func ensureOutcomeStream(ctx context.Context, js jetstream.JetStream, desired jetstream.StreamConfig, provision bool, kind string) (jetstream.Stream, error) {
+	return ensureConfiguredStream(ctx, js, desired, provision, kind)
+}
+
+func ensureConfiguredStream(ctx context.Context, js jetstream.JetStream, desired jetstream.StreamConfig, provision bool, kind string) (jetstream.Stream, error) {
+	stream, err := js.Stream(ctx, desired.Name)
 	if errors.Is(err, jetstream.ErrStreamNotFound) {
-		if !cfg.Provision {
-			return nil, fmt.Errorf("NATS ingress stream %q is missing and nats.provision is false", cfg.Stream)
+		if !provision {
+			return nil, fmt.Errorf("NATS %s stream %q is missing and nats.provision is false", kind, desired.Name)
 		}
 		stream, err = js.CreateStream(ctx, desired)
 	}
 	if err != nil {
-		return nil, fmt.Errorf("open NATS ingress stream %q: %w", cfg.Stream, err)
+		return nil, fmt.Errorf("open NATS %s stream %q: %w", kind, desired.Name, err)
 	}
 	info, err := stream.Info(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("inspect NATS ingress stream %q: %w", cfg.Stream, err)
+		return nil, fmt.Errorf("inspect NATS %s stream %q: %w", kind, desired.Name, err)
 	}
-	if err := validateStreamConfig(info.Config, desired); err != nil {
+	if err := validateStreamConfig(info.Config, desired, kind); err != nil {
 		return nil, err
 	}
 	return stream, nil
 }
 
-func validateStreamConfig(actual, desired jetstream.StreamConfig) error {
+func validateStreamConfig(actual, desired jetstream.StreamConfig, kind string) error {
 	var mismatches []string
 	if actual.Name != desired.Name {
 		mismatches = append(mismatches, fmt.Sprintf("name=%q want %q", actual.Name, desired.Name))
@@ -312,11 +382,20 @@ func validateStreamConfig(actual, desired jetstream.StreamConfig) error {
 	if actual.Discard != desired.Discard {
 		mismatches = append(mismatches, fmt.Sprintf("discard=%v want %v", actual.Discard, desired.Discard))
 	}
+	if actual.DiscardNewPerSubject != desired.DiscardNewPerSubject {
+		mismatches = append(mismatches, fmt.Sprintf("discard_new_per_subject=%t want %t", actual.DiscardNewPerSubject, desired.DiscardNewPerSubject))
+	}
+	if actual.MaxMsgs != desired.MaxMsgs {
+		mismatches = append(mismatches, fmt.Sprintf("max_msgs=%d want %d", actual.MaxMsgs, desired.MaxMsgs))
+	}
 	if actual.MaxBytes != desired.MaxBytes {
 		mismatches = append(mismatches, fmt.Sprintf("max_bytes=%d want %d", actual.MaxBytes, desired.MaxBytes))
 	}
 	if actual.MaxAge != desired.MaxAge {
 		mismatches = append(mismatches, fmt.Sprintf("max_age=%s want %s", actual.MaxAge, desired.MaxAge))
+	}
+	if actual.MaxMsgsPerSubject != desired.MaxMsgsPerSubject {
+		mismatches = append(mismatches, fmt.Sprintf("max_msgs_per_subject=%d want %d", actual.MaxMsgsPerSubject, desired.MaxMsgsPerSubject))
 	}
 	if actual.MaxMsgSize != desired.MaxMsgSize {
 		mismatches = append(mismatches, fmt.Sprintf("max_msg_size=%d want %d", actual.MaxMsgSize, desired.MaxMsgSize))
@@ -331,7 +410,7 @@ func validateStreamConfig(actual, desired jetstream.StreamConfig) error {
 		mismatches = append(mismatches, fmt.Sprintf("duplicate_window=%s want %s", actual.Duplicates, desired.Duplicates))
 	}
 	if len(mismatches) != 0 {
-		return fmt.Errorf("NATS ingress stream %q has incompatible configuration: %s", desired.Name, strings.Join(mismatches, "; "))
+		return fmt.Errorf("NATS %s stream %q has incompatible configuration: %s", kind, desired.Name, strings.Join(mismatches, "; "))
 	}
 	return nil
 }

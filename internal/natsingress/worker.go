@@ -467,9 +467,19 @@ func newRejection(message jetstream.Msg, metadata *jetstream.MsgMetadata, code t
 }
 
 func rejectionID(metadata *jetstream.MsgMetadata, subject, reply string, headers nats.Header, data []byte) string {
-	parts := []string{subject, reply, string(data)}
+	var stream string
+	var streamSequence uint64
 	if metadata != nil {
-		parts = append(parts, metadata.Stream, fmt.Sprintf("%d", metadata.Sequence.Stream))
+		stream = metadata.Stream
+		streamSequence = metadata.Sequence.Stream
+	}
+	return rejectionIdentity(stream, streamSequence, subject, reply, headers, data)
+}
+
+func rejectionIdentity(stream string, streamSequence uint64, subject, reply string, headers nats.Header, data []byte) string {
+	parts := []string{subject, reply, string(data)}
+	if stream != "" {
+		parts = append(parts, stream, fmt.Sprintf("%d", streamSequence))
 	}
 	keys := make([]string, 0, len(headers))
 	for key := range headers {
