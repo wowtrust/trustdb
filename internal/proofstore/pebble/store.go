@@ -26,9 +26,11 @@ import (
 
 	"github.com/wowtrust/trustdb/internal/anchorschedule"
 	"github.com/wowtrust/trustdb/internal/cborx"
+	"github.com/wowtrust/trustdb/internal/cryptosuite"
 	"github.com/wowtrust/trustdb/internal/idempotency"
 	"github.com/wowtrust/trustdb/internal/l5coverage"
 	"github.com/wowtrust/trustdb/internal/model"
+	"github.com/wowtrust/trustdb/internal/proofstoremeta"
 	"github.com/wowtrust/trustdb/internal/trusterr"
 )
 
@@ -80,7 +82,6 @@ const (
 	idempotencyReadyKey  = "meta/idempotency-projection/ready"
 	committedBatchesKey  = "meta/committed-batches/present"
 	anchorLatestAllKey   = "anchor/sth-latest-all/v1"
-	storageSchemaV4      = "trustdb-proofstore-v4"
 	idempotencyReadyV1   = "trustdb.idempotency-projection.ready.v1"
 	committedBatchesV1   = "trustdb.committed-batches.present.v1"
 	rootSortKeyWidth     = 20
@@ -139,6 +140,7 @@ type Options struct {
 	ArtifactSyncMode             string
 	IndexStorageTokens           bool
 	IndexStorageTokensConfigured bool
+	CryptoSuite                  cryptosuite.ID
 }
 
 type encodedBatchArtifact struct {
@@ -172,6 +174,7 @@ type Store struct {
 	db               *pdb.DB
 	recordIndexMode  string
 	artifactSyncMode string
+	suiteID          cryptosuite.ID
 
 	// closeOnce guards the underlying db.Close so that duplicate
 	// Close calls from defers and shutdown hooks cannot panic on a
@@ -184,6 +187,15 @@ type Store struct {
 	hasCommittedBatch atomic.Bool
 	anchorScheduleMu  sync.Mutex
 	l5CoverageMu      sync.Mutex
+}
+
+var storageInitMu sync.Mutex
+
+func (s *Store) CryptoSuite() cryptosuite.ID {
+	if s == nil || s.suiteID == "" {
+		return cryptosuite.INTLV1
+	}
+	return s.suiteID
 }
 
 // WALCheckpointPruneSafe becomes true only after the durable projection is
@@ -205,11 +217,16 @@ func OpenWithOptions(path string, opts Options) (*Store, error) {
 	if path == "" {
 		return nil, trusterr.New(trusterr.CodeInvalidArgument, "pebble proofstore path is required")
 	}
+	suiteID, err := proofstoremeta.RequestedSuite(opts.CryptoSuite)
+	if err != nil {
+		return nil, trusterr.Wrap(trusterr.CodeInvalidArgument, "invalid pebble proofstore cryptographic suite", err)
+	}
 	db, err := pdb.Open(path, &pdb.Options{})
 	if err != nil {
 		return nil, trusterr.Wrap(trusterr.CodeInternal, "open pebble proofstore", err)
 	}
-	if err := ensureStorageSchema(db); err != nil {
+	marker, err := ensureStorageSchema(db, suiteID)
+	if err != nil {
 		_ = db.Close()
 		return nil, err
 	}
@@ -217,6 +234,7 @@ func OpenWithOptions(path string, opts Options) (*Store, error) {
 		db:               db,
 		recordIndexMode:  normalizeRecordIndexMode(opts),
 		artifactSyncMode: normalizeArtifactSyncMode(opts.ArtifactSyncMode),
+		suiteID:          marker.CryptoSuite,
 	}
 	ready, err := store.projectionReadyOnDisk()
 	if err != nil {
@@ -233,21 +251,31 @@ func OpenWithOptions(path string, opts Options) (*Store, error) {
 	return store, nil
 }
 
-func ensureStorageSchema(db *pdb.DB) error {
+func ensureStorageSchema(db *pdb.DB, expected cryptosuite.ID) (proofstoremeta.Marker, error) {
+	storageInitMu.Lock()
+	defer storageInitMu.Unlock()
+
 	value, closer, err := db.Get([]byte(storageSchemaKey))
 	if err == nil {
 		defer closer.Close()
-		if string(value) != storageSchemaV4 {
-			return trusterr.New(trusterr.CodeFailedPrecondition, fmt.Sprintf("unsupported pebble proofstore schema %q; expected %q; clear or rebuild the proofstore", string(value), storageSchemaV4))
+		marker, err := proofstoremeta.Decode(value)
+		if errors.Is(err, proofstoremeta.ErrLegacySchema) {
+			return proofstoremeta.Marker{}, trusterr.Wrap(trusterr.CodeFailedPrecondition, "pebble proofstore requires a cryptographic suite marker", err)
 		}
-		return nil
+		if err != nil {
+			return proofstoremeta.Marker{}, trusterr.Wrap(trusterr.CodeDataLoss, "decode pebble proofstore suite marker", err)
+		}
+		if err := proofstoremeta.Validate(marker, expected); err != nil {
+			return proofstoremeta.Marker{}, trusterr.Wrap(trusterr.CodeFailedPrecondition, "validate pebble proofstore suite marker", err)
+		}
+		return marker, nil
 	}
 	if !errors.Is(err, pdb.ErrNotFound) {
-		return trusterr.Wrap(trusterr.CodeDataLoss, "read pebble proofstore schema", err)
+		return proofstoremeta.Marker{}, trusterr.Wrap(trusterr.CodeDataLoss, "read pebble proofstore suite marker", err)
 	}
 	iter, err := db.NewIter(nil)
 	if err != nil {
-		return trusterr.Wrap(trusterr.CodeDataLoss, "inspect pebble proofstore schema", err)
+		return proofstoremeta.Marker{}, trusterr.Wrap(trusterr.CodeDataLoss, "inspect pebble proofstore suite marker", err)
 	}
 	hasExistingData := iter.First()
 	iterErr := iter.Error()
@@ -255,23 +283,31 @@ func ensureStorageSchema(db *pdb.DB) error {
 		iterErr = closeErr
 	}
 	if iterErr != nil {
-		return trusterr.Wrap(trusterr.CodeDataLoss, "inspect pebble proofstore contents", iterErr)
+		return proofstoremeta.Marker{}, trusterr.Wrap(trusterr.CodeDataLoss, "inspect pebble proofstore contents", iterErr)
 	}
 	if hasExistingData {
-		return trusterr.New(trusterr.CodeFailedPrecondition, "unversioned pebble proofstore detected; clear or rebuild the proofstore")
+		return proofstoremeta.Marker{}, trusterr.New(trusterr.CodeFailedPrecondition, "non-empty pebble proofstore has no cryptographic suite marker; clear or rebuild the proofstore")
+	}
+	marker, err := proofstoremeta.New(expected)
+	if err != nil {
+		return proofstoremeta.Marker{}, trusterr.Wrap(trusterr.CodeInvalidArgument, "build pebble proofstore suite marker", err)
+	}
+	encodedMarker, err := cborx.Marshal(marker)
+	if err != nil {
+		return proofstoremeta.Marker{}, trusterr.Wrap(trusterr.CodeInternal, "encode pebble proofstore suite marker", err)
 	}
 	batch := db.NewBatch()
 	defer batch.Close()
-	if err := batch.Set([]byte(storageSchemaKey), []byte(storageSchemaV4), nil); err != nil {
-		return trusterr.Wrap(trusterr.CodeDataLoss, "stage pebble proofstore schema", err)
+	if err := batch.Set([]byte(storageSchemaKey), encodedMarker, nil); err != nil {
+		return proofstoremeta.Marker{}, trusterr.Wrap(trusterr.CodeDataLoss, "stage pebble proofstore suite marker", err)
 	}
 	if err := batch.Set([]byte(idempotencyReadyKey), []byte(idempotencyReadyV1), nil); err != nil {
-		return trusterr.Wrap(trusterr.CodeDataLoss, "stage empty idempotency projection readiness", err)
+		return proofstoremeta.Marker{}, trusterr.Wrap(trusterr.CodeDataLoss, "stage empty idempotency projection readiness", err)
 	}
 	if err := batch.Commit(pdb.Sync); err != nil {
-		return trusterr.Wrap(trusterr.CodeDataLoss, "initialize pebble proofstore schema", err)
+		return proofstoremeta.Marker{}, trusterr.Wrap(trusterr.CodeDataLoss, "initialize pebble proofstore suite marker", err)
 	}
-	return nil
+	return marker, nil
 }
 
 const (

@@ -20,11 +20,32 @@ import (
 	"github.com/wowtrust/trustdb/internal/anchorschedule"
 	"github.com/wowtrust/trustdb/internal/cborx"
 	"github.com/wowtrust/trustdb/internal/claim"
+	"github.com/wowtrust/trustdb/internal/cryptosuite"
 	"github.com/wowtrust/trustdb/internal/idempotency"
 	"github.com/wowtrust/trustdb/internal/model"
+	"github.com/wowtrust/trustdb/internal/proofstoremeta"
+	"github.com/wowtrust/trustdb/internal/proofstoremeta/proofstoremetatest"
 	"github.com/wowtrust/trustdb/internal/trustcrypto"
 	"github.com/wowtrust/trustdb/internal/trusterr"
 )
+
+func TestTiKVSuiteBindingConformance(t *testing.T) {
+	proofstoremetatest.Run(t, func(t *testing.T) proofstoremetatest.Harness {
+		db, _ := newMockTiKVDB(t, "suite-conformance/"+t.Name()+"/")
+		return proofstoremetatest.Harness{
+			Open: func(suiteID cryptosuite.ID) (cryptosuite.ID, error) {
+				marker, err := ensureStorageSchema(db, suiteID)
+				return marker.CryptoSuite, err
+			},
+			SeedUnbound: func() error {
+				return db.Set([]byte("unbound"), []byte("data"), syncWrite)
+			},
+			WriteRawMarker: func(data []byte) error {
+				return db.Set([]byte(storageSchemaKey), data, syncWrite)
+			},
+		}
+	})
+}
 
 func TestNormalizePDAddresses(t *testing.T) {
 	t.Parallel()
@@ -51,19 +72,30 @@ func TestOpenWithOptionsRequiresPDEndpoints(t *testing.T) {
 
 func TestEnsureStorageSchemaInitializesAndReopensCurrentNamespace(t *testing.T) {
 	db, _ := newMockTiKVDB(t, "storage-schema-current/")
-	if err := ensureStorageSchema(db); err != nil {
+	marker, err := ensureStorageSchema(db, cryptosuite.INTLV1)
+	if err != nil {
 		t.Fatalf("ensureStorageSchema(empty) error = %v", err)
+	}
+	if err := proofstoremeta.Validate(marker, cryptosuite.INTLV1); err != nil {
+		t.Fatalf("initialized marker = %+v: %v", marker, err)
 	}
 	value, closer, err := db.Get([]byte(storageSchemaKey))
 	if err != nil {
 		t.Fatalf("read storage schema: %v", err)
 	}
 	defer closer.Close()
-	if string(value) != storageSchemaV4 {
-		t.Fatalf("storage schema = %q, want %q", value, storageSchemaV4)
+	stored, err := proofstoremeta.Decode(value)
+	if err != nil {
+		t.Fatalf("decode storage marker: %v", err)
 	}
-	if err := ensureStorageSchema(db); err != nil {
+	if err := proofstoremeta.Validate(stored, cryptosuite.INTLV1); err != nil {
+		t.Fatalf("stored marker = %+v: %v", stored, err)
+	}
+	if _, err := ensureStorageSchema(db, cryptosuite.INTLV1); err != nil {
 		t.Fatalf("ensureStorageSchema(current) error = %v", err)
+	}
+	if _, err := ensureStorageSchema(db, cryptosuite.CNSMV1); trusterr.CodeOf(err) != trusterr.CodeFailedPrecondition {
+		t.Fatalf("ensureStorageSchema(mismatch) code=%s err=%v", trusterr.CodeOf(err), err)
 	}
 }
 
@@ -72,7 +104,7 @@ func TestEnsureStorageSchemaRejectsLegacyVersion(t *testing.T) {
 	if err := db.Set([]byte(storageSchemaKey), []byte("trustdb-proofstore-v3"), syncWrite); err != nil {
 		t.Fatalf("seed legacy schema: %v", err)
 	}
-	if err := ensureStorageSchema(db); trusterr.CodeOf(err) != trusterr.CodeFailedPrecondition {
+	if _, err := ensureStorageSchema(db, cryptosuite.INTLV1); trusterr.CodeOf(err) != trusterr.CodeFailedPrecondition {
 		t.Fatalf("ensureStorageSchema(v3) code=%s err=%v, want failed_precondition", trusterr.CodeOf(err), err)
 	}
 }
@@ -82,7 +114,7 @@ func TestEnsureStorageSchemaRejectsUnversionedLegacyQueue(t *testing.T) {
 	if err := db.Set([]byte("anchor/sth-outbox/00000000000000000001"), []byte("legacy"), syncWrite); err != nil {
 		t.Fatalf("seed legacy queue item: %v", err)
 	}
-	if err := ensureStorageSchema(db); trusterr.CodeOf(err) != trusterr.CodeFailedPrecondition {
+	if _, err := ensureStorageSchema(db, cryptosuite.INTLV1); trusterr.CodeOf(err) != trusterr.CodeFailedPrecondition {
 		t.Fatalf("ensureStorageSchema(unversioned) code=%s err=%v, want failed_precondition", trusterr.CodeOf(err), err)
 	}
 }
@@ -93,30 +125,67 @@ func TestEnsureStorageSchemaIgnoresOtherNamespaces(t *testing.T) {
 	if err := other.Set([]byte("anchor/sth-outbox/00000000000000000001"), []byte("legacy"), syncWrite); err != nil {
 		t.Fatalf("seed other namespace: %v", err)
 	}
-	if err := ensureStorageSchema(db); err != nil {
+	if _, err := ensureStorageSchema(db, cryptosuite.INTLV1); err != nil {
 		t.Fatalf("ensureStorageSchema(target) error = %v", err)
 	}
 }
 
 func TestEnsureStorageSchemaAcceptsConcurrentInitialization(t *testing.T) {
-	db, client := newMockTiKVDB(t, "storage-schema-concurrent/")
-	var once sync.Once
-	var hookErr error
-	client.getHook = func() {
-		once.Do(func() {
-			if err := db.Set([]byte(storageSchemaKey), []byte(storageSchemaV4), syncWrite); err != nil {
-				hookErr = err
-				return
-			}
-			hookErr = db.Set([]byte(idempotencyReadyKey), []byte(idempotencyReadyV1), syncWrite)
-		})
+	db, _ := newMockTiKVDB(t, "storage-schema-concurrent/")
+	start := make(chan struct{})
+	results := make(chan error, 2)
+	var wg sync.WaitGroup
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			_, err := ensureStorageSchema(db, cryptosuite.INTLV1)
+			results <- err
+		}()
 	}
-	if err := ensureStorageSchema(db); err != nil {
-		t.Fatalf("ensureStorageSchema(concurrent) error = %v", err)
+	close(start)
+	wg.Wait()
+	close(results)
+	for err := range results {
+		if err != nil {
+			t.Fatalf("concurrent initializer: %v", err)
+		}
 	}
-	if hookErr != nil {
-		t.Fatalf("concurrent initializer: %v", hookErr)
-	}
+}
+
+func TestEnsureStorageSchemaRejectsCorruptUnknownAndConflictingMarkers(t *testing.T) {
+	t.Parallel()
+	t.Run("corrupt", func(t *testing.T) {
+		db, _ := newMockTiKVDB(t, "storage-schema-corrupt/")
+		if err := db.Set([]byte(storageSchemaKey), []byte{0xff}, syncWrite); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := ensureStorageSchema(db, cryptosuite.INTLV1); trusterr.CodeOf(err) != trusterr.CodeDataLoss {
+			t.Fatalf("corrupt marker code=%s err=%v", trusterr.CodeOf(err), err)
+		}
+	})
+	t.Run("unknown", func(t *testing.T) {
+		db, _ := newMockTiKVDB(t, "storage-schema-unknown/")
+		marker, _ := proofstoremeta.New(cryptosuite.INTLV1)
+		marker.CryptoSuite = cryptosuite.ID("UNKNOWN")
+		data, _ := cborx.Marshal(marker)
+		if err := db.Set([]byte(storageSchemaKey), data, syncWrite); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := ensureStorageSchema(db, cryptosuite.INTLV1); trusterr.CodeOf(err) != trusterr.CodeFailedPrecondition {
+			t.Fatalf("unknown marker code=%s err=%v", trusterr.CodeOf(err), err)
+		}
+	})
+	t.Run("conflicting", func(t *testing.T) {
+		db, _ := newMockTiKVDB(t, "storage-schema-conflicting/")
+		if _, err := ensureStorageSchema(db, cryptosuite.CNSMV1); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := ensureStorageSchema(db, cryptosuite.INTLV1); trusterr.CodeOf(err) != trusterr.CodeFailedPrecondition {
+			t.Fatalf("conflicting marker code=%s err=%v", trusterr.CodeOf(err), err)
+		}
+	})
 }
 
 func TestGetBundleMissUsesOnePointRead(t *testing.T) {

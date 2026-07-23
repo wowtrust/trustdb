@@ -5,12 +5,47 @@ import (
 	"context"
 	"testing"
 
+	pdb "github.com/cockroachdb/pebble"
+
+	"github.com/wowtrust/trustdb/internal/cryptosuite"
 	"github.com/wowtrust/trustdb/internal/model"
 	"github.com/wowtrust/trustdb/internal/proofstore"
 	pebblestore "github.com/wowtrust/trustdb/internal/proofstore/pebble"
 	"github.com/wowtrust/trustdb/internal/proofstore/proofstoretest"
+	"github.com/wowtrust/trustdb/internal/proofstoremeta/proofstoremetatest"
 	"github.com/wowtrust/trustdb/internal/trusterr"
 )
+
+func TestPebbleSuiteBindingConformance(t *testing.T) {
+	proofstoremetatest.Run(t, func(t *testing.T) proofstoremetatest.Harness {
+		path := t.TempDir()
+		write := func(key string, data []byte) error {
+			db, err := pdb.Open(path, &pdb.Options{})
+			if err != nil {
+				return err
+			}
+			if err := db.Set([]byte(key), data, pdb.Sync); err != nil {
+				_ = db.Close()
+				return err
+			}
+			return db.Close()
+		}
+		return proofstoremetatest.Harness{
+			Open: func(suiteID cryptosuite.ID) (cryptosuite.ID, error) {
+				store, err := pebblestore.OpenWithOptions(path, pebblestore.Options{CryptoSuite: suiteID})
+				if err != nil {
+					return "", err
+				}
+				defer store.Close()
+				return proofstore.BoundCryptoSuite(store)
+			},
+			SeedUnbound: func() error { return write("unbound", []byte("data")) },
+			WriteRawMarker: func(data []byte) error {
+				return write("meta/storage-schema", data)
+			},
+		}
+	})
+}
 
 // TestPebbleStoreConformance exercises every Store contract against a
 // Pebble-backed implementation so it stays byte-equivalent to the file

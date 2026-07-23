@@ -20,6 +20,7 @@ import (
 
 	"github.com/wowtrust/trustdb/internal/anchorschedule"
 	"github.com/wowtrust/trustdb/internal/cborx"
+	"github.com/wowtrust/trustdb/internal/cryptosuite"
 	"github.com/wowtrust/trustdb/internal/l5coverage"
 	"github.com/wowtrust/trustdb/internal/model"
 	"github.com/wowtrust/trustdb/internal/trusterr"
@@ -42,7 +43,15 @@ const (
 )
 
 type LocalStore struct {
-	Root string
+	Root    string
+	SuiteID cryptosuite.ID
+}
+
+func (s LocalStore) CryptoSuite() cryptosuite.ID {
+	if s.SuiteID == "" {
+		return cryptosuite.INTLV1
+	}
+	return s.SuiteID
 }
 
 type localFileOps struct {

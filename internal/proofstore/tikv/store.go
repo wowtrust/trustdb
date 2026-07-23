@@ -27,9 +27,11 @@ import (
 
 	"github.com/wowtrust/trustdb/internal/anchorschedule"
 	"github.com/wowtrust/trustdb/internal/cborx"
+	"github.com/wowtrust/trustdb/internal/cryptosuite"
 	"github.com/wowtrust/trustdb/internal/idempotency"
 	"github.com/wowtrust/trustdb/internal/l5coverage"
 	"github.com/wowtrust/trustdb/internal/model"
+	"github.com/wowtrust/trustdb/internal/proofstoremeta"
 	"github.com/wowtrust/trustdb/internal/trusterr"
 )
 
@@ -53,6 +55,7 @@ const (
 	promotionCommitMaxAttempts   = 3
 	promotionReferenceBatchSize  = 1024
 	anchorScheduleCommitAttempts = 64
+	storageInitCommitAttempts    = 16
 	anchorScheduleInitialBackoff = 250 * time.Microsecond
 	anchorScheduleMaxBackoff     = 10 * time.Millisecond
 )
@@ -513,7 +516,6 @@ const (
 	globalStateKey       = "global/state/latest"
 	anchorLatestAllKey   = "anchor/sth-latest-all/v1"
 	rootSortKeyWidth     = 20
-	storageSchemaV4      = "trustdb-proofstore-v4"
 	idempotencyReadyV1   = "trustdb.idempotency-projection.ready.v1"
 )
 
@@ -576,6 +578,7 @@ type Options struct {
 	ArtifactSyncMode             string
 	IndexStorageTokens           bool
 	IndexStorageTokensConfigured bool
+	CryptoSuite                  cryptosuite.ID
 }
 
 type encodedBatchArtifact struct {
@@ -611,12 +614,20 @@ type Store struct {
 	checkpointNodeID string
 	checkpointWALID  string
 	idempotencyReady atomic.Bool
+	suiteID          cryptosuite.ID
 
 	// closeOnce guards the underlying db.Close so that duplicate
 	// Close calls from defers and shutdown hooks cannot panic on a
 	// double-free inside the TiKV client.
 	closeOnce sync.Once
 	closeErr  error
+}
+
+func (s *Store) CryptoSuite() cryptosuite.ID {
+	if s == nil || s.suiteID == "" {
+		return cryptosuite.INTLV1
+	}
+	return s.suiteID
 }
 
 // WALCheckpointPruneSafe is true only when this shared store is bound to the
@@ -644,6 +655,10 @@ func OpenWithOptions(opts Options) (*Store, error) {
 	if len(pdAddresses) == 0 {
 		return nil, trusterr.New(trusterr.CodeInvalidArgument, "tikv proofstore requires at least one PD endpoint")
 	}
+	suiteID, err := proofstoremeta.RequestedSuite(opts.CryptoSuite)
+	if err != nil {
+		return nil, trusterr.Wrap(trusterr.CodeInvalidArgument, "invalid tikv proofstore cryptographic suite", err)
+	}
 	clientOpts := []txnkv.ClientOpt{}
 	if strings.TrimSpace(opts.Keyspace) != "" {
 		clientOpts = append(clientOpts, txnkv.WithKeyspace(strings.TrimSpace(opts.Keyspace)))
@@ -653,7 +668,8 @@ func OpenWithOptions(opts Options) (*Store, error) {
 		return nil, trusterr.Wrap(trusterr.CodeInternal, "open tikv proofstore", err)
 	}
 	db := &tikvDB{client: client, namespace: namespaceKeyPrefix(opts.Namespace)}
-	if err := ensureStorageSchema(db); err != nil {
+	marker, err := ensureStorageSchema(db, suiteID)
+	if err != nil {
 		_ = client.Close()
 		return nil, err
 	}
@@ -663,64 +679,79 @@ func OpenWithOptions(opts Options) (*Store, error) {
 		artifactSyncMode: normalizeArtifactSyncMode(opts.ArtifactSyncMode),
 		checkpointNodeID: strings.TrimSpace(opts.CheckpointNodeID),
 		checkpointWALID:  strings.TrimSpace(opts.CheckpointWALID),
+		suiteID:          marker.CryptoSuite,
 	}, nil
 }
 
-func ensureStorageSchema(db *tikvDB) error {
-	value, closer, err := db.Get([]byte(storageSchemaKey))
-	if err == nil {
-		defer closer.Close()
-		if string(value) != storageSchemaV4 {
-			return trusterr.New(trusterr.CodeFailedPrecondition, fmt.Sprintf("unsupported tikv proofstore schema %q; expected %q; clear or rebuild the proofstore namespace", string(value), storageSchemaV4))
-		}
-		return nil
-	}
-	if !errors.Is(err, errNotFound) {
-		return trusterr.Wrap(trusterr.CodeDataLoss, "read tikv proofstore schema", err)
-	}
-
-	lower, upper := prefixBounds("")
-	iter, err := db.NewIter(&iterOptions{LowerBound: lower, UpperBound: upper})
+func ensureStorageSchema(db *tikvDB, expected cryptosuite.ID) (proofstoremeta.Marker, error) {
+	marker, err := proofstoremeta.New(expected)
 	if err != nil {
-		return trusterr.Wrap(trusterr.CodeDataLoss, "inspect tikv proofstore schema", err)
+		return proofstoremeta.Marker{}, trusterr.Wrap(trusterr.CodeInvalidArgument, "build tikv proofstore suite marker", err)
 	}
-	hasExistingData := iter.First()
-	iterErr := iter.Error()
-	if closeErr := iter.Close(); iterErr == nil {
-		iterErr = closeErr
+	encodedMarker, err := cborx.Marshal(marker)
+	if err != nil {
+		return proofstoremeta.Marker{}, trusterr.Wrap(trusterr.CodeInternal, "encode tikv proofstore suite marker", err)
 	}
-	if iterErr != nil {
-		return trusterr.Wrap(trusterr.CodeDataLoss, "inspect tikv proofstore contents", iterErr)
-	}
-	if hasExistingData {
-		// Another node may have initialized the previously empty namespace and
-		// published additional metadata after our first point read. Re-read the
-		// marker before classifying the namespace as an unversioned legacy store.
-		value, closer, readErr := db.Get([]byte(storageSchemaKey))
-		if readErr == nil {
-			defer closer.Close()
-			if string(value) != storageSchemaV4 {
-				return trusterr.New(trusterr.CodeFailedPrecondition, fmt.Sprintf("unsupported tikv proofstore schema %q; expected %q; clear or rebuild the proofstore namespace", string(value), storageSchemaV4))
+	ctx := context.Background()
+	markerKey := db.physicalKey([]byte(storageSchemaKey))
+	readyKey := db.physicalKey([]byte(idempotencyReadyKey))
+	upper := append(append([]byte(nil), db.namespace...), 0xff)
+	var lastErr error
+	for attempt := 0; attempt < storageInitCommitAttempts; attempt++ {
+		txn, beginErr := db.client.Begin()
+		if beginErr != nil {
+			return proofstoremeta.Marker{}, trusterr.Wrap(trusterr.CodeDataLoss, "begin tikv proofstore marker transaction", beginErr)
+		}
+		value, readErr := txn.Get(ctx, markerKey)
+		switch {
+		case readErr == nil:
+			_ = txn.Rollback()
+			stored, err := proofstoremeta.Decode(value)
+			if errors.Is(err, proofstoremeta.ErrLegacySchema) {
+				return proofstoremeta.Marker{}, trusterr.Wrap(trusterr.CodeFailedPrecondition, "tikv proofstore requires a cryptographic suite marker", err)
 			}
-			return nil
-		}
-		if !errors.Is(readErr, errNotFound) {
-			return trusterr.Wrap(trusterr.CodeDataLoss, "re-read tikv proofstore schema", readErr)
-		}
-		return trusterr.New(trusterr.CodeFailedPrecondition, "unversioned tikv proofstore namespace detected; clear or rebuild the proofstore namespace")
-	}
-	if err := db.Set([]byte(storageSchemaKey), []byte(storageSchemaV4), syncWrite); err != nil {
-		// A concurrent opener may have initialized the same empty namespace.
-		value, closer, readErr := db.Get([]byte(storageSchemaKey))
-		if readErr == nil {
-			defer closer.Close()
-			if string(value) == storageSchemaV4 {
-				return nil
+			if err != nil {
+				return proofstoremeta.Marker{}, trusterr.Wrap(trusterr.CodeDataLoss, "decode tikv proofstore suite marker", err)
 			}
+			if err := proofstoremeta.Validate(stored, expected); err != nil {
+				return proofstoremeta.Marker{}, trusterr.Wrap(trusterr.CodeFailedPrecondition, "validate tikv proofstore suite marker", err)
+			}
+			return stored, nil
+		case !tikverr.IsErrNotFound(readErr):
+			_ = txn.Rollback()
+			return proofstoremeta.Marker{}, trusterr.Wrap(trusterr.CodeDataLoss, "read tikv proofstore suite marker", readErr)
 		}
-		return trusterr.Wrap(trusterr.CodeDataLoss, "initialize tikv proofstore schema", err)
+
+		iter, iterErr := txn.Iter(db.namespace, upper)
+		if iterErr != nil {
+			_ = txn.Rollback()
+			return proofstoremeta.Marker{}, trusterr.Wrap(trusterr.CodeDataLoss, "inspect tikv proofstore namespace", iterErr)
+		}
+		hasExistingData := iter.Valid()
+		iter.Close()
+		if hasExistingData {
+			_ = txn.Rollback()
+			return proofstoremeta.Marker{}, trusterr.New(trusterr.CodeFailedPrecondition, "non-empty tikv proofstore namespace has no cryptographic suite marker; clear or rebuild the namespace")
+		}
+		writeErr := txn.Set(markerKey, encodedMarker)
+		if writeErr == nil {
+			writeErr = txn.Set(readyKey, []byte(idempotencyReadyV1))
+		}
+		if writeErr == nil {
+			writeErr = txn.Commit(ctx)
+		} else {
+			_ = txn.Rollback()
+		}
+		if writeErr == nil {
+			return marker, nil
+		}
+		lastErr = writeErr
+		_ = txn.Rollback()
+		if !isRetryablePromotionCommitError(writeErr) {
+			return proofstoremeta.Marker{}, trusterr.Wrap(trusterr.CodeDataLoss, "initialize tikv proofstore suite marker", writeErr)
+		}
 	}
-	return nil
+	return proofstoremeta.Marker{}, trusterr.Wrap(trusterr.CodeDataLoss, "initialize tikv proofstore suite marker retry limit exceeded", lastErr)
 }
 
 func NormalizeNamespace(namespace string) string {

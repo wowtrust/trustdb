@@ -4,7 +4,9 @@ import (
 	"context"
 	"io"
 
+	"github.com/wowtrust/trustdb/internal/cryptosuite"
 	"github.com/wowtrust/trustdb/internal/model"
+	"github.com/wowtrust/trustdb/internal/trusterr"
 )
 
 // Store is the unified persistence interface implemented by every proof
@@ -94,6 +96,25 @@ type Store interface {
 // set of the pointer, so we pin the pointer form here.
 var _ Store = (*LocalStore)(nil)
 var _ GlobalLogPublishedBatchWithAnchorCandidateMarker = (*LocalStore)(nil)
+
+// CryptoSuiteBindingReader exposes the immutable suite selected when the
+// namespace marker was validated at open time. Backup and migration paths use
+// this capability to reject cross-suite copies before writing any data.
+type CryptoSuiteBindingReader interface {
+	CryptoSuite() cryptosuite.ID
+}
+
+func BoundCryptoSuite(store any) (cryptosuite.ID, error) {
+	reader, ok := store.(CryptoSuiteBindingReader)
+	if !ok {
+		return "", trusterr.New(trusterr.CodeFailedPrecondition, "proofstore does not expose a cryptographic suite binding")
+	}
+	suiteID := reader.CryptoSuite()
+	if _, err := cryptosuite.RequireKnown(suiteID); err != nil {
+		return "", trusterr.Wrap(trusterr.CodeDataLoss, "proofstore exposes an invalid cryptographic suite binding", err)
+	}
+	return suiteID, nil
+}
 
 // WALCheckpointPruneSafety is an optional capability for stores that can make
 // a local WAL checkpoint safe to trust after a crash. Returning true certifies

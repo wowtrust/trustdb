@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/wowtrust/trustdb/internal/cryptosuite"
 	"github.com/wowtrust/trustdb/internal/globallog"
 	"github.com/wowtrust/trustdb/internal/model"
 	"github.com/wowtrust/trustdb/internal/proofstore"
@@ -20,6 +21,50 @@ import (
 	"github.com/wowtrust/trustdb/internal/trustcrypto"
 	"github.com/wowtrust/trustdb/internal/trusterr"
 )
+
+func TestTiKVConcurrentSuiteInitializationHasOneWinner(t *testing.T) {
+	requireTiKVIntegration(t)
+	namespace := integrationNamespace(t, "suite-init-conflict")
+	start := make(chan struct{})
+	results := make(chan error, 2)
+	var wg sync.WaitGroup
+	for _, suiteID := range []cryptosuite.ID{cryptosuite.INTLV1, cryptosuite.CNSMV1} {
+		suiteID := suiteID
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			store, err := tikvstore.OpenWithOptions(tikvstore.Options{
+				PDAddressText: os.Getenv("TRUSTDB_TIKV_PD_ENDPOINTS"),
+				Keyspace:      os.Getenv("TRUSTDB_TIKV_KEYSPACE"),
+				Namespace:     namespace,
+				CryptoSuite:   suiteID,
+			})
+			if err == nil {
+				err = store.Close()
+			}
+			results <- err
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(results)
+	var successes, mismatches int
+	for err := range results {
+		if err == nil {
+			successes++
+			continue
+		}
+		if trusterr.CodeOf(err) == trusterr.CodeFailedPrecondition {
+			mismatches++
+			continue
+		}
+		t.Fatalf("unexpected concurrent initialization error: %v", err)
+	}
+	if successes != 1 || mismatches != 1 {
+		t.Fatalf("successes=%d mismatches=%d", successes, mismatches)
+	}
+}
 
 func TestTiKVConformance(t *testing.T) {
 	requireTiKVIntegration(t)
