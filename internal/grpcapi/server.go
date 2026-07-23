@@ -17,6 +17,7 @@ import (
 	"github.com/wowtrust/trustdb/internal/ingest"
 	"github.com/wowtrust/trustdb/internal/model"
 	"github.com/wowtrust/trustdb/internal/prooflevel"
+	"github.com/wowtrust/trustdb/internal/submission"
 	"github.com/wowtrust/trustdb/internal/trusterr"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -25,7 +26,7 @@ import (
 const submitClaimStreamWorkers = 64
 
 type Server struct {
-	Ingest         *ingest.Service
+	Submitter      submission.Submitter
 	Batch          httpapi.BatchService
 	Global         httpapi.GlobalLogService
 	Anchors        httpapi.AnchorService
@@ -39,13 +40,28 @@ func NewServer(
 	anchorSvc httpapi.AnchorService,
 	metrics http.Handler,
 ) *Server {
+	return NewServerWithSubmitter(submission.New(ingestSvc, batchSvc), batchSvc, globalSvc, anchorSvc, metrics)
+}
+
+// NewServerWithSubmitter wires the shared transport-independent submission
+// service used by HTTP, gRPC, and future ingress transports.
+func NewServerWithSubmitter(
+	submitter submission.Submitter,
+	batchSvc httpapi.BatchService,
+	globalSvc httpapi.GlobalLogService,
+	anchorSvc httpapi.AnchorService,
+	metrics http.Handler,
+) *Server {
+	if isTypedNil(submitter) {
+		submitter = nil
+	}
 	if isTypedNil(globalSvc) {
 		globalSvc = nil
 	}
 	if isTypedNil(anchorSvc) {
 		anchorSvc = nil
 	}
-	return &Server{Ingest: ingestSvc, Batch: batchSvc, Global: globalSvc, Anchors: anchorSvc, MetricsHandler: metrics}
+	return &Server{Submitter: submitter, Batch: batchSvc, Global: globalSvc, Anchors: anchorSvc, MetricsHandler: metrics}
 }
 
 func isTypedNil(v any) bool {
@@ -74,7 +90,7 @@ func (s *Server) SubmitClaim(ctx context.Context, req *SubmitClaimRequest) (*Sub
 }
 
 func (s *Server) SubmitClaimStream(stream TrustDBService_SubmitClaimStreamServer) error {
-	if s.Ingest == nil {
+	if s.Submitter == nil {
 		return toStatusError(trusterr.New(trusterr.CodeFailedPrecondition, "ingest service is not configured"))
 	}
 	ctx := stream.Context()
@@ -139,31 +155,22 @@ func (s *Server) SubmitClaimStream(stream TrustDBService_SubmitClaimStreamServer
 }
 
 func (s *Server) submitSignedClaim(ctx context.Context, signed model.SignedClaim) (*SubmitClaimResponse, error) {
-	if s.Ingest == nil {
+	if s.Submitter == nil {
 		return nil, trusterr.New(trusterr.CodeFailedPrecondition, "ingest service is not configured")
 	}
-	record, accepted, idempotent, err := s.Ingest.Submit(ctx, signed)
+	outcome, err := s.Submitter.Submit(ctx, signed)
 	if err != nil {
 		return nil, err
 	}
-	batchEnqueued := false
-	batchErr := ""
-	if s.Batch != nil && !idempotent {
-		if err := s.Batch.Enqueue(context.WithoutCancel(ctx), signed, record, accepted); err != nil {
-			batchErr = err.Error()
-		} else {
-			batchEnqueued = true
-		}
-	}
 	return &SubmitClaimResponse{
-		RecordID:        record.RecordID,
-		Status:          accepted.Status,
-		ProofLevel:      prooflevel.L2.String(),
-		Idempotent:      idempotent,
-		BatchEnqueued:   batchEnqueued,
-		BatchError:      batchErr,
-		ServerRecord:    record,
-		AcceptedReceipt: accepted,
+		RecordID:        outcome.RecordID,
+		Status:          outcome.Status,
+		ProofLevel:      outcome.ProofLevel,
+		Idempotent:      outcome.Idempotent,
+		BatchEnqueued:   outcome.BatchEnqueued,
+		BatchError:      outcome.BatchError,
+		ServerRecord:    outcome.ServerRecord,
+		AcceptedReceipt: outcome.AcceptedReceipt,
 	}, nil
 }
 

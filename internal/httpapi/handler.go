@@ -20,6 +20,7 @@ import (
 	"github.com/wowtrust/trustdb/internal/model"
 	"github.com/wowtrust/trustdb/internal/observability"
 	"github.com/wowtrust/trustdb/internal/prooflevel"
+	"github.com/wowtrust/trustdb/internal/submission"
 	"github.com/wowtrust/trustdb/internal/trusterr"
 )
 
@@ -34,11 +35,11 @@ const (
 var requestBodyBufferPool = sync.Pool{New: func() any { return new([]byte) }}
 
 type Handler struct {
-	Ingest  *ingest.Service
-	Batch   BatchService
-	Global  GlobalLogService
-	Anchors AnchorService
-	Metrics http.Handler
+	Submitter submission.Submitter
+	Batch     BatchService
+	Global    GlobalLogService
+	Anchors   AnchorService
+	Metrics   http.Handler
 }
 
 type BatchService interface {
@@ -193,10 +194,11 @@ type errorResponse struct {
 }
 
 func New(ingestSvc *ingest.Service, metrics http.Handler, batchSvc ...BatchService) http.Handler {
-	h := Handler{Ingest: ingestSvc, Metrics: metrics}
+	h := Handler{Metrics: metrics}
 	if len(batchSvc) > 0 {
 		h.Batch = batchSvc[0]
 	}
+	h.Submitter = submission.New(ingestSvc, h.Batch)
 	return buildMux(h)
 }
 
@@ -206,10 +208,10 @@ func New(ingestSvc *ingest.Service, metrics http.Handler, batchSvc ...BatchServi
 // learn about the anchor API when they don't need it.
 func NewWithAnchors(ingestSvc *ingest.Service, metrics http.Handler, batchSvc BatchService, anchorSvc AnchorService) http.Handler {
 	return buildMux(Handler{
-		Ingest:  ingestSvc,
-		Batch:   batchSvc,
-		Anchors: anchorSvc,
-		Metrics: metrics,
+		Submitter: submission.New(ingestSvc, batchSvc),
+		Batch:     batchSvc,
+		Anchors:   anchorSvc,
+		Metrics:   metrics,
 	})
 }
 
@@ -220,12 +222,31 @@ func NewWithGlobalAndAnchors(
 	globalSvc GlobalLogService,
 	anchorSvc AnchorService,
 ) http.Handler {
+	return NewWithSubmitterAndGlobalAndAnchors(
+		submission.New(ingestSvc, batchSvc),
+		metrics,
+		batchSvc,
+		globalSvc,
+		anchorSvc,
+	)
+}
+
+// NewWithSubmitterAndGlobalAndAnchors wires a transport-independent submitter
+// shared with other ingress transports while retaining the batch service for
+// proof and record query endpoints.
+func NewWithSubmitterAndGlobalAndAnchors(
+	submitter submission.Submitter,
+	metrics http.Handler,
+	batchSvc BatchService,
+	globalSvc GlobalLogService,
+	anchorSvc AnchorService,
+) http.Handler {
 	return buildMux(Handler{
-		Ingest:  ingestSvc,
-		Batch:   batchSvc,
-		Global:  globalSvc,
-		Anchors: anchorSvc,
-		Metrics: metrics,
+		Submitter: submitter,
+		Batch:     batchSvc,
+		Global:    globalSvc,
+		Anchors:   anchorSvc,
+		Metrics:   metrics,
 	})
 }
 
@@ -267,6 +288,9 @@ func buildMux(h Handler) http.Handler {
 }
 
 func normalizeHandler(h Handler) Handler {
+	if isTypedNil(h.Submitter) {
+		h.Submitter = nil
+	}
 	if isTypedNil(h.Batch) {
 		h.Batch = nil
 	}
@@ -451,34 +475,22 @@ func readBoundedRequestBody(body io.Reader, contentLength int64, maxBytes int) (
 }
 
 func (h Handler) submitSignedClaim(ctx context.Context, signed model.SignedClaim) (submitClaimResponse, error) {
-	if h.Ingest == nil {
+	if h.Submitter == nil {
 		return submitClaimResponse{}, trusterr.New(trusterr.CodeFailedPrecondition, "ingest service is not configured")
 	}
-	record, accepted, idempotent, err := h.Ingest.Submit(ctx, signed)
+	outcome, err := h.Submitter.Submit(ctx, signed)
 	if err != nil {
 		return submitClaimResponse{}, err
 	}
-	// Idempotent replays must not re-enqueue into the batch pipeline, both to
-	// avoid duplicate leaves inside a single batch and to keep the L3 proof
-	// for the original submission stable across retries.
-	batchEnqueued := false
-	batchErr := ""
-	if h.Batch != nil && !idempotent {
-		if err := h.Batch.Enqueue(context.WithoutCancel(ctx), signed, record, accepted); err != nil {
-			batchErr = err.Error()
-		} else {
-			batchEnqueued = true
-		}
-	}
 	return submitClaimResponse{
-		RecordID:        record.RecordID,
-		Status:          accepted.Status,
-		ProofLevel:      prooflevel.L2.String(),
-		Idempotent:      idempotent,
-		BatchEnqueued:   batchEnqueued,
-		BatchError:      batchErr,
-		ServerRecord:    record,
-		AcceptedReceipt: accepted,
+		RecordID:        outcome.RecordID,
+		Status:          outcome.Status,
+		ProofLevel:      outcome.ProofLevel,
+		Idempotent:      outcome.Idempotent,
+		BatchEnqueued:   outcome.BatchEnqueued,
+		BatchError:      outcome.BatchError,
+		ServerRecord:    outcome.ServerRecord,
+		AcceptedReceipt: outcome.AcceptedReceipt,
 	}, nil
 }
 

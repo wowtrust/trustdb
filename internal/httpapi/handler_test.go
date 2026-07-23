@@ -16,6 +16,7 @@ import (
 	"github.com/wowtrust/trustdb/internal/cborx"
 	"github.com/wowtrust/trustdb/internal/ingest"
 	"github.com/wowtrust/trustdb/internal/model"
+	"github.com/wowtrust/trustdb/internal/submission"
 	"github.com/wowtrust/trustdb/internal/trusterr"
 )
 
@@ -191,7 +192,7 @@ func TestSubmitClaimKeepsAcceptedBatchEnqueueAliveAfterRequestCancellation(t *te
 		entered: make(chan struct{}),
 		release: make(chan struct{}),
 	}
-	handler := Handler{Ingest: ingestSvc, Batch: batchSvc}
+	handler := Handler{Submitter: submission.New(ingestSvc, batchSvc), Batch: batchSvc}
 	ctx, cancel := context.WithCancel(context.Background())
 	type result struct {
 		response submitClaimResponse
