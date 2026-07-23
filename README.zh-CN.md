@@ -22,6 +22,16 @@
 
 典型场景包括发布产物核验、数据和报告交付、高危操作凭证、数据集/模型来源追踪以及跨组织数据交接。TrustDB 不作笼统的法律效力承诺，也不会自动把密码学密钥绑定到现实身份。
 
+## TrustDB 是否适合你的场景？
+
+| TrustDB 适合 | TrustDB 不替代 |
+| --- | --- |
+| 文件和数据交接的可移植证据 | 原始业务内容存储 |
+| 高风险操作的防篡改记录 | 日志搜索、链路追踪或 SIEM 平台 |
+| 独立、离线的证明验证 | 现实身份认定和密钥管理制度 |
+| 透明日志和外部锚定证据 | 部署层 TLS、认证和授权 |
+| 数据集、模型、报告和发布产物来源追踪 | 法律意见或自动获得的证据效力 |
+
 ## 一条命令体验篡改检测
 
 安装 Go 并克隆仓库后运行：
@@ -33,6 +43,14 @@
 脚本会在临时目录构建 CLI，为样例文件生成证明，验证原文件，然后修改一份副本并确认验证失败。它不会启动服务，也不会保留生成的密钥。
 
 预编译包、Docker、Windows 指引、L4/L5 证明和生产部署请查看[官方快速开始](https://www.trustdb.ryan-wong.cn/docs/quick-start)。
+
+## 加入社区
+
+- 在 [GitHub Discussions](https://github.com/wowtrust/trustdb/discussions) 提问或分享部署经验。
+- 通过[集成讨论](https://github.com/wowtrust/trustdb/discussions/categories/ideas)提出生态连接方案。
+- 领取适合首次参与的 [`good first issue`](https://github.com/wowtrust/trustdb/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22)。
+- 把评估、试点或生产部署加入 [ADOPTERS.md](ADOPTERS.md)。
+- 在[更新日志](CHANGELOG.md)查看面向用户的版本变化。
 
 ![TrustDB 系统架构](assets/readme/system-architecture.png)
 
@@ -230,6 +248,7 @@ mkdir -p .trustdb-dev
 - [SECURITY.md](SECURITY.md)：漏洞私密报告和支持版本策略。
 - [LICENSE-FAQ.md](LICENSE-FAQ.md)：AGPL 采用常见问题和项目边界。
 - [ADOPTERS.md](ADOPTERS.md)：公开评估、试点和生产采用者。
+- [CHANGELOG.md](CHANGELOG.md)：面向用户整理的版本变化和已知限制。
 - [CONTRIBUTING.md](CONTRIBUTING.md)：Issue、PR、Commit、验证和 Review 标准。
 - [formats/SPROOF_V1.md](formats/SPROOF_V1.md)：稳定 `.sproof` v1 交换格式。
 - [formats/DISTRIBUTED_ARCHITECTURE.md](formats/DISTRIBUTED_ARCHITECTURE.md)：分布式/存算分离说明。

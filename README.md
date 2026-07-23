@@ -22,6 +22,16 @@ Use it when a workflow must later answer: **what was submitted, who signed it, w
 
 Typical uses include release-artifact verification, data and report delivery, privileged-operation evidence, dataset/model provenance, and cross-organization handoffs. TrustDB does not make blanket legal-validity claims and does not by itself bind a cryptographic key to a real-world identity.
 
+## Is TrustDB a fit?
+
+| TrustDB is designed for | TrustDB does not replace |
+| --- | --- |
+| Portable evidence for files and data handoffs | Storage for original business content |
+| Tamper-evident records for high-risk operations | Log search, tracing, or SIEM platforms |
+| Independent and offline proof verification | Real-world identity and key-custody processes |
+| Transparency-log and external-anchor evidence | Deployment TLS, authentication, or authorization |
+| Dataset, model, report, and release provenance | Legal advice or automatic evidentiary validity |
+
 ## See tamper detection in one command
 
 With Go installed, clone the repository and run:
@@ -33,6 +43,14 @@ With Go installed, clone the repository and run:
 The script builds the CLI in a temporary directory, proves a sample file, verifies the original, then changes a copy and confirms that verification fails. It does not start a server or retain generated keys.
 
 For prebuilt binaries, Docker, Windows instructions, L4/L5 evidence, and production deployment, use the [official documentation](https://www.trustdb.ryan-wong.cn/docs/quick-start).
+
+## Join the community
+
+- Ask a question or share deployment experience in [GitHub Discussions](https://github.com/wowtrust/trustdb/discussions).
+- Propose an ecosystem connection through an [integration discussion](https://github.com/wowtrust/trustdb/discussions/categories/ideas).
+- Pick an approachable [`good first issue`](https://github.com/wowtrust/trustdb/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22).
+- Add an evaluation, pilot, or production deployment to [ADOPTERS.md](ADOPTERS.md).
+- Review user-visible history in the [changelog](CHANGELOG.md).
 
 ![TrustDB system architecture](assets/readme/system-architecture.png)
 
@@ -243,6 +261,7 @@ The screenshot below is rendered directly from the current desktop client code:
 - [SECURITY.md](SECURITY.md): private vulnerability reporting and supported-version policy.
 - [LICENSE-FAQ.md](LICENSE-FAQ.md): practical AGPL adoption questions and project boundaries.
 - [ADOPTERS.md](ADOPTERS.md): public evaluations, pilots, and production users.
+- [CHANGELOG.md](CHANGELOG.md): curated user-visible release history and known limitations.
 - [docs/compliance/CHINA_COMPLIANCE_SCOPE_AND_CONTROL_MATRIX.zh-CN.md](docs/compliance/CHINA_COMPLIANCE_SCOPE_AND_CONTROL_MATRIX.zh-CN.md): versioned China compliance scope, control ownership, release gates, evidence requirements, and assessment boundaries (Chinese).
 - [CONTRIBUTING.md](CONTRIBUTING.md): issue, PR, commit, validation, and review standards.
 - [formats/SPROOF_V1.md](formats/SPROOF_V1.md): stable `.sproof` v1 exchange format.
