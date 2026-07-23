@@ -49,11 +49,11 @@ export function DownloadsPage() {
   return (
     <>
       <PageHero eyebrow="Downloads" title={<>{release.version}，<br />开放下载。</>} lead="桌面客户端、服务器、CLI 和 Docker 镜像使用同一份版本与提交。按系统直接下载；安装前可用 SHA256SUMS 核对文件。" meta={`正式版 · ${release.published}`}>
-        <div className="page-hero__actions"><a className="button button--solid" href={checksumsAsset.url}><DownloadSimple /> 下载 SHA256SUMS</a><a className="button button--ghost" href={release.dockerUrl} target="_blank" rel="noreferrer">Docker Hub</a></div>
+        <div className="page-hero__actions"><a className="button button--solid" href={checksumsAsset.url}><DownloadSimple /> 下载 SHA256SUMS</a><a className="button button--ghost" href={release.containerUrl} target="_blank" rel="noreferrer">GitHub Container Registry</a></div>
       </PageHero>
       <section className="empty-release section-shell">
         <div className="empty-release__mark" data-reveal><DownloadSimple /></div>
-        <div className="empty-release__copy" data-reveal><p>Stable release</p><h2>按系统选择。</h2><span>GitHub Release 提供全部安装包、服务端与 CLI 归档以及统一校验文件。Docker Hub 同步提供 amd64 与 arm64 镜像。</span></div>
+        <div className="empty-release__copy" data-reveal><p>Stable release</p><h2>按系统选择。</h2><span>GitHub Release 提供安装包、服务端与 CLI 归档以及统一校验文件；WowTrust GHCR 提供 amd64 与 arm64 组织镜像。</span></div>
         <a className="empty-release__watch" href={release.pageUrl} target="_blank" rel="noreferrer"><GithubLogo weight="fill" /> 打开 GitHub Release <ArrowRight /></a>
       </section>
       <section className="asset-plan" id="release-assets">
@@ -80,8 +80,8 @@ export function DownloadsPage() {
           </div>
           <section className="release-support" data-reveal>
             <div><span>03</span><Package /><h3>容器与校验资料</h3></div>
-            <p>Docker Hub 提供 linux/amd64 与 linux/arm64 镜像；GitHub Release 提供所有文件的统一校验清单。</p>
-            <div><a href={release.dockerUrl} target="_blank" rel="noreferrer">Docker Hub <ArrowRight /></a><a href={checksumsAsset.url}>SHA256SUMS <DownloadSimple /></a></div>
+            <p>WowTrust GHCR 是默认组织镜像，Docker Hub 同步保留同版本的 linux/amd64 与 linux/arm64 镜像。</p>
+            <div><a href={release.containerUrl} target="_blank" rel="noreferrer">GHCR <ArrowRight /></a><a href={release.dockerHubUrl} target="_blank" rel="noreferrer">Docker Hub <ArrowRight /></a><a href={checksumsAsset.url}>SHA256SUMS <DownloadSimple /></a></div>
           </section>
         </div>
       </section>

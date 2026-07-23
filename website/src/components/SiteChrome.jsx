@@ -68,10 +68,12 @@ export function SiteFooter() {
         <Link href="/sproof">.sproof</Link>
         <Link href="/changelog">开发日志</Link>
         <Link href="/downloads">下载</Link>
+        <a href="https://github.com/wowtrust/trustdb/contribute" target="_blank" rel="noreferrer">参与贡献</a>
       </nav>
       <div className="site-footer__meta">
         <a href="https://github.com/wowtrust/trustdb" target="_blank" rel="noreferrer">源码 <ArrowUpRight /></a>
-        <a className="site-footer__community" href="https://linux.do/" target="_blank" rel="noreferrer" aria-label="访问 LINUX DO 社区">感谢 LINUX DO 社区 <ArrowUpRight /></a>
+        <a className="site-footer__community" href="https://github.com/wowtrust/trustdb/discussions" target="_blank" rel="noreferrer">GitHub Discussions <ArrowUpRight /></a>
+        <a href="https://linux.do/" target="_blank" rel="noreferrer" aria-label="访问 LINUX DO 社区">感谢 LINUX DO 社区 <ArrowUpRight /></a>
         <small>AGPL-3.0 · © 2026 TrustDB</small>
       </div>
     </footer>
