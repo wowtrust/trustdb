@@ -2,11 +2,13 @@ package receipt
 
 import (
 	"bytes"
+	"context"
 	"crypto/ed25519"
 	"testing"
 
 	"github.com/wowtrust/trustdb/internal/cborx"
 	"github.com/wowtrust/trustdb/internal/model"
+	"github.com/wowtrust/trustdb/internal/trustcrypto"
 )
 
 func TestSignCommittedPreservesDomainEncoding(t *testing.T) {
@@ -39,5 +41,16 @@ func TestSignCommittedPreservesDomainEncoding(t *testing.T) {
 	}
 	if err := VerifyCommitted(signed, privateKey.Public().(ed25519.PublicKey)); err != nil {
 		t.Fatalf("VerifyCommitted: %v", err)
+	}
+}
+
+func TestVerifyWithProviderRejectsNilProvider(t *testing.T) {
+	t.Parallel()
+
+	if err := VerifyAcceptedWithProvider(context.Background(), model.AcceptedReceipt{}, trustcrypto.PublicKeyDescriptor{}, nil); err == nil {
+		t.Fatal("VerifyAcceptedWithProvider() error = nil for nil provider")
+	}
+	if err := VerifyCommittedWithProvider(context.Background(), model.CommittedReceipt{}, trustcrypto.PublicKeyDescriptor{}, nil); err == nil {
+		t.Fatal("VerifyCommittedWithProvider() error = nil for nil provider")
 	}
 }

@@ -19,10 +19,6 @@ import (
 	"github.com/wowtrust/trustdb/internal/trustcrypto"
 )
 
-const (
-	signDomain = "trustdb.key-event.v1"
-)
-
 var crcTable = crc32.MakeTable(crc32.Castagnoli)
 
 type Registry struct {
@@ -368,7 +364,11 @@ func signEvent(ev model.KeyEvent, provider trustcrypto.Provider, signer trustcry
 	if err != nil {
 		return model.Signature{}, err
 	}
-	return trustcrypto.Sign(context.Background(), provider.Suite(), signer, domainInput(signDomain, payload))
+	input, err := trustcrypto.SignatureInputForSuite(provider.Suite(), trustcrypto.SignaturePurposeKeyEvent, payload)
+	if err != nil {
+		return model.Signature{}, err
+	}
+	return trustcrypto.Sign(context.Background(), provider.Suite(), signer, input)
 }
 
 func verifyEvent(ev model.KeyEvent, pub trustcrypto.PublicKeyDescriptor, provider trustcrypto.Provider) error {
@@ -379,7 +379,11 @@ func verifyEvent(ev model.KeyEvent, pub trustcrypto.PublicKeyDescriptor, provide
 	if err != nil {
 		return err
 	}
-	return trustcrypto.Verify(context.Background(), provider, pub, domainInput(signDomain, payload), sig)
+	input, err := trustcrypto.SignatureInputForSuite(provider.Suite(), trustcrypto.SignaturePurposeKeyEvent, payload)
+	if err != nil {
+		return err
+	}
+	return trustcrypto.Verify(context.Background(), provider, pub, input, sig)
 }
 
 func hashEvent(ev model.KeyEvent) ([]byte, error) {

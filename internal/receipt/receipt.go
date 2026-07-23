@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"github.com/wowtrust/trustdb/internal/cborx"
+	"github.com/wowtrust/trustdb/internal/cryptosuite"
 	"github.com/wowtrust/trustdb/internal/model"
 	"github.com/wowtrust/trustdb/internal/trustcrypto"
 )
@@ -37,7 +38,7 @@ func SignAcceptedWithProvider(ctx context.Context, provider trustcrypto.Provider
 		return model.AcceptedReceipt{}, fmt.Errorf("sign accepted receipt: crypto provider is required")
 	}
 	r.ServerSig = model.Signature{}
-	input, buf, err := encodeDomainInput(acceptedDomain, r)
+	input, buf, err := encodeDomainInput(provider.Suite(), trustcrypto.SignaturePurposeAcceptedReceipt, r)
 	if err != nil {
 		return model.AcceptedReceipt{}, err
 	}
@@ -59,9 +60,12 @@ func VerifyAccepted(r model.AcceptedReceipt, publicKey ed25519.PublicKey) error 
 }
 
 func VerifyAcceptedWithProvider(ctx context.Context, r model.AcceptedReceipt, publicKey trustcrypto.PublicKeyDescriptor, provider trustcrypto.Provider) error {
+	if provider == nil {
+		return fmt.Errorf("verify accepted receipt: crypto provider is required")
+	}
 	sig := r.ServerSig
 	r.ServerSig = model.Signature{}
-	input, buf, err := encodeDomainInput(acceptedDomain, r)
+	input, buf, err := encodeDomainInput(provider.Suite(), trustcrypto.SignaturePurposeAcceptedReceipt, r)
 	if err != nil {
 		return err
 	}
@@ -89,7 +93,7 @@ func SignCommittedWithProvider(ctx context.Context, provider trustcrypto.Provide
 		return model.CommittedReceipt{}, fmt.Errorf("sign committed receipt: crypto provider is required")
 	}
 	r.ServerSig = model.Signature{}
-	input, buf, err := encodeDomainInput(committedDomain, r)
+	input, buf, err := encodeDomainInput(provider.Suite(), trustcrypto.SignaturePurposeCommittedReceipt, r)
 	if err != nil {
 		return model.CommittedReceipt{}, err
 	}
@@ -111,9 +115,12 @@ func VerifyCommitted(r model.CommittedReceipt, publicKey ed25519.PublicKey) erro
 }
 
 func VerifyCommittedWithProvider(ctx context.Context, r model.CommittedReceipt, publicKey trustcrypto.PublicKeyDescriptor, provider trustcrypto.Provider) error {
+	if provider == nil {
+		return fmt.Errorf("verify committed receipt: crypto provider is required")
+	}
 	sig := r.ServerSig
 	r.ServerSig = model.Signature{}
-	input, buf, err := encodeDomainInput(committedDomain, r)
+	input, buf, err := encodeDomainInput(provider.Suite(), trustcrypto.SignaturePurposeCommittedReceipt, r)
 	if err != nil {
 		return err
 	}
@@ -124,11 +131,15 @@ func VerifyCommittedWithProvider(ctx context.Context, r model.CommittedReceipt, 
 	return nil
 }
 
-func encodeDomainInput(domain string, value any) ([]byte, *bytes.Buffer, error) {
+func encodeDomainInput(suiteID cryptosuite.ID, purpose trustcrypto.SignaturePurpose, value any) ([]byte, *bytes.Buffer, error) {
 	buf := signingBufferPool.Get().(*bytes.Buffer)
 	buf.Reset()
-	buf.WriteString(domain)
-	buf.WriteByte(0)
+	prefix, err := trustcrypto.SignatureInputForSuite(suiteID, purpose, nil)
+	if err != nil {
+		releaseSigningBuffer(buf)
+		return nil, nil, err
+	}
+	buf.Write(prefix)
 	if err := cborx.MarshalBuffer(buf, value); err != nil {
 		releaseSigningBuffer(buf)
 		return nil, nil, err

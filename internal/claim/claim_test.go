@@ -2,6 +2,7 @@ package claim
 
 import (
 	"bytes"
+	"context"
 	"testing"
 	"time"
 
@@ -88,6 +89,14 @@ func TestSigningInputReturnsIndependentOwnedBytes(t *testing.T) {
 	}
 	if !bytes.Equal(claimCBOR, []byte{1, 2, 3, 4}) {
 		t.Fatalf("claim CBOR mutated: %v", claimCBOR)
+	}
+}
+
+func TestVerifyWithProviderRejectsNilProvider(t *testing.T) {
+	t.Parallel()
+
+	if _, err := VerifyWithProvider(context.Background(), model.SignedClaim{}, trustcrypto.PublicKeyDescriptor{}, nil); err == nil {
+		t.Fatal("VerifyWithProvider() error = nil for nil provider")
 	}
 }
 

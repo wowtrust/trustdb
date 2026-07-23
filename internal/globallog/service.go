@@ -21,7 +21,6 @@ import (
 )
 
 const (
-	sthDomain                = "trustdb.signed-tree-head.v1"
 	appendConflictAttempts   = 16
 	appendConflictBackoff    = time.Millisecond
 	appendConflictMaxBackoff = 16 * time.Millisecond
@@ -577,7 +576,11 @@ func VerifySTHWithProvider(ctx context.Context, sth model.SignedTreeHead, public
 	if err != nil {
 		return err
 	}
-	if err := trustcrypto.Verify(ctx, provider, publicKey, domainInput(sthDomain, payload), sig); err != nil {
+	input, err := trustcrypto.SignatureInputForSuite(provider.Suite(), trustcrypto.SignaturePurposeSignedTreeHead, payload)
+	if err != nil {
+		return err
+	}
+	if err := trustcrypto.Verify(ctx, provider, publicKey, input, sig); err != nil {
 		return fmt.Errorf("verify signed tree head: %w", err)
 	}
 	return nil
@@ -641,7 +644,11 @@ func (s *Service) signSTH(ctx context.Context, leaves []model.GlobalLogLeaf) (mo
 	if err != nil {
 		return model.SignedTreeHead{}, err
 	}
-	sig, err := trustcrypto.Sign(ctx, s.provider.Suite(), s.signer, domainInput(sthDomain, payload))
+	input, err := trustcrypto.SignatureInputForSuite(s.provider.Suite(), trustcrypto.SignaturePurposeSignedTreeHead, payload)
+	if err != nil {
+		return model.SignedTreeHead{}, err
+	}
+	sig, err := trustcrypto.Sign(ctx, s.provider.Suite(), s.signer, input)
 	if err != nil {
 		return model.SignedTreeHead{}, err
 	}
@@ -671,7 +678,11 @@ func (s *Service) signSTHFromState(ctx context.Context, state model.GlobalLogSta
 	if err != nil {
 		return model.SignedTreeHead{}, err
 	}
-	sig, err := trustcrypto.Sign(ctx, s.provider.Suite(), s.signer, domainInput(sthDomain, payload))
+	input, err := trustcrypto.SignatureInputForSuite(s.provider.Suite(), trustcrypto.SignaturePurposeSignedTreeHead, payload)
+	if err != nil {
+		return model.SignedTreeHead{}, err
+	}
+	sig, err := trustcrypto.Sign(ctx, s.provider.Suite(), s.signer, input)
 	if err != nil {
 		return model.SignedTreeHead{}, err
 	}
@@ -1007,12 +1018,4 @@ func largestPowerOfTwoLessThan(n int) int {
 		k <<= 1
 	}
 	return k
-}
-
-func domainInput(domain string, payload []byte) []byte {
-	var buf bytes.Buffer
-	buf.WriteString(domain)
-	buf.WriteByte(0)
-	buf.Write(payload)
-	return buf.Bytes()
 }

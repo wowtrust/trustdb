@@ -17,10 +17,7 @@ import (
 	"github.com/wowtrust/trustdb/internal/trustcrypto"
 )
 
-const (
-	signingDomain                 = "trustdb.client-claim.v1"
-	maxSigningInputBufferCapacity = 1 << 20
-)
+const maxSigningInputBufferCapacity = 1 << 20
 
 var signingInputBufferPool = sync.Pool{New: func() any { return new(bytes.Buffer) }}
 
@@ -75,10 +72,10 @@ func Canonical(claim model.ClientClaim) ([]byte, error) {
 }
 
 func SigningInput(claimCBOR []byte) []byte {
-	out := make([]byte, 0, len(signingDomain)+1+len(claimCBOR))
-	out = append(out, signingDomain...)
-	out = append(out, 0)
-	out = append(out, claimCBOR...)
+	out, err := trustcrypto.SignatureInputForSuite(cryptosuite.INTLV1, trustcrypto.SignaturePurposeClientClaim, claimCBOR)
+	if err != nil {
+		panic(err)
+	}
 	return out
 }
 
@@ -104,7 +101,7 @@ func SignWithProvider(ctx context.Context, provider trustcrypto.Provider, claim 
 	if signer == nil || signer.Handle().KeyID != claim.KeyID {
 		return model.SignedClaim{}, errors.New("signer key_id does not match claim key_id")
 	}
-	input, buf, err := pooledClaimSigningInput(claim)
+	input, buf, err := pooledClaimSigningInput(provider.Suite(), claim)
 	if err != nil {
 		return model.SignedClaim{}, err
 	}
@@ -129,6 +126,9 @@ func Verify(signed model.SignedClaim, publicKey ed25519.PublicKey) (Verified, er
 }
 
 func VerifyWithProvider(ctx context.Context, signed model.SignedClaim, publicKey trustcrypto.PublicKeyDescriptor, provider trustcrypto.Provider) (Verified, error) {
+	if provider == nil {
+		return Verified{}, errors.New("crypto provider is required")
+	}
 	if signed.SchemaVersion != model.SchemaSignedClaim {
 		return Verified{}, fmt.Errorf("unexpected signed claim schema: %s", signed.SchemaVersion)
 	}
@@ -139,7 +139,10 @@ func VerifyWithProvider(ctx context.Context, signed model.SignedClaim, publicKey
 	if signed.Signature.KeyID != signed.Claim.KeyID {
 		return Verified{}, errors.New("signature key_id does not match claim key_id")
 	}
-	input, buf := pooledSigningInput(claimCBOR)
+	input, buf, err := pooledSigningInput(provider.Suite(), claimCBOR)
+	if err != nil {
+		return Verified{}, err
+	}
 	defer releaseSigningInputBuffer(buf)
 	if err := trustcrypto.Verify(ctx, provider, publicKey, input, signed.Signature); err != nil {
 		return Verified{}, err
@@ -156,11 +159,15 @@ func VerifyWithProvider(ctx context.Context, signed model.SignedClaim, publicKey
 	}, nil
 }
 
-func pooledClaimSigningInput(claim model.ClientClaim) ([]byte, *bytes.Buffer, error) {
+func pooledClaimSigningInput(suiteID cryptosuite.ID, claim model.ClientClaim) ([]byte, *bytes.Buffer, error) {
 	buf := signingInputBufferPool.Get().(*bytes.Buffer)
 	buf.Reset()
-	buf.WriteString(signingDomain)
-	buf.WriteByte(0)
+	prefix, err := trustcrypto.SignatureInputForSuite(suiteID, trustcrypto.SignaturePurposeClientClaim, nil)
+	if err != nil {
+		releaseSigningInputBuffer(buf)
+		return nil, nil, err
+	}
+	buf.Write(prefix)
 	if err := cborx.MarshalBuffer(buf, claim); err != nil {
 		releaseSigningInputBuffer(buf)
 		return nil, nil, err
@@ -168,14 +175,18 @@ func pooledClaimSigningInput(claim model.ClientClaim) ([]byte, *bytes.Buffer, er
 	return buf.Bytes(), buf, nil
 }
 
-func pooledSigningInput(claimCBOR []byte) ([]byte, *bytes.Buffer) {
+func pooledSigningInput(suiteID cryptosuite.ID, claimCBOR []byte) ([]byte, *bytes.Buffer, error) {
 	buf := signingInputBufferPool.Get().(*bytes.Buffer)
 	buf.Reset()
-	buf.Grow(len(signingDomain) + 1 + len(claimCBOR))
-	buf.WriteString(signingDomain)
-	buf.WriteByte(0)
+	prefix, err := trustcrypto.SignatureInputForSuite(suiteID, trustcrypto.SignaturePurposeClientClaim, nil)
+	if err != nil {
+		releaseSigningInputBuffer(buf)
+		return nil, nil, err
+	}
+	buf.Grow(len(prefix) + len(claimCBOR))
+	buf.Write(prefix)
 	buf.Write(claimCBOR)
-	return buf.Bytes(), buf
+	return buf.Bytes(), buf, nil
 }
 
 func releaseSigningInputBuffer(buf *bytes.Buffer) {
