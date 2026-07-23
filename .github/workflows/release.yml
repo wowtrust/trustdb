@@ -13,6 +13,7 @@ on:
 
 permissions:
   contents: write
+  packages: write
 
 concurrency:
   group: release-${{ github.ref }}
@@ -294,21 +295,30 @@ jobs:
           if-no-files-found: error
 
   docker:
-    name: Docker Hub · linux/amd64 + linux/arm64
+    name: Container registries · linux/amd64 + linux/arm64
     needs: prepare
-    if: github.ref_type == 'tag'
+    if: github.ref_type == 'tag' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04
     timeout-minutes: 60
 
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+        with:
+          ref: ${{ github.ref_type == 'tag' && github.ref || format('refs/tags/v{0}', needs.prepare.outputs.version) }}
 
       - name: Login to Docker Hub
         uses: docker/login-action@v4
         with:
           username: ${{ vars.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Setup QEMU
         uses: docker/setup-qemu-action@v4
@@ -325,6 +335,8 @@ jobs:
           tags: |
             ${{ vars.DOCKERHUB_USERNAME }}/trustdb:${{ needs.prepare.outputs.version }}
             ${{ vars.DOCKERHUB_USERNAME }}/trustdb:${{ needs.prepare.outputs.channel }}
+            ghcr.io/${{ github.repository_owner }}/trustdb:${{ needs.prepare.outputs.version }}
+            ghcr.io/${{ github.repository_owner }}/trustdb:${{ needs.prepare.outputs.channel }}
           labels: |
             org.opencontainers.image.version=${{ needs.prepare.outputs.version }}
             org.opencontainers.image.revision=${{ github.sha }}
