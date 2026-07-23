@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -51,6 +52,37 @@ server:
   write_timeout: "10s"
   idle_timeout: "120s"
   shutdown_timeout: "10s"
+
+# Optional JetStream ingress. Disabled means TrustDB does not connect to NATS
+# or create any broker resources; the existing HTTP and gRPC transports remain
+# unchanged. workers=0 lets the future runtime size workers automatically.
+nats:
+  enabled: false
+  urls: ["nats://127.0.0.1:4222"]
+  stream: "TRUSTDB_INGRESS"
+  subject: "trustdb.ingress.v1.claims"
+  durable: "trustdb-ingress"
+  workers: 0
+  fetch_batch: 256
+  fetch_wait: "1s"
+  ack_wait: "30s"
+  max_ack_pending: 2048
+  max_deliver: 10
+  connect_timeout: "5s"
+  reconnect_wait: "1s"
+  max_reconnects: -1
+  drain_timeout: "10s"
+  credentials_file: ""
+  username: ""
+  password: ""
+  token: ""
+  tls:
+    enabled: false
+    ca_file: ""
+    cert_file: ""
+    key_file: ""
+    server_name: ""
+    insecure_skip_verify: false
 
 registry:
   key_id: "registry-key"
@@ -124,6 +156,7 @@ type Config struct {
 	Paths      Paths      `mapstructure:"paths" json:"paths"`
 	Identity   Identity   `mapstructure:"identity" json:"identity"`
 	Server     Server     `mapstructure:"server" json:"server"`
+	NATS       NATS       `mapstructure:"nats" json:"nats"`
 	Registry   Registry   `mapstructure:"registry" json:"registry"`
 	Batch      Batch      `mapstructure:"batch" json:"batch"`
 	GlobalLog  GlobalLog  `mapstructure:"global_log" json:"global_log"`
@@ -174,6 +207,42 @@ type Server struct {
 	WriteTimeout      string `mapstructure:"write_timeout" json:"write_timeout"`
 	IdleTimeout       string `mapstructure:"idle_timeout" json:"idle_timeout"`
 	ShutdownTimeout   string `mapstructure:"shutdown_timeout" json:"shutdown_timeout"`
+}
+
+// NATS configures the optional JetStream ingress transport. The runtime must
+// ignore every field in this section while Enabled is false.
+type NATS struct {
+	Enabled         bool     `mapstructure:"enabled" json:"enabled"`
+	URLs            []string `mapstructure:"urls" json:"urls"`
+	Stream          string   `mapstructure:"stream" json:"stream"`
+	Subject         string   `mapstructure:"subject" json:"subject"`
+	Durable         string   `mapstructure:"durable" json:"durable"`
+	Workers         int      `mapstructure:"workers" json:"workers"`
+	FetchBatch      int      `mapstructure:"fetch_batch" json:"fetch_batch"`
+	FetchWait       string   `mapstructure:"fetch_wait" json:"fetch_wait"`
+	AckWait         string   `mapstructure:"ack_wait" json:"ack_wait"`
+	MaxAckPending   int      `mapstructure:"max_ack_pending" json:"max_ack_pending"`
+	MaxDeliver      int      `mapstructure:"max_deliver" json:"max_deliver"`
+	ConnectTimeout  string   `mapstructure:"connect_timeout" json:"connect_timeout"`
+	ReconnectWait   string   `mapstructure:"reconnect_wait" json:"reconnect_wait"`
+	MaxReconnects   int      `mapstructure:"max_reconnects" json:"max_reconnects"`
+	DrainTimeout    string   `mapstructure:"drain_timeout" json:"drain_timeout"`
+	CredentialsFile string   `mapstructure:"credentials_file" json:"credentials_file"`
+	Username        string   `mapstructure:"username" json:"username"`
+	Password        string   `mapstructure:"password" json:"password"`
+	Token           string   `mapstructure:"token" json:"token"`
+	TLS             NATSTLS  `mapstructure:"tls" json:"tls"`
+}
+
+// NATSTLS configures certificate verification and optional mutual TLS for the
+// NATS connection.
+type NATSTLS struct {
+	Enabled            bool   `mapstructure:"enabled" json:"enabled"`
+	CAFile             string `mapstructure:"ca_file" json:"ca_file"`
+	CertFile           string `mapstructure:"cert_file" json:"cert_file"`
+	KeyFile            string `mapstructure:"key_file" json:"key_file"`
+	ServerName         string `mapstructure:"server_name" json:"server_name"`
+	InsecureSkipVerify bool   `mapstructure:"insecure_skip_verify" json:"insecure_skip_verify"`
 }
 
 type Registry struct {
@@ -277,6 +346,22 @@ func Default() Config {
 			IdleTimeout:       "120s",
 			ShutdownTimeout:   "10s",
 		},
+		NATS: NATS{
+			URLs:           []string{"nats://127.0.0.1:4222"},
+			Stream:         "TRUSTDB_INGRESS",
+			Subject:        "trustdb.ingress.v1.claims",
+			Durable:        "trustdb-ingress",
+			Workers:        0,
+			FetchBatch:     256,
+			FetchWait:      "1s",
+			AckWait:        "30s",
+			MaxAckPending:  2048,
+			MaxDeliver:     10,
+			ConnectTimeout: "5s",
+			ReconnectWait:  "1s",
+			MaxReconnects:  -1,
+			DrainTimeout:   "10s",
+		},
 		Registry: Registry{
 			KeyID: "registry-key",
 		},
@@ -342,6 +427,8 @@ func (c Config) Redacted() Config {
 	c.Keys.ServerPublic = redact(c.Keys.ServerPublic)
 	c.Keys.RegistryPrivate = redact(c.Keys.RegistryPrivate)
 	c.Keys.RegistryPublic = redact(c.Keys.RegistryPublic)
+	c.NATS.Password = redact(c.NATS.Password)
+	c.NATS.Token = redact(c.NATS.Token)
 	c.Admin.PasswordHash = redact(c.Admin.PasswordHash)
 	c.Admin.SessionSecret = redact(c.Admin.SessionSecret)
 	return c
@@ -401,6 +488,9 @@ func (c Config) Validate() error {
 		if err := validateNonNegativeDuration(tc.name, tc.value); err != nil {
 			return err
 		}
+	}
+	if err := validateNATS(c.NATS); err != nil {
+		return err
 	}
 	if c.Registry.KeyID == "" {
 		return fmt.Errorf("registry.key_id is required")
@@ -498,6 +588,133 @@ func (c Config) Validate() error {
 	}
 	if err := validateAdmin(c.Admin); err != nil {
 		return err
+	}
+	return nil
+}
+
+func validateNATS(n NATS) error {
+	if !n.Enabled {
+		return nil
+	}
+	if len(n.URLs) == 0 {
+		return fmt.Errorf("nats.urls must contain at least one URL when nats.enabled is true")
+	}
+	for _, raw := range n.URLs {
+		if err := validateNATSURL(raw); err != nil {
+			return err
+		}
+	}
+	if err := validateNATSName("nats.stream", n.Stream); err != nil {
+		return err
+	}
+	if err := validateNATSSubject(n.Subject); err != nil {
+		return err
+	}
+	if err := validateNATSName("nats.durable", n.Durable); err != nil {
+		return err
+	}
+	if n.Workers < 0 {
+		return fmt.Errorf("nats.workers must be zero or greater")
+	}
+	if n.FetchBatch <= 0 {
+		return fmt.Errorf("nats.fetch_batch must be greater than 0")
+	}
+	if n.MaxAckPending <= 0 {
+		return fmt.Errorf("nats.max_ack_pending must be greater than 0")
+	}
+	if n.MaxDeliver <= 0 {
+		return fmt.Errorf("nats.max_deliver must be greater than 0")
+	}
+	if n.FetchBatch > n.MaxAckPending {
+		return fmt.Errorf("nats.fetch_batch must not exceed nats.max_ack_pending")
+	}
+	for _, tc := range []struct {
+		name  string
+		value string
+	}{
+		{name: "nats.fetch_wait", value: n.FetchWait},
+		{name: "nats.ack_wait", value: n.AckWait},
+		{name: "nats.connect_timeout", value: n.ConnectTimeout},
+		{name: "nats.reconnect_wait", value: n.ReconnectWait},
+		{name: "nats.drain_timeout", value: n.DrainTimeout},
+	} {
+		if err := validatePositiveDuration(tc.name, tc.value); err != nil {
+			return err
+		}
+	}
+	if n.MaxReconnects < -1 {
+		return fmt.Errorf("nats.max_reconnects must be -1 or greater")
+	}
+	if err := validateNATSAuth(n); err != nil {
+		return err
+	}
+	if (strings.TrimSpace(n.TLS.CertFile) == "") != (strings.TrimSpace(n.TLS.KeyFile) == "") {
+		return fmt.Errorf("nats.tls.cert_file and nats.tls.key_file must be configured together")
+	}
+	return nil
+}
+
+func validateNATSURL(raw string) error {
+	trimmed := strings.TrimSpace(raw)
+	parsed, err := url.Parse(trimmed)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return fmt.Errorf("nats.urls contains invalid URL %q", raw)
+	}
+	switch strings.ToLower(parsed.Scheme) {
+	case "nats", "tls", "ws", "wss":
+	default:
+		return fmt.Errorf("nats.urls contains unsupported scheme %q", parsed.Scheme)
+	}
+	if parsed.User != nil {
+		return fmt.Errorf("nats.urls must not contain credentials; use nats authentication fields")
+	}
+	return nil
+}
+
+func validateNATSName(field, value string) error {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return fmt.Errorf("%s is required when nats.enabled is true", field)
+	}
+	if strings.ContainsAny(trimmed, ".*>/\\") || strings.IndexFunc(trimmed, func(r rune) bool {
+		return r == ' ' || r == '\t' || r == '\r' || r == '\n'
+	}) >= 0 {
+		return fmt.Errorf("%s contains characters that NATS does not allow", field)
+	}
+	return nil
+}
+
+func validateNATSSubject(value string) error {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return fmt.Errorf("nats.subject is required when nats.enabled is true")
+	}
+	if strings.ContainsAny(trimmed, "*> \t\r\n") || strings.HasPrefix(trimmed, ".") || strings.HasSuffix(trimmed, ".") || strings.Contains(trimmed, "..") {
+		return fmt.Errorf("nats.subject must be a concrete NATS subject without wildcards or empty tokens")
+	}
+	return nil
+}
+
+func validateNATSAuth(n NATS) error {
+	credentialsFile := strings.TrimSpace(n.CredentialsFile)
+	username := strings.TrimSpace(n.Username)
+	password := strings.TrimSpace(n.Password)
+	token := strings.TrimSpace(n.Token)
+	if (username == "") != (password == "") {
+		return fmt.Errorf("nats.username and nats.password must be configured together")
+	}
+	modes := 0
+	if credentialsFile != "" {
+		modes++
+	}
+	if username != "" {
+		modes++
+	}
+	if token != "" {
+		modes++
+	}
+	if modes > 1 {
+		return fmt.Errorf("nats authentication methods are mutually exclusive")
 	}
 	return nil
 }

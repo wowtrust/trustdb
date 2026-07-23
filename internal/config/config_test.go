@@ -20,7 +20,7 @@ func TestDefaultConfigIsValid(t *testing.T) {
 func TestDefaultYAMLIsStructured(t *testing.T) {
 	t.Parallel()
 
-	for _, section := range []string{"paths:", "identity:", "server:", "registry:", "batch:", "proofstore:", "log:", "keys:"} {
+	for _, section := range []string{"paths:", "identity:", "server:", "nats:", "registry:", "batch:", "proofstore:", "log:", "keys:"} {
 		if !strings.Contains(DefaultYAML, section) {
 			t.Fatalf("default yaml missing section %q", section)
 		}
@@ -69,6 +69,108 @@ func TestDefaultYAMLIsStructured(t *testing.T) {
 	}
 	if Default().Server.IdleTimeout != "120s" {
 		t.Fatalf("default server.idle_timeout = %q, want 120s", Default().Server.IdleTimeout)
+	}
+	if Default().NATS.Enabled {
+		t.Fatal("default nats.enabled = true, want false")
+	}
+	if !strings.Contains(DefaultYAML, "nats:\n  enabled: false") {
+		t.Fatal("default yaml must keep NATS disabled")
+	}
+	if Default().NATS.Workers != 0 {
+		t.Fatalf("default nats.workers = %d, want automatic sizing (0)", Default().NATS.Workers)
+	}
+}
+
+func TestValidateNATSIsConditional(t *testing.T) {
+	t.Parallel()
+
+	cfg := Default()
+	cfg.NATS = NATS{Enabled: false}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate rejected disabled empty NATS config: %v", err)
+	}
+
+	cfg = Default()
+	cfg.NATS.Enabled = true
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate rejected enabled default NATS config: %v", err)
+	}
+}
+
+func TestValidateRejectsInvalidEnabledNATSConfig(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name   string
+		mutate func(*NATS)
+		want   string
+	}{
+		{name: "missing URLs", mutate: func(n *NATS) { n.URLs = nil }, want: "nats.urls"},
+		{name: "unsupported URL", mutate: func(n *NATS) { n.URLs = []string{"http://127.0.0.1:4222"} }, want: "unsupported scheme"},
+		{name: "URL credentials", mutate: func(n *NATS) { n.URLs = []string{"nats://user:pass@127.0.0.1:4222"} }, want: "must not contain credentials"},
+		{name: "invalid stream", mutate: func(n *NATS) { n.Stream = "trustdb.ingress" }, want: "nats.stream"},
+		{name: "wildcard subject", mutate: func(n *NATS) { n.Subject = "trustdb.ingress.*" }, want: "nats.subject"},
+		{name: "invalid durable", mutate: func(n *NATS) { n.Durable = "trustdb.ingress" }, want: "nats.durable"},
+		{name: "negative workers", mutate: func(n *NATS) { n.Workers = -1 }, want: "nats.workers"},
+		{name: "zero fetch batch", mutate: func(n *NATS) { n.FetchBatch = 0 }, want: "nats.fetch_batch"},
+		{name: "fetch exceeds pending", mutate: func(n *NATS) { n.FetchBatch = n.MaxAckPending + 1 }, want: "must not exceed"},
+		{name: "zero max deliver", mutate: func(n *NATS) { n.MaxDeliver = 0 }, want: "nats.max_deliver"},
+		{name: "invalid ack wait", mutate: func(n *NATS) { n.AckWait = "soon" }, want: "nats.ack_wait"},
+		{name: "invalid reconnects", mutate: func(n *NATS) { n.MaxReconnects = -2 }, want: "nats.max_reconnects"},
+		{name: "password without username", mutate: func(n *NATS) { n.Password = "secret" }, want: "configured together"},
+		{name: "multiple auth modes", mutate: func(n *NATS) { n.CredentialsFile = "/run/nats.creds"; n.Token = "secret" }, want: "mutually exclusive"},
+		{name: "TLS cert without key", mutate: func(n *NATS) { n.TLS.CertFile = "/run/client.crt" }, want: "configured together"},
+	} {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			cfg := Default()
+			cfg.NATS.Enabled = true
+			tc.mutate(&cfg.NATS)
+			err := cfg.Validate()
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("Validate() error = %v, want %q", err, tc.want)
+			}
+		})
+	}
+}
+
+func TestFromViperMapsNATSConfig(t *testing.T) {
+	t.Parallel()
+
+	v := viper.New()
+	v.Set("nats.enabled", true)
+	v.Set("nats.urls", []string{"nats://one:4222", "tls://two:4222"})
+	v.Set("nats.stream", "INGRESS")
+	v.Set("nats.subject", "claims.ingress")
+	v.Set("nats.durable", "worker-a")
+	v.Set("nats.workers", 12)
+	v.Set("nats.fetch_batch", 128)
+	v.Set("nats.fetch_wait", "250ms")
+	v.Set("nats.ack_wait", "45s")
+	v.Set("nats.max_ack_pending", 1024)
+	v.Set("nats.max_deliver", 20)
+	v.Set("nats.connect_timeout", "3s")
+	v.Set("nats.reconnect_wait", "500ms")
+	v.Set("nats.max_reconnects", 50)
+	v.Set("nats.drain_timeout", "15s")
+	v.Set("nats.credentials_file", "/run/nats.creds")
+	v.Set("nats.tls.enabled", true)
+	v.Set("nats.tls.ca_file", "/run/ca.crt")
+	v.Set("nats.tls.server_name", "nats.internal")
+
+	got := FromViper(v).NATS
+	if !got.Enabled || len(got.URLs) != 2 || got.URLs[1] != "tls://two:4222" {
+		t.Fatalf("NATS URLs = %#v enabled=%v", got.URLs, got.Enabled)
+	}
+	if got.Stream != "INGRESS" || got.Subject != "claims.ingress" || got.Durable != "worker-a" || got.Workers != 12 {
+		t.Fatalf("NATS identity/config = %+v", got)
+	}
+	if got.FetchBatch != 128 || got.MaxAckPending != 1024 || got.MaxDeliver != 20 || got.MaxReconnects != 50 {
+		t.Fatalf("NATS limits = %+v", got)
+	}
+	if got.CredentialsFile != "/run/nats.creds" || !got.TLS.Enabled || got.TLS.CAFile != "/run/ca.crt" || got.TLS.ServerName != "nats.internal" {
+		t.Fatalf("NATS auth/TLS = %+v", got)
 	}
 }
 
@@ -307,6 +409,8 @@ func TestRedactedHidesKeyPaths(t *testing.T) {
 	cfg := Default()
 	cfg.Keys.ClientPrivate = "client.key"
 	cfg.Keys.ServerPublic = "server.pub"
+	cfg.NATS.Password = "password"
+	cfg.NATS.Token = "token"
 	redacted := cfg.Redacted()
 	if redacted.Keys.ClientPrivate != "<redacted>" {
 		t.Fatalf("client private = %q", redacted.Keys.ClientPrivate)
@@ -316,5 +420,8 @@ func TestRedactedHidesKeyPaths(t *testing.T) {
 	}
 	if redacted.Paths.DataDir != cfg.Paths.DataDir {
 		t.Fatalf("paths should not be redacted")
+	}
+	if redacted.NATS.Password != "<redacted>" || redacted.NATS.Token != "<redacted>" {
+		t.Fatalf("NATS secrets were not redacted: %+v", redacted.NATS)
 	}
 }
