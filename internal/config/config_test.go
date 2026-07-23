@@ -82,6 +82,12 @@ func TestDefaultYAMLIsStructured(t *testing.T) {
 	if Default().NATS.Workers != 0 {
 		t.Fatalf("default nats.workers = %d, want automatic sizing (0)", Default().NATS.Workers)
 	}
+	if Default().NATS.ResultStream != "TRUSTDB_INGRESS_RESULTS" || Default().NATS.ResultSubject != "trustdb.ingress.v1.results.*" || Default().NATS.ResultMaxAge != "24h" {
+		t.Fatalf("default NATS result topology = %+v", Default().NATS)
+	}
+	if Default().NATS.DLQStream != "TRUSTDB_INGRESS_DLQ" || Default().NATS.DLQSubject != "trustdb.ingress.v1.dlq.*" || Default().NATS.DLQMaxAge != "0s" {
+		t.Fatalf("default NATS DLQ topology = %+v", Default().NATS)
+	}
 }
 
 func TestValidateAnchorPluginIsConditional(t *testing.T) {
@@ -137,6 +143,16 @@ func TestValidateRejectsInvalidEnabledNATSConfig(t *testing.T) {
 		{name: "too many replicas", mutate: func(n *NATS) { n.StreamReplicas = 6 }, want: "nats.stream_replicas"},
 		{name: "zero stream bytes", mutate: func(n *NATS) { n.StreamMaxBytes = 0 }, want: "nats.stream_max_bytes"},
 		{name: "negative max age", mutate: func(n *NATS) { n.StreamMaxAge = "-1s" }, want: "nats.stream_max_age"},
+		{name: "duplicate result stream", mutate: func(n *NATS) { n.ResultStream = n.Stream }, want: "must be distinct"},
+		{name: "duplicate DLQ stream", mutate: func(n *NATS) { n.DLQStream = n.ResultStream }, want: "must be distinct"},
+		{name: "invalid result subject", mutate: func(n *NATS) { n.ResultSubject = "trustdb.results" }, want: "nats.result_subject"},
+		{name: "invalid DLQ subject", mutate: func(n *NATS) { n.DLQSubject = "trustdb.dlq.>" }, want: "nats.dlq_subject"},
+		{name: "overlapping outcome subjects", mutate: func(n *NATS) { n.DLQSubject = n.ResultSubject }, want: "must not overlap"},
+		{name: "result overlaps ingress", mutate: func(n *NATS) { n.ResultSubject = "trustdb.ingress.v1.*" }, want: "must not overlap"},
+		{name: "zero result bytes", mutate: func(n *NATS) { n.ResultMaxBytes = 0 }, want: "nats.result_max_bytes"},
+		{name: "negative result max age", mutate: func(n *NATS) { n.ResultMaxAge = "-1s" }, want: "nats.result_max_age"},
+		{name: "zero DLQ bytes", mutate: func(n *NATS) { n.DLQMaxBytes = 0 }, want: "nats.dlq_max_bytes"},
+		{name: "negative DLQ max age", mutate: func(n *NATS) { n.DLQMaxAge = "-1s" }, want: "nats.dlq_max_age"},
 		{name: "zero duplicate window", mutate: func(n *NATS) { n.DuplicateWindow = "0s" }, want: "nats.duplicate_window"},
 		{name: "negative workers", mutate: func(n *NATS) { n.Workers = -1 }, want: "nats.workers"},
 		{name: "workers exceed pending", mutate: func(n *NATS) { n.Workers = n.MaxAckPending + 1 }, want: "nats.workers"},
@@ -179,6 +195,14 @@ func TestFromViperMapsNATSConfig(t *testing.T) {
 	v.Set("nats.stream_replicas", 3)
 	v.Set("nats.stream_max_bytes", int64(1<<30))
 	v.Set("nats.stream_max_age", "24h")
+	v.Set("nats.result_stream", "RESULTS")
+	v.Set("nats.result_subject", "claims.results.*")
+	v.Set("nats.result_max_bytes", int64(2<<30))
+	v.Set("nats.result_max_age", "12h")
+	v.Set("nats.dlq_stream", "DLQ")
+	v.Set("nats.dlq_subject", "claims.dlq.*")
+	v.Set("nats.dlq_max_bytes", int64(3<<30))
+	v.Set("nats.dlq_max_age", "168h")
 	v.Set("nats.duplicate_window", "5m")
 	v.Set("nats.workers", 12)
 	v.Set("nats.fetch_batch", 128)
@@ -206,6 +230,12 @@ func TestFromViperMapsNATSConfig(t *testing.T) {
 	}
 	if !got.Provision || got.StreamStorage != "memory" || got.StreamReplicas != 3 || got.StreamMaxBytes != 1<<30 || got.StreamMaxAge != "24h" || got.DuplicateWindow != "5m" {
 		t.Fatalf("NATS topology = %+v", got)
+	}
+	if got.ResultStream != "RESULTS" || got.ResultSubject != "claims.results.*" || got.ResultMaxBytes != 2<<30 || got.ResultMaxAge != "12h" {
+		t.Fatalf("NATS result topology = %+v", got)
+	}
+	if got.DLQStream != "DLQ" || got.DLQSubject != "claims.dlq.*" || got.DLQMaxBytes != 3<<30 || got.DLQMaxAge != "168h" {
+		t.Fatalf("NATS DLQ topology = %+v", got)
 	}
 	if got.FetchBatch != 128 || got.MaxAckPending != 1024 || got.MaxDeliver != 20 || got.MaxReconnects != 50 {
 		t.Fatalf("NATS limits = %+v", got)
