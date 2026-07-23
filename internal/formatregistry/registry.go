@@ -23,6 +23,7 @@ const (
 	FamilyProofstore  Family = "proofstore"
 	FamilyHTTP        Family = "http"
 	FamilyGRPC        Family = "grpc"
+	FamilyNATS        Family = "nats"
 	FamilySDK         Family = "sdk"
 )
 
@@ -48,6 +49,7 @@ const (
 	EncodingProofstore        = "backend-native-keys+deterministic-cbor-values"
 	EncodingHTTPCBOR          = "http+application-cbor"
 	EncodingGRPCCBOR          = "grpc+trustdb-cbor"
+	EncodingNATSJetStreamCBOR = "nats-jetstream+deterministic-cbor"
 	EncodingGoSDKCBOR         = "go-models+deterministic-cbor"
 )
 
@@ -66,6 +68,8 @@ const (
 	HTTPV2        = "trustdb.http.v2"
 	GRPCV1        = "trustdb.v1.TrustDB"
 	GRPCV2        = "trustdb.v2.TrustDB"
+	NATSV1        = "trustdb.nats-ingress.v1"
+	NATSV2        = "trustdb.nats-ingress.v2"
 	SDKV1         = "trustdb.sdk-model.v1"
 	SDKV2         = "trustdb.sdk-model.v2"
 
@@ -124,6 +128,9 @@ var registry = map[string]Descriptor{
 
 	GRPCV1: descriptor(FamilyGRPC, GRPCV1, 1, AvailabilityAvailable, EncodingGRPCCBOR, []cryptosuite.ID{cryptosuite.INTLV1}, "", MigrationRetireOnCutover, 16<<20),
 	GRPCV2: descriptor(FamilyGRPC, GRPCV2, 2, AvailabilityReserved, EncodingGRPCCBOR, []cryptosuite.ID{cryptosuite.CNSMV1, cryptosuite.INTLV1}, "crypto_suite", MigrationDestructiveCutover, MaxTransportMessageBytesV2),
+
+	NATSV1: descriptor(FamilyNATS, NATSV1, 1, AvailabilityAvailable, EncodingNATSJetStreamCBOR, []cryptosuite.ID{cryptosuite.INTLV1}, "", MigrationRetireOnCutover, 1<<20),
+	NATSV2: descriptor(FamilyNATS, NATSV2, 2, AvailabilityReserved, EncodingNATSJetStreamCBOR, []cryptosuite.ID{cryptosuite.CNSMV1, cryptosuite.INTLV1}, "crypto_suite", MigrationDestructiveCutover, MaxTransportMessageBytesV2),
 
 	SDKV1: descriptor(FamilySDK, SDKV1, 1, AvailabilityAvailable, EncodingGoSDKCBOR, []cryptosuite.ID{cryptosuite.INTLV1}, "", MigrationRetireOnCutover, 16<<20),
 	SDKV2: descriptor(FamilySDK, SDKV2, 2, AvailabilityReserved, EncodingGoSDKCBOR, []cryptosuite.ID{cryptosuite.CNSMV1, cryptosuite.INTLV1}, "crypto_suite", MigrationDestructiveCutover, MaxTransportMessageBytesV2),

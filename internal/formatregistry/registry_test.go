@@ -35,6 +35,8 @@ func TestRegistryPinsCurrentAndReservedGenerations(t *testing.T) {
 		HTTPV2:        {FamilyHTTP, 2, AvailabilityReserved, MigrationDestructiveCutover, MaxTransportMessageBytesV2},
 		GRPCV1:        {FamilyGRPC, 1, AvailabilityAvailable, MigrationRetireOnCutover, 16 << 20},
 		GRPCV2:        {FamilyGRPC, 2, AvailabilityReserved, MigrationDestructiveCutover, MaxTransportMessageBytesV2},
+		NATSV1:        {FamilyNATS, 1, AvailabilityAvailable, MigrationRetireOnCutover, 1 << 20},
+		NATSV2:        {FamilyNATS, 2, AvailabilityReserved, MigrationDestructiveCutover, MaxTransportMessageBytesV2},
 		SDKV1:         {FamilySDK, 1, AvailabilityAvailable, MigrationRetireOnCutover, 16 << 20},
 		SDKV2:         {FamilySDK, 2, AvailabilityReserved, MigrationDestructiveCutover, MaxTransportMessageBytesV2},
 	}
@@ -255,7 +257,7 @@ func TestRegistrySnapshotCanonicalCBORGolden(t *testing.T) {
 		t.Fatalf("marshal registry snapshot: %v", err)
 	}
 	digest := sha256.Sum256(encoded)
-	const wantSHA256 = "800b2ad93872d8236262364c1a089f1932101e4b288fd3dc67e022839c123c8b"
+	const wantSHA256 = "61e7a3cd35e840af8f15c35dfce6d14fe04b53f4a4c4ec391ffc8b6ae5e8ceb3"
 	if got := hex.EncodeToString(digest[:]); got != wantSHA256 {
 		t.Fatalf("registry snapshot SHA-256 = %s, want %s", got, wantSHA256)
 	}
