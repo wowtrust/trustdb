@@ -10,6 +10,7 @@ import (
 	trustconfig "github.com/wowtrust/trustdb/internal/config"
 	"github.com/wowtrust/trustdb/internal/natsingress"
 	"github.com/wowtrust/trustdb/internal/submission"
+	"github.com/wowtrust/trustdb/internal/trusterr"
 )
 
 // serveNATSIngress owns the optional NATS transport lifecycle without owning
@@ -120,4 +121,26 @@ func (s *serveNATSIngress) Close(ctx context.Context) error {
 		return errors.Join(ctx.Err(), s.runtime.Close(ctx))
 	}
 	return s.runtime.Close(ctx)
+}
+
+func waitForServeStop(ctx context.Context, errCh <-chan error, natsIngress *serveNATSIngress) error {
+	var natsDone <-chan struct{}
+	if natsIngress != nil {
+		natsDone = natsIngress.Done()
+	}
+
+	select {
+	case <-ctx.Done():
+		return nil
+	case err := <-errCh:
+		return err
+	case <-natsDone:
+		if ctx.Err() != nil {
+			return nil
+		}
+		if err := natsIngress.Err(); err != nil {
+			return trusterr.Wrap(trusterr.CodeInternal, "optional NATS ingress stopped unexpectedly", err)
+		}
+		return trusterr.New(trusterr.CodeInternal, "optional NATS ingress stopped unexpectedly")
+	}
 }

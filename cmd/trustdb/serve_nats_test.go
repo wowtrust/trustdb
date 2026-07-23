@@ -189,6 +189,31 @@ func TestServeNATSIngressReportsUnexpectedWorkerExit(t *testing.T) {
 	closeServeNATSIngress(t, service)
 }
 
+func TestWaitForServeStopTreatsUnexpectedNATSExitAsFatal(t *testing.T) {
+	runErr := errors.New("consumer stopped")
+	service := &serveNATSIngress{
+		done:   make(chan struct{}),
+		runErr: runErr,
+	}
+	close(service.done)
+
+	err := waitForServeStop(context.Background(), make(chan error), service)
+	if !errors.Is(err, runErr) || !strings.Contains(err.Error(), "stopped unexpectedly") {
+		t.Fatalf("waitForServeStop() error = %v", err)
+	}
+}
+
+func TestWaitForServeStopAllowsNATSExitAfterLifecycleCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	service := &serveNATSIngress{done: make(chan struct{})}
+	close(service.done)
+
+	if err := waitForServeStop(ctx, make(chan error), service); err != nil {
+		t.Fatalf("waitForServeStop() error = %v", err)
+	}
+}
+
 type serveNATSSubmitterFunc func(context.Context, model.SignedClaim) (submission.Outcome, error)
 
 func (f serveNATSSubmitterFunc) Submit(ctx context.Context, signed model.SignedClaim) (submission.Outcome, error) {

@@ -604,6 +604,23 @@ func newServeCommand(rt *runtimeConfig) *cobra.Command {
 				otsUpgrader.Start(context.Background())
 				defer otsUpgrader.Stop()
 			}
+
+			serveCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+			defer stop()
+			natsIngress, err := startServeNATSIngress(serveCtx, rt.cfg.NATS, submissionSvc, rt.logger)
+			if err != nil {
+				return err
+			}
+			if natsIngress != nil {
+				defer func() {
+					closeCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+					defer cancel()
+					if err := natsIngress.Close(closeCtx); err != nil {
+						rt.logger.Warn().Err(err).Msg("optional NATS ingress close failed")
+					}
+				}()
+			}
+
 			metricsHandler := observability.Handler(reg)
 			var publicHandler http.Handler
 			if anchorAPI != nil {
@@ -665,37 +682,36 @@ func newServeCommand(rt *runtimeConfig) *cobra.Command {
 				}()
 			}
 
-			ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-			defer stop()
 			go func() {
 				rt.logger.Info().Str("listen", listen).Msg("starting trustdb server")
-				errCh <- server.ListenAndServe()
+				if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+					errCh <- err
+				}
 			}()
 
-			select {
-			case <-ctx.Done():
-				shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
-				defer cancel()
-				if err := server.Shutdown(shutdownCtx); err != nil {
-					return trusterr.Wrap(trusterr.CodeDeadlineExceeded, "http server shutdown", err)
-				}
-				if grpcServer != nil {
-					shutdownGRPCServer(shutdownCtx, grpcServer)
-				}
-				if err := ingestSvc.Shutdown(shutdownCtx); err != nil {
-					return err
-				}
-				if err := batchSvc.Shutdown(shutdownCtx); err != nil {
-					return err
-				}
-				rt.logger.Info().Msg("trustdb server stopped")
-				return nil
-			case err := <-errCh:
-				if errors.Is(err, http.ErrServerClosed) {
-					return nil
-				}
-				return err
+			runErr := waitForServeStop(serveCtx, errCh, natsIngress)
+			stop()
+
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+			defer cancel()
+			var shutdownErrs []error
+			if err := server.Shutdown(shutdownCtx); err != nil {
+				shutdownErrs = append(shutdownErrs, trusterr.Wrap(trusterr.CodeDeadlineExceeded, "http server shutdown", err))
 			}
+			if grpcServer != nil {
+				shutdownGRPCServer(shutdownCtx, grpcServer)
+			}
+			if err := natsIngress.Close(shutdownCtx); err != nil {
+				shutdownErrs = append(shutdownErrs, trusterr.Wrap(trusterr.CodeDeadlineExceeded, "optional NATS ingress shutdown", err))
+			}
+			if err := ingestSvc.Shutdown(shutdownCtx); err != nil {
+				shutdownErrs = append(shutdownErrs, err)
+			}
+			if err := batchSvc.Shutdown(shutdownCtx); err != nil {
+				shutdownErrs = append(shutdownErrs, err)
+			}
+			rt.logger.Info().Msg("trustdb server stopped")
+			return errors.Join(append([]error{runErr}, shutdownErrs...)...)
 		},
 	}
 	addServerFlags(cmd)
