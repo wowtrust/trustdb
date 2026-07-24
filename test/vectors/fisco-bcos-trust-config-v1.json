@@ -1,0 +1,51 @@
+{
+  "schema": "trustdb.test-vector.fisco-bcos-trust-config.v1",
+  "description": "Canonical deterministic-CBOR trust configuration vectors. The configuration is local input and is never embedded in BCOS evidence.",
+  "fixture": {
+    "chain_id": "chain0",
+    "group_id": "group0",
+    "genesis_hash": "32 bytes increasing from 0x01",
+    "trusted_checkpoint": {
+      "block_number": 4096,
+      "block_hash": "32 bytes increasing from 0x21"
+    },
+    "contract_address": "20 bytes increasing from 0x41",
+    "contract_code_hash": "32 bytes increasing from 0x61",
+    "contract_protocol_version": "trustdb-anchor-v1",
+    "contract_event_signature": "AnchorPublished(bytes32,bytes32,uint64,bytes32,bytes32,address,uint16)",
+    "endpoints_after_canonical_sort": [
+      "127.0.0.1:20200",
+      "127.0.0.1:20201",
+      "https://bcos.example.test:20202"
+    ],
+    "read_quorum": 2,
+    "account_provider": "keydescriptor",
+    "validator_quorum_policy": "fisco-bcos-pbft-2f-plus-1-v1",
+    "validators": "validator-a through validator-d; canonical uncompressed 65-byte fixture keys",
+    "trusted_ca_hashes": "two 32-byte fixture hashes increasing from 0xa1 and 0xb1",
+    "pinned_peer_certificate_hash": "32-byte fixture hash increasing from 0xc1"
+  },
+  "vectors": [
+    {
+      "crypto_mode": "standard",
+      "protocol_hash_algorithm": "sha256",
+      "chain_hash_algorithm": "keccak256",
+      "chain_signature_algorithm": "ecdsa-secp256k1",
+      "transport_mode": "tls",
+      "canonical_cbor_sha256": "16bdc483dcd290ef4a98571e45a10675157e572845a5389da081347da75143d6",
+      "trust_config_digest": "bd9f616ecee5b175c4c0ab77d824cca5723693e7f4433851e3393f8d8bd20da4",
+      "chain_context_id": "d0dd44454afa34e20ab27bff972906fb5b39c304508c0f6caa5c4e546a9b0ee5"
+    },
+    {
+      "crypto_mode": "guomi",
+      "protocol_hash_algorithm": "sm3",
+      "chain_hash_algorithm": "sm3",
+      "chain_signature_algorithm": "sm2-sm3",
+      "transport_mode": "gm-tls",
+      "sm2_user_id": "1234567812345678",
+      "canonical_cbor_sha256": "138ce174ad392da687124a434c5aa40ea74541ab8ef3f0045b36178f67fb2174",
+      "trust_config_digest": "0a2b3c2296136e237cde52c6d8ef5ba8aaaacc1ca18220251e44c2abc78fc207",
+      "chain_context_id": "445718702bb699b5e32a6b4cfaac5605382850ed74b7707124f3a1db3e60df53"
+    }
+  ]
+}

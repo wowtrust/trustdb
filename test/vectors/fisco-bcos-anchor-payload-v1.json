@@ -1,0 +1,36 @@
+{
+  "schema": "trustdb.test-vector.fisco-bcos-anchor-payload.v1",
+  "description": "Canonical chain-neutral TrustDB Signed STH payload vectors. All hexadecimal values encode raw bytes, not hexadecimal text hashed as input.",
+  "signed_sth_fixture": {
+    "schema_version": "trustdb.signed-tree-head.v1",
+    "tree_size": 72623859790382856,
+    "root_hash_hex": "101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f",
+    "timestamp_unix_nano": 1735689600123456789,
+    "node_id": "node-cn-east-1",
+    "log_id": "global-log-2026",
+    "key_id": "server-signing-key-01",
+    "signature_fixture": "64 bytes increasing from 0x80, modulo 256"
+  },
+  "vectors": [
+    {
+      "crypto_suite": "INTL_V1",
+      "tree_algorithm": "rfc6962-sha256",
+      "signature_algorithm": "ed25519",
+      "canonical_payload_hex": "54444242434f530000010007494e544c5f5631000e726663363936322d73686132353600067368613235360006736861323536000e6e6f64652d636e2d656173742d31000f676c6f62616c2d6c6f672d32303236000a666973636f2d62636f7301020304050607080020101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f0020f2c6a2023939504c86c16eea603704393b8b82f39e4bde39f285c9e4f57b7c375fae452509ee4290e834a64502d815cacb76928cf9371809daccd6e0e365687e884235e6556a8599c5bef2040a3c6eb1c08eb32de1ade016d9f97bd56bfb56f1",
+      "canonical_payload_sha256": "fb0446bd37ffb9a7523baf39465778e3c5458feb88ccb15c16259067c8203aa6",
+      "signed_sth_digest": "f2c6a2023939504c86c16eea603704393b8b82f39e4bde39f285c9e4f57b7c37",
+      "stream_id": "5fae452509ee4290e834a64502d815cacb76928cf9371809daccd6e0e365687e",
+      "anchor_id": "884235e6556a8599c5bef2040a3c6eb1c08eb32de1ade016d9f97bd56bfb56f1"
+    },
+    {
+      "crypto_suite": "CN_SM_V1",
+      "tree_algorithm": "rfc6962-sm3",
+      "signature_algorithm": "sm2-sm3",
+      "canonical_payload_hex": "54444242434f530000010008434e5f534d5f5631000b726663363936322d736d330003736d330003736d33000e6e6f64652d636e2d656173742d31000f676c6f62616c2d6c6f672d32303236000a666973636f2d62636f7301020304050607080020101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f00204894932d6296ae98007025853a6ab373f208427a7f638c19aca0b1a45cbb106f41aea4cb28ac7183cdeede08da326b50a28d1589b48b33976c37d681b6e53d8ddd5faa68ee9f0ac9dd235788789c7d705ddfbc1deb4280f5518859a0d8630c8f",
+      "canonical_payload_sha256": "29cbc06142ef6799b93d6fb01c847e5dbe131a3aa5ba6689663ee6ff8104d28d",
+      "signed_sth_digest": "4894932d6296ae98007025853a6ab373f208427a7f638c19aca0b1a45cbb106f",
+      "stream_id": "41aea4cb28ac7183cdeede08da326b50a28d1589b48b33976c37d681b6e53d8d",
+      "anchor_id": "dd5faa68ee9f0ac9dd235788789c7d705ddfbc1deb4280f5518859a0d8630c8f"
+    }
+  ]
+}

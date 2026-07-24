@@ -339,6 +339,8 @@ The screenshot below is rendered directly from the current desktop client code:
 - [docs/compliance/ADR-0009-SUITE-AWARE-KEY-REGISTRY-V2.zh-CN.md](docs/compliance/ADR-0009-SUITE-AWARE-KEY-REGISTRY-V2.zh-CN.md): suite-bound V2 registry manifest, SM2/INTL lifecycle, atomic rotation, crash recovery, and external trust-root rules (Chinese).
 - [docs/compliance/ADR-0010-AUTHENTICATED-SM4-SOFTWARE-KEY-ENVELOPES.zh-CN.md](docs/compliance/ADR-0010-AUTHENTICATED-SM4-SOFTWARE-KEY-ENVELOPES.zh-CN.md): authenticated SM4-GCM software-key envelopes, KEK provider boundary, atomic rewrap, and production custody limitations (Chinese).
 - [docs/compliance/ADR-0011-SUPERVISED-SIGNER-PLUGINS.zh-CN.md](docs/compliance/ADR-0011-SUPERVISED-SIGNER-PLUGINS.zh-CN.md): supervised external signer boundary, exact binding, local verification, restart, and no-fallback rules (Chinese).
+- [docs/integrations/ADR-0012-FISCO-BCOS-3X-COMPATIBILITY-BASELINE.md](docs/integrations/ADR-0012-FISCO-BCOS-3X-COMPATIBILITY-BASELINE.md): exact FISCO BCOS 3.16.3, SDK, compiler, crypto-mode, OS/CPU, and runtime-evidence compatibility baseline.
+- [docs/integrations/ADR-0013-FISCO-BCOS-ANCHOR-PROTOCOL.md](docs/integrations/ADR-0013-FISCO-BCOS-ANCHOR-PROTOCOL.md): chain-neutral Signed STH payload, explicit standard/Guomi parameters, local trust configuration, complete proof envelope, and fail-closed offline verification boundaries.
 - [COMMUNITY.md](COMMUNITY.md): support, discussion, and first-contribution entry points.
 - [ROADMAP.md](ROADMAP.md): public product direction and ways to influence it.
 - [SECURITY.md](SECURITY.md): private vulnerability reporting and supported-version policy.
