@@ -113,7 +113,9 @@ func WithHTTPTransport(transport http.RoundTripper) Option {
 type TLSConfig = transporttls.ClientConfig
 
 // WithTLSConfig configures CA trust/pinning, hostname verification, optional
-// mTLS, revocation, and reload for an HTTPS SDK client.
+// mTLS, revocation, and reload for an HTTPS SDK client. HTTP proxies are
+// rejected because net/http performs the post-CONNECT TLS handshake outside a
+// custom DialTLSContext, which would bypass the reloadable policy.
 func WithTLSConfig(config TLSConfig) Option {
 	return func(t *httpTransport) {
 		copy := config
@@ -192,6 +194,7 @@ func NewClient(baseURL string, opts ...Option) (*Client, error) {
 			return nil, errors.New("sdk: WithTLSConfig requires an *http.Transport")
 		}
 		clone := base.Clone()
+		clone.Proxy = rejectHTTPProxy(clone.Proxy)
 		clone.TLSClientConfig = nil
 		clone.DialTLSContext = manager.DialTLSContext
 		clone.ForceAttemptHTTP2 = true
@@ -199,6 +202,22 @@ func NewClient(baseURL string, opts ...Option) (*Client, error) {
 		transport.tlsManager = manager
 	}
 	return NewClientWithTransport(transport)
+}
+
+func rejectHTTPProxy(proxy func(*http.Request) (*url.URL, error)) func(*http.Request) (*url.URL, error) {
+	if proxy == nil {
+		return nil
+	}
+	return func(request *http.Request) (*url.URL, error) {
+		proxyURL, err := proxy(request)
+		if err != nil {
+			return nil, err
+		}
+		if proxyURL != nil {
+			return nil, errors.New("sdk: HTTP proxies are unsupported with reloadable TLS configuration")
+		}
+		return nil, nil
+	}
 }
 
 func isLoopbackHost(host string) bool {

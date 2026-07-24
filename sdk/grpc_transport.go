@@ -98,11 +98,7 @@ func NewGRPCTransport(target string, opts ...GRPCOption) (Transport, error) {
 		cfg.transportCredentials = tlsManager.TransportCredentials()
 	}
 	if cfg.transportCredentials == nil {
-		if isLoopbackGRPCTarget(trimmed) {
-			cfg.transportCredentials = insecure.NewCredentials()
-		} else {
-			cfg.transportCredentials = credentials.NewTLS(&tls.Config{MinVersion: tls.VersionTLS12, ServerName: grpcTargetHost(trimmed)})
-		}
+		cfg.transportCredentials = credentials.NewTLS(&tls.Config{MinVersion: tls.VersionTLS12, ServerName: grpcTargetHost(trimmed)})
 	}
 	dialOptions := []grpc.DialOption{
 		grpc.WithTransportCredentials(cfg.transportCredentials),

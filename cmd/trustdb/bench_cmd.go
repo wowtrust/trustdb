@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"net"
 	"sort"
 	"strconv"
 	"strings"
@@ -573,10 +574,28 @@ func newBenchSDKClient(transport, endpoint string, concurrency int) (*sdk.Client
 	case "http":
 		return sdk.NewClient(endpoint, sdk.WithHTTPClient(sdk.NewHTTPClientForConcurrency(concurrency)))
 	case "grpc":
+		if isLoopbackBenchGRPCTarget(endpoint) {
+			// Shipped benchmark profiles intentionally use a local plaintext
+			// server. The SDK itself remains TLS-by-default for every target.
+			return sdk.NewGRPCClient(endpoint, sdk.WithGRPCLocalPlaintext())
+		}
 		return sdk.NewGRPCClient(endpoint)
 	default:
 		return nil, usageError("bench ingest --transport must be http or grpc")
 	}
+}
+
+func isLoopbackBenchGRPCTarget(target string) bool {
+	host, _, err := net.SplitHostPort(strings.TrimSpace(target))
+	if err != nil {
+		return false
+	}
+	host = strings.Trim(strings.TrimSpace(host), "[]")
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 var errBenchProofTimeout = errors.New("bench proof timeout")

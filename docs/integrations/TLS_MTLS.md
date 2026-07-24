@@ -54,6 +54,13 @@ An invalid, mismatched, not-yet-valid, or expired replacement fails reload and
 the last known-good snapshot remains active. Established HTTP keep-alives,
 gRPC connections, durable ingest, and evidence verification are not restarted.
 
+Endpoint certificate files must contain an ordered PEM chain: the end-entity
+certificate followed by every issuing intermediate through at least one CA
+trust anchor. Every certificate and CA is parsed strictly, checked for current
+validity, CA constraints, key usage, and chain linkage before publication.
+Malformed or trailing PEM data is rejected. A self-signed root may be included
+for validation and is omitted automatically from the TLS wire chain.
+
 Replace files atomically (write a sibling file, `fsync`, then rename). They are
 checked at `reload_interval`. Close idle HTTP connections, or recycle a gRPC
 connection, when a new certificate must take effect immediately instead of
@@ -82,10 +89,16 @@ client, err := sdk.NewClient("https://trustdb.example:8080",
 ```
 
 Use `sdk.WithGRPCTLSConfig` with the same `sdk.TLSConfig` for gRPC. Remote gRPC
-targets default to system-root TLS 1.2+; loopback targets retain a local
-plaintext development path, selectable explicitly with
-`sdk.WithGRPCLocalPlaintext`. Plain HTTP SDK URLs are accepted only for
-loopback hosts.
+targets and loopback targets both default to system-root TLS 1.2+. A local
+plaintext development endpoint must be selected explicitly with
+`sdk.WithGRPCLocalPlaintext`, which rejects non-loopback targets. Plain HTTP SDK
+URLs are accepted only for loopback hosts.
+
+Reloadable HTTP TLS configuration rejects HTTP and HTTPS proxies. Go performs
+the target TLS handshake after an HTTP proxy `CONNECT` outside the custom
+reloadable dialer, so accepting a proxy would bypass CA pins, mTLS credentials,
+revocation, and certificate reload policy. Use a direct connection or a
+policy-aware transport supplied by the application instead.
 
 `CheckHealth` traverses the configured TLS/mTLS connection and reports
 `TransportSecurity`, `TLSVersion`, and whether the server authenticated a

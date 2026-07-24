@@ -13,8 +13,10 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -99,6 +101,28 @@ func TestHTTPPlaintextIsLoopbackOnly(t *testing.T) {
 	}
 }
 
+func TestHTTPSReloadableTLSRejectsProxy(t *testing.T) {
+	t.Parallel()
+	proxyURL, err := url.Parse("http://127.0.0.1:1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	transport := NewHTTPTransportForConcurrency(1)
+	transport.Proxy = http.ProxyURL(proxyURL)
+	client, err := NewClient("https://trustdb.invalid",
+		WithHTTPClient(&http.Client{Transport: transport, Timeout: time.Second}),
+		WithTLSConfig(TLSConfig{ReloadInterval: "1h"}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	status := client.CheckHealth(context.Background())
+	if status.OK || !strings.Contains(status.Error, "proxies are unsupported") {
+		t.Fatalf("proxy health status = %+v", status)
+	}
+}
+
 func TestGRPCClientUsesConfiguredTLS(t *testing.T) {
 	t.Parallel()
 	fixture := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
@@ -131,5 +155,38 @@ func TestGRPCClientUsesConfiguredTLS(t *testing.T) {
 	status := client.CheckHealth(context.Background())
 	if !status.OK || status.TransportSecurity != "tls" || status.TLSVersion == "" {
 		t.Fatalf("gRPC TLS health status = %+v", status)
+	}
+}
+
+func TestGRPCPlaintextRequiresExplicitLoopbackOption(t *testing.T) {
+	t.Parallel()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := grpc.NewServer()
+	grpcapi.RegisterTrustDBServiceServer(server, grpcapi.NewServer(nil, nil, nil, nil, nil))
+	go func() { _ = server.Serve(listener) }()
+	t.Cleanup(func() {
+		server.Stop()
+		_ = listener.Close()
+	})
+
+	secureDefault, err := NewGRPCClient(listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer secureDefault.Close()
+	if status := secureDefault.CheckHealth(context.Background()); status.OK || status.Error == "" {
+		t.Fatalf("TLS-default client reached plaintext server: %+v", status)
+	}
+
+	localPlaintext, err := NewGRPCClient(listener.Addr().String(), WithGRPCLocalPlaintext())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer localPlaintext.Close()
+	if status := localPlaintext.CheckHealth(context.Background()); !status.OK || status.TransportSecurity != "plaintext" {
+		t.Fatalf("explicit plaintext health status = %+v", status)
 	}
 }

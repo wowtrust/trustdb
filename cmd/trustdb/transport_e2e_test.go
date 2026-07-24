@@ -36,7 +36,7 @@ func TestHTTPAndGRPCTransportsShareProofSemantics(t *testing.T) {
 		t.Fatalf("NewClient: %v", err)
 	}
 	defer httpClient.Close()
-	grpcClient, err := sdk.NewGRPCClient(env.grpcTarget)
+	grpcClient, err := sdk.NewGRPCClient(env.grpcTarget, sdk.WithGRPCLocalPlaintext())
 	if err != nil {
 		t.Fatalf("NewGRPCClient: %v", err)
 	}
