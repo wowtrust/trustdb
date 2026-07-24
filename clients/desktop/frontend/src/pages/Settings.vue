@@ -8,7 +8,7 @@ import Button from '@/components/Button.vue'
 import Input from '@/components/Input.vue'
 import Field from '@/components/Field.vue'
 import StatusDot from '@/components/StatusDot.vue'
-import { Save, RotateCcw, PlugZap, Sparkles, FolderOpen } from 'lucide-vue-next'
+import { Save, RotateCcw, PlugZap, Sparkles } from 'lucide-vue-next'
 
 const settings = useSettings()
 const toasts = useToasts()
@@ -25,6 +25,7 @@ const dirty = computed(() => {
   return (
     form.server_url !== settings.settings.server_url ||
     form.server_transport !== settings.settings.server_transport ||
+    form.server_crypto_suite !== settings.settings.server_crypto_suite ||
     form.server_ca_file !== settings.settings.server_ca_file ||
     form.server_name !== settings.settings.server_name ||
     form.server_ca_pins_sha256 !== settings.settings.server_ca_pins_sha256 ||
@@ -32,10 +33,13 @@ const dirty = computed(() => {
     form.client_tls_key_file !== settings.settings.client_tls_key_file ||
     form.tls_reload_interval !== settings.settings.tls_reload_interval ||
     form.server_public_key_b64 !== settings.settings.server_public_key_b64 ||
-    form.anchor_plugin_command !== settings.settings.anchor_plugin_command ||
-    form.anchor_plugin_args_text !== settings.settings.anchor_plugin_args_text ||
-    form.anchor_plugin_start_timeout !== settings.settings.anchor_plugin_start_timeout ||
-    form.anchor_plugin_rpc_timeout !== settings.settings.anchor_plugin_rpc_timeout ||
+    form.client_verifier_descriptor !== settings.settings.client_verifier_descriptor ||
+    form.server_verifier_descriptor !== settings.settings.server_verifier_descriptor ||
+    form.registry_verifier_descriptor !== settings.settings.registry_verifier_descriptor ||
+    form.client_certificate_roots !== settings.settings.client_certificate_roots ||
+    form.server_certificate_roots !== settings.settings.server_certificate_roots ||
+    form.require_identity_evidence !== settings.settings.require_identity_evidence ||
+    form.require_certificate_status !== settings.settings.require_certificate_status ||
     form.default_media_type !== settings.settings.default_media_type ||
     form.default_event_type !== settings.settings.default_event_type
   )
@@ -106,10 +110,6 @@ function reopenOnboarding() {
   else location.reload()
 }
 
-async function pickAnchorPlugin() {
-  const path = await api.chooseOpenPath('选择 L5 锚定插件')
-  if (path) form.anchor_plugin_command = path
-}
 </script>
 
 <template>
@@ -136,8 +136,20 @@ async function pickAnchorPlugin() {
         <Field :label="form.server_transport === 'grpc' ? 'gRPC Target' : '服务器 URL'" :hint="endpointHint">
           <Input v-model="form.server_url" :placeholder="endpointPlaceholder" :mono="true" />
         </Field>
-        <Field label="服务器公钥 (base64)" hint="用于验证 AcceptedReceipt / CommittedReceipt 的签名">
-          <Input v-model="form.server_public_key_b64" placeholder="Ed25519 public key" :mono="true" multiline :rows="2" />
+        <Field label="服务器密码套件" hint="服务端命名空间只能绑定一个套件；响应套件不一致时客户端 fail closed">
+          <select v-model="form.server_crypto_suite" class="w-full rounded-xl border border-white/10 bg-black/30 px-3 py-2 text-[12px]">
+            <option value="INTL_V1">INTL_V1 · Ed25519 / SHA-256</option>
+            <option value="CN_SM_V1">CN_SM_V1 · SM2 / SM3</option>
+          </select>
+        </Field>
+        <Field label="服务器公钥 (base64)" hint="仅作简单本地信任输入；推荐在下方配置 V2 verifier descriptor">
+          <Input
+            v-model="form.server_public_key_b64"
+            :placeholder="form.server_crypto_suite === 'CN_SM_V1' ? 'SM2 uncompressed public key' : 'Ed25519 public key'"
+            :mono="true"
+            multiline
+            :rows="2"
+          />
         </Field>
 
         <div class="rounded-[18px] border border-white/10 bg-black/15 p-4 space-y-3">
@@ -158,7 +170,7 @@ async function pickAnchorPlugin() {
             <Field label="客户端私钥" hint="必须与客户端证书一起配置">
               <Input v-model="form.client_tls_key_file" placeholder="/path/client.key" :mono="true" />
             </Field>
-            <Field label="CA SHA-256 pins" hint="每行或逗号分隔 CA DER 指纹">
+            <Field label="TLS CA SHA-256 pins" hint="仅用于 TLS 证书 DER 指纹；不改变 INTL_V1/CN_SM_V1 内容哈希">
               <Input v-model="form.server_ca_pins_sha256" placeholder="64 hex characters" :mono="true" multiline :rows="2" />
             </Field>
             <Field label="轮换检查间隔" hint="证书、CA 和撤销策略无中断重载">
@@ -188,35 +200,35 @@ async function pickAnchorPlugin() {
       </div>
     </Card>
 
-    <Card title="L5 锚定插件" subtitle="验证服务端返回的自定义外部锚定 proof">
+    <Card title="离线证据信任" subtitle="这些文件来自验证者本机；.sproof 携带的证书永远不会自动加入信任根">
       <div class="space-y-3">
-        <Field label="插件 executable" hint="仅自定义 sink 需要；file / noop / ots 继续使用内置验证器">
-          <div class="flex gap-2">
-            <Input v-model="form.anchor_plugin_command" placeholder="/path/to/trustdb-anchor-plugin" :mono="true" />
-            <Button size="sm" variant="subtle" @click="pickAnchorPlugin">
-              <FolderOpen :size="13" /> 选择
-            </Button>
-          </div>
-        </Field>
-        <Field label="插件参数" hint="每行一个参数；不要在这里填写密钥或 token">
-          <Input
-            v-model="form.anchor_plugin_args_text"
-            placeholder="--network\nconsortium-a"
-            :mono="true"
-            multiline
-            :rows="3"
-          />
-        </Field>
         <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          <Field label="启动超时" hint="启动、握手并连接 loopback gRPC 的最长时间">
-            <Input v-model="form.anchor_plugin_start_timeout" placeholder="10s" :mono="true" />
+          <Field label="客户端 verifier descriptor" hint="每行一个 V2 public/signer descriptor 路径">
+            <Input v-model="form.client_verifier_descriptor" multiline :rows="2" :mono="true" />
           </Field>
-          <Field label="RPC 超时" hint="Publish / Verify 单次调用的最长时间">
-            <Input v-model="form.anchor_plugin_rpc_timeout" placeholder="30s" :mono="true" />
+          <Field label="服务器 verifier descriptor" hint="可列出 receipt / STH 轮换后的多个 key_id">
+            <Input v-model="form.server_verifier_descriptor" multiline :rows="2" :mono="true" />
+          </Field>
+          <Field label="V2 registry verifier descriptor" hint="验证 key lifecycle evidence 的本地 registry 信任键">
+            <Input v-model="form.registry_verifier_descriptor" :mono="true" />
+          </Field>
+          <Field label="客户端 CA 根" hint="每行一个本地 PEM/DER 根文件">
+            <Input v-model="form.client_certificate_roots" multiline :rows="2" :mono="true" />
+          </Field>
+          <Field label="服务器 CA 根" hint="每行一个本地 PEM/DER 根文件">
+            <Input v-model="form.server_certificate_roots" multiline :rows="2" :mono="true" />
           </Field>
         </div>
-        <p class="text-[12px] text-ink-500">
-          自定义 L5 proof 会在验证时启动该子进程；插件缺失、sink 名称不匹配或 proof 被拒绝时均 fail closed。
+        <label class="flex items-center gap-2 text-[12px] text-ink-300">
+          <input v-model="form.require_identity_evidence" type="checkbox" class="accent-accent" />
+          要求 .sproof 为每个实际签名 key 携带身份生命周期证据
+        </label>
+        <label class="flex items-center gap-2 text-[12px] text-ink-300">
+          <input v-model="form.require_certificate_status" type="checkbox" class="accent-accent" />
+          要求证书链和签名时刻有效的 CRL 状态证据
+        </label>
+        <p class="text-[11.5px] text-warn">
+          证据文件中的 descriptor、证书和 CRL 只参与绑定校验；信任只能来自这里配置的本地 descriptor、registry key 与 CA 根。
         </p>
       </div>
     </Card>

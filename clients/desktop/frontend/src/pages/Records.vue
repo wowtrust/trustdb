@@ -270,7 +270,7 @@ async function upgradeOts(r: LocalRecord) {
       <div class="px-4 pt-4 pb-3 flex items-center gap-3 flex-wrap">
         <div class="relative flex-1 min-w-[240px]">
           <Search :size="14" class="absolute left-2.5 top-1/2 -translate-y-1/2 text-ink-400 pointer-events-none z-10" />
-          <Input v-model="query" :leading-icon="true" placeholder="服务端支持 record_id / batch_id；本地缓存支持文件名 / sha256" />
+          <Input v-model="query" :leading-icon="true" placeholder="支持 record_id / batch_id / 文件名 / SHA-256 / SM3" />
         </div>
         <div class="inline-flex items-center gap-1 p-1 rounded-lg hairline border bg-white/50 dark:bg-ink-800/50">
           <button
@@ -421,7 +421,8 @@ async function upgradeOts(r: LocalRecord) {
         <section class="space-y-3">
           <KV label="record_id"><HashChip :value="selected.record_id" :head="14" :tail="10" /></KV>
           <KV label="idempotency_key"><HashChip :value="selected.idempotency_key" :head="10" :tail="8" /></KV>
-          <KV label="sha256"><HashChip :value="selected.content_hash_hex" :head="12" :tail="10" label="sha256" /></KV>
+          <KV label="crypto_suite"><span class="font-mono text-[11.5px] text-accent">{{ selected.crypto_suite || '—' }}</span></KV>
+          <KV :label="selected.hash_alg || 'content hash'"><HashChip :value="selected.content_hash_hex" :head="12" :tail="10" :label="selected.hash_alg || undefined" /></KV>
           <KV label="file_path">
             <span class="text-[12px] break-all font-mono text-ink-700 dark:text-ink-200">{{ selected.file_path }}</span>
           </KV>

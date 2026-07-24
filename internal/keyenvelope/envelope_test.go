@@ -210,9 +210,6 @@ func TestSM4GCMKnownAnswer(t *testing.T) {
 }
 
 func TestEnvelopeStorageAtomicPermissionsAndSymlinkRejection(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("Windows envelope storage intentionally fails closed")
-	}
 	t.Parallel()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "client.material")
@@ -283,6 +280,12 @@ func TestEnvelopeStorageAtomicPermissionsAndSymlinkRejection(t *testing.T) {
 			t.Fatalf("UpdateFile(symlink) error = %v", err)
 		}
 	}
+	if err := RemoveFile(context.Background(), path); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReadFile(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("ReadFile after RemoveFile error = %v, want os.ErrNotExist", err)
+	}
 	secretPath := filepath.Join(dir, "private-secret-material")
 	if _, err := ReadFile(secretPath); err == nil {
 		t.Fatal("ReadFile(missing secret path) error = nil")
@@ -293,7 +296,7 @@ func TestEnvelopeStorageAtomicPermissionsAndSymlinkRejection(t *testing.T) {
 
 func TestUpdateFileSerializesAcrossProcesses(t *testing.T) {
 	if runtime.GOOS == "windows" {
-		t.Skip("Windows envelope storage intentionally fails closed")
+		t.Skip("the helper uses Unix-compatible inherited file descriptors")
 	}
 	provider := testPassphraseProvider("correct horse battery staple")
 	data, err := sealWithRand(context.Background(), testMetadata, bytes.Repeat([]byte{0x31}, 64), provider, deterministicReader(6))
@@ -322,7 +325,7 @@ func TestUpdateFileSerializesAcrossProcesses(t *testing.T) {
 
 func TestUpdateFileRecoversAfterLockHolderProcessExit(t *testing.T) {
 	if runtime.GOOS == "windows" {
-		t.Skip("Windows envelope storage intentionally fails closed")
+		t.Skip("the helper uses Unix-compatible inherited file descriptors")
 	}
 	provider := testPassphraseProvider("correct horse battery staple")
 	data, err := sealWithRand(context.Background(), testMetadata, bytes.Repeat([]byte{0x32}, 64), provider, deterministicReader(7))

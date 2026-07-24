@@ -6,7 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"strings"
+	"runtime"
 	"testing"
 	"time"
 )
@@ -26,31 +26,12 @@ func TestStoreLoadMissingConfigUsesDefaults(t *testing.T) {
 	if cfg.ServerTransport != serverTransportHTTP {
 		t.Fatalf("ServerTransport = %q, want http", cfg.ServerTransport)
 	}
-	if cfg.AnchorPluginStartTimeout != "10s" || cfg.AnchorPluginRPCTimeout != "30s" {
-		t.Fatalf("anchor plugin defaults = %+v", cfg)
-	}
-}
-
-func TestSaveSettingsValidatesAnchorPluginTimeouts(t *testing.T) {
-	t.Parallel()
-
-	store, err := newStore(filepath.Join(t.TempDir(), "config.json"))
-	if err != nil {
-		t.Fatalf("newStore: %v", err)
-	}
-	defer store.close()
-	app := NewApp()
-	app.store = store
-	settings := defaultSettings()
-	settings.AnchorPluginRPCTimeout = "0s"
-	if err := app.SaveSettings(settings); err == nil || !strings.Contains(err.Error(), "RPC timeout") {
-		t.Fatalf("SaveSettings() error = %v", err)
-	}
 }
 
 func TestOpenUserConfigRootCreatesMissingDirectoryUnderHome(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	base := filepath.Join(home, ".config", "trustdb-test")
 	root, err := openUserConfigRoot(base)
 	if err != nil {
@@ -85,7 +66,7 @@ func TestWriteFileAtomicIgnoresStaleFixedTempPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Stat(path) error = %v", err)
 	}
-	if info.Mode().Perm() != 0o644 {
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o644 {
 		t.Fatalf("file mode = %v, want 0644", info.Mode().Perm())
 	}
 	staleInfo, err := os.Stat(staleFixedTmp)

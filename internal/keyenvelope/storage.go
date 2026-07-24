@@ -8,7 +8,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"runtime"
 )
 
 // WriteFile installs a new envelope without replacing an existing path.
@@ -70,29 +69,33 @@ func ReadFile(path string) ([]byte, error) {
 	return readFile(path)
 }
 
+// RemoveFile serializes deletion with writers, rejects unsafe storage, and
+// flushes the containing directory before reporting success.
+func RemoveFile(ctx context.Context, path string) error {
+	if !storageSupported() {
+		return errors.ErrUnsupported
+	}
+	return withEnvelopeLock(ctx, path, func() error {
+		file, _, err := openValidatedEnvelope(path)
+		if err != nil {
+			return err
+		}
+		if err := file.Close(); err != nil {
+			return secretSafePathError("close software key envelope", err)
+		}
+		if err := removeFileDurable(path); err != nil {
+			return secretSafePathError("remove software key envelope", err)
+		}
+		return nil
+	})
+}
+
 func readFile(path string) ([]byte, error) {
-	before, err := os.Lstat(path)
+	file, _, err := openValidatedEnvelope(path)
 	if err != nil {
-		return nil, secretSafePathError("inspect software key envelope", err)
-	}
-	if before.Mode()&os.ModeSymlink != 0 || !before.Mode().IsRegular() {
-		return nil, fmt.Errorf("%w: envelope is not a regular file", ErrUnsafeEnvelopeStorage)
-	}
-	file, err := os.Open(path)
-	if err != nil {
-		return nil, secretSafePathError("open software key envelope", err)
+		return nil, err
 	}
 	defer file.Close()
-	info, err := file.Stat()
-	if err != nil {
-		return nil, secretSafePathError("stat software key envelope", err)
-	}
-	if !info.Mode().IsRegular() || !os.SameFile(before, info) {
-		return nil, fmt.Errorf("%w: envelope is not a regular file", ErrUnsafeEnvelopeStorage)
-	}
-	if runtime.GOOS != "windows" && info.Mode().Perm()&0o077 != 0 {
-		return nil, fmt.Errorf("%w: envelope permissions grant group or other access", ErrUnsafeEnvelopeStorage)
-	}
 	data, err := io.ReadAll(io.LimitReader(file, maxEnvelopeBytes+1))
 	if err != nil {
 		return nil, secretSafePathError("read software key envelope", err)
@@ -102,6 +105,34 @@ func readFile(path string) ([]byte, error) {
 		return nil, fmt.Errorf("%w: envelope size is invalid", ErrUnsafeEnvelopeStorage)
 	}
 	return data, nil
+}
+
+func openValidatedEnvelope(path string) (*os.File, fs.FileInfo, error) {
+	before, err := os.Lstat(path)
+	if err != nil {
+		return nil, nil, secretSafePathError("inspect software key envelope", err)
+	}
+	if before.Mode()&os.ModeSymlink != 0 || !before.Mode().IsRegular() {
+		return nil, nil, fmt.Errorf("%w: envelope is not a regular file", ErrUnsafeEnvelopeStorage)
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, nil, secretSafePathError("open software key envelope", err)
+	}
+	info, err := file.Stat()
+	if err != nil {
+		_ = file.Close()
+		return nil, nil, secretSafePathError("stat software key envelope", err)
+	}
+	if !info.Mode().IsRegular() || !os.SameFile(before, info) {
+		_ = file.Close()
+		return nil, nil, fmt.Errorf("%w: envelope is not a regular file", ErrUnsafeEnvelopeStorage)
+	}
+	if err := validateEnvelopeFile(file, info); err != nil {
+		_ = file.Close()
+		return nil, nil, err
+	}
+	return file, info, nil
 }
 
 func writeFileAtomic(path string, data []byte, mode fs.FileMode, replace bool) error {
@@ -116,8 +147,12 @@ func writeFileAtomic(path string, data []byte, mode fs.FileMode, replace bool) e
 		if !replace {
 			return fs.ErrExist
 		}
-		if runtime.GOOS != "windows" && info.Mode().Perm()&0o077 != 0 {
-			return fmt.Errorf("%w: target permissions grant group or other access", ErrUnsafeEnvelopeStorage)
+		target, _, validateErr := openValidatedEnvelope(path)
+		if validateErr != nil {
+			return validateErr
+		}
+		if closeErr := target.Close(); closeErr != nil {
+			return secretSafePathError("close software key envelope", closeErr)
 		}
 	} else if !errors.Is(err, fs.ErrNotExist) {
 		return secretSafePathError("inspect software key envelope", err)
@@ -139,8 +174,8 @@ func writeFileAtomic(path string, data []byte, mode fs.FileMode, replace bool) e
 			_ = os.Remove(tmpPath)
 		}
 	}()
-	if err := tmp.Chmod(mode); err != nil {
-		return secretSafePathError("set software key envelope permissions", err)
+	if err := secureEnvelopeFile(tmp, mode); err != nil {
+		return err
 	}
 	if _, err := tmp.Write(data); err != nil {
 		return secretSafePathError("write software key envelope", err)

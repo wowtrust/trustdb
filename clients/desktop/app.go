@@ -2,8 +2,6 @@ package main
 
 import (
 	"context"
-	"crypto/ed25519"
-	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -15,10 +13,13 @@ import (
 	"time"
 
 	"github.com/wowtrust/trustdb/internal/cborx"
-	"github.com/wowtrust/trustdb/internal/claim"
+	"github.com/wowtrust/trustdb/internal/cryptosuite"
+	"github.com/wowtrust/trustdb/internal/keydescriptor"
+	"github.com/wowtrust/trustdb/internal/keyenvelope"
 	"github.com/wowtrust/trustdb/internal/model"
 	"github.com/wowtrust/trustdb/internal/trustcrypto"
 	"github.com/wowtrust/trustdb/internal/verify"
+	"github.com/wowtrust/trustdb/sdk"
 
 	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
@@ -36,6 +37,8 @@ type App struct {
 	ctx        context.Context
 	storeMu    sync.Mutex
 	store      *store
+	identityMu sync.RWMutex
+	unlocked   *resolvedDesktopIdentity
 	hashJobs   *hashJobManager
 	savePathMu sync.Mutex
 	savePaths  map[string]string
@@ -74,6 +77,7 @@ func (a *App) startup(ctx context.Context) {
 }
 
 func (a *App) shutdown(ctx context.Context) {
+	a.lockIdentity()
 	a.storeMu.Lock()
 	defer a.storeMu.Unlock()
 	if a.store == nil {
@@ -163,24 +167,80 @@ func (a *App) requireStore() (*store, error) {
 // --- Identity -------------------------------------------------------
 
 type IdentityView struct {
-	TenantID     string `json:"tenant_id"`
-	ClientID     string `json:"client_id"`
-	KeyID        string `json:"key_id"`
-	PublicKeyB64 string `json:"public_key_b64"`
-	HasPrivate   bool   `json:"has_private"`
+	TenantID          string                              `json:"tenant_id"`
+	ClientID          string                              `json:"client_id"`
+	KeyID             string                              `json:"key_id,omitempty"`
+	CryptoSuite       string                              `json:"crypto_suite,omitempty"`
+	Provider          string                              `json:"provider,omitempty"`
+	Algorithm         string                              `json:"algorithm,omitempty"`
+	PublicKeyEncoding string                              `json:"public_key_encoding,omitempty"`
+	PublicKeyB64      string                              `json:"public_key_b64,omitempty"`
+	PublicFingerprint string                              `json:"public_fingerprint,omitempty"`
+	SM2UserID         string                              `json:"sm2_user_id,omitempty"`
+	Protection        string                              `json:"protection,omitempty"`
+	CertificateCount  int                                 `json:"certificate_count"`
+	Certificates      []keydescriptor.CertificateMetadata `json:"certificates,omitempty"`
+	HasPrivate        bool                                `json:"has_private"`
+	Exportable        bool                                `json:"exportable"`
+	Unlocked          bool                                `json:"unlocked"`
+	State             string                              `json:"state"`
+	Error             string                              `json:"error,omitempty"`
 }
 
-func identityView(id *Identity) *IdentityView {
+func identityView(id *Identity, unlocked bool) *IdentityView {
 	if id == nil {
 		return nil
 	}
-	return &IdentityView{
-		TenantID:     id.TenantID,
-		ClientID:     id.ClientID,
-		KeyID:        id.KeyID,
-		PublicKeyB64: id.PublicKeyB64,
-		HasPrivate:   id.PrivateKeyB64 != "",
+	view := &IdentityView{
+		TenantID: id.TenantID,
+		ClientID: id.ClientID,
+		Unlocked: unlocked,
+		State:    "invalid",
 	}
+	descriptor, err := loadDesktopIdentityDescriptor(*id)
+	if err != nil {
+		view.Error = err.Error()
+		return view
+	}
+	suite, err := cryptosuite.RequireKnown(descriptor.CryptoSuite)
+	if err != nil {
+		view.Error = err.Error()
+		return view
+	}
+	fingerprint, err := trustcrypto.HashBytesForSuite(
+		descriptor.CryptoSuite,
+		suite.KeyFingerprintHash.Algorithm,
+		descriptor.PublicKey.Bytes,
+	)
+	if err != nil {
+		view.Error = err.Error()
+		return view
+	}
+	certificates, err := descriptor.CertificateMetadata()
+	if err != nil {
+		view.Error = err.Error()
+		return view
+	}
+	view.KeyID = descriptor.KeyID
+	view.CryptoSuite = string(descriptor.CryptoSuite)
+	view.Provider = descriptor.Provider
+	view.Algorithm = descriptor.Algorithm
+	view.PublicKeyEncoding = descriptor.PublicKey.Encoding
+	view.PublicKeyB64 = encodeKey(descriptor.PublicKey.Bytes)
+	view.PublicFingerprint = encodeKey(fingerprint)
+	view.SM2UserID = descriptor.SM2UserID
+	view.CertificateCount = len(descriptor.CertificateChain)
+	view.Certificates = certificates
+	view.HasPrivate = descriptor.Kind == keydescriptor.KindSigner
+	view.Exportable = false
+	if descriptor.Software != nil {
+		view.Protection = descriptor.Software.Protection
+	}
+	view.State = "ready"
+	if !unlocked {
+		view.State = "locked"
+	}
+	return view
 }
 
 func (a *App) GetIdentity() *IdentityView {
@@ -188,39 +248,37 @@ func (a *App) GetIdentity() *IdentityView {
 	if err != nil {
 		return nil
 	}
-	return identityView(s.getIdentity())
+	return identityView(s.getIdentity(), a.identityUnlocked())
 }
 
-// GenerateIdentity creates a brand-new Ed25519 keypair. If an
-// identity already exists we refuse rather than silently replacing
-// it — the user loses access to anything they signed with the old
-// key, so this must be a deliberate action (UI should route to
-// "Rotate key" instead).
-func (a *App) GenerateIdentity(tenantID, clientID, keyID string) (*IdentityView, error) {
+// GenerateIdentity creates a suite-bound software identity and persists only
+// its canonical descriptor plus SM4-encrypted private material.
+func (a *App) GenerateIdentity(req GenerateIdentityRequest) (*IdentityView, error) {
 	s, err := a.requireStore()
 	if err != nil {
 		return nil, err
 	}
-	if strings.TrimSpace(tenantID) == "" || strings.TrimSpace(clientID) == "" || strings.TrimSpace(keyID) == "" {
-		return nil, errors.New("tenant_id, client_id, key_id are required")
-	}
 	if s.getIdentity() != nil {
 		return nil, errors.New("identity already exists; rotate instead of regenerating")
 	}
-	id, err := generateIdentity(tenantID, clientID, keyID)
+	managedDir := filepath.Join(s.root.Name(), "identities")
+	id, resolved, err := generateSoftwareIdentity(a.ensureCtx(), managedDir, req)
 	if err != nil {
 		return nil, err
 	}
 	if err := s.setIdentity(id); err != nil {
+		_ = resolved.close()
+		removeManagedIdentityMaterial(managedDir, id)
 		return nil, err
 	}
-	return identityView(&id), nil
+	a.setUnlockedIdentity(resolved)
+	return identityView(&id, true), nil
 }
 
-// RotateIdentity replaces the current private key but preserves the
-// tenant/client identity so downstream servers still see the same
-// client; only the key_id changes.
-func (a *App) RotateIdentity(newKeyID string) (*IdentityView, error) {
+// RotateIdentity replaces one managed software identity with a fresh key in
+// the same suite. External-provider rotation is performed by referencing a new
+// provider descriptor so provider custody remains authoritative.
+func (a *App) RotateIdentity(req RotateIdentityRequest) (*IdentityView, error) {
 	s, err := a.requireStore()
 	if err != nil {
 		return nil, err
@@ -229,57 +287,134 @@ func (a *App) RotateIdentity(newKeyID string) (*IdentityView, error) {
 	if current == nil {
 		return nil, errors.New("no existing identity to rotate")
 	}
-	if strings.TrimSpace(newKeyID) == "" {
+	if strings.TrimSpace(req.KeyID) == "" {
 		return nil, errors.New("new key_id is required")
 	}
-	id, err := generateIdentity(current.TenantID, current.ClientID, newKeyID)
+	descriptor, err := loadDesktopIdentityDescriptor(*current)
+	if err != nil {
+		return nil, err
+	}
+	if descriptor.Provider != keydescriptor.ProviderSoftware || !current.ManagedMaterial {
+		return nil, errors.New("provider identity rotation requires referencing a new signer descriptor")
+	}
+	managedDir := filepath.Join(s.root.Name(), "identities")
+	id, resolved, err := generateSoftwareIdentity(a.ensureCtx(), managedDir, GenerateIdentityRequest{
+		TenantID:    current.TenantID,
+		ClientID:    current.ClientID,
+		KeyID:       req.KeyID,
+		CryptoSuite: string(descriptor.CryptoSuite),
+		Passphrase:  req.Passphrase,
+	})
 	if err != nil {
 		return nil, err
 	}
 	if err := s.setIdentity(id); err != nil {
+		_ = resolved.close()
+		removeManagedIdentityMaterial(managedDir, id)
 		return nil, err
 	}
-	return identityView(&id), nil
+	a.setUnlockedIdentity(resolved)
+	removeManagedIdentityMaterial(managedDir, *current)
+	return identityView(&id, true), nil
 }
 
-// ImportIdentity replaces whatever is in the store with a user-supplied
-// private key. We re-derive the public key rather than trusting the
-// provided public key so the two halves can never diverge.
-func (a *App) ImportIdentity(tenantID, clientID, keyID, privateKeyB64 string) (*IdentityView, error) {
+// ImportIdentity accepts private bytes only as a one-shot input and immediately
+// seals them into the same encrypted V2 storage used by generated identities.
+func (a *App) ImportIdentity(req ImportIdentityRequest) (*IdentityView, error) {
 	s, err := a.requireStore()
 	if err != nil {
 		return nil, err
 	}
-	raw, err := decodeKeyField(privateKeyB64)
+	managedDir := filepath.Join(s.root.Name(), "identities")
+	id, resolved, err := importSoftwareIdentity(a.ensureCtx(), managedDir, req)
 	if err != nil {
 		return nil, err
 	}
-	if len(raw) != ed25519.PrivateKeySize {
-		return nil, fmt.Errorf("private key wrong size %d (want %d)", len(raw), ed25519.PrivateKeySize)
-	}
-	id, err := identityFromPrivate(ed25519.PrivateKey(raw), tenantID, clientID, keyID)
-	if err != nil {
-		return nil, err
-	}
+	old := s.getIdentity()
 	if err := s.setIdentity(id); err != nil {
+		_ = resolved.close()
+		removeManagedIdentityMaterial(managedDir, id)
 		return nil, err
 	}
-	return identityView(&id), nil
+	a.setUnlockedIdentity(resolved)
+	if old != nil {
+		removeManagedIdentityMaterial(managedDir, *old)
+	}
+	return identityView(&id, true), nil
 }
 
-// ExportPrivateKey returns the base64 private key. The UI gates this
-// behind an explicit confirm step because once copied it cannot be
-// revoked; the desktop merely trusts that the user really meant it.
-func (a *App) ExportPrivateKey() (string, error) {
+// ReferenceIdentity binds an existing canonical signer descriptor. Software
+// references must use an SM4 envelope; PKCS#11/SDF/remote references execute
+// only through the generic supervised signer-plugin protocol.
+func (a *App) ReferenceIdentity(req ReferenceIdentityRequest) (*IdentityView, error) {
 	s, err := a.requireStore()
 	if err != nil {
-		return "", err
+		return nil, err
+	}
+	id, resolved, err := referenceDesktopIdentity(a.ensureCtx(), req)
+	if err != nil {
+		return nil, err
+	}
+	old := s.getIdentity()
+	if err := s.setIdentity(id); err != nil {
+		_ = resolved.close()
+		return nil, err
+	}
+	a.setUnlockedIdentity(resolved)
+	if old != nil {
+		removeManagedIdentityMaterial(filepath.Join(s.root.Name(), "identities"), *old)
+	}
+	return identityView(&id, true), nil
+}
+
+func (a *App) UnlockIdentity(passphrase string) (*IdentityView, error) {
+	s, err := a.requireStore()
+	if err != nil {
+		return nil, err
 	}
 	id := s.getIdentity()
 	if id == nil {
-		return "", errors.New("no identity")
+		return nil, errors.New("no identity")
 	}
-	return id.PrivateKeyB64, nil
+	resolved, err := resolveDesktopIdentity(a.ensureCtx(), *id, passphrase)
+	if err != nil {
+		return nil, err
+	}
+	a.setUnlockedIdentity(resolved)
+	return identityView(id, true), nil
+}
+
+func (a *App) LockIdentity() {
+	a.lockIdentity()
+}
+
+func (a *App) ExportVerifierDescriptor(outPath string) error {
+	if strings.TrimSpace(outPath) == "" {
+		return errors.New("output path is required")
+	}
+	store, err := a.requireStore()
+	if err != nil {
+		return err
+	}
+	id := store.getIdentity()
+	if id == nil {
+		return errors.New("no identity")
+	}
+	descriptor, err := loadDesktopIdentityDescriptor(*id)
+	if err != nil {
+		return err
+	}
+	descriptor.Kind = keydescriptor.KindVerifier
+	descriptor.Provider = keydescriptor.ProviderPublic
+	descriptor.Software = nil
+	descriptor.PKCS11 = nil
+	descriptor.SDF = nil
+	descriptor.Remote = nil
+	data, err := keydescriptor.Marshal(descriptor)
+	if err != nil {
+		return err
+	}
+	return a.writeAuthorizedFile(outPath, data, 0o644)
 }
 
 func (a *App) ClearIdentity() error {
@@ -287,7 +422,15 @@ func (a *App) ClearIdentity() error {
 	if err != nil {
 		return err
 	}
-	return s.clearIdentity()
+	id := s.getIdentity()
+	if err := s.clearIdentity(); err != nil {
+		return err
+	}
+	a.lockIdentity()
+	if id != nil {
+		removeManagedIdentityMaterial(filepath.Join(s.root.Name(), "identities"), *id)
+	}
+	return nil
 }
 
 // --- Settings -------------------------------------------------------
@@ -308,24 +451,33 @@ func (a *App) SaveSettings(s Settings) error {
 	if !validServerTransport(s.ServerTransport) {
 		return fmt.Errorf("unsupported server transport: %s", s.ServerTransport)
 	}
+	suite, err := requireDesktopSuite(s.ServerCryptoSuite)
+	if err != nil {
+		return err
+	}
+	s.ServerCryptoSuite = string(suite.ID)
 	if s.ServerPubKeyB64 != "" {
 		raw, err := decodeKeyField(s.ServerPubKeyB64)
 		if err != nil {
 			return fmt.Errorf("server public key: %w", err)
 		}
-		if len(raw) != ed25519.PublicKeySize {
-			return fmt.Errorf("server public key wrong size %d", len(raw))
+		if _, err := desktopPublicKeyDescriptor(suite.ID, "desktop-settings-server-key", raw); err != nil {
+			return fmt.Errorf("server public key: %w", err)
 		}
 		// Normalise to raw base64-url so the UI has a stable
 		// representation regardless of how the user pasted it.
 		s.ServerPubKeyB64 = encodeKey(raw)
 	}
-	s.AnchorPluginCommand = strings.TrimSpace(s.AnchorPluginCommand)
 	s.ServerCAFile = strings.TrimSpace(s.ServerCAFile)
 	s.ServerName = strings.TrimSpace(s.ServerName)
 	s.ServerCAPinsSHA256 = strings.TrimSpace(s.ServerCAPinsSHA256)
 	s.ClientTLSCertFile = strings.TrimSpace(s.ClientTLSCertFile)
 	s.ClientTLSKeyFile = strings.TrimSpace(s.ClientTLSKeyFile)
+	s.ClientVerifierDescriptor = strings.TrimSpace(s.ClientVerifierDescriptor)
+	s.ServerVerifierDescriptor = strings.TrimSpace(s.ServerVerifierDescriptor)
+	s.RegistryVerifierDescriptor = strings.TrimSpace(s.RegistryVerifierDescriptor)
+	s.ClientCertificateRoots = strings.TrimSpace(s.ClientCertificateRoots)
+	s.ServerCertificateRoots = strings.TrimSpace(s.ServerCertificateRoots)
 	if (s.ClientTLSCertFile == "") != (s.ClientTLSKeyFile == "") {
 		return errors.New("client TLS certificate and key must be configured together")
 	}
@@ -338,21 +490,6 @@ func (a *App) SaveSettings(s Settings) error {
 	if err := tlsConfigFromSettings(s).Validate(); err != nil && (strings.EqualFold(parsedScheme(s.ServerURL), "https") || hasTLSInputs(tlsConfigFromSettings(s))) {
 		return fmt.Errorf("transport TLS settings: %w", err)
 	}
-	if strings.TrimSpace(s.AnchorPluginStartTimeout) == "" {
-		s.AnchorPluginStartTimeout = "10s"
-	}
-	if strings.TrimSpace(s.AnchorPluginRPCTimeout) == "" {
-		s.AnchorPluginRPCTimeout = "30s"
-	}
-	for name, value := range map[string]string{
-		"anchor plugin start timeout": s.AnchorPluginStartTimeout,
-		"anchor plugin RPC timeout":   s.AnchorPluginRPCTimeout,
-	} {
-		d, err := time.ParseDuration(strings.TrimSpace(value))
-		if err != nil || d <= 0 {
-			return fmt.Errorf("%s must be a positive duration", name)
-		}
-	}
 	return store.setSettings(s)
 }
 
@@ -362,6 +499,8 @@ type FileInfo struct {
 	Path        string `json:"path"`
 	Name        string `json:"name"`
 	Size        int64  `json:"size"`
+	CryptoSuite string `json:"crypto_suite"`
+	HashAlg     string `json:"hash_alg"`
 	ContentHash string `json:"content_hash_hex"`
 	MediaType   string `json:"media_type"`
 }
@@ -388,6 +527,14 @@ func (a *App) DescribeFiles(paths []string) ([]FileInfo, error) {
 }
 
 func (a *App) describeFiles(paths []string) ([]FileInfo, error) {
+	suiteID, err := a.activeIdentitySuite()
+	if err != nil {
+		return nil, err
+	}
+	suite, err := cryptosuite.RequireAvailable(suiteID)
+	if err != nil {
+		return nil, err
+	}
 	out := make([]FileInfo, 0, len(paths))
 	for _, p := range paths {
 		if p == "" {
@@ -397,7 +544,7 @@ func (a *App) describeFiles(paths []string) ([]FileInfo, error) {
 		if err != nil {
 			return nil, err
 		}
-		sum, n, err := trustcrypto.HashReader(model.DefaultHashAlg, f)
+		sum, n, err := trustcrypto.HashReaderForSuite(suite.ID, suite.ContentHash.Algorithm, f)
 		_ = f.Close()
 		if err != nil {
 			return nil, err
@@ -406,6 +553,8 @@ func (a *App) describeFiles(paths []string) ([]FileInfo, error) {
 			Path:        p,
 			Name:        filepath.Base(p),
 			Size:        n,
+			CryptoSuite: string(suite.ID),
+			HashAlg:     suite.ContentHash.Algorithm,
 			ContentHash: hex.EncodeToString(sum),
 			MediaType:   guessMedia(p),
 		})
@@ -413,8 +562,8 @@ func (a *App) describeFiles(paths []string) ([]FileInfo, error) {
 	return out, nil
 }
 
-// StartHashing kicks off an async sha256 pass over the given paths and
-// returns a job id the frontend uses to correlate progress events and
+// StartHashing kicks off an asynchronous suite-selected content-hash pass over
+// the given paths. It returns a job id the frontend uses to correlate progress events and
 // (optionally) cancel. Emitted Wails events:
 //
 //   - hash:begin         { job_id, total_files, total_bytes }
@@ -440,6 +589,10 @@ func (a *App) StartHashing(paths []string) (string, error) {
 	}
 	if len(cleaned) == 0 {
 		return "", errors.New("no files to hash")
+	}
+	suiteID, err := a.activeIdentitySuite()
+	if err != nil {
+		return "", err
 	}
 	// Pre-stat so the UI can show the grand total immediately. Any
 	// unreadable file is fatal for the whole job — we prefer to fail
@@ -483,7 +636,7 @@ func (a *App) StartHashing(paths []string) (string, error) {
 				Name:       name,
 				BytesTotal: sizes[i],
 			})
-			info, err := hashFileStream(job.ctx, p, func(read, fileTotal int64) {
+			info, err := hashFileStreamForSuite(job.ctx, p, suiteID, func(read, fileTotal int64) {
 				wailsruntime.EventsEmit(a.ctx, "hash:file-progress", HashJobEvent{
 					JobID:       jobID,
 					Index:       i,
@@ -705,97 +858,107 @@ func (a *App) ensureCtx() context.Context {
 	return context.Background()
 }
 
+func (a *App) identityUnlocked() bool {
+	a.identityMu.RLock()
+	defer a.identityMu.RUnlock()
+	return a.unlocked != nil
+}
+
+func (a *App) unlockedSDKIdentity() (sdk.Identity, error) {
+	a.identityMu.RLock()
+	defer a.identityMu.RUnlock()
+	if a.unlocked == nil {
+		return sdk.Identity{}, errors.New("identity is locked; unlock it before signing")
+	}
+	return a.unlocked.identity, nil
+}
+
+func (a *App) activeIdentitySuite() (cryptosuite.ID, error) {
+	store, err := a.requireStore()
+	if err != nil {
+		return "", err
+	}
+	id := store.getIdentity()
+	if id == nil {
+		suite, err := requireDesktopSuite(store.getSettings().ServerCryptoSuite)
+		if err != nil {
+			return "", err
+		}
+		return suite.ID, nil
+	}
+	descriptor, err := loadDesktopIdentityDescriptor(*id)
+	if err != nil {
+		return "", err
+	}
+	return descriptor.CryptoSuite, nil
+}
+
+func (a *App) setUnlockedIdentity(resolved *resolvedDesktopIdentity) {
+	a.identityMu.Lock()
+	previous := a.unlocked
+	a.unlocked = resolved
+	a.identityMu.Unlock()
+	if previous != nil {
+		_ = previous.close()
+	}
+}
+
+func (a *App) lockIdentity() {
+	a.identityMu.Lock()
+	previous := a.unlocked
+	a.unlocked = nil
+	a.identityMu.Unlock()
+	if previous != nil {
+		_ = previous.close()
+	}
+}
+
+func removeManagedIdentityMaterial(managedDir string, id Identity) {
+	if !id.ManagedMaterial {
+		return
+	}
+	descriptorPath, ok := pathWithinDirectory(managedDir, id.DescriptorPath)
+	if !ok {
+		return
+	}
+	descriptor, err := keydescriptor.ReadFile(descriptorPath)
+	if err == nil && descriptor.Software != nil {
+		materialPath := filepath.Join(filepath.Dir(descriptorPath), filepath.FromSlash(descriptor.Software.MaterialPath))
+		if materialPath, withinManagedDir := pathWithinDirectory(managedDir, materialPath); withinManagedDir {
+			_ = keyenvelope.RemoveFile(context.Background(), materialPath)
+		}
+	}
+	_ = os.Remove(descriptorPath)
+}
+
+func pathWithinDirectory(directory, path string) (string, bool) {
+	root, err := filepath.Abs(directory)
+	if err != nil {
+		return "", false
+	}
+	target, err := filepath.Abs(path)
+	if err != nil {
+		return "", false
+	}
+	relative, err := filepath.Rel(root, target)
+	if err != nil || relative == "." || filepath.IsAbs(relative) ||
+		relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return "", false
+	}
+	return target, true
+}
+
 func (a *App) serverClient() (*serverClient, error) {
 	s, err := a.requireStore()
 	if err != nil {
 		return nil, err
 	}
 	cfg := s.getSettings()
-	return newServerClientWithTLS(cfg.ServerTransport, cfg.ServerURL, tlsConfigFromSettings(cfg))
-}
-
-// serverPublicKey decodes the configured server public key, or returns
-// a friendly error telling the UI to prompt for it. Kept central so
-// any verify/submit code path has the same error message.
-func (a *App) serverPublicKey() (ed25519.PublicKey, error) {
-	s, err := a.requireStore()
+	suite, err := requireDesktopSuite(cfg.ServerCryptoSuite)
 	if err != nil {
 		return nil, err
 	}
-	cfg := s.getSettings()
-	if cfg.ServerPubKeyB64 == "" {
-		return nil, errors.New("server public key is not configured — add it in Settings")
-	}
-	raw, err := decodeKeyField(cfg.ServerPubKeyB64)
-	if err != nil {
-		return nil, fmt.Errorf("server public key: %w", err)
-	}
-	if len(raw) != ed25519.PublicKeySize {
-		return nil, fmt.Errorf("server public key wrong size: %d", len(raw))
-	}
-	return ed25519.PublicKey(raw), nil
-}
-
-// claimFromFile builds a signed claim for a single file path using
-// the caller-supplied identity. It is the one-stop helper shared by
-// single and batch submit paths so idempotency + nonce generation
-// only live in one place.
-func buildSignedClaim(priv ed25519.PrivateKey, id Identity, info FileInfo, mediaType, eventType, source string) (model.SignedClaim, string, error) {
-	sum, err := hex.DecodeString(info.ContentHash)
-	if err != nil {
-		return model.SignedClaim{}, "", fmt.Errorf("content hash hex: %w", err)
-	}
-	nonce, err := trustcrypto.NewNonce(16)
-	if err != nil {
-		return model.SignedClaim{}, "", err
-	}
-	idemBytes, err := trustcrypto.NewNonce(16)
-	if err != nil {
-		return model.SignedClaim{}, "", err
-	}
-	idempotency := base64.RawURLEncoding.EncodeToString(idemBytes)
-	if mediaType == "" {
-		mediaType = info.MediaType
-	}
-	if mediaType == "" {
-		mediaType = "application/octet-stream"
-	}
-	if eventType == "" {
-		eventType = "file.snapshot"
-	}
-	if source == "" {
-		source = id.ClientID
-	}
-	c, err := claim.NewFileClaim(
-		id.TenantID,
-		id.ClientID,
-		id.KeyID,
-		time.Now().UTC(),
-		nonce,
-		idempotency,
-		model.Content{
-			HashAlg:       model.DefaultHashAlg,
-			ContentHash:   sum,
-			ContentLength: info.Size,
-			MediaType:     mediaType,
-			StorageURI:    "file://" + filepath.ToSlash(info.Path),
-		},
-		model.Metadata{
-			EventType: eventType,
-			Source:    source,
-			Custom: map[string]string{
-				"file_name": info.Name,
-			},
-		},
-	)
-	if err != nil {
-		return model.SignedClaim{}, "", err
-	}
-	signed, err := claim.Sign(c, priv)
-	if err != nil {
-		return model.SignedClaim{}, "", err
-	}
-	return signed, idempotency, nil
+	return newServerClientWithTLSForSuite(cfg.ServerTransport, cfg.ServerURL, tlsConfigFromSettings(cfg), suite.ID)
 }
 
 // marshalClaim is a thin helper so callers can keep the CBOR

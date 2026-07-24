@@ -22,33 +22,33 @@ export function ExportAnchorResult(arg1:string,arg2:string):Promise<void>;
 
 export function ExportGlobalProof(arg1:string,arg2:string):Promise<void>;
 
-export function ExportPrivateKey():Promise<string>;
-
 export function ExportProofBundle(arg1:string,arg2:string):Promise<void>;
 
 export function ExportSingleProof(arg1:string,arg2:string):Promise<void>;
 
-export function GenerateIdentity(arg1:string,arg2:string,arg3:string):Promise<main.IdentityView>;
+export function ExportVerifierDescriptor(arg1:string):Promise<void>;
 
-export function GetIdentity():Promise<main.IdentityView>;
+export function GenerateIdentity(arg1:main.GenerateIdentityRequest):Promise<main.IdentityView>;
 
 export function GetAnchorSystemResource(arg1:string,arg2:string,arg3:string):Promise<model.AnchorSystemResource>;
 
 export function GetAnchorSystemStatus(arg1:string):Promise<model.AnchorSystemStatus>;
 
+export function GetIdentity():Promise<main.IdentityView>;
+
 export function GetProofBundle(arg1:string):Promise<model.ProofBundle>;
 
 export function GetSettings():Promise<main.Settings>;
 
-export function ImportIdentity(arg1:string,arg2:string,arg3:string,arg4:string):Promise<main.IdentityView>;
+export function ImportIdentity(arg1:main.ImportIdentityRequest):Promise<main.IdentityView>;
 
 export function LatestRoot():Promise<model.BatchRoot>;
 
-export function ListRecords():Promise<Array<main.LocalRecord>>;
+export function ListAnchorSystemResources(arg1:string,arg2:string,arg3:number,arg4:string):Promise<model.AnchorSystemResourcePage>;
 
 export function ListAnchorSystems():Promise<Array<model.AnchorSystem>>;
 
-export function ListAnchorSystemResources(arg1:string,arg2:string,arg3:number,arg4:string):Promise<model.AnchorSystemResourcePage>;
+export function ListRecords():Promise<Array<main.LocalRecord>>;
 
 export function ListRecordsPage(arg1:main.RecordPageOptions):Promise<main.RecordPage>;
 
@@ -56,9 +56,13 @@ export function ListRemoteRecordsPage(arg1:main.RecordPageOptions):Promise<main.
 
 export function ListRoots(arg1:number):Promise<Array<model.BatchRoot>>;
 
+export function LockIdentity():Promise<void>;
+
+export function ReferenceIdentity(arg1:main.ReferenceIdentityRequest):Promise<main.IdentityView>;
+
 export function RefreshRecord(arg1:string):Promise<main.LocalRecord>;
 
-export function RotateIdentity(arg1:string):Promise<main.IdentityView>;
+export function RotateIdentity(arg1:main.RotateIdentityRequest):Promise<main.IdentityView>;
 
 export function SaveSettings(arg1:main.Settings):Promise<void>;
 
@@ -71,6 +75,8 @@ export function StartHashing(arg1:Array<string>):Promise<string>;
 export function SubmitBatch(arg1:Array<main.SubmitRequest>):Promise<Array<main.BatchItemResult>>;
 
 export function SubmitFile(arg1:main.SubmitRequest):Promise<main.SubmitResult>;
+
+export function UnlockIdentity(arg1:string):Promise<main.IdentityView>;
 
 export function UpgradeOtsAnchor(arg1:string):Promise<anchor.OtsUpgradeSummary>;
 

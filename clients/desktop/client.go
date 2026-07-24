@@ -25,6 +25,14 @@ func newServerClient(transport, endpoint string) (*serverClient, error) {
 }
 
 func newServerClientWithTLS(transport, endpoint string, tlsConfig sdk.TLSConfig) (*serverClient, error) {
+	return newServerClientWithTLSForSuite(transport, endpoint, tlsConfig, sdk.CryptoSuiteINTLV1)
+}
+
+func newServerClientWithTLSForSuite(
+	transport, endpoint string,
+	tlsConfig sdk.TLSConfig,
+	suite sdk.CryptoSuite,
+) (*serverClient, error) {
 	transport = normalizeServerTransport(transport)
 	endpoint = strings.TrimSpace(endpoint)
 	var (
@@ -34,9 +42,9 @@ func newServerClientWithTLS(transport, endpoint string, tlsConfig sdk.TLSConfig)
 	switch transport {
 	case serverTransportHTTP:
 		if strings.EqualFold(parsedScheme(endpoint), "https") {
-			client, err = sdk.NewClient(endpoint, sdk.WithTLSConfig(tlsConfig))
+			client, err = sdk.NewClientForSuite(endpoint, suite, sdk.WithTLSConfig(tlsConfig))
 		} else {
-			client, err = sdk.NewClient(endpoint)
+			client, err = sdk.NewClientForSuite(endpoint, suite)
 		}
 	case serverTransportGRPC:
 		target, targetErr := normalizeGRPCTarget(endpoint)
@@ -44,9 +52,9 @@ func newServerClientWithTLS(transport, endpoint string, tlsConfig sdk.TLSConfig)
 			return nil, targetErr
 		}
 		if hasTLSInputs(tlsConfig) || !isLoopbackDesktopTarget(target) {
-			client, err = sdk.NewGRPCClient(target, sdk.WithGRPCTLSConfig(tlsConfig))
+			client, err = sdk.NewGRPCClientForSuite(target, suite, sdk.WithGRPCTLSConfig(tlsConfig))
 		} else {
-			client, err = sdk.NewGRPCClient(target, sdk.WithGRPCLocalPlaintext())
+			client, err = sdk.NewGRPCClientForSuite(target, suite, sdk.WithGRPCLocalPlaintext())
 		}
 	default:
 		return nil, fmt.Errorf("unsupported server transport: %s", transport)
@@ -232,8 +240,8 @@ func (c *serverClient) listRecordIndexes(ctx context.Context, opts RecordPageOpt
 			opts.BatchID = query
 			query = ""
 		}
-		if looksLikeSHA256Hex(query) {
-			contentHash = strings.TrimPrefix(strings.ToLower(query), "sha256:")
+		if looksLikeContentHashHex(query) {
+			contentHash = strings.TrimPrefix(strings.TrimPrefix(strings.ToLower(query), "sha256:"), "sm3:")
 			query = ""
 		}
 	}
@@ -276,8 +284,8 @@ func looksLikeRecordID(query string) bool {
 	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(query)), "tr1")
 }
 
-func looksLikeSHA256Hex(query string) bool {
-	query = strings.TrimPrefix(strings.ToLower(strings.TrimSpace(query)), "sha256:")
+func looksLikeContentHashHex(query string) bool {
+	query = strings.TrimPrefix(strings.TrimPrefix(strings.ToLower(strings.TrimSpace(query)), "sha256:"), "sm3:")
 	if len(query) != 64 {
 		return false
 	}
@@ -304,6 +312,8 @@ func localRecordFromIndex(idx model.RecordIndex) LocalRecord {
 	}
 	rec := LocalRecord{
 		RecordID:         idx.RecordID,
+		CryptoSuite:      string(idx.CryptoSuite),
+		HashAlg:          hashAlgorithmForSuite(idx.CryptoSuite),
 		FilePath:         idx.StorageURI,
 		FileName:         displayNameFromStorageURI(idx),
 		ContentHashHex:   hex.EncodeToString(idx.ContentHash),
@@ -321,6 +331,17 @@ func localRecordFromIndex(idx model.RecordIndex) LocalRecord {
 	setLocalRecordSubmittedAt(&rec, submittedAt)
 	setLocalRecordLastSyncedAt(&rec, time.Now().UTC())
 	return rec
+}
+
+func hashAlgorithmForSuite(suiteID sdk.CryptoSuite) string {
+	switch suiteID {
+	case sdk.CryptoSuiteCNSMV1:
+		return sdk.HashAlgorithmSM3
+	case sdk.CryptoSuiteINTLV1:
+		return sdk.HashAlgorithmSHA256
+	default:
+		return ""
+	}
 }
 
 func displayNameFromStorageURI(idx model.RecordIndex) string {
