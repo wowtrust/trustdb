@@ -357,6 +357,12 @@ func (d *nativeDriver) GetReceiptWithProof(ctx context.Context, attempt fiscobco
 	if receipt.Version > math.MaxInt32 || receipt.Status < math.MinInt32 || receipt.Status > math.MaxInt32 {
 		return fiscobcos.ReceiptWithProof{}, fiscobcos.ErrIncompleteChainEvidence
 	}
+	if receipt.Version >= 1 || receipt.ContractAddress != "" {
+		// The pinned Go SDK does not expose effectiveGasPrice, and RPC
+		// normalizes non-empty creation addresses so their exact native field
+		// bytes cannot be reconstructed.
+		return fiscobcos.ReceiptWithProof{}, fiscobcos.ErrIncompleteChainEvidence
+	}
 	if !encodedHexFits(receipt.Output, fiscobcos.MaxNativeEvidenceFieldBytes) {
 		return fiscobcos.ReceiptWithProof{}, fiscobcos.ErrIncompleteChainEvidence
 	}
@@ -395,6 +401,9 @@ func (d *nativeDriver) GetReceiptWithProof(ctx context.Context, attempt fiscobco
 			!encodedHexFits(log.Data, fiscobcos.MaxNativeEvidenceFieldBytes) {
 			return fiscobcos.ReceiptWithProof{}, fiscobcos.ErrIncompleteChainEvidence
 		}
+		if len(log.Address) != 40 {
+			return fiscobcos.ReceiptWithProof{}, fiscobcos.ErrIncompleteChainEvidence
+		}
 		if _, err := strictHexBytes(log.Address, 20); err != nil {
 			return fiscobcos.ReceiptWithProof{}, fiscobcos.ErrIncompleteChainEvidence
 		}
@@ -424,10 +433,8 @@ func (d *nativeDriver) GetReceiptWithProof(ctx context.Context, attempt fiscobco
 		ContractAddress: receipt.ContractAddress,
 		Status:          int32(receipt.Status),
 		Output:          output,
-		// The pinned Go SDK omits effectiveGasPrice. Version >= 1 must
-		// therefore fail closed instead of guessing an empty value.
-		Logs:        nativeLogs,
-		BlockNumber: int64(receipt.BlockNumber),
+		Logs:            nativeLogs,
+		BlockNumber:     int64(receipt.BlockNumber),
 	}
 	rawCanonicalReceipt, canonicalLogs, err := fiscobcos.MarshalNativeReceiptPreimage(receiptFields)
 	if err != nil {

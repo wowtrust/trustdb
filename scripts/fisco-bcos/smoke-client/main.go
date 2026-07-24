@@ -47,6 +47,7 @@ type evidence struct {
 	FinalBlockNumber    int64                      `json:"final_block_number"`
 	Deployment          txEvidence                 `json:"deployment"`
 	EventTransaction    txEvidence                 `json:"event_transaction"`
+	EventReceipt        *types.Receipt             `json:"event_receipt"`
 	Event               types.Log                  `json:"event"`
 	Block               *types.Block               `json:"containing_block"`
 	ConsensusStatus     json.RawMessage            `json:"consensus_status"`
@@ -286,6 +287,10 @@ func main() {
 	if !eventEvidence.ReceiptProofPresent || !eventEvidence.TxProofPresent {
 		fatalf("proof fields are absent from event transaction response")
 	}
+	queriedEventReceipt, err := c.GetTransactionReceipt(ctx, eventHash, true)
+	if err != nil {
+		fatalf("query event receipt for consensus hash: %v", err)
+	}
 
 	var event types.Log
 	select {
@@ -365,6 +370,7 @@ func main() {
 		FinalBlockNumber:    finalBlock,
 		Deployment:          deployEvidence,
 		EventTransaction:    eventEvidence,
+		EventReceipt:        queriedEventReceipt,
 		Event:               event,
 		Block:               block,
 		ConsensusStatus:     consensus,

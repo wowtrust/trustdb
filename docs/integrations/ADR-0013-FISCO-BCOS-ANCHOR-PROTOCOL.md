@@ -157,7 +157,17 @@ Certificate pins remain a local transport control rather than part of offline bl
 - unique block validator-node signatures. A live PBFT view is not persisted as
   block evidence, because the SDK cannot bind that RPC value to the block.
 
-The schema has bounded counts and byte sizes and rejects duplicate transaction hashes and duplicate finality signers. Structural validation reconstructs the official `data.writeTo(output)` TARS bytes from `TransactionReceipt.tars` and `Block.tars`, then recomputes their Keccak-256 or SM3 hashes. It still does not treat the decoded event, Merkle paths, PBFT signatures, or claimed context as trusted; follow-up issues verify those semantic and finality bindings.
+The schema has bounded counts and byte sizes and rejects duplicate transaction
+hashes and duplicate finality signers. Structural validation reconstructs the
+exact consensus field projection in
+`bcos-tars-protocol/impl/TarsHashable.h` at the pinned FISCO BCOS v3.16.3
+commit `274f864e7725fef5b8ed4c6b7a3363ee5396f104`, then recomputes its
+Keccak-256 or SM3 hash. This release hashes ordered field bytes and
+big-endian integers directly; the later upstream implementation that hashes
+`data.writeTo(output)` TARS serialization is not the admitted v3.16.3
+baseline. Validation still does not treat the decoded event, Merkle paths,
+PBFT signatures, or claimed context as trusted; follow-up issues verify those
+semantic and finality bindings.
 
 `STHAnchorResult` retains its current outer schema. For the `fisco-bcos` sink:
 

@@ -162,9 +162,14 @@ finality from verifier-local trust roots, this proof remains
 ## Canonical encodings
 
 The pinned standard SDK's Go structs and normalized JSON are RPC observations,
-not canonical native evidence. Receipt and header preimages are the exact
-`data.writeTo(output)` TARS bytes defined by upstream
-`TransactionReceipt.tars` and `Block.tars`; no field concatenation is accepted.
+not canonical native evidence. Receipt and header hash preimages are the exact
+ordered field projections defined by
+`bcos-tars-protocol/impl/TarsHashable.h` at FISCO BCOS v3.16.3 commit
+`274f864e7725fef5b8ed4c6b7a3363ee5396f104`, including its big-endian
+integer encoding. They are deliberately not the TARS `data.writeTo(output)`
+serialization used by a later upstream implementation. Changing that
+projection requires a separately admitted compatibility baseline and live-node
+evidence.
 The driver must expose independently named native encoders for:
 
 - signed transaction bytes;
