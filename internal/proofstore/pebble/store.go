@@ -4124,6 +4124,38 @@ func (s *Store) ClaimSTHAnchorAttempt(ctx context.Context, key model.STHAnchorSc
 	return attempt, true, nil
 }
 
+func (s *Store) CompareAndSwapSTHAnchorProviderState(ctx context.Context, key model.STHAnchorScheduleKey, generation uint64, leaseToken string, nowUnixN int64, expectedProviderState, nextProviderState []byte) error {
+	if err := ctx.Err(); err != nil {
+		return trusterr.Wrap(trusterr.CodeDeadlineExceeded, "proofstore update sth anchor provider state canceled", err)
+	}
+	if err := anchorschedule.ValidateKey(key); err != nil {
+		return err
+	}
+
+	s.anchorScheduleMu.Lock()
+	defer s.anchorScheduleMu.Unlock()
+
+	current, found, err := s.readSTHAnchorSchedule(key)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return trusterr.New(trusterr.CodeNotFound, "sth anchor schedule not found")
+	}
+	next, err := anchorschedule.CompareAndSwapProviderState(
+		current,
+		generation,
+		leaseToken,
+		nowUnixN,
+		expectedProviderState,
+		nextProviderState,
+	)
+	if err != nil {
+		return err
+	}
+	return s.commitSTHAnchorSchedule(next, "commit sth anchor provider state")
+}
+
 func (s *Store) RescheduleSTHAnchorAttempt(ctx context.Context, key model.STHAnchorScheduleKey, generation uint64, leaseToken string, attempts int, nextAttemptUnixN int64, lastErrorMessage string) error {
 	if err := ctx.Err(); err != nil {
 		return trusterr.Wrap(trusterr.CodeDeadlineExceeded, "proofstore reschedule sth anchor attempt canceled", err)

@@ -14,7 +14,10 @@ import (
 // MaxLastErrorBytes bounds provider-controlled text retained in the mutable
 // scheduler state. Pending/InFlight cardinality is constant, and this keeps
 // their encoded size bounded as well.
-const MaxLastErrorBytes = 4096
+const (
+	MaxLastErrorBytes     = 4096
+	MaxProviderStateBytes = 16 << 20
+)
 
 func ValidateKey(key model.STHAnchorScheduleKey) error {
 	if key.SinkName == "" {
@@ -121,6 +124,12 @@ func ValidateSchedule(schedule model.STHAnchorSchedule) error {
 		}
 		if len(attempt.LastErrorMessage) > MaxLastErrorBytes {
 			return trusterr.New(trusterr.CodeDataLoss, "in-flight anchor error exceeds size limit")
+		}
+		if len(attempt.ProviderState) > MaxProviderStateBytes {
+			return trusterr.New(trusterr.CodeDataLoss, "in-flight anchor provider state exceeds size limit")
+		}
+		if attempt.ProviderState != nil && len(attempt.ProviderState) == 0 {
+			return trusterr.New(trusterr.CodeDataLoss, "in-flight anchor provider state is non-canonical")
 		}
 		if attempt.NextAttemptUnixN > 0 && attempt.NextAttemptUnixN < attempt.LastAttemptUnixN {
 			return trusterr.New(trusterr.CodeDataLoss, "in-flight anchor retry precedes last attempt")
@@ -278,6 +287,40 @@ func Claim(current model.STHAnchorSchedule, nowUnixN, leaseUntilUnixN int64, lea
 	current.InFlight = &attempt
 	current.Revision++
 	return current, attempt, true, nil
+}
+
+// CompareAndSwapProviderState durably checkpoints provider-specific recovery
+// material without changing the immutable target or releasing its live lease.
+// Exact previous bytes fence stale writers in addition to generation and lease
+// ownership.
+func CompareAndSwapProviderState(current model.STHAnchorSchedule, generation uint64, leaseToken string, nowUnixN int64, expectedProviderState, nextProviderState []byte) (model.STHAnchorSchedule, error) {
+	if err := ValidateSchedule(current); err != nil {
+		return model.STHAnchorSchedule{}, err
+	}
+	if current.InFlight == nil {
+		return model.STHAnchorSchedule{}, trusterr.New(trusterr.CodeNotFound, "in-flight anchor attempt not found")
+	}
+	if generation == 0 || current.InFlight.Generation != generation ||
+		leaseToken == "" || current.InFlight.LeaseToken != leaseToken {
+		return model.STHAnchorSchedule{}, trusterr.New(trusterr.CodeFailedPrecondition, "anchor attempt generation or lease token does not match")
+	}
+	if nowUnixN <= 0 || current.InFlight.LeaseUntilUnixN <= nowUnixN {
+		return model.STHAnchorSchedule{}, trusterr.New(trusterr.CodeFailedPrecondition, "anchor attempt lease is not live")
+	}
+	if !bytes.Equal(current.InFlight.ProviderState, expectedProviderState) {
+		return model.STHAnchorSchedule{}, trusterr.New(trusterr.CodeFailedPrecondition, "anchor provider state compare-and-swap conflict")
+	}
+	if len(nextProviderState) == 0 || len(nextProviderState) > MaxProviderStateBytes {
+		return model.STHAnchorSchedule{}, trusterr.New(trusterr.CodeInvalidArgument, "anchor provider state is empty or oversized")
+	}
+	if bytes.Equal(current.InFlight.ProviderState, nextProviderState) {
+		return model.STHAnchorSchedule{}, trusterr.New(trusterr.CodeInvalidArgument, "anchor provider state update is unchanged")
+	}
+	attempt := *current.InFlight
+	attempt.ProviderState = append([]byte(nil), nextProviderState...)
+	current.InFlight = &attempt
+	current.Revision++
+	return current, nil
 }
 
 func Reschedule(current model.STHAnchorSchedule, generation uint64, leaseToken string, attempts int, nextAttemptUnixN int64, lastError string) (model.STHAnchorSchedule, error) {

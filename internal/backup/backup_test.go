@@ -229,6 +229,10 @@ func TestBackupRoundTripPreservesAnchorScheduleAndIndependentResult(t *testing.T
 	if err != nil || !claimed {
 		t.Fatalf("ClaimSTHAnchorAttempt in-flight claimed=%v err=%v", claimed, err)
 	}
+	providerState := []byte("canonical-bcos-attempt-journal")
+	if err := scheduler.CompareAndSwapSTHAnchorProviderState(ctx, key, inFlightAttempt.Generation, "lease-2", 225, nil, providerState); err != nil {
+		t.Fatalf("CompareAndSwapSTHAnchorProviderState: %v", err)
+	}
 	if err := scheduler.RescheduleSTHAnchorAttempt(ctx, key, inFlightAttempt.Generation, "lease-2", 2, 300, "temporary outage"); err != nil {
 		t.Fatalf("RescheduleSTHAnchorAttempt: %v", err)
 	}
@@ -279,7 +283,7 @@ func TestBackupRoundTripPreservesAnchorScheduleAndIndependentResult(t *testing.T
 	if err != nil || !found {
 		t.Fatalf("GetSTHAnchorSchedule found=%v err=%v", found, err)
 	}
-	if schedule.InFlight == nil || schedule.InFlight.Target.TreeSize != 3 || schedule.InFlight.Attempts != 2 || schedule.InFlight.NextAttemptUnixN != 300 || schedule.InFlight.LastAttemptUnixN != 300 || schedule.InFlight.LastErrorMessage != "temporary outage" {
+	if schedule.InFlight == nil || schedule.InFlight.Target.TreeSize != 3 || schedule.InFlight.Attempts != 2 || schedule.InFlight.NextAttemptUnixN != 300 || schedule.InFlight.LastAttemptUnixN != 300 || schedule.InFlight.LastErrorMessage != "temporary outage" || !bytes.Equal(schedule.InFlight.ProviderState, providerState) {
 		t.Fatalf("restored in-flight = %+v", schedule.InFlight)
 	}
 	if schedule.InFlight.LeaseOwner != "" || schedule.InFlight.LeaseToken != "" || schedule.InFlight.LeaseUntilUnixN != 0 {

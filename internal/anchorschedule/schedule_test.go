@@ -152,6 +152,42 @@ func TestRetryAndCompleteRequireLeaseAndExactTarget(t *testing.T) {
 	}
 }
 
+func TestCompareAndSwapProviderStateRequiresLiveLeaseAndExactBytes(t *testing.T) {
+	t.Parallel()
+	schedule, _, err := MergeCandidate(model.STHAnchorSchedule{}, false, candidate(2, 2, 100, 100), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	schedule, attempt, claimed, err := Claim(schedule, 100, 200, "worker-1", "lease-1")
+	if err != nil || !claimed {
+		t.Fatalf("Claim claimed=%v err=%v", claimed, err)
+	}
+	first := []byte("provider-state-1")
+	schedule, err = CompareAndSwapProviderState(schedule, attempt.Generation, "lease-1", 150, nil, first)
+	if err != nil {
+		t.Fatalf("CompareAndSwapProviderState first: %v", err)
+	}
+	if !bytes.Equal(schedule.InFlight.ProviderState, first) {
+		t.Fatalf("provider state = %q", schedule.InFlight.ProviderState)
+	}
+	if _, err := CompareAndSwapProviderState(schedule, attempt.Generation, "lease-1", 150, nil, []byte("stale")); trusterr.CodeOf(err) != trusterr.CodeFailedPrecondition {
+		t.Fatalf("stale previous state error=%v", err)
+	}
+	if _, err := CompareAndSwapProviderState(schedule, attempt.Generation, "lease-1", 200, first, []byte("late")); trusterr.CodeOf(err) != trusterr.CodeFailedPrecondition {
+		t.Fatalf("expired lease error=%v", err)
+	}
+	second := []byte("provider-state-2")
+	schedule, err = CompareAndSwapProviderState(schedule, attempt.Generation, "lease-1", 175, first, second)
+	if err != nil {
+		t.Fatalf("CompareAndSwapProviderState second: %v", err)
+	}
+	first[0] ^= 0xff
+	second[0] ^= 0xff
+	if !bytes.Equal(schedule.InFlight.ProviderState, []byte("provider-state-2")) {
+		t.Fatalf("provider state aliases caller bytes: %q", schedule.InFlight.ProviderState)
+	}
+}
+
 func TestRetryAndFailureBoundStoredProviderError(t *testing.T) {
 	t.Parallel()
 	schedule, _, err := MergeCandidate(model.STHAnchorSchedule{}, false, candidate(2, 2, 100, 100), nil)

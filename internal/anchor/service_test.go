@@ -395,6 +395,9 @@ func (s *failCompletionStore) ListSTHAnchorSchedules(ctx context.Context) ([]mod
 func (s *failCompletionStore) ClaimSTHAnchorAttempt(ctx context.Context, key model.STHAnchorScheduleKey, now, leaseUntil int64, owner, token string) (model.STHAnchorAttempt, bool, error) {
 	return s.schedule.ClaimSTHAnchorAttempt(ctx, key, now, leaseUntil, owner, token)
 }
+func (s *failCompletionStore) CompareAndSwapSTHAnchorProviderState(ctx context.Context, key model.STHAnchorScheduleKey, generation uint64, token string, now int64, expected, next []byte) error {
+	return s.schedule.CompareAndSwapSTHAnchorProviderState(ctx, key, generation, token, now, expected, next)
+}
 func (s *failCompletionStore) RescheduleSTHAnchorAttempt(ctx context.Context, key model.STHAnchorScheduleKey, generation uint64, token string, attempts int, next int64, last string) error {
 	return s.schedule.RescheduleSTHAnchorAttempt(ctx, key, generation, token, attempts, next, last)
 }

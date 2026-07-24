@@ -3222,6 +3222,40 @@ func (s LocalStore) ClaimSTHAnchorAttempt(ctx context.Context, key model.STHAnch
 	return attempt, true, nil
 }
 
+func (s LocalStore) CompareAndSwapSTHAnchorProviderState(ctx context.Context, key model.STHAnchorScheduleKey, generation uint64, leaseToken string, nowUnixN int64, expectedProviderState, nextProviderState []byte) error {
+	if err := ctx.Err(); err != nil {
+		return trusterr.Wrap(trusterr.CodeDeadlineExceeded, "proofstore update sth anchor provider state canceled", err)
+	}
+	if err := anchorschedule.ValidateKey(key); err != nil {
+		return err
+	}
+	lock := s.sthAnchorScheduleLock(key)
+	lock.Lock()
+	defer lock.Unlock()
+	if err := s.replayLocalAnchorPublicationLocked(key); err != nil {
+		return err
+	}
+	current, found, err := s.getSTHAnchorSchedule(key)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return trusterr.New(trusterr.CodeNotFound, "sth anchor schedule not found")
+	}
+	next, err := anchorschedule.CompareAndSwapProviderState(
+		current,
+		generation,
+		leaseToken,
+		nowUnixN,
+		expectedProviderState,
+		nextProviderState,
+	)
+	if err != nil {
+		return err
+	}
+	return s.writeSTHAnchorSchedule(next)
+}
+
 func (s LocalStore) RescheduleSTHAnchorAttempt(ctx context.Context, key model.STHAnchorScheduleKey, generation uint64, leaseToken string, attempts int, nextAttemptUnixN int64, lastError string) error {
 	release, err := s.beginOperation()
 	if err != nil {

@@ -1380,6 +1380,32 @@ func testSTHAnchorScheduleStateMachineOptional(t *testing.T, newStore Factory) {
 	if err != nil || !claimed || attempt.Target.TreeSize != 3 {
 		t.Fatalf("ClaimSTHAnchorAttempt attempt=%+v claimed=%v err=%v", attempt, claimed, err)
 	}
+	providerState := []byte("canonical-provider-state-v1")
+	if err := scheduler.CompareAndSwapSTHAnchorProviderState(ctx, key, attempt.Generation+1, "lease-1", 225, nil, providerState); trusterr.CodeOf(err) != trusterr.CodeFailedPrecondition {
+		t.Fatalf("CompareAndSwapSTHAnchorProviderState wrong generation error=%v", err)
+	}
+	if err := scheduler.CompareAndSwapSTHAnchorProviderState(ctx, key, attempt.Generation, "wrong", 225, nil, providerState); trusterr.CodeOf(err) != trusterr.CodeFailedPrecondition {
+		t.Fatalf("CompareAndSwapSTHAnchorProviderState wrong token error=%v", err)
+	}
+	if err := scheduler.CompareAndSwapSTHAnchorProviderState(ctx, key, attempt.Generation, "lease-1", 250, nil, providerState); trusterr.CodeOf(err) != trusterr.CodeFailedPrecondition {
+		t.Fatalf("CompareAndSwapSTHAnchorProviderState expired lease error=%v", err)
+	}
+	if err := scheduler.CompareAndSwapSTHAnchorProviderState(ctx, key, attempt.Generation, "lease-1", 225, []byte("wrong"), providerState); trusterr.CodeOf(err) != trusterr.CodeFailedPrecondition {
+		t.Fatalf("CompareAndSwapSTHAnchorProviderState wrong previous bytes error=%v", err)
+	}
+	if err := scheduler.CompareAndSwapSTHAnchorProviderState(ctx, key, attempt.Generation, "lease-1", 225, nil, make([]byte, anchorschedule.MaxProviderStateBytes+1)); trusterr.CodeOf(err) != trusterr.CodeInvalidArgument {
+		t.Fatalf("CompareAndSwapSTHAnchorProviderState oversized error=%v", err)
+	}
+	if err := scheduler.CompareAndSwapSTHAnchorProviderState(ctx, key, attempt.Generation, "lease-1", 225, nil, providerState); err != nil {
+		t.Fatalf("CompareAndSwapSTHAnchorProviderState: %v", err)
+	}
+	checkpointed, found, err := scheduler.GetSTHAnchorSchedule(ctx, key)
+	if err != nil || !found || checkpointed.InFlight == nil || !bytes.Equal(checkpointed.InFlight.ProviderState, providerState) {
+		t.Fatalf("checkpointed provider state schedule=%+v found=%v err=%v", checkpointed, found, err)
+	}
+	if err := scheduler.CompareAndSwapSTHAnchorProviderState(ctx, key, attempt.Generation, "lease-1", 225, nil, []byte("lost-update")); trusterr.CodeOf(err) != trusterr.CodeFailedPrecondition {
+		t.Fatalf("CompareAndSwapSTHAnchorProviderState stale writer error=%v", err)
+	}
 	advanced, err := scheduler.UpsertSTHAnchorCandidate(ctx, scheduleCandidate(key, 5, 0x55, 220, 320))
 	if err != nil {
 		t.Fatalf("UpsertSTHAnchorCandidate while in-flight: %v", err)
@@ -1401,7 +1427,7 @@ func testSTHAnchorScheduleStateMachineOptional(t *testing.T, newStore Factory) {
 		t.Fatalf("ClaimSTHAnchorAttempt before retry claimed=%v err=%v", claimed, err)
 	}
 	attempt, claimed, err = scheduler.ClaimSTHAnchorAttempt(ctx, key, 350, 450, "worker-2", "lease-2")
-	if err != nil || !claimed || attempt.Attempts != 1 || attempt.Target.TreeSize != 3 {
+	if err != nil || !claimed || attempt.Attempts != 1 || attempt.Target.TreeSize != 3 || !bytes.Equal(attempt.ProviderState, providerState) {
 		t.Fatalf("ClaimSTHAnchorAttempt retry attempt=%+v claimed=%v err=%v", attempt, claimed, err)
 	}
 

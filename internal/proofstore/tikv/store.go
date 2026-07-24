@@ -4829,6 +4829,33 @@ func (s *Store) ClaimSTHAnchorAttempt(ctx context.Context, key model.STHAnchorSc
 	return committed, claimed, nil
 }
 
+func (s *Store) CompareAndSwapSTHAnchorProviderState(ctx context.Context, key model.STHAnchorScheduleKey, generation uint64, leaseToken string, nowUnixN int64, expectedProviderState, nextProviderState []byte) error {
+	if err := anchorschedule.ValidateKey(key); err != nil {
+		return err
+	}
+	return s.runAnchorScheduleTransaction(ctx, "update sth anchor provider state", func(txn *transaction.KVTxn) error {
+		current, found, err := s.readAnchorScheduleTransaction(ctx, txn, key)
+		if err != nil {
+			return err
+		}
+		if !found {
+			return trusterr.New(trusterr.CodeNotFound, "sth anchor schedule not found")
+		}
+		next, err := anchorschedule.CompareAndSwapProviderState(
+			current,
+			generation,
+			leaseToken,
+			nowUnixN,
+			expectedProviderState,
+			nextProviderState,
+		)
+		if err != nil {
+			return err
+		}
+		return s.writeAnchorScheduleTransaction(txn, next)
+	})
+}
+
 func (s *Store) RescheduleSTHAnchorAttempt(ctx context.Context, key model.STHAnchorScheduleKey, generation uint64, leaseToken string, attempts int, nextAttemptUnixN int64, lastErrorMessage string) error {
 	if err := anchorschedule.ValidateKey(key); err != nil {
 		return err
