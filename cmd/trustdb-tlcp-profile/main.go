@@ -34,14 +34,20 @@ func main() {
 
 func run(args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 || args[0] != "validate" {
-		return errors.New("usage: trustdb-tlcp-profile validate --profile /absolute/path/profile.json [--forbid-key-ref REF]")
+		return errors.New("usage: trustdb-tlcp-profile validate --profile /absolute/path/profile.json [--forbid-key-ref REF] [--forbid-public-key-sha256 SHA256]")
 	}
 	flags := flag.NewFlagSet("validate", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	var profilePath string
-	var forbidden stringList
+	var forbiddenReferences stringList
+	var forbiddenPublicKeys stringList
 	flags.StringVar(&profilePath, "profile", "", "absolute path to a TLCP gateway profile")
-	flags.Var(&forbidden, "forbid-key-ref", "proof-signing key reference that the gateway must not reuse; may be repeated")
+	flags.Var(&forbiddenReferences, "forbid-key-ref", "proof-signing key reference that the gateway must not reuse; may be repeated")
+	flags.Var(
+		&forbiddenPublicKeys,
+		"forbid-public-key-sha256",
+		"canonical proof-signing public-key SHA-256 that the gateway must not reuse; may be repeated",
+	)
 	if err := flags.Parse(args[1:]); err != nil {
 		return err
 	}
@@ -53,7 +59,8 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return errors.New("--profile is required")
 	}
 	_, report, err := tlcpprofile.LoadAndValidate(profilePath, tlcpprofile.Options{
-		ForbiddenKeyReferences: append([]string(nil), forbidden...),
+		ForbiddenKeyReferences:    append([]string(nil), forbiddenReferences...),
+		ForbiddenPublicKeySHA256s: append([]string(nil), forbiddenPublicKeys...),
 	})
 	if err != nil {
 		return err

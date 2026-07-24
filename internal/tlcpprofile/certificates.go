@@ -82,8 +82,16 @@ func validatePublicTrust(profile Profile, now time.Time) (Report, error) {
 		ServerName:                  profile.ServerName,
 		SigningCertificateSHA256:    certificateFingerprint(set.signingLeaf),
 		EncryptionCertificateSHA256: certificateFingerprint(set.encryptionLeaf),
+		SigningPublicKeySHA256:      publicKeyFingerprint(set.signingLeaf),
+		EncryptionPublicKeySHA256:   publicKeyFingerprint(set.encryptionLeaf),
 		ServerCASHA256:              certificateFingerprints(serverRoots),
 		ClientCASHA256:              certificateFingerprints(clientRoots),
+	}
+	if report.SigningPublicKeySHA256 != profile.Certificates.SigningKey.PublicKeySHA256 {
+		return Report{}, errors.New("TLCP signing key fingerprint does not match the signing certificate")
+	}
+	if report.EncryptionPublicKeySHA256 != profile.Certificates.EncryptionKey.PublicKeySHA256 {
+		return Report{}, errors.New("TLCP encryption key fingerprint does not match the encryption certificate")
 	}
 	for _, certificate := range set.all {
 		if report.EarliestCertificateExpiration.IsZero() ||
@@ -534,6 +542,15 @@ func uniqueCertificates(certificates []*smx509.Certificate) []*smx509.Certificat
 
 func certificateFingerprint(certificate *smx509.Certificate) string {
 	value := sha256.Sum256(certificate.Raw)
+	return hex.EncodeToString(value[:])
+}
+
+func publicKeyFingerprint(certificate *smx509.Certificate) string {
+	der, err := smx509.MarshalPKIXPublicKey(certificate.PublicKey)
+	if err != nil {
+		return ""
+	}
+	value := sha256.Sum256(der)
 	return hex.EncodeToString(value[:])
 }
 

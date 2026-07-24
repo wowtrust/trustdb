@@ -16,19 +16,32 @@
     "name": "tengine-tongsuo",
     "tengine_version": "2.3.4",
     "tengine_commit": "698e1798e8d691c55b5405ca1526c3dca4759d47",
-    "tengine_source_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+    "tengine_source_sha256": "9a8d1e83ec7664f799255b0dec5baebde2d12b6578b29cfadf92316b3d3e221c",
     "tongsuo_version": "8.4.0",
     "tongsuo_commit": "a8ae0925d26de3b449f7a21767910cd41291bcd8",
-    "tongsuo_source_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
-    "builder_image": "docker.io/library/debian:bookworm-slim@sha256:3333333333333333333333333333333333333333333333333333333333333333",
-    "runtime_image": "docker.io/library/debian:bookworm-slim@sha256:4444444444444444444444444444444444444444444444444444444444444444",
+    "tongsuo_source_sha256": "57c2741750a699bfbdaa1bbe44a5733e9c8fc65d086c210151cfbc2bbd6fc975",
+    "builder_image": "docker.io/library/debian:bookworm-slim@sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818",
+    "runtime_image": "docker.io/library/debian:bookworm-slim@sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818",
     "gateway_image_digest": "sha256:5555555555555555555555555555555555555555555555555555555555555555",
     "build_parameters": [
       "--add-module=modules/ngx_openssl_ntls",
+      "--build=trustdb-tlcp-gateway-reproducible",
+      "--conf-path=/etc/trustdb/tlcp/nginx.conf",
+      "--error-log-path=stderr",
+      "--group=trustdb",
+      "--http-log-path=/dev/stdout",
+      "--http-proxy-temp-path=/var/cache/tlcp-gateway/proxy",
+      "--lock-path=/run/tlcp-gateway/tlcp-gateway.lock",
+      "--pid-path=/run/tlcp-gateway/tlcp-gateway.pid",
+      "--prefix=/opt/tlcp-gateway",
+      "--sbin-path=/usr/local/sbin/tlcp-gateway",
+      "--user=trustdb",
+      "--with-cc-opt=-O2 -fdebug-prefix-map=/src=. -ffile-prefix-map=/src=. -fno-record-gcc-switches -Wno-deprecated-declarations",
       "--with-http_ssl_module",
       "--with-http_v2_module",
+      "--with-ld-opt=-Wl,--build-id=none",
       "--with-openssl=/src/tongsuo",
-      "--with-openssl-opt=enable-ntls",
+      "--with-openssl-opt=enable-ntls no-tests",
       "--with-stream",
       "--with-stream_ssl_module",
       "--with-stream_ssl_preread_module"
@@ -55,11 +68,13 @@
     "client_ca_file": "${FIXTURE_DIR}/client-ca.pem",
     "signing_key": {
       "provider": "file",
-      "reference": "${FIXTURE_DIR}/server-signing.key"
+      "reference": "${FIXTURE_DIR}/server-signing.key",
+      "public_key_sha256": "8888888888888888888888888888888888888888888888888888888888888888"
     },
     "encryption_key": {
       "provider": "file",
-      "reference": "${FIXTURE_DIR}/server-encryption.key"
+      "reference": "${FIXTURE_DIR}/server-encryption.key",
+      "public_key_sha256": "9999999999999999999999999999999999999999999999999999999999999999"
     }
   },
   "revocation": {

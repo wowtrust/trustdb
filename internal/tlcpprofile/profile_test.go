@@ -45,7 +45,10 @@ func TestGoldenProfileValidatesStrictSM2DualCertificatesAndCRLs(t *testing.T) {
 		report.ServerName != fixture.profile.ServerName ||
 		len(report.SigningCertificateSHA256) != 64 ||
 		len(report.EncryptionCertificateSHA256) != 64 ||
+		len(report.SigningPublicKeySHA256) != 64 ||
+		len(report.EncryptionPublicKeySHA256) != 64 ||
 		report.SigningCertificateSHA256 == report.EncryptionCertificateSHA256 ||
+		report.SigningPublicKeySHA256 == report.EncryptionPublicKeySHA256 ||
 		len(report.ServerCASHA256) != 1 ||
 		len(report.ClientCASHA256) != 1 ||
 		len(report.CRLIssuers) != 2 {
@@ -118,12 +121,34 @@ func TestProfileFailsClosedOnDeploymentAndTrustBoundaryDrift(t *testing.T) {
 		{
 			name:   "non-loopback app upstream",
 			mutate: func(profile *Profile) { profile.Network.TrustDBGRPCUpstream = "10.0.0.2:9090" },
-			match:  "loopback-only",
+			match:  "exactly 127.0.0.1",
 		},
 		{
 			name:   "production file key",
 			mutate: func(profile *Profile) { profile.Environment = EnvironmentProduction },
 			match:  "test profiles",
+		},
+		{
+			name: "production raw key path",
+			mutate: func(profile *Profile) {
+				profile.Environment = EnvironmentProduction
+				profile.Certificates.SigningKey.Provider = KeyProviderSDF
+				profile.Certificates.SigningKey.Reference = "/private/signing.key"
+				profile.Certificates.EncryptionKey.Provider = KeyProviderSDF
+				profile.Certificates.EncryptionKey.Reference = "engine:sdf:encryption-key"
+			},
+			match: "engine:<id>:<key-id>",
+		},
+		{
+			name: "production provider and engine mismatch",
+			mutate: func(profile *Profile) {
+				profile.Environment = EnvironmentProduction
+				profile.Certificates.SigningKey.Provider = KeyProviderSDF
+				profile.Certificates.SigningKey.Reference = "engine:pkcs11:signing-key"
+				profile.Certificates.EncryptionKey.Provider = KeyProviderSDF
+				profile.Certificates.EncryptionKey.Reference = "engine:sdf:encryption-key"
+			},
+			match: "must match provider sdf",
 		},
 		{
 			name: "same key reference under another provider label",
@@ -142,6 +167,21 @@ func TestProfileFailsClosedOnDeploymentAndTrustBoundaryDrift(t *testing.T) {
 			name:   "unpinned tengine",
 			mutate: func(profile *Profile) { profile.Implementation.TengineCommit = strings.Repeat("0", 40) },
 			match:  "pinned",
+		},
+		{
+			name: "unpinned tengine source",
+			mutate: func(profile *Profile) {
+				profile.Implementation.TengineSourceSHA256 = strings.Repeat("0", 64)
+			},
+			match: "pinned",
+		},
+		{
+			name: "unpinned builder image",
+			mutate: func(profile *Profile) {
+				profile.Implementation.BuilderImage = "docker.io/library/debian:bookworm-slim@sha256:" +
+					strings.Repeat("0", 64)
+			},
+			match: "pinned",
 		},
 		{
 			name: "gateway image digest without algorithm",
@@ -175,6 +215,19 @@ func TestProfileFailsClosedOnDeploymentAndTrustBoundaryDrift(t *testing.T) {
 	}
 }
 
+func TestProductionOpaqueEngineReferencesValidateWithoutReadingPrivateKeys(t *testing.T) {
+	fixture := newTrustFixture(t)
+	profile := fixture.profile
+	profile.Environment = EnvironmentProduction
+	profile.Certificates.SigningKey.Provider = KeyProviderSDF
+	profile.Certificates.SigningKey.Reference = "engine:sdf:gateway-signing"
+	profile.Certificates.EncryptionKey.Provider = KeyProviderSDF
+	profile.Certificates.EncryptionKey.Reference = "engine:sdf:gateway-encryption"
+	if _, err := Validate(profile, Options{Now: fixtureNow}); err != nil {
+		t.Fatalf("Validate() production opaque keys error = %v", err)
+	}
+}
+
 func TestProfileRejectsProofKeyReferenceOverlapWithoutReadingKeys(t *testing.T) {
 	fixture := newTrustFixture(t)
 	reference := fixture.profile.Certificates.SigningKey.Reference
@@ -185,6 +238,23 @@ func TestProfileRejectsProofKeyReferenceOverlapWithoutReadingKeys(t *testing.T) 
 	}
 	if _, err := os.Stat(reference); !os.IsNotExist(err) {
 		t.Fatalf("test key unexpectedly exists: %v", err)
+	}
+	if _, err := Validate(fixture.profile, Options{
+		Now: fixtureNow,
+		ForbiddenPublicKeySHA256s: []string{
+			fixture.profile.Certificates.SigningKey.PublicKeySHA256,
+		},
+	}); err == nil || !strings.Contains(err.Error(), "public key overlaps") {
+		t.Fatalf("Validate() public-key alias error = %v", err)
+	}
+}
+
+func TestProfileRejectsDeclaredPublicKeyFingerprintDrift(t *testing.T) {
+	fixture := newTrustFixture(t)
+	fixture.profile.Certificates.SigningKey.PublicKeySHA256 = strings.Repeat("a", 64)
+	if _, err := Validate(fixture.profile, Options{Now: fixtureNow}); err == nil ||
+		!strings.Contains(err.Error(), "fingerprint does not match") {
+		t.Fatalf("Validate() error = %v", err)
 	}
 }
 
@@ -336,6 +406,10 @@ func TestProfileRequiresCRLForEveryServerIntermediate(t *testing.T) {
 		fixtureNow.Add(24*time.Hour),
 		nil,
 	)
+	fixture.profile.Certificates.SigningKey.PublicKeySHA256 =
+		publicKeyFingerprint(fixture.signingCertificate)
+	fixture.profile.Certificates.EncryptionKey.PublicKeySHA256 =
+		publicKeyFingerprint(fixture.encryptionCertificate)
 	appendCertificatePEM(t, fixture.profile.Certificates.ServerEncryptionChainFile, intermediate)
 	intermediateCRL := filepath.Join(fixture.dir, "server-intermediate.crl")
 	writeCRL(
@@ -411,6 +485,8 @@ func newTrustFixture(t *testing.T) trustFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
+	profile.Certificates.SigningKey.PublicKeySHA256 = publicKeyFingerprint(signing)
+	profile.Certificates.EncryptionKey.PublicKeySHA256 = publicKeyFingerprint(encryption)
 	return trustFixture{
 		dir: dir, profile: profile,
 		serverCA: serverCA, serverCAKey: serverCAKey,

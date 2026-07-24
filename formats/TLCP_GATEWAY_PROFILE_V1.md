@@ -11,6 +11,17 @@ The reference profile pins Tengine `2.3.4` at commit
 runtime base images, build arguments, the produced gateway image, SBOM, and
 build record are all independently SHA-256 pinned.
 
+The exact production build inputs are recorded in
+[`packaging/tlcp-gateway/baseline.json`](../packaging/tlcp-gateway/baseline.json).
+The Tengine archive SHA-256 is
+`9a8d1e83ec7664f799255b0dec5baebde2d12b6578b29cfadf92316b3d3e221c`;
+the Tongsuo archive SHA-256 is
+`57c2741750a699bfbdaa1bbe44a5733e9c8fc65d086c210151cfbc2bbd6fc975`.
+Both builder and runtime use the exact Debian manifest-list digest recorded in
+that baseline. The `gateway_image_digest`, `sbom_sha256`, and
+`build_record_sha256` fields identify outputs of a particular reproducible
+build and therefore are not hard-coded global constants.
+
 ## Trust boundary
 
 The gateway terminates TLCP mutual authentication and forwards HTTP and gRPC
@@ -26,12 +37,20 @@ them. The gateway entrypoint may read test-only software keys to perform
 certificate/key matching. TrustDB does not mount or read either gateway private
 key.
 
+Every production reference uses `engine:<id>:<key-id>`. For the `pkcs11` and
+`sdf` providers, `<id>` must respectively be `pkcs11` or `sdf`; `<key-id>` is
+an opaque provider identifier, not a filesystem path or private-key value.
+
 Proof-signing keys remain under TrustDB's existing `keys.*` and
 `crypto.signer_plugins.*` configuration. A caller should pass every
 proof-signing key reference to `trustdb-tlcp-profile validate` with
-`--forbid-key-ref`; an exact overlap fails. Gateway certificates, CAs, CRLs,
-keys, and readiness results never become proof trust roots. Proof, WAL,
-proofstore, backup, and offline verification bytes are unchanged.
+`--forbid-key-ref` and every canonical proof-signing public-key fingerprint
+with `--forbid-public-key-sha256`. Reference aliases cannot bypass separation:
+each gateway key declares a canonical `public_key_sha256`, it must match the
+public key in the corresponding certificate, and a fingerprint overlap fails.
+Gateway certificates, CAs, CRLs, keys, and readiness results never become
+proof trust roots. Proof, WAL, proofstore, backup, and offline verification
+bytes are unchanged.
 
 ## Strict JSON envelope
 
@@ -44,7 +63,9 @@ while being read are rejected.
 The complete field shape is represented by
 [`test/vectors/tlcp-gateway-profile-v1.json`](../test/vectors/tlcp-gateway-profile-v1.json).
 `${FIXTURE_DIR}` is a test-only placeholder replaced with an absolute temporary
-directory by the golden tests.
+directory by the golden tests. Repeated-digit artifact digests in that
+test-environment vector exercise schema shape only; they are not production
+pins or published build outputs.
 
 The following values are exact:
 
@@ -114,11 +135,11 @@ new HTTP or gRPC connection.
 ## Network and readiness
 
 `trustdb_http_upstream` and `trustdb_grpc_upstream` are distinct loopback IP
-address/port pairs. `gateway_http_bind` and `gateway_grpc_bind` are distinct
-non-loopback IP address/port pairs. All four addresses are explicit and use
-non-zero ports. All four ports are different because the two processes share
-one network namespace and an unspecified gateway bind must not overlap a
-TrustDB loopback listener.
+address/port pairs using exactly `127.0.0.1`. `gateway_http_bind` and
+`gateway_grpc_bind` are distinct non-loopback IP address/port pairs. All four
+addresses are explicit and use non-zero ports. All four ports are different
+because the two processes share one network namespace and an unspecified
+gateway bind must not overlap a TrustDB loopback listener.
 
 Profile validation is necessary but not sufficient for readiness. The external
 ready signal must perform, within the configured startup/canary timeout:

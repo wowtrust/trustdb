@@ -24,8 +24,12 @@ const (
 	ImplementationTengineTongsuo = "tengine-tongsuo"
 	PinnedTengineVersion         = "2.3.4"
 	PinnedTengineCommit          = "698e1798e8d691c55b5405ca1526c3dca4759d47"
+	PinnedTengineSourceSHA256    = "9a8d1e83ec7664f799255b0dec5baebde2d12b6578b29cfadf92316b3d3e221c"
 	PinnedTongsuoVersion         = "8.4.0"
 	PinnedTongsuoCommit          = "a8ae0925d26de3b449f7a21767910cd41291bcd8"
+	PinnedTongsuoSourceSHA256    = "57c2741750a699bfbdaa1bbe44a5733e9c8fc65d086c210151cfbc2bbd6fc975"
+	PinnedBuilderImage           = "docker.io/library/debian:bookworm-slim@sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818"
+	PinnedRuntimeImage           = "docker.io/library/debian:bookworm-slim@sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818"
 
 	EnvironmentProduction = "production"
 	EnvironmentTest       = "test"
@@ -101,8 +105,9 @@ type Certificates struct {
 }
 
 type KeyReference struct {
-	Provider  string `json:"provider"`
-	Reference string `json:"reference"`
+	Provider        string `json:"provider"`
+	Reference       string `json:"reference"`
+	PublicKeySHA256 string `json:"public_key_sha256"`
 }
 
 type Revocation struct {
@@ -118,8 +123,9 @@ type Timeouts struct {
 }
 
 type Options struct {
-	Now                    time.Time
-	ForbiddenKeyReferences []string
+	Now                       time.Time
+	ForbiddenKeyReferences    []string
+	ForbiddenPublicKeySHA256s []string
 }
 
 type Report struct {
@@ -128,6 +134,8 @@ type Report struct {
 	ServerName                    string    `json:"server_name"`
 	SigningCertificateSHA256      string    `json:"signing_certificate_sha256"`
 	EncryptionCertificateSHA256   string    `json:"encryption_certificate_sha256"`
+	SigningPublicKeySHA256        string    `json:"signing_public_key_sha256"`
+	EncryptionPublicKeySHA256     string    `json:"encryption_public_key_sha256"`
 	ServerCASHA256                []string  `json:"server_ca_sha256"`
 	ClientCASHA256                []string  `json:"client_ca_sha256"`
 	CRLIssuers                    []string  `json:"crl_issuers"`
@@ -207,7 +215,12 @@ func validateProfileFields(profile Profile, options Options) error {
 	if err := validateNetwork(profile.Network); err != nil {
 		return err
 	}
-	if err := validateCertificatesConfig(profile.Certificates, profile.Environment, options.ForbiddenKeyReferences); err != nil {
+	if err := validateCertificatesConfig(
+		profile.Certificates,
+		profile.Environment,
+		options.ForbiddenKeyReferences,
+		options.ForbiddenPublicKeySHA256s,
+	); err != nil {
 		return err
 	}
 	if err := validateRevocationConfig(profile.Revocation); err != nil {
@@ -223,15 +236,17 @@ func validateImplementation(value Implementation) error {
 	if value.Name != ImplementationTengineTongsuo ||
 		value.TengineVersion != PinnedTengineVersion ||
 		value.TengineCommit != PinnedTengineCommit ||
+		value.TengineSourceSHA256 != PinnedTengineSourceSHA256 ||
 		value.TongsuoVersion != PinnedTongsuoVersion ||
-		value.TongsuoCommit != PinnedTongsuoCommit {
+		value.TongsuoCommit != PinnedTongsuoCommit ||
+		value.TongsuoSourceSHA256 != PinnedTongsuoSourceSHA256 ||
+		value.BuilderImage != PinnedBuilderImage ||
+		value.RuntimeImage != PinnedRuntimeImage {
 		return errors.New("TLCP gateway implementation does not match the pinned Tengine/Tongsuo baseline")
 	}
 	for name, digest := range map[string]string{
-		"tengine_source_sha256": value.TengineSourceSHA256,
-		"tongsuo_source_sha256": value.TongsuoSourceSHA256,
-		"sbom_sha256":           value.SBOMSHA256,
-		"build_record_sha256":   value.BuildRecordSHA256,
+		"sbom_sha256":         value.SBOMSHA256,
+		"build_record_sha256": value.BuildRecordSHA256,
 	} {
 		if err := validateSHA256(name, digest); err != nil {
 			return err
@@ -243,14 +258,6 @@ func validateImplementation(value Implementation) error {
 	if err := validateSHA256("gateway_image_digest", value.GatewayImageDigest); err != nil {
 		return err
 	}
-	for name, image := range map[string]string{
-		"builder_image": value.BuilderImage,
-		"runtime_image": value.RuntimeImage,
-	} {
-		if err := validateDigestPinnedImage(name, image); err != nil {
-			return err
-		}
-	}
 	if len(value.BuildParameters) > MaxBuildParameterCount ||
 		!equalStrings(value.BuildParameters, requiredBuildParameters()) {
 		return errors.New("TLCP gateway build_parameters do not match the pinned baseline")
@@ -261,10 +268,23 @@ func validateImplementation(value Implementation) error {
 func requiredBuildParameters() []string {
 	return []string{
 		"--add-module=modules/ngx_openssl_ntls",
+		"--build=trustdb-tlcp-gateway-reproducible",
+		"--conf-path=/etc/trustdb/tlcp/nginx.conf",
+		"--error-log-path=stderr",
+		"--group=trustdb",
+		"--http-log-path=/dev/stdout",
+		"--http-proxy-temp-path=/var/cache/tlcp-gateway/proxy",
+		"--lock-path=/run/tlcp-gateway/tlcp-gateway.lock",
+		"--pid-path=/run/tlcp-gateway/tlcp-gateway.pid",
+		"--prefix=/opt/tlcp-gateway",
+		"--sbin-path=/usr/local/sbin/tlcp-gateway",
+		"--user=trustdb",
+		"--with-cc-opt=-O2 -fdebug-prefix-map=/src=. -ffile-prefix-map=/src=. -fno-record-gcc-switches -Wno-deprecated-declarations",
 		"--with-http_ssl_module",
 		"--with-http_v2_module",
+		"--with-ld-opt=-Wl,--build-id=none",
 		"--with-openssl=/src/tongsuo",
-		"--with-openssl-opt=enable-ntls",
+		"--with-openssl-opt=enable-ntls no-tests",
 		"--with-stream",
 		"--with-stream_ssl_module",
 		"--with-stream_ssl_preread_module",
@@ -289,8 +309,9 @@ func validateNetwork(value Network) error {
 	if err != nil {
 		return err
 	}
-	if !httpUpstream.Addr().IsLoopback() || !grpcUpstream.Addr().IsLoopback() {
-		return errors.New("TrustDB TLCP gateway upstreams must be loopback-only")
+	allowedUpstream := netip.MustParseAddr("127.0.0.1")
+	if httpUpstream.Addr() != allowedUpstream || grpcUpstream.Addr() != allowedUpstream {
+		return errors.New("TrustDB TLCP gateway upstreams must use exactly 127.0.0.1")
 	}
 	httpBind, err := parseAddress("gateway_http_bind", value.GatewayHTTPBind)
 	if err != nil {
@@ -314,7 +335,12 @@ func validateNetwork(value Network) error {
 	return nil
 }
 
-func validateCertificatesConfig(value Certificates, environment string, forbidden []string) error {
+func validateCertificatesConfig(
+	value Certificates,
+	environment string,
+	forbiddenReferences []string,
+	forbiddenPublicKeys []string,
+) error {
 	for name, path := range map[string]string{
 		"server_signing_chain_file":    value.ServerSigningChainFile,
 		"server_encryption_chain_file": value.ServerEncryptionChainFile,
@@ -325,24 +351,45 @@ func validateCertificatesConfig(value Certificates, environment string, forbidde
 			return err
 		}
 	}
-	if err := validateKeyReference("signing_key", value.SigningKey, environment, forbidden); err != nil {
+	if err := validateKeyReference(
+		"signing_key", value.SigningKey, environment, forbiddenReferences, forbiddenPublicKeys,
+	); err != nil {
 		return err
 	}
-	if err := validateKeyReference("encryption_key", value.EncryptionKey, environment, forbidden); err != nil {
+	if err := validateKeyReference(
+		"encryption_key", value.EncryptionKey, environment, forbiddenReferences, forbiddenPublicKeys,
+	); err != nil {
 		return err
 	}
 	if value.SigningKey.Reference == value.EncryptionKey.Reference {
 		return errors.New("TLCP signing and encryption keys must use distinct references")
 	}
+	if value.SigningKey.PublicKeySHA256 == value.EncryptionKey.PublicKeySHA256 {
+		return errors.New("TLCP signing and encryption keys must use distinct public keys")
+	}
 	return nil
 }
 
-func validateKeyReference(name string, value KeyReference, environment string, forbidden []string) error {
+func validateKeyReference(
+	name string,
+	value KeyReference,
+	environment string,
+	forbiddenReferences []string,
+	forbiddenPublicKeys []string,
+) error {
 	if err := validateString(name+".reference", value.Reference); err != nil {
+		return err
+	}
+	if err := validateCanonicalSHA256(name+".public_key_sha256", value.PublicKeySHA256); err != nil {
 		return err
 	}
 	switch value.Provider {
 	case KeyProviderEngine, KeyProviderPKCS11, KeyProviderSDF:
+		if environment == EnvironmentProduction {
+			if err := validateOpaqueEngineReference(name, value.Provider, value.Reference); err != nil {
+				return err
+			}
+		}
 	case KeyProviderFile:
 		if environment != EnvironmentTest {
 			return fmt.Errorf("%s file provider is allowed only in test profiles", name)
@@ -353,9 +400,38 @@ func validateKeyReference(name string, value KeyReference, environment string, f
 	default:
 		return fmt.Errorf("%s provider must be engine, pkcs11, sdf, or test-only file", name)
 	}
-	for _, item := range forbidden {
+	for _, item := range forbiddenReferences {
 		if value.Reference == item {
 			return fmt.Errorf("%s reference overlaps a proof-signing key reference", name)
+		}
+	}
+	for _, item := range forbiddenPublicKeys {
+		if err := validateCanonicalSHA256("forbidden_public_key_sha256", item); err != nil {
+			return err
+		}
+		if value.PublicKeySHA256 == item {
+			return fmt.Errorf("%s public key overlaps a proof-signing public key", name)
+		}
+	}
+	return nil
+}
+
+func validateOpaqueEngineReference(name, provider, reference string) error {
+	parts := strings.SplitN(reference, ":", 3)
+	if len(parts) != 3 || parts[0] != "engine" || parts[1] == "" || parts[2] == "" {
+		return fmt.Errorf("%s production reference must use engine:<id>:<key-id>", name)
+	}
+	if provider != KeyProviderEngine && parts[1] != provider {
+		return fmt.Errorf("%s production engine id must match provider %s", name, provider)
+	}
+	for _, value := range parts[1:] {
+		if strings.IndexFunc(value, func(char rune) bool {
+			return !((char >= 'a' && char <= 'z') ||
+				(char >= 'A' && char <= 'Z') ||
+				(char >= '0' && char <= '9') ||
+				strings.ContainsRune("_./@,=+-", char))
+		}) >= 0 {
+			return fmt.Errorf("%s production reference contains unsupported characters", name)
 		}
 	}
 	return nil
@@ -416,15 +492,11 @@ func validateSHA256(name, value string) error {
 	return nil
 }
 
-func validateDigestPinnedImage(name, value string) error {
-	if err := validateString(name, value); err != nil {
-		return err
+func validateCanonicalSHA256(name, value string) error {
+	if strings.HasPrefix(value, "sha256:") {
+		return fmt.Errorf("TLCP gateway %s must omit the sha256: prefix", name)
 	}
-	index := strings.LastIndex(value, "@sha256:")
-	if index <= 0 {
-		return fmt.Errorf("TLCP gateway %s must be pinned by sha256 digest", name)
-	}
-	return validateSHA256(name, value[index+1:])
+	return validateSHA256(name, value)
 }
 
 func validateAbsoluteCleanPath(name, value string) error {
