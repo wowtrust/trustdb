@@ -8,14 +8,7 @@ import (
 )
 
 func LoadAndValidate(path string, options Options) (Profile, Report, error) {
-	if err := validateAbsoluteCleanPath("profile_file", path); err != nil {
-		return Profile{}, Report{}, err
-	}
-	data, err := readBoundedRegularFile(path, MaxProfileBytes)
-	if err != nil {
-		return Profile{}, Report{}, fmt.Errorf("load TLCP gateway profile: %w", err)
-	}
-	profile, err := Decode(data)
+	profile, err := Load(path)
 	if err != nil {
 		return Profile{}, Report{}, err
 	}
@@ -24,6 +17,25 @@ func LoadAndValidate(path string, options Options) (Profile, Report, error) {
 		return Profile{}, Report{}, err
 	}
 	return profile, report, nil
+}
+
+// Load performs the bounded, strict profile-envelope read without evaluating
+// certificates or external public inputs. Deadline-owning wrappers use it to
+// obtain the lifecycle timeout before running full validation in a killable
+// child process.
+func Load(path string) (Profile, error) {
+	if err := validateAbsoluteCleanPath("profile_file", path); err != nil {
+		return Profile{}, err
+	}
+	data, err := readBoundedRegularFile(path, MaxProfileBytes)
+	if err != nil {
+		return Profile{}, fmt.Errorf("load TLCP gateway profile: %w", err)
+	}
+	profile, err := Decode(data)
+	if err != nil {
+		return Profile{}, err
+	}
+	return profile, nil
 }
 
 func readBoundedRegularFile(path string, limit int64) ([]byte, error) {
