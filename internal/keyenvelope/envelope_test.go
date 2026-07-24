@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/wowtrust/trustdb/internal/cborx"
@@ -98,6 +99,8 @@ func TestEnvelopeFailsClosedForWrongKeyTamperTruncationAndDowngrade(t *testing.T
 	wrong := testPassphraseProvider("wrong horse battery staple!!")
 	if _, err := Open(ctx, data, testMetadata, wrong); !errors.Is(err, ErrAuthenticationFailed) {
 		t.Fatalf("wrong passphrase error = %v", err)
+	} else if strings.Contains(err.Error(), "correct horse") || strings.Contains(err.Error(), "wrong horse") {
+		t.Fatalf("wrong passphrase diagnostic leaked secret text: %v", err)
 	}
 
 	tests := map[string]func(Envelope) []byte{
@@ -264,6 +267,12 @@ func TestEnvelopeStorageAtomicPermissionsAndSymlinkRejection(t *testing.T) {
 		if err := ReplaceFile(link, second); !errors.Is(err, ErrUnsafeEnvelopeStorage) {
 			t.Fatalf("ReplaceFile(symlink) error = %v", err)
 		}
+	}
+	secretPath := filepath.Join(dir, "private-secret-material")
+	if _, err := ReadFile(secretPath); err == nil {
+		t.Fatal("ReadFile(missing secret path) error = nil")
+	} else if strings.Contains(err.Error(), filepath.Base(secretPath)) {
+		t.Fatalf("storage diagnostic leaked material path: %v", err)
 	}
 }
 
