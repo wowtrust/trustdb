@@ -116,7 +116,8 @@ RUN printf '%s\n' \
     && : > /etc/apt/sources.list.d/debian.sources \
     && apt-get -o Acquire::Check-Valid-Until=false update \
     && apt-get install -y --no-install-recommends libpcre3=2:8.39-15 \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* /var/log/apt/* \
+    && rm -f /var/cache/ldconfig/aux-cache /var/log/dpkg.log
 COPY --from=builder /usr/local/sbin/tlcp-gateway /usr/local/sbin/tlcp-gateway
 COPY --from=builder /opt/tongsuo/bin/openssl /opt/tongsuo/bin/openssl
 COPY --from=profile-validator /out/trustdb-tlcp-profile /usr/local/bin/trustdb-tlcp-profile

@@ -15,6 +15,9 @@ pass's cached layers. The embedded tools build from
 modules rather than downloading TrustDB's unrelated server dependencies.
 Those modules are fetched serially with bounded retries and verified against
 the committed sums before compilation.
+The runtime package layer removes apt/dpkg logs and the regenerated ldconfig
+auxiliary cache because they contain execution-time state and are not required
+to load the pinned runtime library.
 
 Build and independently verify one architecture:
 
