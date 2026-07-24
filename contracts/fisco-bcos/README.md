@@ -157,6 +157,31 @@ bindings and verifies the pinned SM2 PBFT validator quorum without contacting
 the chain. The anchored TrustDB payload and its evidence cryptographic suite
 remain unchanged and opaque to FISCO BCOS.
 
+## Standard and Guomi performance evidence
+
+The four-node Air smoke provides a repeated, post-warmup comparison rather
+than reporting the old single diagnostic timing:
+
+```bash
+scripts/fisco-bcos/smoke-air.sh \
+  --mode standard --work-dir /tmp/fisco-standard-perf \
+  --performance-warmup 5 --performance-samples 20
+scripts/fisco-bcos/smoke-air.sh \
+  --mode guomi --work-dir /tmp/fisco-guomi-perf \
+  --performance-warmup 5 --performance-samples 20
+```
+
+Run the pair sequentially on the same otherwise-idle host and use identical
+sample settings. Values are bounded to 3–20 warmups and 20–100 measured
+samples so p95 has a meaningful minimum population and smoke runtime remains
+bounded. The result's `performance` object reports `n`, p50, p95 and maximum
+for transaction preparation/signing/encoding, receipt submission, split
+receipt/transaction proof retrieval, block retrieval, and local
+receipt/block/PBFT verification. Contract deployment and network lifecycle
+work are excluded. See
+[ADR-0012](../../docs/integrations/ADR-0012-FISCO-BCOS-3X-COMPATIBILITY-BASELINE.md)
+for the exact methodology and interpretation limits.
+
 ## Deployment record
 
 Copy `deployments/deployment-record.template.json` into a controlled deployment
