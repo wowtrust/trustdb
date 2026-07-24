@@ -188,24 +188,48 @@ func TestTLCPGatewayHTTPAndGRPCMutualAuthentication(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := tlcpprofile.WriteTrustDBIdentityManifest(
-			manifestPath,
-			staleData,
-			registryData,
-		); err != nil {
+		assertRejected := func(proofData, registryData []byte) {
+			t.Helper()
+			if _, err := tlcpprofile.WriteTrustDBIdentityManifest(
+				manifestPath,
+				proofData,
+				registryData,
+			); err != nil {
+				t.Fatal(err)
+			}
+			output, readinessErr := exec.Command(
+				"docker",
+				"exec",
+				running.gatewayContainer,
+				"/usr/local/bin/trustdb-tlcp-readiness",
+			).CombinedOutput()
+			if readinessErr == nil {
+				t.Fatalf("stale identity manifest passed readiness:\n%s", output)
+			}
+			replaceTestFile(t, manifestPath, original)
+			waitForRuntimeReadiness(t, running.gatewayContainer, 10*time.Second)
+		}
+		assertRejected(staleData, registryData)
+
+		proofData, err := os.ReadFile(filepath.Join(
+			fixture.dir,
+			"trustdb-server.pub",
+		))
+		if err != nil {
 			t.Fatal(err)
 		}
-		output, readinessErr := exec.Command(
-			"docker",
-			"exec",
-			running.gatewayContainer,
-			"/usr/local/bin/trustdb-tlcp-readiness",
-		).CombinedOutput()
-		if readinessErr == nil {
-			t.Fatalf("stale manifest passed readiness:\n%s", output)
+		staleRegistryPublic, _, err := ed25519.GenerateKey(rand.Reader)
+		if err != nil {
+			t.Fatal(err)
 		}
-		replaceTestFile(t, manifestPath, original)
-		waitForRuntimeReadiness(t, running.gatewayContainer, 10*time.Second)
+		staleRegistryDescriptor := staleDescriptor.Clone()
+		staleRegistryDescriptor.KeyID = "stale-registry-signer"
+		staleRegistryDescriptor.PublicKey.Bytes = staleRegistryPublic
+		staleRegistryData, err := keydescriptor.Marshal(staleRegistryDescriptor)
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertRejected(proofData, staleRegistryData)
 	})
 
 	t.Run("bounded concurrent HTTP and gRPC", func(t *testing.T) {
