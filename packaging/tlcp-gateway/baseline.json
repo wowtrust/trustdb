@@ -1,0 +1,60 @@
+{
+  "schema_version": "trustdb.tlcp-gateway-build-baseline.v1",
+  "source_date_epoch": 1702545703,
+  "tengine": {
+    "version": "2.3.4",
+    "commit": "698e1798e8d691c55b5405ca1526c3dca4759d47",
+    "archive_url": "https://github.com/alibaba/tengine/archive/refs/tags/2.3.4.tar.gz",
+    "archive_sha256": "9a8d1e83ec7664f799255b0dec5baebde2d12b6578b29cfadf92316b3d3e221c",
+    "license_sha256": "8444037a744ac508f6c76aa334d73a2f9ca0bf53317d078ddf43626ccfa10deb"
+  },
+  "tongsuo": {
+    "version": "8.4.0",
+    "commit": "a8ae0925d26de3b449f7a21767910cd41291bcd8",
+    "archive_url": "https://github.com/Tongsuo-Project/Tongsuo/archive/refs/tags/8.4.0.tar.gz",
+    "archive_sha256": "57c2741750a699bfbdaa1bbe44a5733e9c8fc65d086c210151cfbc2bbd6fc975",
+    "license_sha256": "7d5450cb2d142651b8afa315b5f238efc805dad827d91ba367d8516bc9d49e7a"
+  },
+  "builder_image": "docker.io/library/debian:bookworm-slim@sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818",
+  "runtime_image": "docker.io/library/debian:bookworm-slim@sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818",
+  "validator_builder_image": "docker.io/library/golang:1.26.5-bookworm@sha256:1ecb7edf62a0408027bd5729dfd6b1b8766e578e8df93995b225dfd0944eb651",
+  "dockerfile_frontend_image": "docker.io/docker/dockerfile:1.7@sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e",
+  "buildx_version": "v0.35.0",
+  "buildkit_image": "docker.io/moby/buildkit:v0.31.2@sha256:2f5adac4ecd194d9f8c10b7b5d7bceb5186853db1b26e5abd3a657af0b7e26ec",
+  "debian_snapshot": "20260713T000000Z",
+  "builder_packages": [
+    "build-essential=12.9",
+    "libpcre3-dev=2:8.39-15",
+    "perl=5.36.0-7+deb12u3",
+    "zlib1g-dev=1:1.2.13.dfsg-1"
+  ],
+  "runtime_packages": [
+    "libpcre3=2:8.39-15"
+  ],
+  "syft_image": "docker.io/anchore/syft:v1.38.2@sha256:63a159108794114992136692c92155c7694f259aca814a92c187a4e025754b00",
+  "build_parameters": [
+    "--add-module=modules/ngx_openssl_ntls",
+    "--build=trustdb-tlcp-gateway-reproducible",
+    "--conf-path=/etc/trustdb/tlcp/nginx.conf",
+    "--error-log-path=stderr",
+    "--group=trustdb",
+    "--http-log-path=/dev/stdout",
+    "--http-proxy-temp-path=/var/cache/tlcp-gateway/proxy",
+    "--lock-path=/run/tlcp-gateway/tlcp-gateway.lock",
+    "--pid-path=/run/tlcp-gateway/tlcp-gateway.pid",
+    "--prefix=/opt/tlcp-gateway",
+    "--sbin-path=/usr/local/sbin/tlcp-gateway",
+    "--user=trustdb",
+    "--with-cc-opt=-O2 -fdebug-prefix-map=/src=. -ffile-prefix-map=/src=. -fno-record-gcc-switches -Wno-deprecated-declarations",
+    "--with-http_ssl_module",
+    "--with-http_v2_module",
+    "--with-ld-opt=-Wl,--build-id=none",
+    "--with-openssl=/src/tongsuo",
+    "--with-openssl-opt=enable-ntls no-tests",
+    "--with-stream",
+    "--with-stream_ssl_module",
+    "--with-stream_ssl_preread_module",
+    "CGO_ENABLED=0",
+    "go build -trimpath -buildvcs=false -ldflags=-s -w -buildid="
+  ]
+}

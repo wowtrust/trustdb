@@ -1,0 +1,104 @@
+{
+  "schema_version": "trustdb.tlcp-gateway-profile.v1",
+  "profile_id": "test-tongsuo-gateway",
+  "environment": "test",
+  "mode": "tlcp_mtls",
+  "crypto_mode": "guomi",
+  "server_name": "trustdb.example",
+  "cipher_suites": [
+    "ECDHE-SM2-SM4-GCM-SM3"
+  ],
+  "alpn_protocols": [
+    "h2",
+    "http/1.1"
+  ],
+  "implementation": {
+    "name": "tengine-tongsuo",
+    "tengine_version": "2.3.4",
+    "tengine_commit": "698e1798e8d691c55b5405ca1526c3dca4759d47",
+    "tengine_source_sha256": "9a8d1e83ec7664f799255b0dec5baebde2d12b6578b29cfadf92316b3d3e221c",
+    "tongsuo_version": "8.4.0",
+    "tongsuo_commit": "a8ae0925d26de3b449f7a21767910cd41291bcd8",
+    "tongsuo_source_sha256": "57c2741750a699bfbdaa1bbe44a5733e9c8fc65d086c210151cfbc2bbd6fc975",
+    "builder_image": "docker.io/library/debian:bookworm-slim@sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818",
+    "runtime_image": "docker.io/library/debian:bookworm-slim@sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818",
+    "validator_builder_image": "docker.io/library/golang:1.26.5-bookworm@sha256:1ecb7edf62a0408027bd5729dfd6b1b8766e578e8df93995b225dfd0944eb651",
+    "gateway_image_digest": "sha256:5555555555555555555555555555555555555555555555555555555555555555",
+    "build_parameters": [
+      "--add-module=modules/ngx_openssl_ntls",
+      "--build=trustdb-tlcp-gateway-reproducible",
+      "--conf-path=/etc/trustdb/tlcp/nginx.conf",
+      "--error-log-path=stderr",
+      "--group=trustdb",
+      "--http-log-path=/dev/stdout",
+      "--http-proxy-temp-path=/var/cache/tlcp-gateway/proxy",
+      "--lock-path=/run/tlcp-gateway/tlcp-gateway.lock",
+      "--pid-path=/run/tlcp-gateway/tlcp-gateway.pid",
+      "--prefix=/opt/tlcp-gateway",
+      "--sbin-path=/usr/local/sbin/tlcp-gateway",
+      "--user=trustdb",
+      "--with-cc-opt=-O2 -fdebug-prefix-map=/src=. -ffile-prefix-map=/src=. -fno-record-gcc-switches -Wno-deprecated-declarations",
+      "--with-http_ssl_module",
+      "--with-http_v2_module",
+      "--with-ld-opt=-Wl,--build-id=none",
+      "--with-openssl=/src/tongsuo",
+      "--with-openssl-opt=enable-ntls no-tests",
+      "--with-stream",
+      "--with-stream_ssl_module",
+      "--with-stream_ssl_preread_module",
+      "CGO_ENABLED=0",
+      "go build -trimpath -buildvcs=false -ldflags=-s -w -buildid="
+    ],
+    "sbom_sha256": "6666666666666666666666666666666666666666666666666666666666666666",
+    "build_record_sha256": "7777777777777777777777777777777777777777777777777777777777777777"
+  },
+  "network": {
+    "shared_network_namespace": true,
+    "host_network": false,
+    "allowed_containers": [
+      "trustdb",
+      "tlcp-gateway",
+      "tlcp-gateway-candidate"
+    ],
+    "trustdb_http_upstream": "127.0.0.1:8080",
+    "trustdb_grpc_upstream": "127.0.0.1:9090",
+    "gateway_http_bind": "0.0.0.0:8443",
+    "gateway_grpc_bind": "0.0.0.0:9443"
+  },
+  "certificates": {
+    "server_signing_chain_file": "${FIXTURE_DIR}/server-signing.pem",
+    "server_encryption_chain_file": "${FIXTURE_DIR}/server-encryption.pem",
+    "server_ca_file": "${FIXTURE_DIR}/server-ca.pem",
+    "client_ca_file": "${FIXTURE_DIR}/client-ca.pem",
+    "signing_key": {
+      "provider": "file",
+      "reference": "${FIXTURE_DIR}/server-signing.key",
+      "public_key_sha256": "8888888888888888888888888888888888888888888888888888888888888888"
+    },
+    "encryption_key": {
+      "provider": "file",
+      "reference": "${FIXTURE_DIR}/server-encryption.key",
+      "public_key_sha256": "9999999999999999999999999999999999999999999999999999999999999999"
+    }
+  },
+  "readiness": {
+    "identity_name": "trustdb-readiness.example",
+    "signing_chain_file": "${FIXTURE_DIR}/client-signing.pem",
+    "encryption_chain_file": "${FIXTURE_DIR}/client-encryption.pem"
+  },
+  "trustdb_identity_manifest_file": "${FIXTURE_DIR}/trustdb-active-identities.json",
+  "revocation": {
+    "mode": "crl",
+    "crl_files": [
+      "${FIXTURE_DIR}/server-ca.crl",
+      "${FIXTURE_DIR}/client-ca.crl"
+    ],
+    "gateway_crl_bundle_file": "${FIXTURE_DIR}/crl-bundle.pem",
+    "max_staleness": "24h"
+  },
+  "timeouts": {
+    "startup": "30s",
+    "reload": "30s",
+    "canary": "10s"
+  }
+}

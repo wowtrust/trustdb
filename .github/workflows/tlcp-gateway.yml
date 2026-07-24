@@ -1,0 +1,170 @@
+name: TLCP Gateway
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/tlcp-gateway.yml"
+      - "cmd/trustdb-tlcp-build-record/**"
+      - "cmd/trustdb-tlcp-profile/**"
+      - "cmd/trustdb-tlcp-readiness/**"
+      - "docs/integrations/TLCP_GATEWAY.md"
+      - "formats/TLCP_GATEWAY_PROFILE_V1.md"
+      - "internal/tlcpbuild/**"
+      - "internal/tlcpe2e/**"
+      - "internal/tlcpprofile/**"
+      - "internal/tlcpready/**"
+      - "packaging/tlcp-gateway/**"
+      - "test/vectors/tlcp-gateway-profile-v1.json"
+      - "go.mod"
+      - "go.sum"
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/tlcp-gateway.yml"
+      - "cmd/trustdb-tlcp-build-record/**"
+      - "cmd/trustdb-tlcp-profile/**"
+      - "cmd/trustdb-tlcp-readiness/**"
+      - "docs/integrations/TLCP_GATEWAY.md"
+      - "formats/TLCP_GATEWAY_PROFILE_V1.md"
+      - "internal/tlcpbuild/**"
+      - "internal/tlcpe2e/**"
+      - "internal/tlcpprofile/**"
+      - "internal/tlcpready/**"
+      - "packaging/tlcp-gateway/**"
+      - "test/vectors/tlcp-gateway-profile-v1.json"
+      - "go.mod"
+      - "go.sum"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tlcp-gateway-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux-gateway:
+    name: Reproducible gateway and TLCP interop · ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-amd64
+            runner: ubuntu-24.04
+            platform: linux/amd64
+          - name: linux-arm64
+            runner: ubuntu-24.04-arm
+            platform: linux/arm64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 50
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Setup Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
+        with:
+          version: v0.35.0
+          driver: docker-container
+          driver-opts: |
+            image=docker.io/moby/buildkit:v0.31.2@sha256:2f5adac4ecd194d9f8c10b7b5d7bceb5186853db1b26e5abd3a657af0b7e26ec
+
+      - name: Test profile and build contracts
+        run: |
+          go test -count=1 -mod=readonly \
+            ./internal/tlcpprofile ./internal/tlcpready ./internal/tlcpbuild \
+            ./cmd/trustdb-tlcp-profile ./cmd/trustdb-tlcp-readiness \
+            ./cmd/trustdb-tlcp-build-record
+          go vet \
+            ./internal/tlcpprofile ./internal/tlcpready ./internal/tlcpbuild \
+            ./cmd/trustdb-tlcp-profile ./cmd/trustdb-tlcp-readiness \
+            ./cmd/trustdb-tlcp-build-record
+
+      - name: Build twice and verify OCI, SBOM, and build record
+        id: build
+        shell: bash
+        env:
+          PLATFORM: ${{ matrix.platform }}
+          OUTPUT_DIR: ${{ runner.temp }}/trustdb-tlcp-artifacts
+        run: |
+          set -euo pipefail
+          packaging/tlcp-gateway/build.sh | tee "$RUNNER_TEMP/tlcp-build.log"
+          digest="$(awk '/^TLCP gateway image:/ {print $4}' "$RUNNER_TEMP/tlcp-build.log")"
+          runtime_image="$(awk '/^TLCP gateway runtime image:/ {print $5}' "$RUNNER_TEMP/tlcp-build.log")"
+          if ! [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::reproducible build did not emit an image digest"
+            exit 1
+          fi
+          expected_runtime_image="trustdb-tlcp-gateway:verified-${PLATFORM//\//-}"
+          if [[ "$runtime_image" != "$expected_runtime_image" ]]; then
+            echo "::error::reproducible build did not load the expected runtime image"
+            exit 1
+          fi
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          echo "image=$runtime_image" >> "$GITHUB_OUTPUT"
+
+      - name: Run real HTTP and HTTP/2 gRPC TLCP tests
+        env:
+          TRUSTDB_TLCP_GATEWAY_IMAGE: ${{ steps.build.outputs.image }}
+        run: |
+          go test -count=1 -mod=readonly -tags="integration tlcp" \
+            -run TestTLCPGatewayHTTPAndGRPCMutualAuthentication \
+            ./internal/tlcpe2e
+
+      - name: Run TLCP integration race test
+        if: matrix.name == 'linux-amd64'
+        env:
+          TRUSTDB_TLCP_GATEWAY_IMAGE: ${{ steps.build.outputs.image }}
+        run: |
+          go test -race -count=1 -mod=readonly -tags="integration tlcp" \
+            -run TestTLCPGatewayHTTPAndGRPCMutualAuthentication \
+            ./internal/tlcpe2e
+
+      - name: Upload verified build evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: trustdb-tlcp-${{ matrix.name }}
+          path: ${{ runner.temp }}/trustdb-tlcp-artifacts/
+          if-no-files-found: error
+          retention-days: 14
+
+  portable-developer-tools:
+    name: Profile and test compilation · ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macos-arm64
+            runner: macos-15
+          - name: windows-amd64
+            runner: windows-2025
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Setup Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Test portable profile and build-record tools
+        run: |
+          go test -count=1 -mod=readonly ./internal/tlcpprofile ./internal/tlcpready ./internal/tlcpbuild
+          go test -count=1 -mod=readonly ./cmd/trustdb-tlcp-profile ./cmd/trustdb-tlcp-readiness ./cmd/trustdb-tlcp-build-record
+          go build -trimpath ./cmd/trustdb-tlcp-profile ./cmd/trustdb-tlcp-readiness ./cmd/trustdb-tlcp-build-record
+
+      - name: Compile TLCP integration harness
+        run: go test -count=1 -mod=readonly -tags="integration tlcp" -run "^$" ./internal/tlcpe2e

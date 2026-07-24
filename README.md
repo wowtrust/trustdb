@@ -292,6 +292,14 @@ Implemented HTTP endpoints:
 
 The optional gRPC listener is enabled with `--grpc-listen` or `server.grpc_listen`. It uses TrustDB's deterministic CBOR payload model so HTTP and gRPC transports share proof semantics. HTTP and gRPC share TLS 1.2/1.3 and mTLS listener policy; CA pinning, zero-listener-restart rotation, revocation hooks, SDK/desktop configuration, and the strict separation between transport and proof trust are documented in [TLS and mutual TLS transport security](docs/integrations/TLS_MTLS.md).
 
+Deployments that require a Guomi transport boundary can use the
+[TLCP and Guomi certificate gateway](docs/integrations/TLCP_GATEWAY.md). The
+pinned Tengine/Tongsuo profile provides SM2/SM3 dual-certificate mutual
+authentication, SM4-GCM, HTTP and HTTP/2 gRPC proxying, CRL enforcement,
+atomic certificate-generation rotation, reproducible Linux images, and real
+positive and negative interoperability tests without exposing gateway private
+keys to TrustDB.
+
 ## Configuration
 
 Configuration examples live in [configs](configs):
@@ -333,6 +341,7 @@ The screenshot below is rendered directly from the current desktop client code:
 - [ARCHITECTURE.zh-CN.md](ARCHITECTURE.zh-CN.md): detailed TrustDB server, persistence, Global Log, anchoring, SDK, backup, and offline-verification architecture (Chinese).
 - [docs/integrations/NATS_INGRESS.md](docs/integrations/NATS_INGRESS.md): optional JetStream ingress topology, configuration, security, backpressure, result recovery, and Go SDK workflow.
 - [docs/integrations/PKCS11_SIGNER.md](docs/integrations/PKCS11_SIGNER.md): isolated native PKCS#11 signer, PIN-file and mechanism gates, rotation, SoftHSM interoperability, and production-token qualification.
+- [docs/integrations/TLCP_GATEWAY.md](docs/integrations/TLCP_GATEWAY.md): pinned Tengine/Tongsuo TLCP gateway, SM2/SM3 dual certificates, SM4-GCM, CRLs, readiness, rotation, and real HTTP/gRPC interoperability.
 - [docs/compliance/NATIONAL_CRYPTOGRAPHY_THREAT_MODEL_AND_EVIDENCE_MAP.zh-CN.md](docs/compliance/NATIONAL_CRYPTOGRAPHY_THREAT_MODEL_AND_EVIDENCE_MAP.zh-CN.md): China-cryptography threat model, prohibited trust shortcuts, tabletop scenarios, residual risks, and compliance evidence map (Chinese).
 - [docs/compliance/ADR-0004-PROVIDER-NEUTRAL-CRYPTO-CONTRACTS.zh-CN.md](docs/compliance/ADR-0004-PROVIDER-NEUTRAL-CRYPTO-CONTRACTS.zh-CN.md): suite-aware hashing, non-exportable key handles, signer/verifier contracts, and fail-closed provider rules (Chinese).
 - [docs/compliance/ADR-0005-IMMUTABLE-PROOFSTORE-SUITE-MARKERS.zh-CN.md](docs/compliance/ADR-0005-IMMUTABLE-PROOFSTORE-SUITE-MARKERS.zh-CN.md): immutable suite markers, atomic backend initialization, and backup/migration binding rules (Chinese).
