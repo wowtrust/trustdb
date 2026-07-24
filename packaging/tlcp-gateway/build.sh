@@ -101,6 +101,10 @@ docker run --rm --platform "$platform" --entrypoint /bin/sh "$image_digest" -c '
     fail "trustdb runtime identity is missing"
   [ -w /run/tlcp-gateway ] || fail "runtime directory is not writable"
   [ ! -w /etc/trustdb/tlcp ] || fail "configuration directory is writable"
+  [ -x /usr/local/bin/trustdb-tlcp-profile ] || fail "strict profile validator is missing"
+  [ -x /usr/local/bin/trustdb-tlcp-readiness ] || fail "credentialed readiness probe is missing"
+  [ -x /usr/local/bin/tlcp-gateway-prepare-runtime ] ||
+    fail "validated runtime activation helper is missing"
   tengine_license=$(sha256sum /usr/share/licenses/trustdb-tlcp-gateway/Tengine-LICENSE | cut -d " " -f1)
   [ "$tengine_license" = "8444037a744ac508f6c76aa334d73a2f9ca0bf53317d078ddf43626ccfa10deb" ] ||
     fail "Tengine license checksum drifted"

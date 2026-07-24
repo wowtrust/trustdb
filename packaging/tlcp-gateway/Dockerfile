@@ -1,6 +1,7 @@
 # syntax=docker/dockerfile:1.7@sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e
 
 ARG BASE_IMAGE=docker.io/library/debian:bookworm-slim@sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818
+ARG VALIDATOR_BUILDER_IMAGE=docker.io/library/golang:1.26.5-bookworm@sha256:1ecb7edf62a0408027bd5729dfd6b1b8766e578e8df93995b225dfd0944eb651
 
 FROM ${BASE_IMAGE} AS source
 ADD --checksum=sha256:9a8d1e83ec7664f799255b0dec5baebde2d12b6578b29cfadf92316b3d3e221c \
@@ -63,6 +64,28 @@ RUN ./configure \
     && /usr/local/sbin/tlcp-gateway -V 2>&1 | grep -F 'Tengine/2.3.4' \
     && /opt/tongsuo/bin/openssl version | grep -F 'Tongsuo 8.4.0'
 
+FROM ${VALIDATOR_BUILDER_IMAGE} AS profile-validator
+ARG SOURCE_DATE_EPOCH=1702545703
+ENV CGO_ENABLED=0 \
+    GOFLAGS=-mod=readonly \
+    GOTOOLCHAIN=local \
+    SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH}
+WORKDIR /src/trustdb
+COPY go.mod go.sum ./
+RUN go mod download
+COPY internal/tlcpprofile ./internal/tlcpprofile
+COPY internal/tlcpready ./internal/tlcpready
+COPY cmd/trustdb-tlcp-profile ./cmd/trustdb-tlcp-profile
+COPY cmd/trustdb-tlcp-readiness ./cmd/trustdb-tlcp-readiness
+RUN go build -trimpath -buildvcs=false \
+      -ldflags='-s -w -buildid=' \
+      -o /out/trustdb-tlcp-profile \
+      ./cmd/trustdb-tlcp-profile \
+    && go build -trimpath -buildvcs=false \
+      -ldflags='-s -w -buildid=' \
+      -o /out/trustdb-tlcp-readiness \
+      ./cmd/trustdb-tlcp-readiness
+
 FROM ${BASE_IMAGE} AS gateway
 ARG SOURCE_DATE_EPOCH=1702545703
 LABEL org.opencontainers.image.title="TrustDB TLCP gateway" \
@@ -82,22 +105,27 @@ RUN printf '%s\n' \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=builder /usr/local/sbin/tlcp-gateway /usr/local/sbin/tlcp-gateway
 COPY --from=builder /opt/tongsuo/bin/openssl /opt/tongsuo/bin/openssl
+COPY --from=profile-validator /out/trustdb-tlcp-profile /usr/local/bin/trustdb-tlcp-profile
+COPY --from=profile-validator /out/trustdb-tlcp-readiness /usr/local/bin/trustdb-tlcp-readiness
 COPY --from=builder /etc/trustdb/tlcp/mime.types /opt/tlcp-gateway/conf/mime.types
 COPY --from=builder /licenses /usr/share/licenses/trustdb-tlcp-gateway
 COPY packaging/tlcp-gateway/baseline.json /usr/share/trustdb/tlcp-gateway/build-baseline.json
 COPY packaging/tlcp-gateway/entrypoint.sh /usr/local/bin/tlcp-gateway-entrypoint
+COPY packaging/tlcp-gateway/prepare-runtime.sh /usr/local/bin/tlcp-gateway-prepare-runtime
 RUN mkdir -p /etc/trustdb/tlcp /var/cache/tlcp-gateway/proxy /run/tlcp-gateway \
     && printf '%s\n' 'trustdb:x:10001:' >> /etc/group \
     && printf '%s\n' 'trustdb:x:10001:10001:TrustDB TLCP gateway:/nonexistent:/usr/sbin/nologin' >> /etc/passwd \
     && chown -R 10001:10001 /var/cache/tlcp-gateway /run/tlcp-gateway \
-    && chmod 0755 /usr/local/bin/tlcp-gateway-entrypoint \
+    && chmod 0755 \
+      /usr/local/bin/tlcp-gateway-entrypoint \
+      /usr/local/bin/tlcp-gateway-prepare-runtime \
     && test "$(sha256sum /usr/share/licenses/trustdb-tlcp-gateway/Tengine-LICENSE | cut -d ' ' -f 1)" = "8444037a744ac508f6c76aa334d73a2f9ca0bf53317d078ddf43626ccfa10deb" \
     && test "$(sha256sum /usr/share/licenses/trustdb-tlcp-gateway/Tongsuo-LICENSE.txt | cut -d ' ' -f 1)" = "7d5450cb2d142651b8afa315b5f238efc805dad827d91ba367d8516bc9d49e7a"
 USER 10001:10001
 WORKDIR /run/tlcp-gateway
-ENV PATH=/opt/tongsuo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
-    TLCP_CONFIG_FILE=/run/tlcp-gateway/nginx.conf
+ENV PATH=/opt/tongsuo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 EXPOSE 8443 9443
 STOPSIGNAL SIGQUIT
-HEALTHCHECK NONE
+HEALTHCHECK --interval=10s --timeout=10s --start-period=5s --retries=2 \
+  CMD ["/usr/local/bin/trustdb-tlcp-readiness"]
 ENTRYPOINT ["/usr/local/bin/tlcp-gateway-entrypoint"]
