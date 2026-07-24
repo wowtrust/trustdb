@@ -291,6 +291,13 @@ func TestDescriptorCertificateChainBindsLeafKey(t *testing.T) {
 	if err := descriptor.Validate(); err != nil {
 		t.Fatalf("Validate() error = %v", err)
 	}
+	metadata, err := descriptor.CertificateMetadata()
+	if err != nil {
+		t.Fatalf("CertificateMetadata() error = %v", err)
+	}
+	if len(metadata) != 2 || metadata[0].Subject == "" || metadata[0].NotBeforeUnixN == 0 || metadata[0].NotAfterUnixN == 0 || !metadata[1].IsCA {
+		t.Fatalf("CertificateMetadata() = %+v", metadata)
+	}
 	descriptor.PublicKey.Bytes = caPublic
 	if err := descriptor.Validate(); err == nil || !strings.Contains(err.Error(), "does not match") {
 		t.Fatalf("Validate() error = %v, want leaf mismatch", err)

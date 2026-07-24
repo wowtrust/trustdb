@@ -16,7 +16,7 @@ const (
 	SchemaBatchTreeLeaf        = "trustdb.batch-tree-leaf.v1"
 	SchemaBatchTreeNode        = "trustdb.batch-tree-node.v1"
 	SchemaWALCheckpoint        = "trustdb.wal-checkpoint.v1"
-	SchemaKeyEvent             = "trustdb.key-event.v1"
+	SchemaKeyEvent             = "trustdb.key-event.v2"
 	SchemaGlobalLogLeaf        = "trustdb.global-log-leaf.v1"
 	SchemaGlobalLogNode        = "trustdb.global-log-node.v1"
 	SchemaGlobalLogState       = "trustdb.global-log-state.v1"
@@ -45,6 +45,7 @@ const SchemaWALCheckpointContiguous = "trustdb.wal-checkpoint.v2"
 
 const (
 	KeyEventRegister   = "KEY_REGISTERED"
+	KeyEventRotate     = "KEY_ROTATED"
 	KeyEventRevoke     = "KEY_REVOKED"
 	KeyEventCompromise = "KEY_COMPROMISED"
 
@@ -572,16 +573,22 @@ type GlobalLogOutboxItem struct {
 }
 
 type ClientKey struct {
-	TenantID           string `cbor:"tenant_id" json:"tenant_id"`
-	ClientID           string `cbor:"client_id" json:"client_id"`
-	KeyID              string `cbor:"key_id" json:"key_id"`
-	Alg                string `cbor:"alg" json:"alg"`
-	PublicKey          []byte `cbor:"public_key" json:"public_key"`
-	ValidFromUnixN     int64  `cbor:"valid_from_unix_nano" json:"valid_from_unix_nano"`
-	ValidUntilUnixN    int64  `cbor:"valid_until_unix_nano,omitempty" json:"valid_until_unix_nano,omitempty"`
-	Status             string `cbor:"status" json:"status"`
-	RevokedAtUnixN     int64  `cbor:"revoked_at_unix_nano,omitempty" json:"revoked_at_unix_nano,omitempty"`
-	CompromisedAtUnixN int64  `cbor:"compromised_at_unix_nano,omitempty" json:"compromised_at_unix_nano,omitempty"`
+	TenantID           string         `cbor:"tenant_id" json:"tenant_id"`
+	ClientID           string         `cbor:"client_id" json:"client_id"`
+	KeyID              string         `cbor:"key_id" json:"key_id"`
+	CryptoSuite        cryptosuite.ID `cbor:"crypto_suite" json:"crypto_suite"`
+	Alg                string         `cbor:"alg" json:"alg"`
+	PublicKeyEncoding  string         `cbor:"public_key_encoding" json:"public_key_encoding"`
+	PublicKey          []byte         `cbor:"public_key" json:"public_key"`
+	SM2UserID          string         `cbor:"sm2_user_id,omitempty" json:"sm2_user_id,omitempty"`
+	CertificateChain   [][]byte       `cbor:"certificate_chain,omitempty" json:"certificate_chain,omitempty"`
+	Provider           string         `cbor:"provider" json:"provider"`
+	KeyDescriptor      []byte         `cbor:"key_descriptor" json:"key_descriptor"`
+	ValidFromUnixN     int64          `cbor:"valid_from_unix_nano" json:"valid_from_unix_nano"`
+	ValidUntilUnixN    int64          `cbor:"valid_until_unix_nano,omitempty" json:"valid_until_unix_nano,omitempty"`
+	Status             string         `cbor:"status" json:"status"`
+	RevokedAtUnixN     int64          `cbor:"revoked_at_unix_nano,omitempty" json:"revoked_at_unix_nano,omitempty"`
+	CompromisedAtUnixN int64          `cbor:"compromised_at_unix_nano,omitempty" json:"compromised_at_unix_nano,omitempty"`
 }
 
 // STHAnchorResult records a successful external publication of an STH/global
@@ -685,20 +692,22 @@ type L5CoverageCheckpoint struct {
 }
 
 type KeyEvent struct {
-	SchemaVersion      string    `cbor:"schema_version" json:"schema_version"`
-	Sequence           uint64    `cbor:"sequence" json:"sequence"`
-	Type               string    `cbor:"type" json:"type"`
-	TenantID           string    `cbor:"tenant_id" json:"tenant_id"`
-	ClientID           string    `cbor:"client_id" json:"client_id"`
-	KeyID              string    `cbor:"key_id" json:"key_id"`
-	Alg                string    `cbor:"alg" json:"alg"`
-	PublicKey          []byte    `cbor:"public_key,omitempty" json:"public_key,omitempty"`
-	ValidFromUnixN     int64     `cbor:"valid_from_unix_nano,omitempty" json:"valid_from_unix_nano,omitempty"`
-	ValidUntilUnixN    int64     `cbor:"valid_until_unix_nano,omitempty" json:"valid_until_unix_nano,omitempty"`
-	RevokedAtUnixN     int64     `cbor:"revoked_at_unix_nano,omitempty" json:"revoked_at_unix_nano,omitempty"`
-	CompromisedAtUnixN int64     `cbor:"compromised_at_unix_nano,omitempty" json:"compromised_at_unix_nano,omitempty"`
-	Reason             string    `cbor:"reason,omitempty" json:"reason,omitempty"`
-	PrevEventHash      []byte    `cbor:"prev_event_hash,omitempty" json:"prev_event_hash,omitempty"`
-	EventHash          []byte    `cbor:"event_hash" json:"event_hash"`
-	RegistrySignature  Signature `cbor:"registry_signature" json:"registry_signature"`
+	SchemaVersion      string         `cbor:"schema_version" json:"schema_version"`
+	CryptoSuite        cryptosuite.ID `cbor:"crypto_suite" json:"crypto_suite"`
+	Sequence           uint64         `cbor:"sequence" json:"sequence"`
+	Type               string         `cbor:"type" json:"type"`
+	TenantID           string         `cbor:"tenant_id" json:"tenant_id"`
+	ClientID           string         `cbor:"client_id" json:"client_id"`
+	KeyID              string         `cbor:"key_id" json:"key_id"`
+	PreviousKeyID      string         `cbor:"previous_key_id,omitempty" json:"previous_key_id,omitempty"`
+	KeyDescriptor      []byte         `cbor:"key_descriptor,omitempty" json:"key_descriptor,omitempty"`
+	ValidFromUnixN     int64          `cbor:"valid_from_unix_nano,omitempty" json:"valid_from_unix_nano,omitempty"`
+	ValidUntilUnixN    int64          `cbor:"valid_until_unix_nano,omitempty" json:"valid_until_unix_nano,omitempty"`
+	RotatedAtUnixN     int64          `cbor:"rotated_at_unix_nano,omitempty" json:"rotated_at_unix_nano,omitempty"`
+	RevokedAtUnixN     int64          `cbor:"revoked_at_unix_nano,omitempty" json:"revoked_at_unix_nano,omitempty"`
+	CompromisedAtUnixN int64          `cbor:"compromised_at_unix_nano,omitempty" json:"compromised_at_unix_nano,omitempty"`
+	Reason             string         `cbor:"reason,omitempty" json:"reason,omitempty"`
+	PrevEventHash      []byte         `cbor:"prev_event_hash,omitempty" json:"prev_event_hash,omitempty"`
+	EventHash          []byte         `cbor:"event_hash" json:"event_hash"`
+	RegistrySignature  Signature      `cbor:"registry_signature" json:"registry_signature"`
 }

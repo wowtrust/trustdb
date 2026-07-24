@@ -261,10 +261,10 @@ func (e LocalEngine) resolveClientKey(signed model.SignedClaim, receivedAt time.
 			return trustcrypto.PublicKeyDescriptor{}, "", err
 		}
 		descriptor := trustcrypto.PublicKeyDescriptor{
-			Suite:     cryptosuite.INTLV1,
+			Suite:     key.CryptoSuite,
 			KeyID:     key.KeyID,
 			Algorithm: key.Alg,
-			Encoding:  cryptosuite.Ed25519PublicKeyEncoding,
+			Encoding:  key.PublicKeyEncoding,
 			Bytes:     append([]byte(nil), key.PublicKey...),
 		}
 		if err := trustcrypto.ValidatePublicKey(e.cryptoProvider(), descriptor); err != nil {

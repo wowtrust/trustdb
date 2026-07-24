@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/wowtrust/trustdb/internal/claim"
+	"github.com/wowtrust/trustdb/internal/cryptosuite"
+	"github.com/wowtrust/trustdb/internal/keydescriptor"
 	"github.com/wowtrust/trustdb/internal/keystore"
 	"github.com/wowtrust/trustdb/internal/model"
 	"github.com/wowtrust/trustdb/internal/trustcrypto"
@@ -103,7 +105,18 @@ func TestLocalEngineUsesKeyRegistry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("keystore.Open() error = %v", err)
 	}
-	if _, err := reg.RegisterClientKey("tenant-a", "client-a", "client-key", trustcrypto.MustNewEd25519PublicKey("client-key", clientPub), time.Unix(50, 0), time.Time{}); err != nil {
+	if _, err := reg.RegisterClientKey("tenant-a", "client-a", keydescriptor.Descriptor{
+		SchemaVersion: keydescriptor.SchemaV1,
+		Kind:          keydescriptor.KindVerifier,
+		Provider:      keydescriptor.ProviderPublic,
+		CryptoSuite:   cryptosuite.INTLV1,
+		KeyID:         "client-key",
+		Algorithm:     cryptosuite.SignatureEd25519,
+		PublicKey: keydescriptor.PublicKeyMaterial{
+			Encoding: cryptosuite.Ed25519PublicKeyEncoding,
+			Bytes:    clientPub,
+		},
+	}, time.Unix(50, 0), time.Time{}); err != nil {
 		t.Fatalf("RegisterClientKey() error = %v", err)
 	}
 

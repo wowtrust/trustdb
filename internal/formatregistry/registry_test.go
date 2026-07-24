@@ -257,7 +257,7 @@ func TestRegistrySnapshotCanonicalCBORGolden(t *testing.T) {
 		t.Fatalf("marshal registry snapshot: %v", err)
 	}
 	digest := sha256.Sum256(encoded)
-	const wantSHA256 = "4ebea1dfcf27475ec76d57ad5f919d7d0d49c056f28975bfab2f391ca7089c8e"
+	const wantSHA256 = "8b8ec7da0aefe597b86289f584504186e0e339bd9fceb6ebaf9528ab80c651c8"
 	if got := hex.EncodeToString(digest[:]); got != wantSHA256 {
 		t.Fatalf("registry snapshot SHA-256 = %s, want %s", got, wantSHA256)
 	}

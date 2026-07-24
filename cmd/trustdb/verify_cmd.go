@@ -466,7 +466,13 @@ func resolveVerifyClientPub(bundle model.ProofBundle, clientPubPath, registryPat
 		if err != nil {
 			return trustcrypto.PublicKeyDescriptor{}, err
 		}
-		return trustcrypto.NewEd25519PublicKey(key.KeyID, key.PublicKey)
+		return trustcrypto.PublicKeyDescriptor{
+			Suite:     key.CryptoSuite,
+			KeyID:     key.KeyID,
+			Algorithm: key.Alg,
+			Encoding:  key.PublicKeyEncoding,
+			Bytes:     append([]byte(nil), key.PublicKey...),
+		}, nil
 	}
 	return trustcrypto.PublicKeyDescriptor{}, usageError("verify requires either client-public-key or key-registry")
 }

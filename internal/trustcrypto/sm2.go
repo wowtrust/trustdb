@@ -30,6 +30,19 @@ type sm2ASN1Signature struct {
 	S *big.Int
 }
 
+// GenerateSM2Key creates a development/reference SM2 key pair. Production
+// keys are expected to be generated inside their configured HSM, SDF, or KMS
+// provider and imported by descriptor instead of crossing that boundary.
+func GenerateSM2Key() (publicKey, privateKey []byte, err error) {
+	key, err := sm2.GenerateKey(rand.Reader)
+	if err != nil {
+		return nil, nil, fmt.Errorf("generate SM2 key: %w", err)
+	}
+	privateKey = key.D.FillBytes(make([]byte, SM2PrivateKeySize))
+	publicKey = elliptic.Marshal(sm2.P256(), key.X, key.Y)
+	return publicKey, privateKey, nil
+}
+
 func validateSignatureEncoding(suite cryptosuite.Suite, signature []byte) error {
 	switch suite.Signature.Encoding {
 	case cryptosuite.Ed25519SignatureEncoding:

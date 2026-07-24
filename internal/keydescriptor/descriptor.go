@@ -93,6 +93,17 @@ type RemoteKeyReference struct {
 	CredentialRef string `cbor:"credential_ref" json:"credential_ref"`
 }
 
+type CertificateMetadata struct {
+	Index          int    `json:"index"`
+	SerialNumber   string `json:"serial_number"`
+	Subject        string `json:"subject"`
+	Issuer         string `json:"issuer"`
+	NotBeforeUnixN int64  `json:"not_before_unix_nano"`
+	NotAfterUnixN  int64  `json:"not_after_unix_nano"`
+	IsCA           bool   `json:"is_ca"`
+	SignatureAlg   string `json:"signature_algorithm"`
+}
+
 func (d Descriptor) Clone() Descriptor {
 	d.PublicKey.Bytes = append([]byte(nil), d.PublicKey.Bytes...)
 	d.CertificateChain = cloneBytesList(d.CertificateChain)
@@ -123,6 +134,32 @@ func (d Descriptor) PublicKeyDescriptor() (trustcrypto.PublicKeyDescriptor, erro
 		Suite: d.CryptoSuite, KeyID: d.KeyID, Algorithm: d.Algorithm,
 		Encoding: d.PublicKey.Encoding, Bytes: append([]byte(nil), d.PublicKey.Bytes...),
 	}, nil
+}
+
+// CertificateMetadata returns validated, non-secret certificate inventory
+// suitable for operator inspection and registry validity enforcement.
+func (d Descriptor) CertificateMetadata() ([]CertificateMetadata, error) {
+	if err := d.Validate(); err != nil {
+		return nil, err
+	}
+	metadata := make([]CertificateMetadata, len(d.CertificateChain))
+	for i, der := range d.CertificateChain {
+		certificate, err := smx509.ParseCertificate(der)
+		if err != nil {
+			return nil, invalid("certificate %d is invalid DER", i)
+		}
+		metadata[i] = CertificateMetadata{
+			Index:          i,
+			SerialNumber:   certificate.SerialNumber.String(),
+			Subject:        certificate.Subject.String(),
+			Issuer:         certificate.Issuer.String(),
+			NotBeforeUnixN: certificate.NotBefore.UTC().UnixNano(),
+			NotAfterUnixN:  certificate.NotAfter.UTC().UnixNano(),
+			IsCA:           certificate.IsCA,
+			SignatureAlg:   certificate.SignatureAlgorithm.String(),
+		}
+	}
+	return metadata, nil
 }
 
 func (d Descriptor) Validate() error {

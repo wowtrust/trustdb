@@ -195,7 +195,7 @@ var modelSchemas = []SchemaTransition{
 	{Artifact: "global_log_state", Current: "trustdb.global-log-state.v1", Next: "trustdb.global-log-state.v2"},
 	{Artifact: "global_log_tile", Current: "trustdb.global-log-tile.v1", Next: "trustdb.global-log-tile.v2"},
 	{Artifact: "idempotency_decision", Current: "trustdb.idempotency-decision.v1", Next: "trustdb.idempotency-decision.v2"},
-	{Artifact: "key_event", Current: "trustdb.key-event.v1", Next: "trustdb.key-event.v2"},
+	{Artifact: "key_event", Current: "trustdb.key-event.v2", Next: "trustdb.key-event.v3"},
 	{Artifact: "l5_coverage_checkpoint", Current: "trustdb.l5-coverage-checkpoint.v1", Next: "trustdb.l5-coverage-checkpoint.v2"},
 	{Artifact: "proof_bundle", Current: "trustdb.proof-bundle.v1", Next: "trustdb.proof-bundle.v2"},
 	{Artifact: "record_index", Current: "trustdb.record-index.v1", Next: "trustdb.record-index.v2"},
