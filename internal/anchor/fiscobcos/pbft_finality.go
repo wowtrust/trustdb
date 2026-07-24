@@ -9,6 +9,7 @@ import (
 	gmsm2 "github.com/emmansun/gmsm/sm2"
 	"github.com/ethereum/go-ethereum/crypto"
 
+	"github.com/wowtrust/trustdb/internal/cryptosuite"
 	"github.com/wowtrust/trustdb/internal/model"
 )
 
@@ -82,7 +83,7 @@ func VerifyStaticPBFTFinality(
 		if !member {
 			return fmt.Errorf("%w: PBFT signer %q is not in the trusted static set", ErrInvalidProof, commit.ValidatorNodeID)
 		}
-		if err := verifyPBFTCommitSignature(
+		if err := VerifyPBFTCommitSignature(
 			canonical.CryptoMode,
 			canonical.SM2UserID,
 			validator.PublicKey,
@@ -180,7 +181,11 @@ func canonicalNodeID(rawPublicKey []byte) string {
 	return "0x" + hex.EncodeToString(rawPublicKey)
 }
 
-func verifyPBFTCommitSignature(
+// VerifyPBFTCommitSignature independently verifies one native PBFT commit
+// signature against an explicitly selected chain cryptographic mode. It does
+// not authenticate validator membership; callers must bind publicKey to their
+// local validator trust policy.
+func VerifyPBFTCommitSignature(
 	mode CryptoMode,
 	sm2UserID string,
 	publicKey []byte,
@@ -192,6 +197,9 @@ func verifyPBFTCommitSignature(
 	}
 	switch mode {
 	case CryptoModeStandard:
+		if sm2UserID != "" {
+			return fmt.Errorf("standard mode must not set an SM2 user ID")
+		}
 		if len(signature) != bcosStandardSignatureBytes || signature[64] > 3 {
 			return fmt.Errorf("standard signature must be 65-byte [R || S || recovery-id<=3]")
 		}
@@ -213,6 +221,9 @@ func verifyPBFTCommitSignature(
 		}
 		return nil
 	case CryptoModeGuomi:
+		if sm2UserID != cryptosuite.SM2DefaultUserID {
+			return fmt.Errorf("Guomi mode requires fixed SM2 user ID %q", cryptosuite.SM2DefaultUserID)
+		}
 		if len(signature) != bcosGuomiSignatureBytes {
 			return fmt.Errorf("Guomi signature must be 64-byte [R || S]")
 		}

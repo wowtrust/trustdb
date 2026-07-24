@@ -80,6 +80,21 @@ func ParametersForMode(mode CryptoMode) (ModeParameters, error) {
 	}
 }
 
+// NativeTransactionSignatureBytes returns the exact signature width carried
+// by a FISCO BCOS transaction in the selected chain cryptographic mode.
+func NativeTransactionSignatureBytes(mode CryptoMode) (int, error) {
+	switch mode {
+	case CryptoModeStandard:
+		return 65, nil
+	case CryptoModeGuomi:
+		// SM2 transactions carry R || S || the 64-byte uncompressed public
+		// key body. The leading SEC1 0x04 byte is not serialized.
+		return 128, nil
+	default:
+		return 0, fmt.Errorf("%w: unsupported crypto_mode %q", ErrInvalidTrustConfig, mode)
+	}
+}
+
 func validateExplicitModeParameters(mode CryptoMode, protocolHash, chainHash, chainSignature string) error {
 	want, err := ParametersForMode(mode)
 	if err != nil {

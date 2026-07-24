@@ -58,13 +58,22 @@ func New(ctx context.Context, config Config, backend Backend) (*Plugin, error) {
 	info := signerplugin.Info{
 		PluginID:     config.PluginID,
 		ProviderKind: signerplugin.ProviderSDF,
-		Algorithms: []signerplugin.AlgorithmCapability{{
-			CryptoSuite:       signerplugin.SuiteCNSMV1,
-			Algorithm:         signerplugin.AlgorithmSM2SM3,
-			PublicKeyEncoding: signerplugin.SM2PublicKeyEncoding,
-			SignatureEncoding: signerplugin.SM2SignatureEncoding,
-			SM2UserID:         signerplugin.SM2DefaultUserID,
-		}},
+		Algorithms: []signerplugin.AlgorithmCapability{
+			{
+				CryptoSuite:       signerplugin.SuiteCNSMV1,
+				Algorithm:         signerplugin.AlgorithmSM2SM3,
+				PublicKeyEncoding: signerplugin.SM2PublicKeyEncoding,
+				SignatureEncoding: signerplugin.SM2SignatureEncoding,
+				SM2UserID:         signerplugin.SM2DefaultUserID,
+			},
+			{
+				CryptoSuite:       signerplugin.SuiteFISCOBCOSGuomi,
+				Algorithm:         signerplugin.AlgorithmSM2SM3,
+				PublicKeyEncoding: signerplugin.SM2PublicKeyEncoding,
+				SignatureEncoding: signerplugin.SM2SignatureEncoding,
+				SM2UserID:         signerplugin.SM2DefaultUserID,
+			},
+		},
 		MaxConcurrentSigns: config.MaxConcurrentSigns,
 	}
 	if err := signerplugin.ValidateInfo(info); err != nil {
@@ -477,7 +486,8 @@ func (p *Plugin) validateKey(key signerplugin.Key) (uint32, string, error) {
 		key.Binding.ProtocolVersion != signerplugin.ProtocolVersion ||
 		key.Binding.PluginID != p.info.PluginID ||
 		key.Binding.ProviderKind != signerplugin.ProviderSDF ||
-		key.Binding.CryptoSuite != signerplugin.SuiteCNSMV1 ||
+		(key.Binding.CryptoSuite != signerplugin.SuiteCNSMV1 &&
+			key.Binding.CryptoSuite != signerplugin.SuiteFISCOBCOSGuomi) ||
 		key.Binding.Algorithm != signerplugin.AlgorithmSM2SM3 ||
 		key.Binding.PublicKeyEncoding != signerplugin.SM2PublicKeyEncoding ||
 		key.Binding.SignatureEncoding != signerplugin.SM2SignatureEncoding ||

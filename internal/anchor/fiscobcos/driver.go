@@ -258,7 +258,7 @@ type ConsensusSnapshot struct {
 	Finality    FinalityEvidence `cbor:"finality" json:"finality"`
 }
 
-// Driver is the complete network boundary used by the standard-crypto sink.
+// Driver is the complete network boundary used by the mode-bound sink.
 // Implementations may wrap the pinned Go SDK, but no SDK types cross this
 // interface and no method claims that returned evidence is offline-valid.
 type Driver interface {
@@ -292,7 +292,7 @@ func validateProbeAgainstTrust(probe ChainProbe, config TrustConfig) error {
 	if probe.SDKVersion != StandardSDKVersion {
 		return &DriverError{Operation: "probe", Endpoint: probe.Endpoint, Class: FailurePermanent, Kind: ErrUnsupportedSDK}
 	}
-	if probe.CryptoMode != CryptoModeStandard {
+	if probe.CryptoMode != config.CryptoMode {
 		return &DriverError{Operation: "probe", Endpoint: probe.Endpoint, Class: FailurePermanent, Kind: ErrWrongNetwork}
 	}
 	if probe.ChainID != config.ChainID || probe.GroupID != config.GroupID ||

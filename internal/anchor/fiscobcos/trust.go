@@ -2,11 +2,17 @@ package fiscobcos
 
 import (
 	"bytes"
+	"encoding/hex"
 	"fmt"
+	"net"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/emmansun/gmsm/sm2"
+	ethcrypto "github.com/ethereum/go-ethereum/crypto"
 
 	"github.com/wowtrust/trustdb/internal/cborx"
 	"github.com/wowtrust/trustdb/internal/cryptosuite"
@@ -260,7 +266,7 @@ func validateTrustConfig(config TrustConfig) error {
 	}
 	seenEndpoints := make(map[string]struct{}, len(config.Endpoints))
 	for _, endpoint := range config.Endpoints {
-		if err := validateEndpoint(endpoint); err != nil {
+		if err := validateEndpoint(endpoint, params.TransportMode); err != nil {
 			return err
 		}
 		if _, exists := seenEndpoints[endpoint]; exists {
@@ -327,6 +333,10 @@ func validateCertificates(certificates CertificateConfig, params ModeParameters)
 		if err := validateConfigString("certificates.client_encryption_key_ref", certificates.ClientEncryptionKeyRef); err != nil {
 			return err
 		}
+		if certificates.ClientSigningCertificateRef == certificates.ClientEncryptionCertificateRef ||
+			certificates.ClientSigningKeyRef == certificates.ClientEncryptionKeyRef {
+			return fmt.Errorf("%w: Guomi signing and encryption certificate roles must use distinct references", ErrInvalidTrustConfig)
+		}
 	} else if certificates.ClientEncryptionCertificateRef != "" || certificates.ClientEncryptionKeyRef != "" {
 		return fmt.Errorf("%w: standard mode must not set Guomi encryption certificate references", ErrInvalidTrustConfig)
 	}
@@ -343,6 +353,22 @@ func validateValidator(validator ValidatorDescriptor, params ModeParameters) err
 	if len(validator.PublicKey) != 65 || validator.PublicKey[0] != 0x04 {
 		return fmt.Errorf("%w: validator %q public key must be canonical 65-byte uncompressed form", ErrInvalidTrustConfig, validator.NodeID)
 	}
+	switch params.Mode {
+	case CryptoModeStandard:
+		if _, err := ethcrypto.UnmarshalPubkey(validator.PublicKey); err != nil {
+			return fmt.Errorf("%w: validator %q public key is not valid secp256k1", ErrInvalidTrustConfig, validator.NodeID)
+		}
+	case CryptoModeGuomi:
+		if _, err := sm2.NewPublicKey(validator.PublicKey); err != nil {
+			return fmt.Errorf("%w: validator %q public key is not valid sm2p256v1", ErrInvalidTrustConfig, validator.NodeID)
+		}
+	default:
+		return fmt.Errorf("%w: validator %q has unsupported crypto mode", ErrInvalidTrustConfig, validator.NodeID)
+	}
+	wantNodeID := "0x" + hex.EncodeToString(validator.PublicKey[1:])
+	if validator.NodeID != wantNodeID {
+		return fmt.Errorf("%w: validator node_id %q does not match its canonical public key body", ErrInvalidTrustConfig, validator.NodeID)
+	}
 	return nil
 }
 
@@ -353,18 +379,33 @@ func validateConfigString(name, value string) error {
 	return nil
 }
 
-func validateEndpoint(endpoint string) error {
+func validateEndpoint(endpoint, transportMode string) error {
 	if err := validateConfigString("endpoint", endpoint); err != nil {
 		return err
 	}
 	if strings.Contains(endpoint, "@") {
 		return fmt.Errorf("%w: endpoint must not contain user information", ErrInvalidTrustConfig)
 	}
-	if strings.Contains(endpoint, "://") {
-		u, err := url.Parse(endpoint)
-		if err != nil || u.Host == "" || u.User != nil || u.Fragment != "" {
+	if !strings.Contains(endpoint, "://") {
+		host, portText, err := net.SplitHostPort(endpoint)
+		port, portErr := strconv.Atoi(portText)
+		if err != nil || portErr != nil || strings.TrimSpace(host) == "" || port < 1 || port > 65535 {
 			return fmt.Errorf("%w: malformed endpoint %q", ErrInvalidTrustConfig, endpoint)
 		}
+		return nil
+	}
+	u, err := url.Parse(endpoint)
+	if err != nil || u.Host == "" || u.User != nil || u.Fragment != "" ||
+		u.Path != "" && u.Path != "/" {
+		return fmt.Errorf("%w: malformed endpoint %q", ErrInvalidTrustConfig, endpoint)
+	}
+	if u.Scheme != transportMode {
+		return fmt.Errorf("%w: endpoint %q is not bound to transport_mode=%s", ErrInvalidTrustConfig, endpoint, transportMode)
+	}
+	_, portText, err := net.SplitHostPort(u.Host)
+	port, portErr := strconv.Atoi(portText)
+	if err != nil || portErr != nil || port < 1 || port > 65535 {
+		return fmt.Errorf("%w: endpoint %q has an invalid port", ErrInvalidTrustConfig, endpoint)
 	}
 	return nil
 }

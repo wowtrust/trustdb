@@ -2,6 +2,8 @@ package signerplugin
 
 import (
 	"bytes"
+	"encoding/asn1"
+	"math/big"
 	"testing"
 )
 
@@ -124,5 +126,49 @@ func TestFISCOBCOSStandardSignerProfileIsExact(t *testing.T) {
 	signature[64] = 2
 	if err := validateSignature(binding, signature); err == nil {
 		t.Fatal("out-of-range recovery id was accepted")
+	}
+}
+
+func TestFISCOBCOSGuomiSignerProfileIsIndependentAndExact(t *testing.T) {
+	binding := Binding{
+		ProtocolVersion:   ProtocolVersion,
+		PluginID:          "bcos-guomi-signer",
+		ProviderKind:      ProviderRemote,
+		CryptoSuite:       SuiteFISCOBCOSGuomi,
+		Algorithm:         AlgorithmSM2SM3,
+		PublicKeyEncoding: SM2PublicKeyEncoding,
+		SignatureEncoding: SM2SignatureEncoding,
+		KeyID:             "publisher",
+		SM2UserID:         SM2DefaultUserID,
+	}
+	if err := ValidateBinding(binding); err != nil {
+		t.Fatalf("valid Guomi transaction binding rejected: %v", err)
+	}
+	signature, err := asn1.Marshal(struct {
+		R *big.Int
+		S *big.Int
+	}{big.NewInt(1), big.NewInt(2)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := validateSignature(binding, signature); err != nil {
+		t.Fatalf("valid Guomi DER signature rejected: %v", err)
+	}
+
+	info := helperInfoResponse()
+	info.PluginID = binding.PluginID
+	info.Algorithms = []AlgorithmCapability{{
+		CryptoSuite:       SuiteCNSMV1,
+		Algorithm:         AlgorithmSM2SM3,
+		PublicKeyEncoding: SM2PublicKeyEncoding,
+		SignatureEncoding: SM2SignatureEncoding,
+		SM2UserID:         SM2DefaultUserID,
+	}}
+	if err := ValidateBindingForInfo(binding, info); err == nil {
+		t.Fatal("BCOS Guomi transaction binding accepted a CN_SM_V1-only provider profile")
+	}
+	info.Algorithms[0].CryptoSuite = SuiteFISCOBCOSGuomi
+	if err := ValidateBindingForInfo(binding, info); err != nil {
+		t.Fatalf("matching BCOS Guomi provider profile rejected: %v", err)
 	}
 }

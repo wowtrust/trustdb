@@ -69,12 +69,12 @@ func (p Profile) capability() (signerplugin.AlgorithmCapability, error) {
 			PublicKeyEncoding: signerplugin.Ed25519PublicKeyEncoding,
 			SignatureEncoding: signerplugin.Ed25519SignatureEncoding,
 		}, nil
-	case signerplugin.SuiteCNSMV1:
+	case signerplugin.SuiteCNSMV1, signerplugin.SuiteFISCOBCOSGuomi:
 		if p.Mechanism == 0 || (p.SignatureFormat != SignatureFormatRaw && p.SignatureFormat != SignatureFormatDER) {
 			return signerplugin.AlgorithmCapability{}, fmt.Errorf("%w: CN_SM_V1 requires a non-zero mechanism and explicit raw or DER output", ErrInvalidConfiguration)
 		}
 		return signerplugin.AlgorithmCapability{
-			CryptoSuite:       signerplugin.SuiteCNSMV1,
+			CryptoSuite:       p.CryptoSuite,
 			Algorithm:         signerplugin.AlgorithmSM2SM3,
 			PublicKeyEncoding: signerplugin.SM2PublicKeyEncoding,
 			SignatureEncoding: signerplugin.SM2SignatureEncoding,

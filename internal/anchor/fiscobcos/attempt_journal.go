@@ -156,9 +156,11 @@ func ValidateAttemptJournal(journal AttemptJournal) error {
 		journal.SinkName != SinkName || journal.TreeSize == 0 ||
 		len(journal.RootHash) != identifierBytes ||
 		len(journal.SignedSTHDigest) != identifierBytes ||
-		journal.CryptoMode != CryptoModeStandard ||
 		len(journal.ChainContextID) != identifierBytes {
 		return fmt.Errorf("%w: invalid identity or version", ErrInvalidAttemptJournal)
+	}
+	if _, err := ParametersForMode(journal.CryptoMode); err != nil {
+		return fmt.Errorf("%w: invalid crypto mode", ErrInvalidAttemptJournal)
 	}
 	if err := validateConfigString("journal node_id", journal.NodeID); err != nil {
 		return fmt.Errorf("%w: invalid node_id", ErrInvalidAttemptJournal)
@@ -305,6 +307,10 @@ func ValidateAttemptJournalTransition(previous, next AttemptJournal) error {
 
 func validateJournalAttempt(attempt JournalAttempt, ordinal uint32, journal AttemptJournal) error {
 	transaction := attempt.Transaction
+	signatureBytes, err := NativeTransactionSignatureBytes(journal.CryptoMode)
+	if err != nil {
+		return fmt.Errorf("%w: invalid crypto mode", ErrInvalidAttemptJournal)
+	}
 	if transaction.Ordinal != ordinal ||
 		len(transaction.RawCanonicalTransaction) == 0 ||
 		len(transaction.RawCanonicalTransaction) > maxRawTransactionBytes ||
@@ -312,14 +318,14 @@ func validateJournalAttempt(attempt JournalAttempt, ordinal uint32, journal Atte
 		transaction.GroupID != journal.GroupID ||
 		!bytes.Equal(transaction.To, journal.Contract.Address) ||
 		len(transaction.Input) == 0 || len(transaction.Input) > MaxPayloadBytes+4 ||
-		len(transaction.Signature) != 65 ||
+		len(transaction.Signature) != signatureBytes ||
 		len(transaction.Sender) != 20 ||
 		len(transaction.TransactionHash) != identifierBytes ||
 		transaction.BlockLimit == 0 || transaction.PreparedAtUnixN <= 0 {
 		return fmt.Errorf("%w: transaction attempt %d is incomplete or oversized", ErrInvalidAttemptJournal, ordinal)
 	}
 	payload, _ := UnmarshalPayload(journal.CanonicalPayload)
-	callData, err := PublishCallData(payload)
+	callData, err := PublishCallDataForMode(journal.CryptoMode, payload)
 	if err != nil || !bytes.Equal(transaction.Input, callData) {
 		return fmt.Errorf("%w: transaction attempt %d input does not match payload", ErrInvalidAttemptJournal, ordinal)
 	}
@@ -350,7 +356,7 @@ func validateJournalAttempt(attempt JournalAttempt, ordinal uint32, journal Atte
 				return fmt.Errorf("%w: successful attempt has incompatible submission status=%d", ErrInvalidAttemptJournal, attempt.Submission.Status)
 			}
 		}
-		if err := validateAttemptReceipt(attempt.Outcome, attempt.Receipt, transaction.TransactionHash); err != nil {
+		if err := validateAttemptReceipt(attempt.Outcome, attempt.Receipt, transaction.TransactionHash, journal.CryptoMode); err != nil {
 			return err
 		}
 	case AttemptOutcomeReceiptBlockLimitRejected:
@@ -373,7 +379,7 @@ func validateJournalAttempt(attempt JournalAttempt, ordinal uint32, journal Atte
 				return fmt.Errorf("%w: transaction-pool rejection must not claim an included receipt", ErrInvalidAttemptJournal)
 			}
 		} else {
-			if err := validateAttemptReceipt(attempt.Outcome, attempt.Receipt, transaction.TransactionHash); err != nil {
+			if err := validateAttemptReceipt(attempt.Outcome, attempt.Receipt, transaction.TransactionHash, journal.CryptoMode); err != nil {
 				return err
 			}
 			if attempt.Receipt.Status != attempt.Submission.Status {
@@ -416,7 +422,7 @@ func isRecoverableSubmissionStatus(status int64) bool {
 		ClassifyReceiptStatus(int(status)) == ReceiptStatusAmbiguous
 }
 
-func validateAttemptReceipt(outcome AttemptOutcome, receipt *AttemptReceiptObservation, transactionHash []byte) error {
+func validateAttemptReceipt(outcome AttemptOutcome, receipt *AttemptReceiptObservation, transactionHash []byte, mode CryptoMode) error {
 	if receipt == nil ||
 		len(receipt.RawCanonicalReceipt) == 0 ||
 		len(receipt.RawCanonicalReceipt) > maxRawReceiptBytes ||
@@ -438,7 +444,11 @@ func validateAttemptReceipt(outcome AttemptOutcome, receipt *AttemptReceiptObser
 		uint64(receipt.Fields.BlockNumber) != receipt.BlockNumber {
 		return fmt.Errorf("%w: receipt fields do not reconstruct exact consensus preimage", ErrInvalidAttemptJournal)
 	}
-	receiptHash, err := HashNativeEvidence(HashKeccak256, canonicalReceipt)
+	params, err := ParametersForMode(mode)
+	if err != nil {
+		return fmt.Errorf("%w: invalid crypto mode", ErrInvalidAttemptJournal)
+	}
+	receiptHash, err := HashNativeEvidence(params.ChainHashAlgorithm, canonicalReceipt)
 	if err != nil || !bytes.Equal(receiptHash, receipt.ReceiptHash) {
 		return fmt.Errorf("%w: receipt consensus hash mismatch", ErrInvalidAttemptJournal)
 	}

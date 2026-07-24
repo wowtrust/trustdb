@@ -53,6 +53,10 @@ const (
 	// signer boundary sign the 32-byte transaction digest produced by the
 	// pinned FISCO BCOS standard-crypto SDK.
 	SuiteFISCOBCOSStandard = "FISCO_BCOS_STANDARD_V1"
+	// SuiteFISCOBCOSGuomi is the independent Guomi-chain transaction profile.
+	// It intentionally does not reuse CN_SM_V1, so provider policy cannot
+	// confuse a BCOS transaction digest with TrustDB evidence-suite input.
+	SuiteFISCOBCOSGuomi = "FISCO_BCOS_GUOMI_V1"
 
 	AlgorithmEd25519   = "ed25519"
 	AlgorithmSM2SM3    = "sm2-sm3"
@@ -396,6 +400,13 @@ func validateAlgorithmCapability(capability AlgorithmCapability) error {
 			capability.SM2UserID != "" {
 			return errors.New("signer plugin FISCO_BCOS_STANDARD_V1 capability does not match the immutable transaction profile")
 		}
+	case SuiteFISCOBCOSGuomi:
+		if capability.Algorithm != AlgorithmSM2SM3 ||
+			capability.PublicKeyEncoding != SM2PublicKeyEncoding ||
+			capability.SignatureEncoding != SM2SignatureEncoding ||
+			capability.SM2UserID != SM2DefaultUserID {
+			return errors.New("signer plugin FISCO_BCOS_GUOMI_V1 capability does not match the immutable transaction profile")
+		}
 	default:
 		return fmt.Errorf("signer plugin crypto_suite %q is unsupported by protocol v1", capability.CryptoSuite)
 	}
@@ -532,7 +543,7 @@ func validatePublicKey(binding Binding, publicKey []byte) error {
 		if len(publicKey) != 32 {
 			return fmt.Errorf("signer plugin returned Ed25519 public key size %d", len(publicKey))
 		}
-	case SuiteCNSMV1:
+	case SuiteCNSMV1, SuiteFISCOBCOSGuomi:
 		if len(publicKey) != 65 || publicKey[0] != 0x04 {
 			return errors.New("signer plugin returned a malformed SM2 uncompressed public key")
 		}
@@ -552,7 +563,7 @@ func validateSignature(binding Binding, signature []byte) error {
 		if len(signature) != 64 {
 			return fmt.Errorf("signer plugin returned Ed25519 signature size %d", len(signature))
 		}
-	case SuiteCNSMV1:
+	case SuiteCNSMV1, SuiteFISCOBCOSGuomi:
 		if err := validateCanonicalDERSignature(signature); err != nil {
 			return err
 		}

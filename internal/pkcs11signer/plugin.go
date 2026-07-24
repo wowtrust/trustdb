@@ -346,7 +346,7 @@ func normalizePublicKey(suite string, material KeyMaterial) ([]byte, error) {
 			if len(decoded) == ed25519.PublicKeySize {
 				objectKey = append([]byte(nil), decoded...)
 			}
-		case signerplugin.SuiteCNSMV1:
+		case signerplugin.SuiteCNSMV1, signerplugin.SuiteFISCOBCOSGuomi:
 			x, y := elliptic.Unmarshal(sm2.P256(), decoded)
 			if x != nil && y != nil && len(decoded) == 65 {
 				objectKey = append([]byte(nil), decoded...)
@@ -369,7 +369,7 @@ func normalizePublicKey(suite string, material KeyMaterial) ([]byte, error) {
 				return nil, errors.New("token certificate is not Ed25519")
 			}
 			certificateKey = append([]byte(nil), publicKey...)
-		case signerplugin.SuiteCNSMV1:
+		case signerplugin.SuiteCNSMV1, signerplugin.SuiteFISCOBCOSGuomi:
 			publicKey, ok := certificate.PublicKey.(*ecdsa.PublicKey)
 			if !ok || publicKey.X == nil || publicKey.Y == nil || !sm2.P256().IsOnCurve(publicKey.X, publicKey.Y) {
 				return nil, errors.New("token certificate is not SM2")
@@ -407,7 +407,7 @@ func normalizeSignature(profile Profile, signature []byte) ([]byte, error) {
 			return nil, errors.New("invalid Ed25519 token signature")
 		}
 		return append([]byte(nil), signature...), nil
-	case signerplugin.SuiteCNSMV1:
+	case signerplugin.SuiteCNSMV1, signerplugin.SuiteFISCOBCOSGuomi:
 		var r, s *big.Int
 		switch profile.SignatureFormat {
 		case SignatureFormatRaw:

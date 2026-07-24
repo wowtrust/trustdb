@@ -33,8 +33,9 @@ func newFISCOBCOSPluginAccountSigner(
 	plugins trustconfig.SignerPlugins,
 	stderr io.Writer,
 ) (standardsdk.AccountSigner, io.Closer, error) {
-	if account.Algorithm != fiscobcos.StandardAccountAlg {
-		return nil, nil, fmt.Errorf("FISCO BCOS account algorithm %q is not the standard-chain profile", account.Algorithm)
+	if account.Algorithm != fiscobcos.StandardAccountAlg &&
+		account.Algorithm != fiscobcos.GuomiAccountAlg {
+		return nil, nil, fmt.Errorf("FISCO BCOS account algorithm %q is unsupported", account.Algorithm)
 	}
 	plugin, err := fiscoBCOSSignerPluginConfig(account.Provider, plugins)
 	if err != nil {
@@ -96,17 +97,32 @@ func fiscoBCOSPluginKey(account fiscobcos.AccountProviderConfig, info signerplug
 	if err != nil {
 		return signerplugin.Key{}, err
 	}
+	binding := signerplugin.Binding{
+		ProtocolVersion: signerplugin.ProtocolVersion,
+		PluginID:        info.PluginID,
+		ProviderKind:    account.Provider,
+		KeyID:           account.KeyID,
+	}
+	switch account.Algorithm {
+	case fiscobcos.StandardAccountAlg:
+		binding.CryptoSuite = signerplugin.SuiteFISCOBCOSStandard
+		binding.Algorithm = signerplugin.AlgorithmSecp256k1
+		binding.PublicKeyEncoding = signerplugin.Secp256k1PublicKeyEncoding
+		binding.SignatureEncoding = signerplugin.Secp256k1SignatureEncoding
+	case fiscobcos.GuomiAccountAlg:
+		// The provider performs the same fixed-user-ID SM2-SM3 operation as
+		// CN_SM_V1, but this selects only an account-signing capability. It
+		// does not select or alter TrustDB's independent evidence suite.
+		binding.CryptoSuite = signerplugin.SuiteFISCOBCOSGuomi
+		binding.Algorithm = signerplugin.AlgorithmSM2SM3
+		binding.PublicKeyEncoding = signerplugin.SM2PublicKeyEncoding
+		binding.SignatureEncoding = signerplugin.SM2SignatureEncoding
+		binding.SM2UserID = signerplugin.SM2DefaultUserID
+	default:
+		return signerplugin.Key{}, fmt.Errorf("unsupported FISCO BCOS account algorithm %q", account.Algorithm)
+	}
 	key := signerplugin.Key{
-		Binding: signerplugin.Binding{
-			ProtocolVersion:   signerplugin.ProtocolVersion,
-			PluginID:          info.PluginID,
-			ProviderKind:      account.Provider,
-			CryptoSuite:       signerplugin.SuiteFISCOBCOSStandard,
-			Algorithm:         signerplugin.AlgorithmSecp256k1,
-			PublicKeyEncoding: signerplugin.Secp256k1PublicKeyEncoding,
-			SignatureEncoding: signerplugin.Secp256k1SignatureEncoding,
-			KeyID:             account.KeyID,
-		},
+		Binding:   binding,
 		Reference: reference,
 	}
 	if err := signerplugin.ValidateBindingForInfo(key.Binding, info); err != nil {

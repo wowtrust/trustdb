@@ -231,10 +231,57 @@ func TestAttemptJournalDecoderRejectsNonCanonicalAndHugeDeclaredCount(t *testing
 	}
 }
 
+func TestAttemptJournalGuomiBindingIsModeExact(t *testing.T) {
+	t.Parallel()
+
+	_, config, journal := testAttemptJournalForMode(t, CryptoModeGuomi)
+	if err := ValidateAttemptJournal(journal); err != nil {
+		t.Fatalf("Guomi journal rejected: %v", err)
+	}
+	if len(journal.Attempts[0].Transaction.Signature) != 128 {
+		t.Fatalf("Guomi signature size = %d, want 128", len(journal.Attempts[0].Transaction.Signature))
+	}
+	journal.Attempts[0].Outcome = AttemptOutcomeReceiptSuccess
+	journal.Attempts[0].Receipt = testAttemptReceiptForMode(
+		journal.Attempts[0].Transaction.TransactionHash,
+		ReceiptStatusOK,
+		CryptoModeGuomi,
+	)
+	if err := ValidateAttemptJournal(journal); err != nil {
+		t.Fatalf("Guomi SM3 receipt journal rejected: %v", err)
+	}
+	journal.Attempts[0].Receipt.ReceiptHash = sequenceBytes(0xee, 32)
+	if err := ValidateAttemptJournal(journal); err == nil {
+		t.Fatal("Guomi journal accepted a non-SM3 receipt hash")
+	}
+	journal.Attempts[0].Receipt = nil
+	journal.Attempts[0].Outcome = AttemptOutcomePrepared
+	standardInput, err := PublishCallDataForMode(CryptoModeStandard, mustJournalPayload(t, journal))
+	if err != nil {
+		t.Fatal(err)
+	}
+	journal.Attempts[0].Transaction.Input = standardInput
+	if err := ValidateAttemptJournal(journal); err == nil {
+		t.Fatal("Guomi journal accepted standard-mode ABI selector")
+	}
+
+	_, standardConfig, standardJournal := testAttemptJournalForMode(t, CryptoModeStandard)
+	if err := ValidateAttemptJournalBinding(standardJournal, standardJournal.Generation, testSTH(cryptosuite.INTLV1), config); err == nil {
+		t.Fatal("standard journal accepted Guomi local trust")
+	}
+	if err := ValidateAttemptJournalBinding(standardJournal, standardJournal.Generation, testSTH(cryptosuite.INTLV1), standardConfig); err != nil {
+		t.Fatalf("standard journal binding rejected: %v", err)
+	}
+}
+
 func testAttemptJournal(t *testing.T) (sth model.SignedTreeHead, config TrustConfig, journal AttemptJournal) {
+	return testAttemptJournalForMode(t, CryptoModeStandard)
+}
+
+func testAttemptJournalForMode(t *testing.T, mode CryptoMode) (sth model.SignedTreeHead, config TrustConfig, journal AttemptJournal) {
 	t.Helper()
 	sth = testSTH(cryptosuite.INTLV1)
-	config = testTrustConfig(t, CryptoModeStandard)
+	config = testTrustConfig(t, mode)
 	payload, err := NewAnchorPayload(cryptosuite.INTLV1, sth)
 	if err != nil {
 		t.Fatal(err)
@@ -272,13 +319,23 @@ func testAttemptJournal(t *testing.T) (sth model.SignedTreeHead, config TrustCon
 	return sth, config, journal
 }
 
-func testSignedTransaction(t *testing.T, journal AttemptJournal, ordinal uint32, blockLimit uint64, seed byte) SignedTransactionAttempt {
+func mustJournalPayload(t *testing.T, journal AttemptJournal) AnchorPayload {
 	t.Helper()
 	payload, err := UnmarshalPayload(journal.CanonicalPayload)
 	if err != nil {
 		t.Fatal(err)
 	}
-	input, err := PublishCallData(payload)
+	return payload
+}
+
+func testSignedTransaction(t *testing.T, journal AttemptJournal, ordinal uint32, blockLimit uint64, seed byte) SignedTransactionAttempt {
+	t.Helper()
+	payload := mustJournalPayload(t, journal)
+	input, err := PublishCallDataForMode(journal.CryptoMode, payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signatureBytes, err := NativeTransactionSignatureBytes(journal.CryptoMode)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -289,7 +346,7 @@ func testSignedTransaction(t *testing.T, journal AttemptJournal, ordinal uint32,
 		GroupID:                 journal.GroupID,
 		To:                      append([]byte(nil), journal.Contract.Address...),
 		Input:                   input,
-		Signature:               sequenceBytes(seed, 65),
+		Signature:               sequenceBytes(seed, signatureBytes),
 		Sender:                  sequenceBytes(seed+1, 20),
 		TransactionHash:         sequenceBytes(seed+2, 32),
 		BlockLimit:              blockLimit,
@@ -298,6 +355,10 @@ func testSignedTransaction(t *testing.T, journal AttemptJournal, ordinal uint32,
 }
 
 func testAttemptReceipt(transactionHash []byte, status int64) *AttemptReceiptObservation {
+	return testAttemptReceiptForMode(transactionHash, status, CryptoModeStandard)
+}
+
+func testAttemptReceiptForMode(transactionHash []byte, status int64, mode CryptoMode) *AttemptReceiptObservation {
 	fields := NativeReceiptFields{
 		Version:     0,
 		GasUsed:     "1",
@@ -309,7 +370,11 @@ func testAttemptReceipt(transactionHash []byte, status int64) *AttemptReceiptObs
 	if err != nil {
 		panic(err)
 	}
-	hash, err := HashNativeEvidence(HashKeccak256, raw)
+	params, err := ParametersForMode(mode)
+	if err != nil {
+		panic(err)
+	}
+	hash, err := HashNativeEvidence(params.ChainHashAlgorithm, raw)
 	if err != nil {
 		panic(err)
 	}

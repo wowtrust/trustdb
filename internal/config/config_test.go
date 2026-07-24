@@ -175,7 +175,7 @@ func TestValidateAnchorPluginIsConditional(t *testing.T) {
 func TestValidateFISCOBCOSTrustConfigIsConditional(t *testing.T) {
 	t.Parallel()
 
-	for _, sink := range []string{"fisco-bcos", "FISCO-BCOS-STANDARD"} {
+	for _, sink := range []string{"fisco-bcos", "FISCO-BCOS"} {
 		cfg := Default()
 		cfg.Anchor.Sink = sink
 		if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "anchor.fisco_bcos.trust_config_file") {
@@ -185,6 +185,12 @@ func TestValidateFISCOBCOSTrustConfigIsConditional(t *testing.T) {
 		if err := cfg.Validate(); err != nil {
 			t.Fatalf("Validate() rejected configured sink=%q: %v", sink, err)
 		}
+	}
+	cfg := Default()
+	cfg.Anchor.Sink = "fisco-bcos-standard"
+	cfg.Anchor.FISCOBCOS.TrustConfigFile = "/etc/trustdb/fisco-bcos-trust.cbor"
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "anchor.sink") {
+		t.Fatalf("legacy standard-only sink alias accepted: %v", err)
 	}
 }
 
