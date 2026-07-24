@@ -72,7 +72,7 @@ func Level(proof model.SingleProof) prooflevel.Level {
 	if proof.GlobalProof != nil {
 		evidence.GlobalLogProof = true
 	}
-	if proof.AnchorResult != nil {
+	if proof.AnchorResult != nil && model.AnchorResultProvidesOfflineL5(*proof.AnchorResult) {
 		evidence.STHAnchorResult = true
 	}
 	return prooflevel.Evaluate(evidence)
@@ -216,6 +216,12 @@ func validateAnchorEvidence(proof model.SingleProof) error {
 		proof.AnchorResult.STH.LogID == "" || proof.AnchorResult.STH.LogID != proof.LogID {
 		return errors.New("sproof: anchor_result log_id does not exactly match the envelope")
 	}
+	if isRawFISCOBCOSProof(proof) {
+		if err := fiscobcos.ValidateProofContainer(proof.GlobalProof.STH, *proof.AnchorResult); err != nil {
+			return fmt.Errorf("sproof: FISCO BCOS anchor_result: %w", err)
+		}
+		return nil
+	}
 	if err := verify.AnchorContainerConsistency(*proof.GlobalProof, *proof.AnchorResult); err != nil {
 		return fmt.Errorf("sproof: anchor_result: %w", err)
 	}
@@ -225,6 +231,12 @@ func validateAnchorEvidence(proof model.SingleProof) error {
 		}
 	}
 	return nil
+}
+
+func isRawFISCOBCOSProof(proof model.SingleProof) bool {
+	return proof.AnchorResult != nil &&
+		proof.AnchorResult.SinkName == fiscobcos.SinkName &&
+		proof.AnchorResult.EvidenceStage == model.AnchorEvidenceStageRaw
 }
 
 func validateIdentityEvidenceEnvelope(proof model.SingleProof) error {

@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/wowtrust/trustdb/internal/anchor/fiscobcos"
 	"github.com/wowtrust/trustdb/internal/cborx"
 	"github.com/wowtrust/trustdb/internal/cryptosuite"
 	"github.com/wowtrust/trustdb/internal/merkle"
@@ -427,7 +428,9 @@ func (s *Service) Evidence(ctx context.Context, batchID string) (model.GlobalLog
 			if !model.ValidAnchorEvidenceStage(result.EvidenceStage) {
 				return model.GlobalLogEvidence{}, trusterr.New(trusterr.CodeDataLoss, "latest STH anchor result has an unknown evidence stage")
 			}
-			if !model.AnchorResultProvidesOfflineL5(result) {
+			if !model.AnchorResultProvidesOfflineL5(result) &&
+				!(result.SinkName == fiscobcos.SinkName &&
+					result.EvidenceStage == model.AnchorEvidenceStageRaw) {
 				found = false
 			}
 		}

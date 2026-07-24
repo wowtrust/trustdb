@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 
+	"github.com/wowtrust/trustdb/internal/anchor/fiscobcos"
 	"github.com/wowtrust/trustdb/internal/keydescriptor"
 	"github.com/wowtrust/trustdb/internal/model"
 	"github.com/wowtrust/trustdb/internal/verify"
@@ -20,8 +21,9 @@ const (
 )
 
 const (
-	OfflineStageContainer = "sproof_container"
-	OfflineStageIdentity  = "identity_evidence"
+	OfflineStageContainer            = "sproof_container"
+	OfflineStageIdentity             = "identity_evidence"
+	OfflineStageBCOSReceiptInclusion = "bcos_receipt_inclusion"
 )
 
 // OfflineStageResult is a deterministic account of each local verification
@@ -47,8 +49,9 @@ type OfflineResult struct {
 }
 
 type OfflineTrust struct {
-	Proof    verify.TrustedKeys
-	Identity IdentityTrust
+	Proof     verify.TrustedKeys
+	Identity  IdentityTrust
+	FISCOBCOS *fiscobcos.TrustConfig
 }
 
 type OfflineOptions struct {
@@ -109,7 +112,7 @@ func VerifyOffline(
 	if proof.GlobalProof != nil {
 		verifyOptions = append(verifyOptions, verify.WithGlobalProof(*proof.GlobalProof))
 	}
-	if proof.AnchorResult != nil && !options.SkipAnchor {
+	if proof.AnchorResult != nil && !options.SkipAnchor && !isRawFISCOBCOSProof(proof) {
 		verifyOptions = append(verifyOptions, verify.WithAnchor(*proof.AnchorResult))
 	}
 	proofTrust, err := bindEvidenceProofKeys(proof, trust.Proof)
@@ -132,6 +135,26 @@ func VerifyOffline(
 	result.ProofLevel = verified.ProofLevel
 	result.AnchorSink = verified.AnchorSink
 	result.AnchorID = verified.AnchorID
+	if isRawFISCOBCOSProof(proof) && !options.SkipAnchor {
+		if trust.FISCOBCOS == nil {
+			err := fmt.Errorf("sproof: verifier-local FISCO BCOS trust config is required")
+			setBCOSReceiptInclusionStage(&result, OfflineStageFailed, err)
+			result.Valid = false
+			return result, err
+		}
+		if err := fiscobcos.VerifyReceiptInclusion(
+			proof.GlobalProof.STH,
+			*proof.AnchorResult,
+			*trust.FISCOBCOS,
+		); err != nil {
+			setBCOSReceiptInclusionStage(&result, OfflineStageFailed, err)
+			result.Valid = false
+			return result, err
+		}
+		setBCOSReceiptInclusionStage(&result, OfflineStagePassed, nil)
+		result.AnchorSink = proof.AnchorResult.SinkName
+		result.AnchorID = proof.AnchorResult.AnchorID
+	}
 	return result, nil
 }
 
@@ -221,6 +244,13 @@ func appendProofStages(
 				continue
 			}
 		case verify.StageAnchor:
+			if isRawFISCOBCOSProof(proof) {
+				result.Stages = append(result.Stages, OfflineStageResult{
+					Name:   string(stage),
+					Status: OfflineStageNotPresent,
+				})
+				continue
+			}
 			if proof.AnchorResult == nil {
 				result.Stages = append(result.Stages, OfflineStageResult{
 					Name:   string(stage),
@@ -249,6 +279,42 @@ func appendProofStages(
 			Name:   string(stage),
 			Status: status,
 		})
+	}
+	switch {
+	case !isRawFISCOBCOSProof(proof):
+		result.Stages = append(result.Stages, OfflineStageResult{
+			Name:   OfflineStageBCOSReceiptInclusion,
+			Status: OfflineStageNotPresent,
+		})
+	case options.SkipAnchor:
+		result.Stages = append(result.Stages, OfflineStageResult{
+			Name:   OfflineStageBCOSReceiptInclusion,
+			Status: OfflineStageSkipped,
+		})
+	default:
+		result.Stages = append(result.Stages, OfflineStageResult{
+			Name:   OfflineStageBCOSReceiptInclusion,
+			Status: OfflineStageNotRun,
+		})
+	}
+}
+
+func setBCOSReceiptInclusionStage(
+	result *OfflineResult,
+	status OfflineStageStatus,
+	err error,
+) {
+	for index := range result.Stages {
+		if result.Stages[index].Name != OfflineStageBCOSReceiptInclusion {
+			continue
+		}
+		result.Stages[index].Status = status
+		if err == nil {
+			result.Stages[index].Error = ""
+		} else {
+			result.Stages[index].Error = err.Error()
+		}
+		return
 	}
 }
 

@@ -17,6 +17,7 @@ import (
 	"github.com/emmansun/gmsm/smx509"
 	"github.com/spf13/cobra"
 	"github.com/wowtrust/trustdb/internal/anchor"
+	"github.com/wowtrust/trustdb/internal/anchor/fiscobcos"
 	"github.com/wowtrust/trustdb/internal/formatregistry"
 	"github.com/wowtrust/trustdb/internal/keystore"
 	"github.com/wowtrust/trustdb/internal/model"
@@ -40,6 +41,7 @@ func newVerifyCommand(rt *runtimeConfig) *cobra.Command {
 		serverPubPath                                                         string
 		serverURL, recordID                                                   string
 		anchorPluginCommand, anchorPluginStartTimeout, anchorPluginRPCTimeout string
+		fiscoBCOSTrustConfigPath                                              string
 		anchorPluginArgs                                                      []string
 		clientCARootPaths, serverCARootPaths, additionalServerPubPaths        []string
 		skipAnchor                                                            bool
@@ -79,6 +81,9 @@ lifecycle, certificate chain, and CRL against independently supplied keys,
 registry keys, and --client-ca-certificate/--server-ca-certificate roots.
 Use repeatable --additional-server-public-key descriptors when accepted,
 committed, and STH signatures span a server-key rotation.
+Raw FISCO BCOS receipt evidence additionally requires verifier-local
+--fisco-bcos-trust-config. It verifies receipt inclusion as L4 evidence and
+does not claim PBFT finality or promote the proof to L5.
 It performs no network or external provider access and emits a structured
 result for every verification stage.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -124,6 +129,8 @@ result for every verification stage.`,
 				return usageError("verify: --anchor is only valid with --proof")
 			case !remote && anchorPath != "" && globalProofPath == "":
 				return usageError("verify: --anchor requires --global-proof")
+			case fiscoBCOSTrustConfigPath != "" && (remote || sproofPath == ""):
+				return usageError("verify: --fisco-bcos-trust-config is only valid with local --sproof")
 			}
 
 			bundle, globalProof, remoteAnchor, singleProof, err := loadVerifyInputs(
@@ -213,22 +220,26 @@ result for every verification stage.`,
 			}
 			if anchorInUse != nil && !isBuiltInAnchorSink(anchorInUse.SinkName) {
 				if singleProof != nil {
-					return usageError("verify: offline .sproof verification does not execute an external anchor plugin")
+					if anchorInUse.SinkName != fiscobcos.SinkName ||
+						anchorInUse.EvidenceStage != model.AnchorEvidenceStageRaw {
+						return usageError("verify: offline .sproof verification does not execute an external anchor plugin")
+					}
+				} else {
+					if strings.TrimSpace(anchorPluginCommand) == "" {
+						return usageError("verify: custom anchor sink requires --anchor-plugin-command")
+					}
+					pluginSink, err := newPluginSinkFromParams(cmd.Context(), pluginSinkParams{
+						Command:          anchorPluginCommand,
+						Args:             anchorPluginArgs,
+						StartTimeoutText: anchorPluginStartTimeout,
+						RPCTimeoutText:   anchorPluginRPCTimeout,
+					})
+					if err != nil {
+						return err
+					}
+					defer pluginSink.Close()
+					opts = append(opts, verify.WithAnchorVerifier(pluginSink))
 				}
-				if strings.TrimSpace(anchorPluginCommand) == "" {
-					return usageError("verify: custom anchor sink requires --anchor-plugin-command")
-				}
-				pluginSink, err := newPluginSinkFromParams(cmd.Context(), pluginSinkParams{
-					Command:          anchorPluginCommand,
-					Args:             anchorPluginArgs,
-					StartTimeoutText: anchorPluginStartTimeout,
-					RPCTimeoutText:   anchorPluginRPCTimeout,
-				})
-				if err != nil {
-					return err
-				}
-				defer pluginSink.Close()
-				opts = append(opts, verify.WithAnchorVerifier(pluginSink))
 			}
 
 			if clientPub.KeyID != "" && clientPub.KeyID != bundle.SignedClaim.Claim.KeyID {
@@ -244,8 +255,17 @@ result for every verification stage.`,
 				offlineResult *sproof.OfflineResult
 			)
 			if singleProof != nil {
+				var fiscoBCOSTrustConfig *fiscobcos.TrustConfig
+				if strings.TrimSpace(fiscoBCOSTrustConfigPath) != "" {
+					loaded, loadErr := loadCanonicalFISCOBCOSTrustConfig(fiscoBCOSTrustConfigPath)
+					if loadErr != nil {
+						return loadErr
+					}
+					fiscoBCOSTrustConfig = &loaded
+				}
 				verified, verifyErr := sproof.VerifyOffline(f, *singleProof, sproof.OfflineTrust{
-					Proof: proofTrust,
+					Proof:     proofTrust,
+					FISCOBCOS: fiscoBCOSTrustConfig,
 					Identity: sproof.IdentityTrust{
 						ClientPublicKeys:         []trustcrypto.PublicKeyDescriptor{clientPub},
 						ServerPublicKeys:         serverTrustKeys,
@@ -307,6 +327,7 @@ result for every verification stage.`,
 	cmd.Flags().StringVar(&serverURL, "server", "", "TrustDB server URL (remote mode)")
 	cmd.Flags().StringVar(&recordID, "record", "", "record id to verify (remote mode)")
 	cmd.Flags().BoolVar(&skipAnchor, "skip-anchor", false, "do not fetch or verify L5 anchor")
+	cmd.Flags().StringVar(&fiscoBCOSTrustConfigPath, "fisco-bcos-trust-config", "", "absolute canonical verifier-local FISCO BCOS TrustConfig for raw receipt inclusion")
 	cmd.Flags().StringVar(&anchorPluginCommand, "anchor-plugin-command", "", "external anchor plugin executable used to verify a custom L5 proof")
 	cmd.Flags().StringArrayVar(&anchorPluginArgs, "anchor-plugin-arg", nil, "argument passed to the external anchor plugin; may be repeated")
 	cmd.Flags().StringVar(&anchorPluginStartTimeout, "anchor-plugin-start-timeout", "", "maximum time to start and handshake with an external anchor plugin (default 10s)")
