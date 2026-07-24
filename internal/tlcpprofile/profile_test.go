@@ -219,6 +219,33 @@ func TestProfileFailsClosedOnDeploymentAndTrustBoundaryDrift(t *testing.T) {
 	}
 }
 
+func TestLifecycleTimeoutSelectsEveryBoundedContract(t *testing.T) {
+	profile := Profile{Timeouts: Timeouts{
+		Startup: "11s",
+		Reload:  "12s",
+		Canary:  "13s",
+	}}
+	for _, test := range []struct {
+		lifecycle string
+		want      time.Duration
+	}{
+		{LifecycleStartup, 11 * time.Second},
+		{LifecycleReload, 12 * time.Second},
+		{LifecycleCanary, 13 * time.Second},
+	} {
+		got, err := LifecycleTimeout(profile, test.lifecycle)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != test.want {
+			t.Fatalf("LifecycleTimeout(%q) = %s, want %s", test.lifecycle, got, test.want)
+		}
+	}
+	if _, err := LifecycleTimeout(profile, "shutdown"); err == nil {
+		t.Fatal("unsupported lifecycle was accepted")
+	}
+}
+
 func TestProductionOpaqueEngineReferencesValidateWithoutReadingPrivateKeys(t *testing.T) {
 	fixture := newTrustFixture(t)
 	profile := fixture.profile

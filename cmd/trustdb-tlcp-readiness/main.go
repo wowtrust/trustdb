@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"strings"
-	"time"
 
 	"github.com/wowtrust/trustdb/internal/tlcpprofile"
 	"github.com/wowtrust/trustdb/internal/tlcpready"
@@ -50,7 +49,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	timeout, err := time.ParseDuration(profile.Timeouts.Canary)
+	timeout, err := tlcpprofile.LifecycleTimeout(profile, tlcpprofile.LifecycleCanary)
 	if err != nil {
 		return err
 	}

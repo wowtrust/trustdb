@@ -382,9 +382,16 @@ func TestTLCPGatewayHTTPAndGRPCMutualAuthentication(t *testing.T) {
 		activateGeneration(t, fixture.dir, second.name)
 		prepareRuntimeInContainer(t, active.gatewayContainer)
 		runDocker(t, "kill", "--signal", "HUP", active.gatewayContainer)
-		waitForServerPublicKey(t, active, fixture, second.signingPublicKeySHA256, 10*time.Second)
-		if elapsed := time.Since(started); elapsed > 10*time.Second {
-			t.Fatalf("gateway reload took %s, want at most 10s", elapsed)
+		reloadTimeout, err := tlcpprofile.LifecycleTimeout(
+			fixture.profile,
+			tlcpprofile.LifecycleReload,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		waitForServerPublicKey(t, active, fixture, second.signingPublicKeySHA256, reloadTimeout)
+		if elapsed := time.Since(started); elapsed > reloadTimeout {
+			t.Fatalf("gateway reload took %s, want at most %s", elapsed, reloadTimeout)
 		}
 		runHTTPClient(t, active, fixture, nil)
 		if err := runGRPCHealthClient(active, fixture); err != nil {
@@ -1443,6 +1450,7 @@ func prepareRuntimeCommand(container string) []string {
 		"exec",
 		container,
 		"/usr/local/bin/tlcp-gateway-prepare-runtime",
+		"reload",
 	}
 }
 

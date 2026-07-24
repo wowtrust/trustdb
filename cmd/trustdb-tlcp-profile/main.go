@@ -34,10 +34,15 @@ func main() {
 
 func run(args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
-		return errors.New("usage: trustdb-tlcp-profile <validate|prepare-runtime|verify-runtime>")
+		return errors.New(
+			"usage: trustdb-tlcp-profile <validate|timeout|prepare-runtime|verify-runtime>",
+		)
 	}
 	if args[0] == "prepare-runtime" || args[0] == "verify-runtime" {
 		return runRuntime(args[0], args[1:], stdout, stderr)
+	}
+	if args[0] == "timeout" {
+		return runTimeout(args[1:], stdout, stderr)
 	}
 	if args[0] != "validate" {
 		return fmt.Errorf("unknown command %q", args[0])
@@ -77,6 +82,38 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return fmt.Errorf("encode TLCP gateway validation report: %w", err)
 	}
 	return nil
+}
+
+func runTimeout(args []string, stdout, stderr io.Writer) error {
+	flags := flag.NewFlagSet("timeout", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	var profilePath, lifecycle string
+	flags.StringVar(&profilePath, "profile", "", "absolute path to the strict TLCP gateway profile")
+	flags.StringVar(
+		&lifecycle,
+		"lifecycle",
+		"",
+		"lifecycle deadline to emit: startup, reload, or canary",
+	)
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 {
+		return errors.New("unexpected positional arguments")
+	}
+	if strings.TrimSpace(profilePath) == "" || strings.TrimSpace(lifecycle) == "" {
+		return errors.New("--profile and --lifecycle are required")
+	}
+	profile, _, err := tlcpprofile.LoadAndValidate(profilePath, tlcpprofile.Options{})
+	if err != nil {
+		return err
+	}
+	timeout, err := tlcpprofile.LifecycleTimeout(profile, lifecycle)
+	if err != nil {
+		return err
+	}
+	_, err = fmt.Fprintln(stdout, timeout.String())
+	return err
 }
 
 func runRuntime(command string, args []string, stdout, stderr io.Writer) error {

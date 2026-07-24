@@ -14,10 +14,32 @@ require_env() {
 require_env TLCP_PROFILE_FILE
 require_env TLCP_EXPECTED_GATEWAY_IMAGE_DIGEST
 
+case "${1:-}" in
+  startup|reload) lifecycle=$1 ;;
+  *) fail "lifecycle argument must be startup or reload" ;;
+esac
+
 case "$TLCP_PROFILE_FILE" in
   /*) ;;
   *) fail "TLCP_PROFILE_FILE must be an absolute path" ;;
 esac
+
+if [ "${TLCP_PREPARE_DEADLINE_ACTIVE:-}" != "1" ]; then
+  deadline=$(
+    /usr/local/bin/trustdb-tlcp-profile timeout \
+      --profile "$TLCP_PROFILE_FILE" \
+      --lifecycle "$lifecycle"
+  )
+  TLCP_PREPARE_DEADLINE_ACTIVE=1
+  export TLCP_PREPARE_DEADLINE_ACTIVE
+  exec /usr/bin/timeout \
+    --foreground \
+    --signal=TERM \
+    --kill-after=1s \
+    "$deadline" \
+    "$0" "$lifecycle"
+fi
+unset TLCP_PREPARE_DEADLINE_ACTIVE
 
 configuration=/run/tlcp-gateway/nginx.conf
 runtime_manifest=/run/tlcp-gateway/runtime-manifest.json

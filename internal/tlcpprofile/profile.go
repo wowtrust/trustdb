@@ -38,6 +38,10 @@ const (
 	CryptoModeGuomi       = "guomi"
 	RevocationCRL         = "crl"
 
+	LifecycleStartup = "startup"
+	LifecycleReload  = "reload"
+	LifecycleCanary  = "canary"
+
 	KeyProviderEngine = "engine"
 	KeyProviderPKCS11 = "pkcs11"
 	KeyProviderSDF    = "sdf"
@@ -522,6 +526,25 @@ func validateTimeouts(value Timeouts) error {
 		}
 	}
 	return nil
+}
+
+func LifecycleTimeout(profile Profile, lifecycle string) (time.Duration, error) {
+	var value string
+	switch lifecycle {
+	case LifecycleStartup:
+		value = profile.Timeouts.Startup
+	case LifecycleReload:
+		value = profile.Timeouts.Reload
+	case LifecycleCanary:
+		value = profile.Timeouts.Canary
+	default:
+		return 0, fmt.Errorf("unsupported TLCP gateway lifecycle %q", lifecycle)
+	}
+	duration, err := time.ParseDuration(value)
+	if err != nil || duration < time.Second || duration > 10*time.Minute {
+		return 0, fmt.Errorf("TLCP gateway %s timeout is invalid", lifecycle)
+	}
+	return duration, nil
 }
 
 func validateString(name, value string) error {

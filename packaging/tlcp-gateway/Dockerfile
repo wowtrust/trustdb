@@ -138,6 +138,7 @@ RUN mkdir -p /etc/trustdb/tlcp /var/cache/tlcp-gateway/proxy /run/tlcp-gateway \
     && chmod 0755 \
       /usr/local/bin/tlcp-gateway-entrypoint \
       /usr/local/bin/tlcp-gateway-prepare-runtime \
+    && command -v timeout >/dev/null \
     && test "$(sha256sum /usr/share/licenses/trustdb-tlcp-gateway/Tengine-LICENSE | cut -d ' ' -f 1)" = "8444037a744ac508f6c76aa334d73a2f9ca0bf53317d078ddf43626ccfa10deb" \
     && test "$(sha256sum /usr/share/licenses/trustdb-tlcp-gateway/Tongsuo-LICENSE.txt | cut -d ' ' -f 1)" = "7d5450cb2d142651b8afa315b5f238efc805dad827d91ba367d8516bc9d49e7a"
 USER 10001:10001
@@ -145,6 +146,6 @@ WORKDIR /run/tlcp-gateway
 ENV PATH=/opt/tongsuo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 EXPOSE 8443 9443
 STOPSIGNAL SIGQUIT
-HEALTHCHECK --interval=10s --timeout=10s --start-period=5s --retries=2 \
+HEALTHCHECK --interval=10s --timeout=10m5s --start-period=5s --retries=2 \
   CMD ["/usr/local/bin/trustdb-tlcp-readiness"]
 ENTRYPOINT ["/usr/local/bin/tlcp-gateway-entrypoint"]
