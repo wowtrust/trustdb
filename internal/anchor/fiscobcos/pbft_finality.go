@@ -84,6 +84,7 @@ func VerifyStaticPBFTFinality(
 		}
 		if err := verifyPBFTCommitSignature(
 			canonical.CryptoMode,
+			canonical.SM2UserID,
 			validator.PublicKey,
 			proof.Block.BlockHash,
 			commit.Signature,
@@ -181,6 +182,7 @@ func canonicalNodeID(rawPublicKey []byte) string {
 
 func verifyPBFTCommitSignature(
 	mode CryptoMode,
+	sm2UserID string,
 	publicKey []byte,
 	blockHash []byte,
 	signature []byte,
@@ -218,9 +220,13 @@ func verifyPBFTCommitSignature(
 		if err != nil {
 			return fmt.Errorf("parse SM2 validator public key: %v", err)
 		}
+		digest, err := gmsm2.CalculateSM2Hash(public, blockHash, []byte(sm2UserID))
+		if err != nil {
+			return fmt.Errorf("calculate SM2 block-hash digest: %v", err)
+		}
 		r := new(big.Int).SetBytes(signature[:32])
 		s := new(big.Int).SetBytes(signature[32:])
-		if !gmsm2.Verify(public, blockHash, r, s) {
+		if !gmsm2.Verify(public, digest, r, s) {
 			return fmt.Errorf("invalid SM2 block-hash signature")
 		}
 		return nil

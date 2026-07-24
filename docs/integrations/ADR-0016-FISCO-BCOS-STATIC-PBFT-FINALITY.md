@@ -130,12 +130,12 @@ recovery failure, or a different recovered key fails.
 
 ### Guomi mode
 
-Each PBFT proof is exactly 64 bytes `[R || S]`. FISCO BCOS `SM2Crypto` receives
-the 32-byte SM3 block hash and signs that digest directly. This is deliberately
-different from the BCOS transaction signature path, which applies the fixed
-SM2 user-ID preprocessing. TrustDB parses the locally pinned SM2 public key and
-verifies `R,S` against the carried block hash without transaction-style ZA
-preprocessing.
+Each PBFT proof is exactly 64 bytes `[R || S]`. FISCO BCOS v3.16.3
+`SM2Crypto` passes the 32-byte SM3 block hash as the message to its SM2
+implementation, which then applies ZA plus SM3 using the fixed
+`1234567812345678` user ID before signing. TrustDB reproduces that exact
+preprocessing with the locally pinned SM2 public key. A signature made
+directly over the block hash without ZA preprocessing fails closed.
 
 BCOS mode and TrustDB proof suite remain independent. Tests deliberately cover
 a standard BCOS block carrying a `CN_SM_V1` TrustDB STH and a Guomi BCOS block

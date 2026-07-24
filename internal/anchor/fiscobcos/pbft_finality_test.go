@@ -270,6 +270,34 @@ func TestVerifyStaticPBFTFinalityRejectsDuplicateSigner(t *testing.T) {
 	}
 }
 
+func TestVerifyStaticPBFTFinalityRejectsGuomiDirectDigestSignature(t *testing.T) {
+	t.Parallel()
+
+	sth, result, trust, keys := validStaticFinalityFixture(
+		t,
+		CryptoModeGuomi,
+		cryptosuite.INTLV1,
+	)
+	proof := mustFinalityProof(t, result)
+	for index := range proof.Finality.Signatures {
+		private, err := gmsm2.NewPrivateKey(keys[index].private)
+		if err != nil {
+			t.Fatal(err)
+		}
+		r, s, err := gmsm2.Sign(rand.Reader, &private.PrivateKey, proof.Block.BlockHash)
+		if err != nil {
+			t.Fatal(err)
+		}
+		r.FillBytes(proof.Finality.Signatures[index].Signature[:32])
+		s.FillBytes(proof.Finality.Signatures[index].Signature[32:])
+	}
+	candidate := resultWithFinalityProof(t, result, proof)
+	err := VerifyStaticPBFTFinality(sth, candidate, trust)
+	if err == nil || !strings.Contains(err.Error(), "invalid SM2 block-hash signature") {
+		t.Fatalf("VerifyStaticPBFTFinality() error = %v, want upstream SM2 preprocessing rejection", err)
+	}
+}
+
 func validStaticFinalityFixture(
 	t *testing.T,
 	mode CryptoMode,
@@ -357,7 +385,15 @@ func rebuildFinalityBlock(t *testing.T, proof *AnchorProof, signers []finalityFi
 			if err != nil {
 				t.Fatal(err)
 			}
-			r, s, err := gmsm2.Sign(rand.Reader, &private.PrivateKey, blockHash)
+			digest, err := gmsm2.CalculateSM2Hash(
+				&private.PublicKey,
+				blockHash,
+				[]byte(cryptosuite.SM2DefaultUserID),
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			r, s, err := gmsm2.Sign(rand.Reader, &private.PrivateKey, digest)
 			if err != nil {
 				t.Fatal(err)
 			}
