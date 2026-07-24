@@ -16,37 +16,47 @@ import (
 	"github.com/wowtrust/trustdb/internal/model"
 )
 
-// Identity is the signing persona the desktop client uses. Keys are
-// stored base64-url-raw (no padding) to stay friendly for hand-editing
-// the config file without shelling out to a helper.
+// Identity stores only the location of a canonical V2 signer descriptor and
+// non-secret provider launch metadata. Private material remains in an
+// authenticated SM4 envelope or behind an external signer provider.
 type Identity struct {
-	TenantID      string `json:"tenant_id"`
-	ClientID      string `json:"client_id"`
-	KeyID         string `json:"key_id"`
-	PrivateKeyB64 string `json:"private_key_b64"`
-	PublicKeyB64  string `json:"public_key_b64"`
+	SchemaVersion    string   `json:"schema_version"`
+	TenantID         string   `json:"tenant_id"`
+	ClientID         string   `json:"client_id"`
+	DescriptorPath   string   `json:"descriptor_path"`
+	ManagedMaterial  bool     `json:"managed_material,omitempty"`
+	PluginCommand    string   `json:"plugin_command,omitempty"`
+	PluginInheritEnv []string `json:"plugin_inherit_env,omitempty"`
 }
 
 // Settings captures everything that is not a secret but should still
 // survive restarts: the target server, the server's signing key so
 // we can verify responses, and UI preferences.
 type Settings struct {
-	ServerURL                string `json:"server_url"`
-	ServerTransport          string `json:"server_transport"`
-	ServerCAFile             string `json:"server_ca_file"`
-	ServerName               string `json:"server_name"`
-	ServerCAPinsSHA256       string `json:"server_ca_pins_sha256"`
-	ClientTLSCertFile        string `json:"client_tls_cert_file"`
-	ClientTLSKeyFile         string `json:"client_tls_key_file"`
-	TLSReloadInterval        string `json:"tls_reload_interval"`
-	ServerPubKeyB64          string `json:"server_public_key_b64"`
-	AnchorPluginCommand      string `json:"anchor_plugin_command"`
-	AnchorPluginArgsText     string `json:"anchor_plugin_args_text"`
-	AnchorPluginStartTimeout string `json:"anchor_plugin_start_timeout"`
-	AnchorPluginRPCTimeout   string `json:"anchor_plugin_rpc_timeout"`
-	DefaultMedia             string `json:"default_media_type"`
-	DefaultEvent             string `json:"default_event_type"`
-	Theme                    string `json:"theme"`
+	ServerURL                  string `json:"server_url"`
+	ServerTransport            string `json:"server_transport"`
+	ServerCryptoSuite          string `json:"server_crypto_suite"`
+	ServerCAFile               string `json:"server_ca_file"`
+	ServerName                 string `json:"server_name"`
+	ServerCAPinsSHA256         string `json:"server_ca_pins_sha256"`
+	ClientTLSCertFile          string `json:"client_tls_cert_file"`
+	ClientTLSKeyFile           string `json:"client_tls_key_file"`
+	TLSReloadInterval          string `json:"tls_reload_interval"`
+	ServerPubKeyB64            string `json:"server_public_key_b64"`
+	ClientVerifierDescriptor   string `json:"client_verifier_descriptor"`
+	ServerVerifierDescriptor   string `json:"server_verifier_descriptor"`
+	RegistryVerifierDescriptor string `json:"registry_verifier_descriptor"`
+	ClientCertificateRoots     string `json:"client_certificate_roots"`
+	ServerCertificateRoots     string `json:"server_certificate_roots"`
+	RequireIdentityEvidence    bool   `json:"require_identity_evidence"`
+	RequireCertificateStatus   bool   `json:"require_certificate_status"`
+	AnchorPluginCommand        string `json:"anchor_plugin_command"`
+	AnchorPluginArgsText       string `json:"anchor_plugin_args_text"`
+	AnchorPluginStartTimeout   string `json:"anchor_plugin_start_timeout"`
+	AnchorPluginRPCTimeout     string `json:"anchor_plugin_rpc_timeout"`
+	DefaultMedia               string `json:"default_media_type"`
+	DefaultEvent               string `json:"default_event_type"`
+	Theme                      string `json:"theme"`
 }
 
 const (
@@ -60,6 +70,8 @@ const (
 // across app restarts without having to re-fetch from the server.
 type LocalRecord struct {
 	RecordID          string                  `json:"record_id"`
+	CryptoSuite       string                  `json:"crypto_suite"`
+	HashAlg           string                  `json:"hash_alg"`
 	SubmittedAt       string                  `json:"submitted_at"`
 	SubmittedAtUnixN  int64                   `json:"submitted_at_unix_nano"`
 	FilePath          string                  `json:"file_path"`
@@ -167,6 +179,7 @@ func defaultSettings() Settings {
 	return Settings{
 		ServerURL:                "http://127.0.0.1:8080",
 		ServerTransport:          serverTransportHTTP,
+		ServerCryptoSuite:        "INTL_V1",
 		TLSReloadInterval:        "1m",
 		AnchorPluginStartTimeout: "10s",
 		AnchorPluginRPCTimeout:   "30s",
@@ -234,6 +247,9 @@ func (s *store) load() error {
 		defaults := defaultSettings()
 		loaded.Settings.ServerURL = defaults.ServerURL
 	}
+	if loaded.Settings.ServerCryptoSuite == "" {
+		loaded.Settings.ServerCryptoSuite = "INTL_V1"
+	}
 	loaded.Settings.ServerTransport = normalizeServerTransport(loaded.Settings.ServerTransport)
 	if loaded.Settings.TLSReloadInterval == "" {
 		loaded.Settings.TLSReloadInterval = "1m"
@@ -298,6 +314,7 @@ func (s *store) snapshot() configFile {
 	}
 	if s.data.Identity != nil {
 		id := *s.data.Identity
+		id.PluginInheritEnv = append([]string(nil), id.PluginInheritEnv...)
 		out.Identity = &id
 	}
 	return out
@@ -310,6 +327,7 @@ func (s *store) getIdentity() *Identity {
 		return nil
 	}
 	id := *s.data.Identity
+	id.PluginInheritEnv = append([]string(nil), id.PluginInheritEnv...)
 	return &id
 }
 
@@ -317,6 +335,7 @@ func (s *store) setIdentity(id Identity) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	cp := id
+	cp.PluginInheritEnv = append([]string(nil), id.PluginInheritEnv...)
 	s.data.Identity = &cp
 	return s.persistLocked()
 }
@@ -338,6 +357,9 @@ func (s *store) setSettings(cfg Settings) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	cfg.ServerTransport = normalizeServerTransport(cfg.ServerTransport)
+	if cfg.ServerCryptoSuite == "" {
+		cfg.ServerCryptoSuite = "INTL_V1"
+	}
 	if cfg.TLSReloadInterval == "" {
 		cfg.TLSReloadInterval = "1m"
 	}

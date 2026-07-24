@@ -410,8 +410,8 @@ func localRecordLevelCountKey(level string) string {
 func localRecordListPrefix(opts RecordPageOptions) (prefix, counterKey string, exactCounter bool) {
 	q := strings.TrimSpace(opts.Query)
 	switch {
-	case localRecordLooksLikeSHA256(q):
-		return localRecordPrefixHash + strings.TrimPrefix(strings.ToLower(q), "sha256:") + "/", "", false
+	case localRecordLooksLikeContentHash(q):
+		return localRecordPrefixHash + trimContentHashPrefix(q) + "/", "", false
 	case localRecordQueryToken(q) != "":
 		return localRecordPrefixToken + localRecordPart(localRecordQueryToken(q)) + "/", "", false
 	case opts.Level != "":
@@ -445,8 +445,8 @@ func localRecordIndexKeys(rec LocalRecord) []string {
 	if rec.ClientID != "" {
 		keys = append(keys, localRecordPrefixClient+localRecordPart(rec.ClientID)+"/"+suffix)
 	}
-	if localRecordLooksLikeSHA256(rec.ContentHashHex) {
-		keys = append(keys, localRecordPrefixHash+strings.TrimPrefix(strings.ToLower(rec.ContentHashHex), "sha256:")+"/"+suffix)
+	if localRecordLooksLikeContentHash(rec.ContentHashHex) {
+		keys = append(keys, localRecordPrefixHash+trimContentHashPrefix(rec.ContentHashHex)+"/"+suffix)
 	}
 	for _, token := range localRecordTokens(rec) {
 		keys = append(keys, localRecordPrefixToken+localRecordPart(token)+"/"+suffix)
@@ -601,8 +601,8 @@ func localRecordSearchTokens(value string) []string {
 	return tokens
 }
 
-func localRecordLooksLikeSHA256(value string) bool {
-	value = strings.TrimPrefix(strings.ToLower(strings.TrimSpace(value)), "sha256:")
+func localRecordLooksLikeContentHash(value string) bool {
+	value = trimContentHashPrefix(value)
 	if len(value) != 64 {
 		return false
 	}
@@ -612,4 +612,10 @@ func localRecordLooksLikeSHA256(value string) bool {
 		}
 	}
 	return true
+}
+
+func trimContentHashPrefix(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	value = strings.TrimPrefix(value, "sha256:")
+	return strings.TrimPrefix(value, "sm3:")
 }

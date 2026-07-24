@@ -1,14 +1,18 @@
 package main
 
 import (
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/wowtrust/trustdb/internal/anchor"
 	"github.com/wowtrust/trustdb/internal/model"
 	"github.com/wowtrust/trustdb/internal/prooflevel"
 	"github.com/wowtrust/trustdb/internal/sproof"
+	"github.com/wowtrust/trustdb/sdk"
 )
 
 // SubmitRequest is the single, JSON-friendly shape the UI uses to
@@ -48,28 +52,35 @@ func (a *App) SubmitFile(req SubmitRequest) (*SubmitResult, error) {
 	if req.Path == "" {
 		return nil, errors.New("path is required")
 	}
-	id := st.getIdentity()
-	if id == nil {
+	storedIdentity := st.getIdentity()
+	if storedIdentity == nil {
 		return nil, errors.New("identity not configured — create or import a key first")
 	}
-	_, priv, err := loadSigningKeys(*id)
+	identity, err := a.unlockedSDKIdentity()
 	if err != nil {
 		return nil, err
 	}
-
-	infos, err := a.describeFiles([]string{req.Path})
+	descriptor, err := loadDesktopIdentityDescriptor(*storedIdentity)
 	if err != nil {
-		return nil, fmt.Errorf("read file: %w", err)
+		return nil, err
 	}
-	if len(infos) == 0 {
-		return nil, fmt.Errorf("no file found at %s", req.Path)
+	if identity.KeyID != descriptor.KeyID {
+		return nil, errors.New("unlocked identity no longer matches persisted descriptor")
 	}
-	info := infos[0]
+	file, err := os.Open(req.Path)
+	if err != nil {
+		return nil, fmt.Errorf("open file: %w", err)
+	}
+	defer file.Close()
+	stat, err := file.Stat()
+	if err != nil {
+		return nil, fmt.Errorf("stat file: %w", err)
+	}
 
 	cfg := st.getSettings()
 	media := req.MediaType
 	if media == "" {
-		media = info.MediaType
+		media = guessMedia(req.Path)
 	}
 	if media == "" {
 		media = cfg.DefaultMedia
@@ -78,10 +89,9 @@ func (a *App) SubmitFile(req SubmitRequest) (*SubmitResult, error) {
 	if event == "" {
 		event = cfg.DefaultEvent
 	}
-
-	signed, idempotency, err := buildSignedClaim(priv, *id, info, media, event, req.Source)
-	if err != nil {
-		return nil, err
+	source := req.Source
+	if source == "" {
+		source = storedIdentity.ClientID
 	}
 
 	c, err := a.serverClient()
@@ -89,24 +99,39 @@ func (a *App) SubmitFile(req SubmitRequest) (*SubmitResult, error) {
 		return nil, err
 	}
 	defer c.close()
-	resp, err := c.submitSignedClaim(a.ensureCtx(), signed)
+	resp, err := c.sdk.SubmitFile(a.ensureCtx(), file, identity, sdk.FileClaimOptions{
+		MediaType:  media,
+		StorageURI: "file://" + filepath.ToSlash(req.Path),
+		EventType:  event,
+		Source:     source,
+		CustomMetadata: map[string]string{
+			"file_name": filepath.Base(req.Path),
+		},
+	})
 	if err != nil {
 		return nil, err
 	}
+	signed := resp.SignedClaim
+	if signed.CryptoSuite != descriptor.CryptoSuite {
+		return nil, errors.New("submitted claim crypto_suite does not match identity")
+	}
+	content := signed.Claim.Content
 
 	rec := LocalRecord{
 		RecordID:        resp.RecordID,
-		FilePath:        info.Path,
-		FileName:        info.Name,
-		ContentHashHex:  info.ContentHash,
-		ContentLength:   info.Size,
+		CryptoSuite:     string(signed.CryptoSuite),
+		HashAlg:         content.HashAlg,
+		FilePath:        req.Path,
+		FileName:        filepath.Base(req.Path),
+		ContentHashHex:  hex.EncodeToString(content.ContentHash),
+		ContentLength:   stat.Size(),
 		MediaType:       media,
 		EventType:       event,
-		Source:          req.Source,
-		IdempotencyKey:  idempotency,
-		TenantID:        id.TenantID,
-		ClientID:        id.ClientID,
-		KeyID:           id.KeyID,
+		Source:          source,
+		IdempotencyKey:  signed.Claim.IdempotencyKey,
+		TenantID:        storedIdentity.TenantID,
+		ClientID:        storedIdentity.ClientID,
+		KeyID:           descriptor.KeyID,
 		ProofLevel:      prooflevel.L2.String(),
 		ServerRecord:    &resp.ServerRecord,
 		AcceptedReceipt: &resp.AcceptedReceipt,

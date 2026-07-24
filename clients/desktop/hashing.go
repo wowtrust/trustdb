@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/wowtrust/trustdb/internal/model"
+	"github.com/wowtrust/trustdb/internal/cryptosuite"
 	"github.com/wowtrust/trustdb/internal/trustcrypto"
 )
 
@@ -140,11 +140,24 @@ func (p *progressReader) Read(b []byte) (int, error) {
 	return n, err
 }
 
-// hashFileStream computes the sha256 of a single file while periodically
-// calling onProgress with the running byte count. It respects ctx for
-// cancellation and returns a FileInfo ready to be handed to the frontend.
-// The function is synchronous but bounded in memory (io.Copy buffers).
+// hashFileStream computes an INTL_V1 content hash for compatibility with
+// existing callers. New suite-aware paths use hashFileStreamForSuite. Both
+// functions periodically call onProgress with the running byte count, respect
+// ctx cancellation, and remain bounded in memory.
 func hashFileStream(ctx context.Context, path string, onProgress func(read, total int64)) (FileInfo, error) {
+	return hashFileStreamForSuite(ctx, path, cryptosuite.INTLV1, onProgress)
+}
+
+func hashFileStreamForSuite(
+	ctx context.Context,
+	path string,
+	suiteID cryptosuite.ID,
+	onProgress func(read, total int64),
+) (FileInfo, error) {
+	suite, err := cryptosuite.RequireAvailable(suiteID)
+	if err != nil {
+		return FileInfo{}, err
+	}
 	f, err := os.Open(path)
 	if err != nil {
 		return FileInfo{}, err
@@ -171,7 +184,7 @@ func hashFileStream(ctx context.Context, path string, onProgress func(read, tota
 			}
 		},
 	}
-	sum, n, err := trustcrypto.HashReader(model.DefaultHashAlg, pr)
+	sum, n, err := trustcrypto.HashReaderForSuite(suite.ID, suite.ContentHash.Algorithm, pr)
 	if err != nil {
 		// Surface cancellation with a stable sentinel so callers can
 		// tell user-aborted apart from real IO failures.
@@ -184,6 +197,8 @@ func hashFileStream(ctx context.Context, path string, onProgress func(read, tota
 		Path:        path,
 		Name:        filepath.Base(path),
 		Size:        n,
+		CryptoSuite: string(suite.ID),
+		HashAlg:     suite.ContentHash.Algorithm,
 		ContentHash: hex.EncodeToString(sum),
 		MediaType:   guessMedia(path),
 	}, nil
