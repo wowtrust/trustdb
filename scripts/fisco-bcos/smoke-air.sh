@@ -154,8 +154,13 @@ fi
 
 if [[ ${RAW_EVM_FIXTURE} != true ]]; then
     mkdir -p "${WORK_DIR}/contract"
-    "${SOLC_BIN}" --bin --abi --overwrite \
-        -o "${WORK_DIR}/contract" "${SCRIPT_DIR}/CompatibilityProbe.sol"
+    if ! "${SOLC_BIN}" --bin --abi --overwrite \
+        -o "${WORK_DIR}/contract" "${SCRIPT_DIR}/CompatibilityProbe.sol" \
+        >"${WORK_DIR}/compiler-build.log" 2>&1; then
+        echo "the pinned Solidity compiler failed to build CompatibilityProbe.sol" >&2
+        sed 's/^/  /' "${WORK_DIR}/compiler-build.log" >&2
+        exit 1
+    fi
 fi
 
 NODE_DIR="${WORK_DIR}/nodes-${MODE}"
@@ -254,14 +259,14 @@ if [[ ${ROOT_SM_CERT_WAS_PRESENT} == false && -e ${REPO_ROOT}/sm_cert.cnf ]] || 
     exit 1
 fi
 
-python3 - "${WORK_DIR}" "${BASELINE}" "${MODE}" "${PLATFORM}" <<'PY'
+python3 - "${WORK_DIR}" "${BASELINE}" "${MODE}" "${PLATFORM}" "${SOLC_EXECUTABLE}" <<'PY'
 import json
 import platform
 import sys
 from pathlib import Path
 
 work = Path(sys.argv[1])
-baseline_path, mode, target_platform = sys.argv[2:]
+baseline_path, mode, target_platform, compiler_executable = sys.argv[2:]
 client = json.loads((work / "client-evidence.json").read_text(encoding="utf-8"))
 artifacts = json.loads((work / "artifact-verification.json").read_text(encoding="utf-8"))
 client["environment"] = {
@@ -271,7 +276,7 @@ client["environment"] = {
     "node_version": (work / "node-version.txt").read_text(encoding="utf-8"),
     "solc_version": (work / "solc-version.txt").read_text(encoding="utf-8"),
     "tassl_version": (work / "tassl-version.txt").read_text(encoding="utf-8"),
-    "compiler_executable": (work / "solc-version.txt").stat().st_size > 0 and "Version" in (work / "solc-version.txt").read_text(encoding="utf-8"),
+    "compiler_executable": compiler_executable == "true",
 }
 client["artifacts"] = artifacts["artifacts"]
 client["certificate_verification"] = (work / "certificate-verification.txt").read_text(encoding="utf-8").splitlines()
