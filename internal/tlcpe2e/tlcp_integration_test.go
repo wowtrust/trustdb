@@ -31,9 +31,11 @@ import (
 )
 
 const (
-	serverName = "trustdb.test"
-	httpPort   = "8443"
-	grpcPort   = "9443"
+	serverName     = "trustdb.test"
+	httpPort       = "8443"
+	grpcPort       = "9443"
+	canaryHTTPPort = "10443"
+	canaryGRPCPort = "11443"
 )
 
 type certificateFixture struct {
@@ -60,6 +62,12 @@ type runningGateway struct {
 	fixture           certificateFixture
 	httpAddress       string
 	grpcAddress       string
+}
+
+type serverGeneration struct {
+	name                      string
+	signingPublicKeySHA256    string
+	encryptionPublicKeySHA256 string
 }
 
 func TestTLCPGatewayHTTPAndGRPCMutualAuthentication(t *testing.T) {
@@ -205,6 +213,95 @@ func TestTLCPGatewayHTTPAndGRPCMutualAuthentication(t *testing.T) {
 			t.Fatal("gateway accepted a revoked client for the gRPC health service")
 		}
 	})
+
+	t.Run("expired server certificate", func(t *testing.T) {
+		expired := prepareExpiredServerGeneration(t, fixture)
+		name := startGatewayContainer(
+			t,
+			running.upstreamContainer,
+			gatewayImage,
+			fixture,
+			generationEnvironment(expired, canaryHTTPPort, canaryGRPCPort),
+			true,
+		)
+		if logs := dockerOutput(t, "logs", name); !strings.Contains(logs, "leaf certificate is expired") {
+			t.Fatalf("expired server certificate did not fail before readiness:\n%s", logs)
+		}
+	})
+
+	t.Run("atomic certificate rotation", func(t *testing.T) {
+		first, second := prepareServerGenerations(t, fixture)
+		activeGeneration := first
+		activeGeneration.name = "active"
+		active := startGateway(
+			t,
+			upstreamImage,
+			gatewayImage,
+			fixture,
+			generationEnvironment(activeGeneration, httpPort, grpcPort),
+		)
+		if err := runGRPCHealthClient(active, fixture); err != nil {
+			t.Fatalf("initial generation gRPC canary: %v", err)
+		}
+		if got := serverPublicKeySHA256(t, active, fixture); got != first.signingPublicKeySHA256 {
+			t.Fatalf("initial signing public key = %s, want %s", got, first.signingPublicKeySHA256)
+		}
+
+		invalidEnvironment := generationEnvironment(second, canaryHTTPPort, canaryGRPCPort)
+		invalidEnvironment["TLCP_ENCRYPTION_KEY_REFERENCE"] = "/certs/" + first.name + "/server-encryption.key"
+		failedCandidate := startGatewayContainer(
+			t,
+			active.upstreamContainer,
+			gatewayImage,
+			fixture,
+			invalidEnvironment,
+			true,
+		)
+		if logs := dockerOutput(t, "logs", failedCandidate); !strings.Contains(logs, "private key does not match") {
+			t.Fatalf("invalid candidate did not fail closed:\n%s", logs)
+		}
+		runHTTPClient(t, active, fixture, nil)
+		if err := runGRPCHealthClient(active, fixture); err != nil {
+			t.Fatalf("failed candidate disrupted the active generation: %v", err)
+		}
+
+		candidateName := startGatewayContainer(
+			t,
+			active.upstreamContainer,
+			gatewayImage,
+			fixture,
+			generationEnvironment(second, canaryHTTPPort, canaryGRPCPort),
+			false,
+		)
+		waitForLog(t, candidateName, "start worker processes")
+		candidate := runningGateway{
+			gatewayContainer:  candidateName,
+			upstreamContainer: active.upstreamContainer,
+			gatewayImage:      gatewayImage,
+			fixture:           fixture,
+			httpAddress:       publishedAddress(t, active.upstreamContainer, canaryHTTPPort),
+			grpcAddress:       publishedAddress(t, active.upstreamContainer, canaryGRPCPort),
+		}
+		runHTTPClient(t, candidate, fixture, nil)
+		if err := runGRPCHealthClient(candidate, fixture); err != nil {
+			t.Fatalf("candidate generation gRPC canary: %v", err)
+		}
+		if got := serverPublicKeySHA256(t, candidate, fixture); got != second.signingPublicKeySHA256 {
+			t.Fatalf("candidate signing public key = %s, want %s", got, second.signingPublicKeySHA256)
+		}
+
+		started := time.Now()
+		activateGeneration(t, fixture.dir, second.name)
+		runDocker(t, "kill", "--signal", "HUP", active.gatewayContainer)
+		waitForServerPublicKey(t, active, fixture, second.signingPublicKeySHA256, 10*time.Second)
+		if elapsed := time.Since(started); elapsed > 10*time.Second {
+			t.Fatalf("gateway reload took %s, want at most 10s", elapsed)
+		}
+		runHTTPClient(t, active, fixture, nil)
+		if err := runGRPCHealthClient(active, fixture); err != nil {
+			t.Fatalf("rotated generation gRPC canary: %v", err)
+		}
+	})
 }
 
 func requireDocker(t *testing.T) {
@@ -313,6 +410,8 @@ func startGateway(
 		"--name", upstream,
 		"--publish", "127.0.0.1::"+httpPort,
 		"--publish", "127.0.0.1::"+grpcPort,
+		"--publish", "127.0.0.1::"+canaryHTTPPort,
+		"--publish", "127.0.0.1::"+canaryGRPCPort,
 		"--read-only",
 		upstreamImage,
 	)
@@ -666,6 +765,65 @@ func verifyGRPCHealthResponse(response []byte, diagnostics string) error {
 	return nil
 }
 
+func serverPublicKeySHA256(
+	t *testing.T,
+	running runningGateway,
+	fixture certificateFixture,
+) string {
+	t.Helper()
+	args := opensslDockerArgs(running, fixture, "http/1.1", true)
+	for index, value := range args {
+		if value == "-brief" {
+			args = append(args[:index], args[index+1:]...)
+			break
+		}
+	}
+	args = append(args, "-showcerts")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	command := exec.CommandContext(ctx, "docker", args...)
+	command.Stdin = strings.NewReader(
+		"GET /health HTTP/1.1\r\nHost: " + serverName + "\r\nConnection: close\r\n\r\n",
+	)
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("read gateway certificate: %v\n%s", err, output)
+	}
+	start := bytes.Index(output, []byte("-----BEGIN CERTIFICATE-----"))
+	if start < 0 {
+		t.Fatalf("gateway did not return a PEM certificate:\n%s", output)
+	}
+	block, _ := pem.Decode(output[start:])
+	if block == nil || block.Type != "CERTIFICATE" {
+		t.Fatalf("gateway returned an invalid PEM certificate:\n%s", output)
+	}
+	certificate, err := smx509.ParseCertificate(block.Bytes)
+	if err != nil {
+		t.Fatalf("parse gateway certificate: %v", err)
+	}
+	return publicKeySHA256(t, certificate)
+}
+
+func waitForServerPublicKey(
+	t *testing.T,
+	running runningGateway,
+	fixture certificateFixture,
+	expected string,
+	timeout time.Duration,
+) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	var last string
+	for time.Now().Before(deadline) {
+		last = serverPublicKeySHA256(t, running, fixture)
+		if last == expected {
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	t.Fatalf("server public key remained %s, want %s after %s", last, expected, timeout)
+}
+
 func runningAddress(running runningGateway, alpn string) string {
 	if alpn == "h2" {
 		return running.grpcAddress
@@ -779,6 +937,137 @@ func newCertificateFixture(t *testing.T) certificateFixture {
 			new(big.Int).Set(clientSigning.SerialNumber),
 			new(big.Int).Set(clientEncryption.SerialNumber),
 		},
+	}
+}
+
+func prepareServerGenerations(
+	t *testing.T,
+	fixture certificateFixture,
+) (serverGeneration, serverGeneration) {
+	t.Helper()
+	first := serverGeneration{
+		name:                      "generation-1",
+		signingPublicKeySHA256:    fixture.serverSigningSHA256,
+		encryptionPublicKeySHA256: fixture.serverEncryptionSHA256,
+	}
+	firstDir := filepath.Join(fixture.dir, first.name)
+	if err := os.Mkdir(firstDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{
+		"server-signing.pem",
+		"server-signing.key",
+		"server-encryption.pem",
+		"server-encryption.key",
+	} {
+		if err := os.Rename(filepath.Join(fixture.dir, name), filepath.Join(firstDir, name)); err != nil {
+			t.Fatalf("stage first generation %s: %v", name, err)
+		}
+	}
+
+	second := serverGeneration{name: "generation-2"}
+	secondDir := filepath.Join(fixture.dir, second.name)
+	if err := os.Mkdir(secondDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	signing, _ := createEndpoint(
+		t,
+		filepath.Join(secondDir, "server-signing.pem"),
+		filepath.Join(secondDir, "server-signing.key"),
+		fixture.serverCAObject,
+		fixture.serverCAKey,
+		30,
+		serverName,
+		smx509.KeyUsageDigitalSignature,
+		smx509.ExtKeyUsageServerAuth,
+		now,
+	)
+	encryption, _ := createEndpoint(
+		t,
+		filepath.Join(secondDir, "server-encryption.pem"),
+		filepath.Join(secondDir, "server-encryption.key"),
+		fixture.serverCAObject,
+		fixture.serverCAKey,
+		31,
+		serverName,
+		smx509.KeyUsageKeyEncipherment,
+		smx509.ExtKeyUsageServerAuth,
+		now,
+	)
+	appendCertificate(t, filepath.Join(secondDir, "server-signing.pem"), fixture.serverCAObject)
+	appendCertificate(t, filepath.Join(secondDir, "server-encryption.pem"), fixture.serverCAObject)
+	second.signingPublicKeySHA256 = publicKeySHA256(t, signing)
+	second.encryptionPublicKeySHA256 = publicKeySHA256(t, encryption)
+	activateGeneration(t, fixture.dir, first.name)
+	return first, second
+}
+
+func prepareExpiredServerGeneration(
+	t *testing.T,
+	fixture certificateFixture,
+) serverGeneration {
+	t.Helper()
+	generation := serverGeneration{name: "expired-generation"}
+	dir := filepath.Join(fixture.dir, generation.name)
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	expiredAt := time.Now().UTC().Add(-48 * time.Hour)
+	signing, _ := createEndpoint(
+		t,
+		filepath.Join(dir, "server-signing.pem"),
+		filepath.Join(dir, "server-signing.key"),
+		fixture.serverCAObject,
+		fixture.serverCAKey,
+		40,
+		serverName,
+		smx509.KeyUsageDigitalSignature,
+		smx509.ExtKeyUsageServerAuth,
+		expiredAt,
+	)
+	encryption, _ := createEndpoint(
+		t,
+		filepath.Join(dir, "server-encryption.pem"),
+		filepath.Join(dir, "server-encryption.key"),
+		fixture.serverCAObject,
+		fixture.serverCAKey,
+		41,
+		serverName,
+		smx509.KeyUsageKeyEncipherment,
+		smx509.ExtKeyUsageServerAuth,
+		expiredAt,
+	)
+	appendCertificate(t, filepath.Join(dir, "server-signing.pem"), fixture.serverCAObject)
+	appendCertificate(t, filepath.Join(dir, "server-encryption.pem"), fixture.serverCAObject)
+	generation.signingPublicKeySHA256 = publicKeySHA256(t, signing)
+	generation.encryptionPublicKeySHA256 = publicKeySHA256(t, encryption)
+	return generation
+}
+
+func generationEnvironment(generation serverGeneration, httpBind, grpcBind string) map[string]string {
+	prefix := "/certs/" + generation.name
+	return map[string]string{
+		"TLCP_SERVER_SIGNING_CHAIN_FILE":    prefix + "/server-signing.pem",
+		"TLCP_SERVER_ENCRYPTION_CHAIN_FILE": prefix + "/server-encryption.pem",
+		"TLCP_SIGNING_KEY_REFERENCE":        prefix + "/server-signing.key",
+		"TLCP_SIGNING_PUBLIC_KEY_SHA256":    generation.signingPublicKeySHA256,
+		"TLCP_ENCRYPTION_KEY_REFERENCE":     prefix + "/server-encryption.key",
+		"TLCP_ENCRYPTION_PUBLIC_KEY_SHA256": generation.encryptionPublicKeySHA256,
+		"TLCP_GATEWAY_HTTP_BIND":            "0.0.0.0:" + httpBind,
+		"TLCP_GATEWAY_GRPC_BIND":            "0.0.0.0:" + grpcBind,
+	}
+}
+
+func activateGeneration(t *testing.T, root, generation string) {
+	t.Helper()
+	temporary := filepath.Join(root, ".active-"+strconv.FormatInt(time.Now().UnixNano(), 36))
+	if err := os.Symlink(generation, temporary); err != nil {
+		t.Fatalf("create staged active-generation link: %v", err)
+	}
+	if err := os.Rename(temporary, filepath.Join(root, "active")); err != nil {
+		_ = os.Remove(temporary)
+		t.Fatalf("atomically activate certificate generation: %v", err)
 	}
 }
 

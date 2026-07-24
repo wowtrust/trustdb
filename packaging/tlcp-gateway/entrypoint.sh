@@ -51,6 +51,13 @@ public_key_sha256_from_private_key() {
     cut -d ' ' -f 1
 }
 
+validate_current_leaf_certificate() {
+  name=$1
+  path=$2
+  /opt/tongsuo/bin/openssl x509 -in "$path" -noout -checkend 0 >/dev/null 2>&1 ||
+    fail "$name leaf certificate is expired or malformed"
+}
+
 validate_key_reference() {
   role=$1
   provider=$2
@@ -151,6 +158,13 @@ do
     *) fail "$name must bind TrustDB plaintext to 127.0.0.1" ;;
   esac
 done
+
+validate_current_leaf_certificate \
+  TLCP_SERVER_SIGNING_CHAIN_FILE \
+  "$TLCP_SERVER_SIGNING_CHAIN_FILE"
+validate_current_leaf_certificate \
+  TLCP_SERVER_ENCRYPTION_CHAIN_FILE \
+  "$TLCP_SERVER_ENCRYPTION_CHAIN_FILE"
 
 validate_key_reference \
   SIGNING \
