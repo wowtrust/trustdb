@@ -19,6 +19,7 @@ import (
 	"github.com/wowtrust/trustdb/internal/globallog"
 	"github.com/wowtrust/trustdb/internal/model"
 	"github.com/wowtrust/trustdb/internal/proofstore"
+	"github.com/wowtrust/trustdb/internal/proofstore/proofstoretest"
 	"github.com/wowtrust/trustdb/internal/trustcrypto"
 	"github.com/wowtrust/trustdb/internal/trusterr"
 )
@@ -494,6 +495,65 @@ func TestRestoreRejectsTamperedBCOSJournalBeforeWrites(t *testing.T) {
 	}
 	if _, err := dst.LatestRoot(ctx); trusterr.CodeOf(err) != trusterr.CodeNotFound {
 		t.Fatalf("restore wrote an entry before rejecting tampered journal: %v", err)
+	}
+}
+
+func TestRestoreRejectsForgedBCOSOfflineStageBeforeWrites(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	key := model.STHAnchorScheduleKey{NodeID: "node-forged-stage", LogID: "log-forged-stage", SinkName: fiscobcos.SinkName}
+	sth := backupScheduleSTH(key, 4, 0x44)
+	result := proofstoretest.FISCOBCOSResult(t, key, sth, 400)
+	result.EvidenceStage = model.AnchorEvidenceStageOfflineVerified
+
+	path := filepath.Join(t.TempDir(), "forged-bcos-stage.tdbackup")
+	file, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tw := tar.NewWriter(file)
+	manifest := Manifest{
+		SchemaVersion: SchemaManifest,
+		BackupID:      "forged-bcos-stage",
+		CreatedAt:     time.Unix(1, 0).UTC().Format(time.RFC3339Nano),
+		Compression:   "none",
+		CryptoSuite:   cryptosuite.INTLV1,
+	}
+	var ordinal int64
+	root := model.BatchRoot{
+		SchemaVersion: model.SchemaBatchRoot,
+		CryptoSuite:   cryptosuite.INTLV1,
+		BatchID:       "must-not-restore-forged-stage",
+		BatchRoot:     repeatByte(0x56, 32),
+		TreeSize:      1,
+		ClosedAtUnixN: 1,
+	}
+	if err := writeCBORTracked(tw, &manifest, &ordinal, "roots/must-not-restore-forged-stage.tdroot", "batch_root", root); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeCBORTracked(tw, &manifest, &ordinal, "anchors/sth-result/000000000.tdsth-anchor-result", "sth_anchor_result", result); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeJSONTracked(tw, &manifest, &ordinal, "manifest.json", "manifest", manifest); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeJSONTracked(tw, &manifest, &ordinal, "summary.json", "summary", manifest); err != nil {
+		t.Fatal(err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	dst := newBoundTestLocalStore(t, filepath.Join(t.TempDir(), "dst"))
+	if _, err := Restore(ctx, dst, path); trusterr.CodeOf(err) != trusterr.CodeDataLoss ||
+		!strings.Contains(err.Error(), "remain raw") {
+		t.Fatalf("Restore forged BCOS stage error=%v", err)
+	}
+	if _, err := dst.LatestRoot(ctx); trusterr.CodeOf(err) != trusterr.CodeNotFound {
+		t.Fatalf("restore wrote an entry before rejecting forged BCOS stage: %v", err)
 	}
 }
 

@@ -1340,7 +1340,7 @@ func testFISCOBCOSResultIsByteImmutable(t *testing.T, newStore Factory) {
 	}
 	ctx := context.Background()
 	key := model.STHAnchorScheduleKey{NodeID: "node-bcos", LogID: "log-bcos", SinkName: fiscobcos.SinkName}
-	original := scheduleBCOSResult(t, key, scheduleSTH(key, 9, 0x91), 900)
+	original := FISCOBCOSResult(t, key, scheduleSTH(key, 9, 0x91), 900)
 	if err := writer.PutSTHAnchorResult(ctx, original); err != nil {
 		t.Fatalf("PutSTHAnchorResult original: %v", err)
 	}
@@ -1373,6 +1373,14 @@ func testFISCOBCOSResultIsByteImmutable(t *testing.T, newStore Factory) {
 	if err := updater.UpdateSTHAnchorResult(ctx, original, oversized); trusterr.CodeOf(err) != trusterr.CodeInvalidArgument {
 		t.Fatalf("UpdateSTHAnchorResult oversized BCOS proof error=%v, want invalid_argument", err)
 	}
+	forgedStage := original
+	forgedStage.EvidenceStage = model.AnchorEvidenceStageOfflineVerified
+	if err := writer.PutSTHAnchorResult(ctx, forgedStage); trusterr.CodeOf(err) != trusterr.CodeInvalidArgument {
+		t.Fatalf("PutSTHAnchorResult forged BCOS stage error=%v, want invalid_argument", err)
+	}
+	if err := updater.UpdateSTHAnchorResult(ctx, original, forgedStage); trusterr.CodeOf(err) != trusterr.CodeInvalidArgument {
+		t.Fatalf("UpdateSTHAnchorResult forged BCOS stage error=%v, want invalid_argument", err)
+	}
 
 	scheduler, ok := store.(proofstore.STHAnchorScheduleStore)
 	if !ok {
@@ -1389,14 +1397,21 @@ func testFISCOBCOSResultIsByteImmutable(t *testing.T, newStore Factory) {
 	if err != nil || !claimed {
 		t.Fatalf("ClaimSTHAnchorAttempt claimed=%v err=%v", claimed, err)
 	}
-	invalidCompletion := scheduleBCOSResult(t, completeKey, completeSTH, 1001)
+	invalidCompletion := FISCOBCOSResult(t, completeKey, completeSTH, 1001)
+	invalidCompletion.EvidenceStage = model.AnchorEvidenceStageOfflineVerified
+	if err := scheduler.CompleteSTHAnchorAttempt(ctx, completeKey, attempt.Generation, attempt.LeaseToken, invalidCompletion); trusterr.CodeOf(err) != trusterr.CodeInvalidArgument {
+		t.Fatalf("CompleteSTHAnchorAttempt forged BCOS stage error=%v, want invalid_argument", err)
+	}
 	invalidCompletion.Proof = make([]byte, fiscobcos.MaxProofBytes+1)
+	invalidCompletion.EvidenceStage = model.AnchorEvidenceStageRaw
 	if err := scheduler.CompleteSTHAnchorAttempt(ctx, completeKey, attempt.Generation, attempt.LeaseToken, invalidCompletion); trusterr.CodeOf(err) != trusterr.CodeInvalidArgument {
 		t.Fatalf("CompleteSTHAnchorAttempt oversized BCOS proof error=%v, want invalid_argument", err)
 	}
 }
 
-func scheduleBCOSResult(t *testing.T, key model.STHAnchorScheduleKey, sth model.SignedTreeHead, publishedAt int64) model.STHAnchorResult {
+// FISCOBCOSResult builds a structurally valid raw BCOS proof container for
+// storage, backup, and scheduler conformance tests.
+func FISCOBCOSResult(t testing.TB, key model.STHAnchorScheduleKey, sth model.SignedTreeHead, publishedAt int64) model.STHAnchorResult {
 	t.Helper()
 	payload, err := fiscobcos.NewAnchorPayload(cryptosuite.INTLV1, sth)
 	if err != nil {

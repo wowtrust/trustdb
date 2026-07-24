@@ -589,6 +589,9 @@ func ValidateResult(key model.STHAnchorScheduleKey, result model.STHAnchorResult
 		return trusterr.New(trusterr.CodeInvalidArgument, "anchor result does not bind its signed tree head")
 	}
 	if result.SinkName == fiscobcos.SinkName {
+		if result.EvidenceStage != model.AnchorEvidenceStageRaw {
+			return trusterr.New(trusterr.CodeInvalidArgument, "FISCO BCOS anchor result must remain raw until dedicated offline verification")
+		}
 		if len(result.Proof) == 0 || len(result.Proof) > fiscobcos.MaxProofBytes {
 			return trusterr.New(trusterr.CodeInvalidArgument, "FISCO BCOS anchor proof is empty or oversized")
 		}
