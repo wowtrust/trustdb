@@ -20,7 +20,7 @@ func TestDefaultConfigIsValid(t *testing.T) {
 func TestDefaultYAMLIsStructured(t *testing.T) {
 	t.Parallel()
 
-	for _, section := range []string{"paths:", "identity:", "server:", "nats:", "registry:", "batch:", "proofstore:", "log:", "keys:"} {
+	for _, section := range []string{"paths:", "identity:", "server:", "nats:", "registry:", "batch:", "crypto:", "proofstore:", "log:", "keys:"} {
 		if !strings.Contains(DefaultYAML, section) {
 			t.Fatalf("default yaml missing section %q", section)
 		}
@@ -67,6 +67,9 @@ func TestDefaultYAMLIsStructured(t *testing.T) {
 	if Default().Anchor.Plugin.StartTimeout != "10s" || Default().Anchor.Plugin.RPCTimeout != "30s" {
 		t.Fatalf("default anchor plugin timeouts = %+v", Default().Anchor.Plugin)
 	}
+	if got := Default().Crypto.SignerPlugins.Remote; got.StartTimeout != "10s" || got.RPCTimeout != "30s" || got.MaxConcurrency != 0 {
+		t.Fatalf("default remote signer plugin = %+v", got)
+	}
 	if Default().Server.ReadHeaderTimeout != "5s" {
 		t.Fatalf("default server.read_header_timeout = %q, want 5s", Default().Server.ReadHeaderTimeout)
 	}
@@ -87,6 +90,67 @@ func TestDefaultYAMLIsStructured(t *testing.T) {
 	}
 	if Default().NATS.DLQStream != "TRUSTDB_INGRESS_DLQ" || Default().NATS.DLQSubject != "trustdb.ingress.v1.dlq.*" || Default().NATS.DLQMaxAge != "0s" {
 		t.Fatalf("default NATS DLQ topology = %+v", Default().NATS)
+	}
+}
+
+func TestValidateSignerPluginConfig(t *testing.T) {
+	t.Parallel()
+
+	cfg := Default()
+	cfg.Crypto.SignerPlugins.Remote.Args = []string{"--config", "/run/plugin.yaml"}
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "crypto.signer_plugins.remote.command") {
+		t.Fatalf("Validate() error = %v, want command requirement", err)
+	}
+	cfg.Crypto.SignerPlugins.Remote.Command = "/usr/local/bin/trustdb-remote-signer"
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() rejected configured signer plugin: %v", err)
+	}
+	cfg.Crypto.SignerPlugins.Remote.RPCTimeout = "0s"
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "crypto.signer_plugins.remote.rpc_timeout") {
+		t.Fatalf("Validate() error = %v, want rpc timeout error", err)
+	}
+	cfg = Default()
+	cfg.Crypto.SignerPlugins.PKCS11.MaxConcurrency = -1
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "crypto.signer_plugins.pkcs11.max_concurrency") {
+		t.Fatalf("Validate() error = %v, want max concurrency error", err)
+	}
+}
+
+func TestFromViperMapsSignerPluginConfig(t *testing.T) {
+	t.Parallel()
+	v := viper.New()
+	v.Set("crypto.signer_plugins.remote.command", "/usr/local/bin/remote-signer")
+	v.Set("crypto.signer_plugins.remote.args", []string{"--profile", "production"})
+	v.Set("crypto.signer_plugins.remote.inherit_env", []string{"AWS_REGION", "AWS_WEB_IDENTITY_TOKEN_FILE"})
+	v.Set("crypto.signer_plugins.remote.start_timeout", "4s")
+	v.Set("crypto.signer_plugins.remote.rpc_timeout", "8s")
+	v.Set("crypto.signer_plugins.remote.max_concurrency", 7)
+
+	got := FromViper(v).Crypto.SignerPlugins.Remote
+	if got.Command != "/usr/local/bin/remote-signer" || len(got.Args) != 2 || len(got.InheritEnv) != 2 || got.StartTimeout != "4s" || got.RPCTimeout != "8s" || got.MaxConcurrency != 7 {
+		t.Fatalf("remote signer plugin = %+v", got)
+	}
+	redacted := FromViper(v).Redacted().Crypto.SignerPlugins.Remote
+	if len(redacted.Args) != 1 || redacted.Args[0] != "<redacted>" {
+		t.Fatalf("redacted signer plugin args = %#v", redacted.Args)
+	}
+}
+
+func TestValidateSignerPluginEnvironmentAllowlist(t *testing.T) {
+	t.Parallel()
+	for _, value := range []string{"1INVALID", "HAS-DASH", "TRUSTDB_SIGNER_PLUGIN_MAGIC_COOKIE", "trustdb_signer_plugin_magic_cookie"} {
+		cfg := Default()
+		cfg.Crypto.SignerPlugins.Remote.Command = "/usr/local/bin/remote-signer"
+		cfg.Crypto.SignerPlugins.Remote.InheritEnv = []string{value}
+		if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "inherit_env") {
+			t.Fatalf("Validate() with %q error = %v, want inherit_env error", value, err)
+		}
+	}
+	cfg := Default()
+	cfg.Crypto.SignerPlugins.Remote.Command = "/usr/local/bin/remote-signer"
+	cfg.Crypto.SignerPlugins.Remote.InheritEnv = []string{"PLUGIN_PATH", "plugin_path"}
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "duplicate") {
+		t.Fatalf("Validate() case-colliding environment error = %v, want duplicate", err)
 	}
 }
 

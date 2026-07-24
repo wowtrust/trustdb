@@ -15,6 +15,7 @@ import (
 	"sort"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/emmansun/gmsm/sm2"
 	"github.com/emmansun/gmsm/smx509"
@@ -359,7 +360,7 @@ func validatePKCS11URI(raw string) error {
 	attributeNames := make([]string, 0, len(items))
 	for _, item := range items {
 		parts := strings.SplitN(item, "=", 2)
-		if len(parts) != 2 || parts[0] == "" || parts[1] == "" || parts[0] != strings.ToLower(parts[0]) {
+		if len(parts) != 2 || parts[1] == "" || !validPKCS11AttributeName(parts[0]) {
 			return invalid("pkcs11 URI contains a non-canonical attribute")
 		}
 		if _, ok := seen[parts[0]]; ok {
@@ -394,9 +395,21 @@ func validatePKCS11URI(raw string) error {
 	return nil
 }
 
+func validPKCS11AttributeName(name string) bool {
+	if name == "" {
+		return false
+	}
+	for _, r := range name {
+		if !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '_' || r == '-') {
+			return false
+		}
+	}
+	return true
+}
+
 func validateRemoteReference(ref RemoteKeyReference) error {
-	if !validReference(ref.Handle) || !validReference(ref.CredentialRef) {
-		return invalid("remote handle and credential_ref are required")
+	if !validReference(ref.Endpoint) || !validReference(ref.Handle) || !validReference(ref.CredentialRef) {
+		return invalid("remote endpoint, handle, and credential_ref are required and must be within size limits")
 	}
 	u, err := url.Parse(ref.Endpoint)
 	if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
@@ -493,7 +506,7 @@ func validRelativePath(value string) bool {
 }
 
 func validIdentifier(value string, maxBytes int) bool {
-	if value == "" || len(value) > maxBytes || strings.TrimSpace(value) != value {
+	if value == "" || len(value) > maxBytes || !utf8.ValidString(value) || strings.TrimSpace(value) != value {
 		return false
 	}
 	for _, r := range value {

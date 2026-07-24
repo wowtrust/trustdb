@@ -250,11 +250,23 @@ func newServeCommand(rt *runtimeConfig) *cobra.Command {
 			if batchProofWorkers < 0 {
 				return usageError("batch-proof-workers must be zero or greater")
 			}
-			serverSigner, serverKey, err := readSigner(cmd.Context(), serverKeyPath)
+			serverSigner, serverKey, err := rt.readSigner(cmd.Context(), serverKeyPath)
 			if err != nil {
 				return err
 			}
+			defer rt.closeSignerResolver()
 			clientPub, clientKeys, err := resolveClientKeys(clientPubPath, registryPath, registryPubPath, cmd.Flags().Changed("key-registry"))
+			if err != nil {
+				return err
+			}
+			serverKeyID := stringValue(cmd, rt, "server-key-id", "server_key_id")
+			if err := requireKeyID(serverKeyID, serverKey); err != nil {
+				return err
+			}
+			if err := requireClientKeySuite(serverKey.CryptoSuite, clientPub, clientKeys); err != nil {
+				return err
+			}
+			cryptoProvider, err := trustcrypto.ProviderForSuite(serverKey.CryptoSuite)
 			if err != nil {
 				return err
 			}
@@ -351,10 +363,6 @@ func newServeCommand(rt *runtimeConfig) *cobra.Command {
 			if logID == "" {
 				logID = nodeID
 			}
-			serverKeyID := stringValue(cmd, rt, "server-key-id", "server_key_id")
-			if err := requireKeyID(serverKeyID, serverKey); err != nil {
-				return err
-			}
 			engine := app.LocalEngine{
 				ServerID:        nodeID,
 				LogID:           logID,
@@ -362,6 +370,7 @@ func newServeCommand(rt *runtimeConfig) *cobra.Command {
 				ClientPublicKey: clientPub,
 				ClientKeys:      clientKeys,
 				ServerSigner:    serverSigner,
+				CryptoProvider:  cryptoProvider,
 				ProofWorkers:    batchProofWorkers,
 				WAL:             writer,
 				Idempotency:     idempotency,
@@ -400,6 +409,7 @@ func newServeCommand(rt *runtimeConfig) *cobra.Command {
 				ArtifactSyncMode:             proofstoreArtifactSyncMode,
 				IndexStorageTokens:           !strings.EqualFold(proofstoreRecordIndexMode, "no_storage_tokens"),
 				IndexStorageTokensConfigured: cmd.Flags().Changed("proofstore-index-storage-tokens"),
+				CryptoSuite:                  serverKey.CryptoSuite,
 			})
 			if err != nil {
 				return err
@@ -606,6 +616,7 @@ func newServeCommand(rt *runtimeConfig) *cobra.Command {
 					NodeID:         nodeID,
 					LogID:          logID,
 					Signer:         serverSigner,
+					CryptoProvider: cryptoProvider,
 					AnchorSinkName: anchorSinkName,
 				})
 				if err != nil {

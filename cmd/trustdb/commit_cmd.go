@@ -9,10 +9,12 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/wowtrust/trustdb/internal/app"
 	"github.com/wowtrust/trustdb/internal/cborx"
+	"github.com/wowtrust/trustdb/internal/cryptosuite"
 	"github.com/wowtrust/trustdb/internal/keystore"
 	"github.com/wowtrust/trustdb/internal/model"
 	"github.com/wowtrust/trustdb/internal/prooflevel"
 	"github.com/wowtrust/trustdb/internal/trustcrypto"
+	"github.com/wowtrust/trustdb/internal/trusterr"
 )
 
 func newCommitCommand(rt *runtimeConfig) *cobra.Command {
@@ -42,11 +44,19 @@ func newCommitCommand(rt *runtimeConfig) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			serverSigner, serverKey, err := readSigner(cmd.Context(), serverKeyPath)
+			serverSigner, serverKey, err := rt.readSigner(cmd.Context(), serverKeyPath)
 			if err != nil {
 				return err
 			}
+			defer rt.closeSignerResolver()
 			if err := requireKeyID(serverKeyID, serverKey); err != nil {
+				return err
+			}
+			if err := requireClientKeySuite(serverKey.CryptoSuite, clientPub, clientKeys); err != nil {
+				return err
+			}
+			cryptoProvider, err := trustcrypto.ProviderForSuite(serverKey.CryptoSuite)
+			if err != nil {
 				return err
 			}
 			writer, _, err := openWALWriter(walPath, 0)
@@ -60,6 +70,7 @@ func newCommitCommand(rt *runtimeConfig) *cobra.Command {
 				ClientPublicKey: clientPub,
 				ClientKeys:      clientKeys,
 				ServerSigner:    serverSigner,
+				CryptoProvider:  cryptoProvider,
 				WAL:             writer,
 			}
 			record, accepted, _, err := engine.Submit(context.Background(), signed)
@@ -129,11 +140,19 @@ func newCommitBatchCommand(rt *runtimeConfig) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			serverSigner, serverKey, err := readSigner(cmd.Context(), serverKeyPath)
+			serverSigner, serverKey, err := rt.readSigner(cmd.Context(), serverKeyPath)
 			if err != nil {
 				return err
 			}
+			defer rt.closeSignerResolver()
 			if err := requireKeyID(serverKeyID, serverKey); err != nil {
+				return err
+			}
+			if err := requireClientKeySuite(serverKey.CryptoSuite, clientPub, clientKeys); err != nil {
+				return err
+			}
+			cryptoProvider, err := trustcrypto.ProviderForSuite(serverKey.CryptoSuite)
+			if err != nil {
 				return err
 			}
 			writer, _, err := openWALWriter(walPath, 0)
@@ -147,6 +166,7 @@ func newCommitBatchCommand(rt *runtimeConfig) *cobra.Command {
 				ClientPublicKey: clientPub,
 				ClientKeys:      clientKeys,
 				ServerSigner:    serverSigner,
+				CryptoProvider:  cryptoProvider,
 				WAL:             writer,
 			}
 			records := make([]model.ServerRecord, len(signed))
@@ -235,4 +255,26 @@ func resolveClientKeys(clientPubPath, registryPath, registryPubPath string, regi
 		return trustcrypto.PublicKeyDescriptor{}, nil, err
 	}
 	return descriptor, nil, nil
+}
+
+type clientKeySuiteReporter interface {
+	Suite() cryptosuite.ID
+}
+
+func requireClientKeySuite(serverSuite cryptosuite.ID, clientPublicKey trustcrypto.PublicKeyDescriptor, clientKeys app.ClientKeyResolver) error {
+	clientSuite := clientPublicKey.Suite
+	if clientSuite == "" && clientKeys != nil {
+		reporter, ok := clientKeys.(clientKeySuiteReporter)
+		if !ok {
+			return nil
+		}
+		clientSuite = reporter.Suite()
+	}
+	if clientSuite == "" || clientSuite == serverSuite {
+		return nil
+	}
+	return trusterr.New(
+		trusterr.CodeFailedPrecondition,
+		fmt.Sprintf("client key suite %s does not match server signer suite %s", clientSuite, serverSuite),
+	)
 }

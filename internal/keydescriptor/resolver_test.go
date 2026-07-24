@@ -325,9 +325,53 @@ func TestResolverHonorsContextCancellation(t *testing.T) {
 	}
 }
 
+func TestResolverClosesOwnedProvidersAndRejectsFurtherResolution(t *testing.T) {
+	t.Parallel()
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	descriptor := providerDescriptor(publicKey, ProviderRemote)
+	provider := &closingSignerProvider{
+		fakeSignerProvider: fakeSignerProvider{
+			name:   ProviderRemote,
+			signer: newFakeSigner(ProviderRemote, descriptor.KeyID, privateKey),
+		},
+	}
+	resolver, err := NewResolver(provider)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := resolver.ResolveSigner(context.Background(), descriptor, t.TempDir()); err != nil {
+		t.Fatalf("ResolveSigner() error = %v", err)
+	}
+	if err := resolver.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if err := resolver.Close(); err != nil {
+		t.Fatalf("second Close() error = %v", err)
+	}
+	if provider.closeCalls != 1 {
+		t.Fatalf("provider close calls = %d, want 1", provider.closeCalls)
+	}
+	if _, err := resolver.ResolveSigner(context.Background(), descriptor, t.TempDir()); !errors.Is(err, ErrResolverClosed) {
+		t.Fatalf("ResolveSigner() after Close error = %v, want ErrResolverClosed", err)
+	}
+}
+
 type fakeSignerProvider struct {
 	name   string
 	signer trustcrypto.Signer
+}
+
+type closingSignerProvider struct {
+	fakeSignerProvider
+	closeCalls int
+}
+
+func (p *closingSignerProvider) Close() error {
+	p.closeCalls++
+	return nil
 }
 
 func (p fakeSignerProvider) Name() string { return p.name }

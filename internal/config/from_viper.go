@@ -29,6 +29,9 @@ func FromViper(v *viper.Viper) Config {
 	if anchorPluginRPCTimeout == "" {
 		anchorPluginRPCTimeout = defaults.Anchor.Plugin.RPCTimeout
 	}
+	remoteSignerPlugin := signerPluginFromViper(v, "remote", defaults.Crypto.SignerPlugins.Remote)
+	pkcs11SignerPlugin := signerPluginFromViper(v, "pkcs11", defaults.Crypto.SignerPlugins.PKCS11)
+	sdfSignerPlugin := signerPluginFromViper(v, "sdf", defaults.Crypto.SignerPlugins.SDF)
 	return Config{
 		RunProfile: v.GetString("run_profile"),
 		Paths: Paths{
@@ -146,6 +149,11 @@ func FromViper(v *viper.Viper) Config {
 				RPCTimeout:   anchorPluginRPCTimeout,
 			},
 		},
+		Crypto: Crypto{SignerPlugins: SignerPlugins{
+			Remote: remoteSignerPlugin,
+			PKCS11: pkcs11SignerPlugin,
+			SDF:    sdfSignerPlugin,
+		}},
 		History: History{
 			TileSize:        v.GetUint64("history.tile_size"),
 			HotWindowLeaves: v.GetUint64("history.hot_window_leaves"),
@@ -195,6 +203,26 @@ func FromViper(v *viper.Viper) Config {
 			CookieSecure:  v.GetBool("admin.cookie_secure"),
 			SessionTTL:    v.GetString("admin.session_ttl"),
 		},
+	}
+}
+
+func signerPluginFromViper(v *viper.Viper, provider string, defaults SignerPlugin) SignerPlugin {
+	prefix := "crypto.signer_plugins." + provider + "."
+	startTimeout := strings.TrimSpace(v.GetString(prefix + "start_timeout"))
+	if startTimeout == "" {
+		startTimeout = defaults.StartTimeout
+	}
+	rpcTimeout := strings.TrimSpace(v.GetString(prefix + "rpc_timeout"))
+	if rpcTimeout == "" {
+		rpcTimeout = defaults.RPCTimeout
+	}
+	return SignerPlugin{
+		Command:        v.GetString(prefix + "command"),
+		Args:           append([]string(nil), v.GetStringSlice(prefix+"args")...),
+		InheritEnv:     append([]string(nil), v.GetStringSlice(prefix+"inherit_env")...),
+		StartTimeout:   startTimeout,
+		RPCTimeout:     rpcTimeout,
+		MaxConcurrency: v.GetInt(prefix + "max_concurrency"),
 	}
 }
 

@@ -7,7 +7,11 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/wowtrust/trustdb/internal/app"
+	"github.com/wowtrust/trustdb/internal/cryptosuite"
 	"github.com/wowtrust/trustdb/internal/keystore"
+	"github.com/wowtrust/trustdb/internal/trustcrypto"
+	"github.com/wowtrust/trustdb/internal/trusterr"
 )
 
 // TestResolveClientKeysPrefersExplicitPubKey guards the bug where a non-empty
@@ -96,6 +100,31 @@ func TestResolveClientKeysRegistryFallback(t *testing.T) {
 		t.Fatalf("resolveClientKeys() resolver = nil, want registry-backed resolver")
 	}
 }
+
+func TestRequireClientKeySuiteFailsBeforeStorageForMixedSuites(t *testing.T) {
+	t.Parallel()
+	matchingPublic := trustcrypto.PublicKeyDescriptor{Suite: cryptosuite.INTLV1}
+	if err := requireClientKeySuite(cryptosuite.INTLV1, matchingPublic, nil); err != nil {
+		t.Fatalf("matching direct client suite error = %v", err)
+	}
+
+	mismatchedPublic := trustcrypto.PublicKeyDescriptor{Suite: cryptosuite.CNSMV1}
+	if err := requireClientKeySuite(cryptosuite.INTLV1, mismatchedPublic, nil); trusterr.CodeOf(err) != trusterr.CodeFailedPrecondition {
+		t.Fatalf("direct client suite mismatch error = %v, code = %s", err, trusterr.CodeOf(err))
+	}
+
+	registry := suiteOnlyClientKeys{suite: cryptosuite.CNSMV1}
+	if err := requireClientKeySuite(cryptosuite.INTLV1, trustcrypto.PublicKeyDescriptor{}, registry); trusterr.CodeOf(err) != trusterr.CodeFailedPrecondition {
+		t.Fatalf("registry suite mismatch error = %v, code = %s", err, trusterr.CodeOf(err))
+	}
+}
+
+type suiteOnlyClientKeys struct {
+	app.ClientKeyResolver
+	suite cryptosuite.ID
+}
+
+func (r suiteOnlyClientKeys) Suite() cryptosuite.ID { return r.suite }
 
 func initializeTestRegistry(t *testing.T, dir, registryPath string) string {
 	t.Helper()

@@ -29,10 +29,11 @@ func newClaimFileCommand(rt *runtimeConfig) *cobra.Command {
 			if filePath == "" || clientID == "" || keyID == "" || privateKeyPath == "" {
 				return usageError("claim-file requires file, client, key-id, and private-key")
 			}
-			signer, key, err := readSigner(cmd.Context(), privateKeyPath)
+			signer, key, err := rt.readSigner(cmd.Context(), privateKeyPath)
 			if err != nil {
 				return err
 			}
+			defer rt.closeSignerResolver()
 			if err := requireKeyID(keyID, key); err != nil {
 				return err
 			}

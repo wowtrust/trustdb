@@ -262,10 +262,11 @@ func newKeyRegisterCommand(rt *runtimeConfig, hidden bool) *cobra.Command {
 			if registryPrivate == "" || clientID == "" || keyID == "" || publicKeyPath == "" {
 				return usageError("key-register requires registry-private-key, client, key-id, and public-key")
 			}
-			registrySigner, registryKey, err := readLifecycleSigner(cmd.Context(), registryPrivate)
+			registrySigner, registryKey, err := rt.readLifecycleSigner(cmd.Context(), registryPrivate)
 			if err != nil {
 				return err
 			}
+			defer rt.closeSignerResolver()
 			if err := requireKeyID(registryKeyID, registryKey); err != nil {
 				return err
 			}
@@ -284,6 +285,7 @@ func newKeyRegisterCommand(rt *runtimeConfig, hidden bool) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			defer rt.closeSignerResolver()
 			routeStorePath, err := configureStatusNotificationRoute(registryPath, tenantID, clientID, model.UpstreamNotificationRoute{
 				WebhookURL:     statusWebhookURL,
 				NATSSubject:    statusNATSSubject,
@@ -349,10 +351,11 @@ func newKeyRevokeCommand(rt *runtimeConfig, hidden bool) *cobra.Command {
 			if registryPrivate == "" || clientID == "" || keyID == "" {
 				return usageError("key-revoke requires registry-private-key, client, and key-id")
 			}
-			registrySigner, registryKey, err := readLifecycleSigner(cmd.Context(), registryPrivate)
+			registrySigner, registryKey, err := rt.readLifecycleSigner(cmd.Context(), registryPrivate)
 			if err != nil {
 				return err
 			}
+			defer rt.closeSignerResolver()
 			if err := requireKeyID(registryKeyID, registryKey); err != nil {
 				return err
 			}
@@ -416,10 +419,11 @@ func newKeyCompromiseCommand(rt *runtimeConfig) *cobra.Command {
 			if registryPrivate == "" || clientID == "" || keyID == "" {
 				return usageError("key compromise requires registry-private-key, client, and key-id")
 			}
-			registry, err := openLifecycleRegistry(cmd.Context(), registryPath, registryPrivate, registryPublic, registryKeyID)
+			registry, err := openLifecycleRegistry(cmd.Context(), rt, registryPath, registryPrivate, registryPublic, registryKeyID)
 			if err != nil {
 				return err
 			}
+			defer rt.closeSignerResolver()
 			event, err := registry.MarkClientKeyCompromised(tenantID, clientID, keyID, time.Unix(compromisedAtUnix, 0).UTC(), reason)
 			if err != nil {
 				return err
@@ -466,7 +470,7 @@ func newKeyRotateCommand(rt *runtimeConfig) *cobra.Command {
 			if err := requireKeyID(keyID, descriptor); err != nil {
 				return err
 			}
-			registry, registrySigner, registryPub, err := openLifecycleRegistryWithSigner(cmd.Context(), registryPath, registryPrivate, registryPublic, registryKeyID)
+			registry, registrySigner, registryPub, err := openLifecycleRegistryWithSigner(cmd.Context(), rt, registryPath, registryPrivate, registryPublic, registryKeyID)
 			if err != nil {
 				return err
 			}
@@ -542,16 +546,22 @@ func configureStatusNotificationRoute(registryPath, tenantID, clientID string, r
 	return path, nil
 }
 
-func openLifecycleRegistry(ctx context.Context, registryPath, registryPrivate, registryPublic, registryKeyID string) (*keystore.Registry, error) {
-	registry, _, _, err := openLifecycleRegistryWithSigner(ctx, registryPath, registryPrivate, registryPublic, registryKeyID)
+func openLifecycleRegistry(ctx context.Context, rt *runtimeConfig, registryPath, registryPrivate, registryPublic, registryKeyID string) (*keystore.Registry, error) {
+	registry, _, _, err := openLifecycleRegistryWithSigner(ctx, rt, registryPath, registryPrivate, registryPublic, registryKeyID)
 	return registry, err
 }
 
-func openLifecycleRegistryWithSigner(ctx context.Context, registryPath, registryPrivate, registryPublic, registryKeyID string) (*keystore.Registry, trustcrypto.Signer, trustcrypto.PublicKeyDescriptor, error) {
-	registrySigner, registryDescriptor, err := readLifecycleSigner(ctx, registryPrivate)
+func openLifecycleRegistryWithSigner(ctx context.Context, rt *runtimeConfig, registryPath, registryPrivate, registryPublic, registryKeyID string) (*keystore.Registry, trustcrypto.Signer, trustcrypto.PublicKeyDescriptor, error) {
+	registrySigner, registryDescriptor, err := rt.readLifecycleSigner(ctx, registryPrivate)
 	if err != nil {
 		return nil, nil, trustcrypto.PublicKeyDescriptor{}, err
 	}
+	cleanupResolver := true
+	defer func() {
+		if cleanupResolver {
+			_ = rt.closeSignerResolver()
+		}
+	}()
 	if err := requireKeyID(registryKeyID, registryDescriptor); err != nil {
 		return nil, nil, trustcrypto.PublicKeyDescriptor{}, err
 	}
@@ -572,6 +582,7 @@ func openLifecycleRegistryWithSigner(ctx context.Context, registryPath, registry
 	if err != nil {
 		return nil, nil, trustcrypto.PublicKeyDescriptor{}, err
 	}
+	cleanupResolver = false
 	return registry, registrySigner, registryPub, nil
 }
 

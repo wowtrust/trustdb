@@ -165,6 +165,11 @@ func TestDescriptorRejectsInvalidUnionAndProviderDetails(t *testing.T) {
 			d.PKCS11 = &PKCS11KeyReference{URI: "pkcs11:object=key;pin-value=secret;type=private"}
 			return d
 		},
+		"pkcs11 encoded attribute name": func(d Descriptor) Descriptor {
+			d.Provider, d.Software = ProviderPKCS11, nil
+			d.PKCS11 = &PKCS11KeyReference{URI: "pkcs11:object=key;pin%2dvalue=secret;type=private"}
+			return d
+		},
 		"pkcs11 public": func(d Descriptor) Descriptor {
 			d.Provider, d.Software = ProviderPKCS11, nil
 			d.PKCS11 = &PKCS11KeyReference{URI: "pkcs11:object=key;type=public"}
@@ -183,6 +188,15 @@ func TestDescriptorRejectsInvalidUnionAndProviderDetails(t *testing.T) {
 		"remote credentials": func(d Descriptor) Descriptor {
 			d.Provider, d.Software = ProviderRemote, nil
 			d.Remote = &RemoteKeyReference{Endpoint: "https://user:pass@kms.example", Handle: "key", CredentialRef: "env:TOKEN"}
+			return d
+		},
+		"remote endpoint too long": func(d Descriptor) Descriptor {
+			d.Provider, d.Software = ProviderRemote, nil
+			d.Remote = &RemoteKeyReference{Endpoint: "https://kms.example/" + strings.Repeat("a", maxStringBytes), Handle: "key", CredentialRef: "env:TOKEN"}
+			return d
+		},
+		"invalid utf8 key id": func(d Descriptor) Descriptor {
+			d.KeyID = string([]byte{'k', 'e', 'y', 0xff})
 			return d
 		},
 		"verifier signer reference": func(d Descriptor) Descriptor {

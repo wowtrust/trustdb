@@ -15,6 +15,43 @@ PKCS#11, SDF, and remote descriptors reference non-exportable provider keys.
 Legacy raw-key files are rejected. See
 [`formats/KEY_DESCRIPTOR_V1.md`](../formats/KEY_DESCRIPTOR_V1.md).
 
+## External signer plugins
+
+`software` descriptors work without extra configuration. A signer descriptor
+whose provider is `remote`, `pkcs11`, or `sdf` requires a matching supervised
+plugin configuration. For example:
+
+```yaml
+crypto:
+  signer_plugins:
+    remote:
+      command: "/usr/local/bin/trustdb-kms-adapter"
+      args: ["--config", "/etc/trustdb/kms-adapter.yaml"]
+      inherit_env: ["AWS_REGION", "AWS_WEB_IDENTITY_TOKEN_FILE"]
+      start_timeout: "10s"
+      rpc_timeout: "30s"
+      max_concurrency: 16
+```
+
+The child receives no ambient environment unless a variable name is listed in
+`inherit_env`. Plugin arguments are redacted from config diagnostics. Provider
+selection is exact: if a descriptor names an unconfigured or unavailable
+provider, TrustDB fails instead of falling back to a software key. See
+[`formats/SIGNER_PLUGIN_V1.md`](../formats/SIGNER_PLUGIN_V1.md).
+
+Signer plugins are trusted executables and run with the TrustDB process's OS
+account; environment filtering is not a filesystem or syscall sandbox. Do not
+put credentials in `args`, because operating-system process listings may expose
+them. Use descriptor credential references and narrowly scoped `inherit_env`
+entries instead.
+
+Shutdown is bounded and best-effort: TrustDB closes the RPC connection, asks
+the child to exit with an OS interrupt where supported, and force-terminates it
+if signaling is unavailable or the timeout expires. Windows currently takes the
+force-termination path because Go does not implement `os.Interrupt` there.
+Adapters must therefore keep provider state crash-safe and must not rely only on
+shutdown hooks to release or reconcile HSM/KMS sessions.
+
 `anchor.poll_interval` controls the O(1) durable scheduler recovery lookup. Triggered work normally starts immediately; polling resumes pending or in-flight work after missed triggers and restarts. Benchmark profiles use `250ms`, while the default remains `2s` to limit idle store reads.
 
 The optional `nats` section is disabled by default. Enabling, pre-provisioning,

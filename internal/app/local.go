@@ -77,11 +77,17 @@ func (e LocalEngine) Submit(ctx context.Context, signed model.SignedClaim) (mode
 		if err != nil {
 			return model.ServerRecord{}, model.AcceptedReceipt{}, err
 		}
-		pos, _, err := e.WAL.AppendAt(ctx, payload, now)
+		var record model.ServerRecord
+		var accepted model.AcceptedReceipt
+		_, _, err = e.WAL.AppendPreparedAt(ctx, payload, now, func(prepareCtx context.Context, pos model.WALPosition) error {
+			var buildErr error
+			record, accepted, buildErr = e.buildAccepted(prepareCtx, signed, verified, keyStatus, claimHash, sigHash, pos, now)
+			return buildErr
+		})
 		if err != nil {
 			return model.ServerRecord{}, model.AcceptedReceipt{}, err
 		}
-		return e.buildAccepted(ctx, signed, verified, keyStatus, claimHash, sigHash, pos, now)
+		return record, accepted, nil
 	}
 	if e.Idempotency == nil {
 		record, accepted, err := build()

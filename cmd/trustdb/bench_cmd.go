@@ -113,10 +113,11 @@ func newBenchIngestCommand(rt *runtimeConfig) *cobra.Command {
 			}
 			cfg.ReportFile = strings.TrimSpace(cfg.ReportFile)
 
-			signer, descriptor, err := readSigner(cmd.Context(), cfg.PrivateKeyPath)
+			signer, descriptor, err := rt.readSigner(cmd.Context(), cfg.PrivateKeyPath)
 			if err != nil {
 				return err
 			}
+			defer rt.closeSignerResolver()
 			if err := requireKeyID(cfg.Identity.KeyID, descriptor); err != nil {
 				return err
 			}

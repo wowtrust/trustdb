@@ -143,6 +143,33 @@ anchor:
     start_timeout: "10s"
     rpc_timeout: "30s"
 
+# Optional supervised signer plugins. Plugins implement private-key custody
+# only; TrustDB keeps suites, hashing, signature framing, and verification
+# built in. Empty commands leave each external provider disabled.
+crypto:
+  signer_plugins:
+    remote:
+      command: ""
+      args: []
+      inherit_env: []
+      start_timeout: "10s"
+      rpc_timeout: "30s"
+      max_concurrency: 0
+    pkcs11:
+      command: ""
+      args: []
+      inherit_env: []
+      start_timeout: "10s"
+      rpc_timeout: "30s"
+      max_concurrency: 0
+    sdf:
+      command: ""
+      args: []
+      inherit_env: []
+      start_timeout: "10s"
+      rpc_timeout: "30s"
+      max_concurrency: 0
+
 history:
   tile_size: 256
   hot_window_leaves: 65536
@@ -198,6 +225,7 @@ type Config struct {
 	Batch      Batch      `mapstructure:"batch" json:"batch"`
 	GlobalLog  GlobalLog  `mapstructure:"global_log" json:"global_log"`
 	Anchor     Anchor     `mapstructure:"anchor" json:"anchor"`
+	Crypto     Crypto     `mapstructure:"crypto" json:"crypto"`
 	History    History    `mapstructure:"history" json:"history"`
 	Backup     Backup     `mapstructure:"backup" json:"backup"`
 	Proofstore Proofstore `mapstructure:"proofstore" json:"proofstore"`
@@ -364,6 +392,28 @@ type AnchorPlugin struct {
 	RPCTimeout   string   `mapstructure:"rpc_timeout" json:"rpc_timeout"`
 }
 
+// Crypto configures optional external private-key custody adapters. These
+// plugins cannot register suites, hash algorithms, signature framing, Merkle
+// profiles, or verifiers.
+type Crypto struct {
+	SignerPlugins SignerPlugins `mapstructure:"signer_plugins" json:"signer_plugins"`
+}
+
+type SignerPlugins struct {
+	Remote SignerPlugin `mapstructure:"remote" json:"remote"`
+	PKCS11 SignerPlugin `mapstructure:"pkcs11" json:"pkcs11"`
+	SDF    SignerPlugin `mapstructure:"sdf" json:"sdf"`
+}
+
+type SignerPlugin struct {
+	Command        string   `mapstructure:"command" json:"command"`
+	Args           []string `mapstructure:"args" json:"args"`
+	InheritEnv     []string `mapstructure:"inherit_env" json:"inherit_env"`
+	StartTimeout   string   `mapstructure:"start_timeout" json:"start_timeout"`
+	RPCTimeout     string   `mapstructure:"rpc_timeout" json:"rpc_timeout"`
+	MaxConcurrency int      `mapstructure:"max_concurrency" json:"max_concurrency"`
+}
+
 type History struct {
 	TileSize        uint64 `mapstructure:"tile_size" json:"tile_size"`
 	HotWindowLeaves uint64 `mapstructure:"hot_window_leaves" json:"hot_window_leaves"`
@@ -504,6 +554,11 @@ func Default() Config {
 				RPCTimeout:   "30s",
 			},
 		},
+		Crypto: Crypto{SignerPlugins: SignerPlugins{
+			Remote: defaultSignerPlugin(),
+			PKCS11: defaultSignerPlugin(),
+			SDF:    defaultSignerPlugin(),
+		}},
 		History: History{
 			TileSize:        256,
 			HotWindowLeaves: 65536,
@@ -550,7 +605,21 @@ func (c Config) Redacted() Config {
 	c.Admin.PasswordHash = redact(c.Admin.PasswordHash)
 	c.Admin.SessionSecret = redact(c.Admin.SessionSecret)
 	c.Server.Transport.KeyFile = redact(c.Server.Transport.KeyFile)
+	c.Crypto.SignerPlugins.Remote.Args = redactArgs(c.Crypto.SignerPlugins.Remote.Args)
+	c.Crypto.SignerPlugins.PKCS11.Args = redactArgs(c.Crypto.SignerPlugins.PKCS11.Args)
+	c.Crypto.SignerPlugins.SDF.Args = redactArgs(c.Crypto.SignerPlugins.SDF.Args)
 	return c
+}
+
+func defaultSignerPlugin() SignerPlugin {
+	return SignerPlugin{StartTimeout: "10s", RPCTimeout: "30s"}
+}
+
+func redactArgs(args []string) []string {
+	if len(args) == 0 {
+		return nil
+	}
+	return []string{"<redacted>"}
 }
 
 func redact(value string) string {
@@ -663,6 +732,18 @@ func (c Config) Validate() error {
 	if strings.EqualFold(strings.TrimSpace(c.Anchor.Sink), "plugin") && strings.TrimSpace(c.Anchor.Plugin.Command) == "" {
 		return fmt.Errorf("anchor.plugin.command is required when anchor.sink is plugin")
 	}
+	for _, tc := range []struct {
+		name   string
+		plugin SignerPlugin
+	}{
+		{name: "remote", plugin: c.Crypto.SignerPlugins.Remote},
+		{name: "pkcs11", plugin: c.Crypto.SignerPlugins.PKCS11},
+		{name: "sdf", plugin: c.Crypto.SignerPlugins.SDF},
+	} {
+		if err := validateSignerPlugin(tc.name, tc.plugin); err != nil {
+			return err
+		}
+	}
 	if c.History.TileSize == 0 {
 		return fmt.Errorf("history.tile_size must be greater than 0")
 	}
@@ -751,6 +832,37 @@ func ValidateServerTransportPolicy(runProfile, httpListen, grpcListen string, co
 	return nil
 }
 
+func validateSignerPlugin(name string, plugin SignerPlugin) error {
+	prefix := "crypto.signer_plugins." + name
+	if err := validatePositiveDuration(prefix+".start_timeout", plugin.StartTimeout); err != nil {
+		return err
+	}
+	if err := validatePositiveDuration(prefix+".rpc_timeout", plugin.RPCTimeout); err != nil {
+		return err
+	}
+	if plugin.MaxConcurrency < 0 || plugin.MaxConcurrency > 1024 {
+		return fmt.Errorf("%s.max_concurrency must be between 0 and 1024", prefix)
+	}
+	if strings.TrimSpace(plugin.Command) == "" && (len(plugin.Args) > 0 || len(plugin.InheritEnv) > 0) {
+		return fmt.Errorf("%s.command is required when args or inherit_env are configured", prefix)
+	}
+	seenEnv := make(map[string]struct{}, len(plugin.InheritEnv))
+	for _, name := range plugin.InheritEnv {
+		if !validEnvironmentName(name) {
+			return fmt.Errorf("%s.inherit_env contains invalid variable name %q", prefix, name)
+		}
+		normalizedName := strings.ToUpper(name)
+		if strings.HasPrefix(normalizedName, "TRUSTDB_SIGNER_PLUGIN_") {
+			return fmt.Errorf("%s.inherit_env must not include reserved signer-plugin variables", prefix)
+		}
+		if _, exists := seenEnv[normalizedName]; exists {
+			return fmt.Errorf("%s.inherit_env contains duplicate variable %q", prefix, name)
+		}
+		seenEnv[normalizedName] = struct{}{}
+	}
+	return nil
+}
+
 func isLoopbackTCPAddress(address string) bool {
 	host, _, err := net.SplitHostPort(strings.TrimSpace(address))
 	if err != nil {
@@ -759,6 +871,24 @@ func isLoopbackTCPAddress(address string) bool {
 	host = strings.TrimSpace(strings.Trim(host, "[]"))
 	ip := net.ParseIP(host)
 	return ip != nil && ip.IsLoopback()
+}
+
+func validEnvironmentName(name string) bool {
+	if name == "" {
+		return false
+	}
+	for index, r := range name {
+		if index == 0 {
+			if !(r == '_' || r >= 'A' && r <= 'Z' || r >= 'a' && r <= 'z') {
+				return false
+			}
+			continue
+		}
+		if !(r == '_' || r >= 'A' && r <= 'Z' || r >= 'a' && r <= 'z' || r >= '0' && r <= '9') {
+			return false
+		}
+	}
+	return true
 }
 
 func validateNATS(n NATS) error {

@@ -199,10 +199,11 @@ func newBenchMatrixCommand(rt *runtimeConfig) *cobra.Command {
 				cfg.Base.Source = "trustdb-bench"
 			}
 
-			signer, descriptor, err := readSigner(cmd.Context(), cfg.Base.PrivateKeyPath)
+			signer, descriptor, err := rt.readSigner(cmd.Context(), cfg.Base.PrivateKeyPath)
 			if err != nil {
 				return err
 			}
+			defer rt.closeSignerResolver()
 			if err := requireKeyID(cfg.Base.Identity.KeyID, descriptor); err != nil {
 				return err
 			}

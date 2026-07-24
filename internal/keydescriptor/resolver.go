@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 
 	"github.com/wowtrust/trustdb/internal/cryptosuite"
 	"github.com/wowtrust/trustdb/internal/keyenvelope"
@@ -22,6 +23,7 @@ const maxSoftwareMaterialBytes = 4096
 
 var (
 	ErrInvalidResolver       = errors.New("invalid key resolver")
+	ErrResolverClosed        = errors.New("key resolver is closed")
 	ErrUnsupportedProtection = errors.New("unsupported software key protection")
 	ErrUnsafeMaterial        = errors.New("unsafe software key material")
 	ErrSignerMismatch        = errors.New("resolved signer does not match key descriptor")
@@ -40,6 +42,11 @@ type SignerProvider interface {
 // descriptor. It never falls back to raw key bytes or another provider.
 type Resolver struct {
 	providers map[string]SignerProvider
+
+	mu        sync.RWMutex
+	closed    bool
+	closeErr  error
+	closeOnce sync.Once
 }
 
 func NewResolver(providers ...SignerProvider) (*Resolver, error) {
@@ -111,7 +118,13 @@ func (r *Resolver) resolveSigner(ctx context.Context, descriptor Descriptor, mat
 			return nil, err
 		}
 	}
+	r.mu.RLock()
+	if r.closed {
+		r.mu.RUnlock()
+		return nil, ErrResolverClosed
+	}
 	provider, ok := r.providers[descriptor.Provider]
+	r.mu.RUnlock()
 	if !ok {
 		return nil, fmt.Errorf("%w: %q", ErrUnsupportedProvider, descriptor.Provider)
 	}
@@ -123,6 +136,38 @@ func (r *Resolver) resolveSigner(ctx context.Context, descriptor Descriptor, mat
 		return nil, err
 	}
 	return signer, nil
+}
+
+// Close releases provider-owned resources such as subprocesses, remote
+// connections, PKCS#11 sessions, or SDF device handles. A Resolver owns the
+// SignerProvider instances passed to NewResolver and must outlive every signer
+// it resolves.
+func (r *Resolver) Close() error {
+	if r == nil {
+		return nil
+	}
+	r.closeOnce.Do(func() {
+		r.mu.Lock()
+		r.closed = true
+		providers := make([]SignerProvider, 0, len(r.providers))
+		for _, provider := range r.providers {
+			providers = append(providers, provider)
+		}
+		r.mu.Unlock()
+
+		var errs []error
+		for _, provider := range providers {
+			closer, ok := provider.(io.Closer)
+			if !ok {
+				continue
+			}
+			if err := closer.Close(); err != nil {
+				errs = append(errs, fmt.Errorf("close signer provider %q: %w", provider.Name(), err))
+			}
+		}
+		r.closeErr = errors.Join(errs...)
+	})
+	return r.closeErr
 }
 
 func (r *Resolver) ResolveSignerFile(ctx context.Context, descriptorPath string) (trustcrypto.Signer, Descriptor, error) {

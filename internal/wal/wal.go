@@ -33,12 +33,17 @@ const (
 
 var crcTable = crc32.MakeTable(crc32.Castagnoli)
 
+// ErrAppendReservationInvalidated tells a caller that an earlier FIFO append
+// failed and this request must be retried to obtain a new exact WAL position.
+var ErrAppendReservationInvalidated = errors.New("wal: append reservation invalidated; retry request")
+
 var (
 	errRepairableFirstHeader = errors.New("wal: repairable first record header")
 	errTornRecord            = errors.New("wal: torn record")
 	errCorruptRecord         = errors.New("wal: corrupt record")
 	errBadRecordMagic        = errors.New("wal: bad record magic")
 	errUnsupportedRecord     = errors.New("wal: unsupported record encoding")
+	errWriterClosed          = errors.New("wal: writer is closed")
 )
 
 const (
@@ -100,6 +105,9 @@ const segmentFileExt = ".wal"
 const segmentIDWidth = 9
 
 type Writer struct {
+	reservationMu sync.Mutex
+	reservations  []*appendReservation
+
 	mu              sync.Mutex
 	file            *os.File
 	dir             string // empty in legacy single-file mode
@@ -129,6 +137,30 @@ type Writer struct {
 	fsyncHook       func(string, time.Duration)
 	fsyncErrorHook  func(string, error)
 	recordBuf       []byte
+}
+
+type appendState struct {
+	segmentID uint64
+	sequence  uint64
+	offset    int64
+}
+
+type appendReservation struct {
+	position model.WALPosition
+	after    appendState
+	payload  []byte
+	at       time.Time
+	ctx      context.Context
+	cancel   context.CancelFunc
+	ready    bool
+	finished bool
+	result   chan appendReservationResult
+}
+
+type appendReservationResult struct {
+	position   model.WALPosition
+	recordHash [32]byte
+	err        error
 }
 
 type timerStopper interface {
@@ -567,6 +599,182 @@ func (w *Writer) Append(ctx context.Context, payload []byte) (model.WALPosition,
 }
 
 func (w *Writer) AppendAt(ctx context.Context, payload []byte, at time.Time) (model.WALPosition, [32]byte, error) {
+	return w.appendReserved(ctx, payload, at, nil)
+}
+
+// AppendPreparedAt reserves an exact WAL position, invokes prepare exactly once
+// without holding the writer lock, and publishes successful reservations in
+// FIFO order. Concurrent callbacks may run in parallel. If an earlier
+// reservation fails, later reservations are invalidated instead of being
+// silently rebound or re-signed for a different position. This keeps failed
+// acceptance signatures out of the durable WAL without letting a slow external
+// signer block fsync, rotation, or Close. prepare must honor its context so
+// failure cascades and Close can stop in-flight work promptly.
+func (w *Writer) AppendPreparedAt(ctx context.Context, payload []byte, at time.Time, prepare func(context.Context, model.WALPosition) error) (model.WALPosition, [32]byte, error) {
+	if prepare == nil {
+		return model.WALPosition{}, [32]byte{}, errors.New("wal: prepare callback is required")
+	}
+	return w.appendReserved(ctx, payload, at, prepare)
+}
+
+func (w *Writer) appendReserved(ctx context.Context, payload []byte, at time.Time, prepare func(context.Context, model.WALPosition) error) (model.WALPosition, [32]byte, error) {
+	if err := validatePayloadLength(len(payload)); err != nil {
+		return model.WALPosition{}, [32]byte{}, err
+	}
+	if err := ctx.Err(); err != nil {
+		return model.WALPosition{}, [32]byte{}, err
+	}
+	reservation, err := w.reserveAppend(ctx, payload, at)
+	if err != nil {
+		return model.WALPosition{}, [32]byte{}, err
+	}
+	var prepareErr error
+	if prepare != nil {
+		prepareErr = prepare(reservation.ctx, reservation.position)
+	}
+	if prepareErr == nil {
+		prepareErr = ctx.Err()
+	}
+	w.completeReservation(reservation, prepareErr)
+	return w.waitReservation(ctx, reservation)
+}
+
+func (w *Writer) reserveAppend(ctx context.Context, payload []byte, at time.Time) (*appendReservation, error) {
+	w.reservationMu.Lock()
+	defer w.reservationMu.Unlock()
+
+	w.mu.Lock()
+	if err := w.readyToAppendLocked(); err != nil {
+		w.mu.Unlock()
+		return nil, err
+	}
+	base := appendState{segmentID: w.segmentID, sequence: w.sequence, offset: w.offset}
+	w.mu.Unlock()
+	if count := len(w.reservations); count > 0 {
+		base = w.reservations[count-1].after
+	}
+	position, after, err := w.positionAfter(base, len(payload))
+	if err != nil {
+		return nil, err
+	}
+	prepareCtx, cancel := context.WithCancel(ctx)
+	reservation := &appendReservation{
+		position: position,
+		after:    after,
+		payload:  payload,
+		at:       at,
+		ctx:      prepareCtx,
+		cancel:   cancel,
+		result:   make(chan appendReservationResult, 1),
+	}
+	w.reservations = append(w.reservations, reservation)
+	return reservation, nil
+}
+
+func (w *Writer) completeReservation(reservation *appendReservation, prepareErr error) {
+	w.reservationMu.Lock()
+	defer w.reservationMu.Unlock()
+	if reservation.finished {
+		return
+	}
+	index := w.reservationIndexLocked(reservation)
+	if index < 0 {
+		return
+	}
+	if prepareErr != nil {
+		w.finishReservationLocked(reservation, appendReservationResult{err: prepareErr})
+		w.invalidateReservationsLocked(index+1, ErrAppendReservationInvalidated)
+		w.clearReservationsFromLocked(index)
+		w.drainReservationsLocked()
+		return
+	}
+	reservation.ready = true
+	w.drainReservationsLocked()
+}
+
+func (w *Writer) waitReservation(ctx context.Context, reservation *appendReservation) (model.WALPosition, [32]byte, error) {
+	select {
+	case result := <-reservation.result:
+		return result.position, result.recordHash, result.err
+	case <-ctx.Done():
+		w.cancelReservation(reservation, ctx.Err())
+		result := <-reservation.result
+		return result.position, result.recordHash, result.err
+	}
+}
+
+func (w *Writer) cancelReservation(reservation *appendReservation, err error) {
+	w.reservationMu.Lock()
+	defer w.reservationMu.Unlock()
+	if reservation.finished {
+		return
+	}
+	index := w.reservationIndexLocked(reservation)
+	if index < 0 {
+		return
+	}
+	w.finishReservationLocked(reservation, appendReservationResult{err: err})
+	w.invalidateReservationsLocked(index+1, ErrAppendReservationInvalidated)
+	w.clearReservationsFromLocked(index)
+	w.drainReservationsLocked()
+}
+
+func (w *Writer) drainReservationsLocked() {
+	for len(w.reservations) > 0 && w.reservations[0].ready {
+		reservation := w.reservations[0]
+		position, recordHash, err := w.commitAtExpected(
+			reservation.ctx,
+			reservation.payload,
+			reservation.at,
+			reservation.position,
+		)
+		w.finishReservationLocked(reservation, appendReservationResult{
+			position:   position,
+			recordHash: recordHash,
+			err:        err,
+		})
+		w.reservations[0] = nil
+		w.reservations = w.reservations[1:]
+		if err != nil {
+			w.invalidateReservationsLocked(0, ErrAppendReservationInvalidated)
+			w.clearReservationsFromLocked(0)
+			return
+		}
+	}
+}
+
+func (w *Writer) invalidateReservationsLocked(start int, err error) {
+	for _, reservation := range w.reservations[start:] {
+		w.finishReservationLocked(reservation, appendReservationResult{err: err})
+	}
+}
+
+func (w *Writer) clearReservationsFromLocked(start int) {
+	for index := start; index < len(w.reservations); index++ {
+		w.reservations[index] = nil
+	}
+	w.reservations = w.reservations[:start]
+}
+
+func (w *Writer) finishReservationLocked(reservation *appendReservation, result appendReservationResult) {
+	if reservation.finished {
+		return
+	}
+	reservation.finished = true
+	reservation.cancel()
+	reservation.result <- result
+}
+
+func (w *Writer) reservationIndexLocked(reservation *appendReservation) int {
+	for index, candidate := range w.reservations {
+		if candidate == reservation {
+			return index
+		}
+	}
+	return -1
+}
+
+func (w *Writer) commitAtExpected(ctx context.Context, payload []byte, at time.Time, expected model.WALPosition) (model.WALPosition, [32]byte, error) {
 	if err := validatePayloadLength(len(payload)); err != nil {
 		return model.WALPosition{}, [32]byte{}, err
 	}
@@ -574,34 +782,32 @@ func (w *Writer) AppendAt(ctx context.Context, payload []byte, at time.Time) (mo
 		return model.WALPosition{}, [32]byte{}, err
 	}
 
-	start := time.Now()
-	defer func() {
-		if w.appendHook != nil {
-			w.appendHook(w.fsyncMode, time.Since(start))
-		}
-	}()
-
 	var (
 		fsyncs     [3]fsyncObservation
 		fsyncCount int
 	)
+	start := time.Now()
 	w.mu.Lock()
+	if err := w.readyToAppendLocked(); err != nil {
+		w.mu.Unlock()
+		return model.WALPosition{}, [32]byte{}, err
+	}
+	pos, err := w.nextPositionLocked(len(payload))
+	if err != nil {
+		w.mu.Unlock()
+		return model.WALPosition{}, [32]byte{}, err
+	}
+	if pos != expected {
+		w.mu.Unlock()
+		return model.WALPosition{}, [32]byte{}, ErrAppendReservationInvalidated
+	}
 	defer func() {
 		w.mu.Unlock()
 		w.observeFsyncs(fsyncs[:fsyncCount])
+		if w.appendHook != nil {
+			w.appendHook(w.fsyncMode, time.Since(start))
+		}
 	}()
-	if w.closed {
-		return model.WALPosition{}, [32]byte{}, errors.New("wal: writer is closed")
-	}
-	if w.stickyErr != nil {
-		return model.WALPosition{}, [32]byte{}, w.stickyErr
-	}
-	if w.file == nil {
-		return model.WALPosition{}, [32]byte{}, errors.New("wal: writer is closed")
-	}
-	if w.sequence == ^uint64(0) {
-		return model.WALPosition{}, [32]byte{}, errors.New("wal: sequence exhausted")
-	}
 
 	// Auto-rotate before writing, never in the middle, so a single record
 	// is always entirely contained in one segment. A segment that does not
@@ -611,7 +817,8 @@ func (w *Writer) AppendAt(ctx context.Context, payload []byte, at time.Time) (mo
 	// forever between rotations.
 	nextSeq := w.sequence + 1
 	encoded, recordHash := encodeRecordInto(w.recordBuf, w.segmentID, nextSeq, at.UTC().UnixNano(), w.prevHash, payload)
-	if w.dir != "" && w.maxBytes > 0 && w.offset > 0 && w.offset > w.maxBytes-int64(len(encoded)) {
+	rotate := w.dir != "" && w.maxBytes > 0 && w.offset > 0 && w.offset > w.maxBytes-int64(len(encoded))
+	if rotate {
 		beforeRotate, publish, err := w.rotateLocked()
 		for _, fsync := range [...]fsyncObservation{beforeRotate, publish} {
 			if fsync.attempted {
@@ -624,16 +831,12 @@ func (w *Writer) AppendAt(ctx context.Context, payload []byte, at time.Time) (mo
 		}
 		nextSeq = w.sequence + 1
 		encoded, recordHash = encodeRecordInto(encoded[:0], w.segmentID, nextSeq, at.UTC().UnixNano(), w.prevHash, payload)
+		pos = model.WALPosition{SegmentID: w.segmentID, Offset: w.offset, Sequence: nextSeq}
 	}
 	if cap(encoded) <= maxReusableRecordBytes {
 		w.recordBuf = encoded[:0]
 	} else {
 		w.recordBuf = nil
-	}
-	pos := model.WALPosition{
-		SegmentID: w.segmentID,
-		Offset:    w.offset,
-		Sequence:  nextSeq,
 	}
 	n, err := w.file.Write(encoded)
 	if err != nil {
@@ -661,6 +864,55 @@ func (w *Writer) AppendAt(ctx context.Context, payload []byte, at time.Time) (mo
 	w.offset += int64(n)
 	w.prevHash = recordHash
 	return pos, recordHash, nil
+}
+
+func (w *Writer) readyToAppendLocked() error {
+	if w.closed {
+		return errWriterClosed
+	}
+	if w.stickyErr != nil {
+		return w.stickyErr
+	}
+	if w.file == nil {
+		return errWriterClosed
+	}
+	if w.sequence == ^uint64(0) {
+		return errors.New("wal: sequence exhausted")
+	}
+	return nil
+}
+
+func (w *Writer) nextPositionLocked(payloadLen int) (model.WALPosition, error) {
+	position, _, err := w.positionAfter(appendState{
+		segmentID: w.segmentID,
+		sequence:  w.sequence,
+		offset:    w.offset,
+	}, payloadLen)
+	return position, err
+}
+
+func (w *Writer) positionAfter(state appendState, payloadLen int) (model.WALPosition, appendState, error) {
+	if state.sequence == ^uint64(0) {
+		return model.WALPosition{}, appendState{}, errors.New("wal: sequence exhausted")
+	}
+	position := model.WALPosition{
+		SegmentID: state.segmentID,
+		Offset:    state.offset,
+		Sequence:  state.sequence + 1,
+	}
+	recordBytes := int64(headerSize + payloadLen + crcSize + recordHashSize)
+	if w.dir != "" && w.maxBytes > 0 && state.offset > 0 && state.offset > w.maxBytes-recordBytes {
+		if state.segmentID == ^uint64(0) {
+			return model.WALPosition{}, appendState{}, errors.New("wal: segment id exhausted")
+		}
+		position.SegmentID++
+		position.Offset = 0
+	}
+	return position, appendState{
+		segmentID: position.SegmentID,
+		sequence:  position.Sequence,
+		offset:    position.Offset + recordBytes,
+	}, nil
 }
 
 func validatePayloadLength(length int) error {
@@ -724,6 +976,7 @@ func (w *Writer) rotateLocked() (fsyncObservation, fsyncObservation, error) {
 }
 
 func (w *Writer) Close() error {
+	w.reservationMu.Lock()
 	w.mu.Lock()
 	if w.closeDone == nil {
 		w.closeDone = make(chan struct{})
@@ -731,6 +984,7 @@ func (w *Writer) Close() error {
 	if w.closed {
 		done := w.closeDone
 		w.mu.Unlock()
+		w.reservationMu.Unlock()
 		<-done
 		w.mu.Lock()
 		err := w.closeErr
@@ -739,6 +993,9 @@ func (w *Writer) Close() error {
 	}
 	w.closed = true
 	w.cancelGroupTimerLocked()
+	w.invalidateReservationsLocked(0, errWriterClosed)
+	w.clearReservationsFromLocked(0)
+	w.reservationMu.Unlock()
 
 	var (
 		closeErrors []error

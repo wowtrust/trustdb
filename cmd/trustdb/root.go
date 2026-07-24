@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -13,18 +14,20 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 	trustconfig "github.com/wowtrust/trustdb/internal/config"
+	"github.com/wowtrust/trustdb/internal/keydescriptor"
 	"github.com/wowtrust/trustdb/internal/logx"
 	"gopkg.in/natefinch/lumberjack.v2"
 )
 
 type runtimeConfig struct {
-	out        io.Writer
-	errOut     io.Writer
-	configPath string
-	cfg        trustconfig.Config
-	viper      *viper.Viper
-	logger     zerolog.Logger
-	logCloser  io.Closer
+	out            io.Writer
+	errOut         io.Writer
+	configPath     string
+	cfg            trustconfig.Config
+	viper          *viper.Viper
+	logger         zerolog.Logger
+	logCloser      io.Closer
+	signerResolver *keydescriptor.Resolver
 }
 
 func newRootCommand(out, errOut io.Writer) *cobra.Command {
@@ -227,6 +230,19 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("anchor.plugin.args", defaults.Anchor.Plugin.Args)
 	v.SetDefault("anchor.plugin.start_timeout", defaults.Anchor.Plugin.StartTimeout)
 	v.SetDefault("anchor.plugin.rpc_timeout", defaults.Anchor.Plugin.RPCTimeout)
+	for provider, plugin := range map[string]trustconfig.SignerPlugin{
+		"remote": defaults.Crypto.SignerPlugins.Remote,
+		"pkcs11": defaults.Crypto.SignerPlugins.PKCS11,
+		"sdf":    defaults.Crypto.SignerPlugins.SDF,
+	} {
+		prefix := "crypto.signer_plugins." + provider + "."
+		v.SetDefault(prefix+"command", plugin.Command)
+		v.SetDefault(prefix+"args", plugin.Args)
+		v.SetDefault(prefix+"inherit_env", plugin.InheritEnv)
+		v.SetDefault(prefix+"start_timeout", plugin.StartTimeout)
+		v.SetDefault(prefix+"rpc_timeout", plugin.RPCTimeout)
+		v.SetDefault(prefix+"max_concurrency", plugin.MaxConcurrency)
+	}
 	v.SetDefault("anchor.ots.calendars", []string{})
 	v.SetDefault("anchor.ots.min_accepted", 0)
 	v.SetDefault("anchor.ots.timeout", "")
@@ -356,6 +372,16 @@ func setDefaults(v *viper.Viper) {
 	bindEnv(v, "anchor.plugin.args", "TRUSTDB_ANCHOR_PLUGIN_ARGS")
 	bindEnv(v, "anchor.plugin.start_timeout", "TRUSTDB_ANCHOR_PLUGIN_START_TIMEOUT")
 	bindEnv(v, "anchor.plugin.rpc_timeout", "TRUSTDB_ANCHOR_PLUGIN_RPC_TIMEOUT")
+	for _, provider := range []string{"remote", "pkcs11", "sdf"} {
+		prefix := "crypto.signer_plugins." + provider + "."
+		envPrefix := "TRUSTDB_CRYPTO_SIGNER_PLUGINS_" + strings.ToUpper(provider) + "_"
+		bindEnv(v, prefix+"command", envPrefix+"COMMAND")
+		bindEnv(v, prefix+"args", envPrefix+"ARGS")
+		bindEnv(v, prefix+"inherit_env", envPrefix+"INHERIT_ENV")
+		bindEnv(v, prefix+"start_timeout", envPrefix+"START_TIMEOUT")
+		bindEnv(v, prefix+"rpc_timeout", envPrefix+"RPC_TIMEOUT")
+		bindEnv(v, prefix+"max_concurrency", envPrefix+"MAX_CONCURRENCY")
+	}
 	bindEnv(v, "anchor.ots.calendars", "TRUSTDB_ANCHOR_OTS_CALENDARS")
 	bindEnv(v, "anchor.ots.min_accepted", "TRUSTDB_ANCHOR_OTS_MIN_ACCEPTED")
 	bindEnv(v, "anchor.ots.timeout", "TRUSTDB_ANCHOR_OTS_TIMEOUT")
@@ -409,12 +435,17 @@ func (rt *runtimeConfig) load() error {
 }
 
 func (rt *runtimeConfig) close() error {
-	if rt.logCloser == nil {
-		return nil
+	var errs []error
+	if err := rt.closeSignerResolver(); err != nil {
+		errs = append(errs, err)
 	}
-	err := rt.logCloser.Close()
-	rt.logCloser = nil
-	return err
+	if rt.logCloser != nil {
+		if err := rt.logCloser.Close(); err != nil {
+			errs = append(errs, err)
+		}
+		rt.logCloser = nil
+	}
+	return errors.Join(errs...)
 }
 
 func (rt *runtimeConfig) writeJSON(v any) error {
