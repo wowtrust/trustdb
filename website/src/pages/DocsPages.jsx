@@ -3,6 +3,7 @@ import { useEffect, useRef } from "react";
 import { CodeBlock, InlineLink, PageHero } from "../components/SiteChrome";
 import { useDocsOnboarding } from "../content/docsOnboarding";
 import { binaryDownloads, checksumsAsset, desktopDownloads, release } from "../lib/release";
+import { natsIngressContent } from "../content/natsIngress";
 import { productExplanation } from "../content/productExplanation";
 import { useLocale } from "../i18n";
 import { Link } from "../router";
@@ -284,6 +285,7 @@ export function QuickStartPage({ route }) {
 export function ServerDocsPage({ route }) {
   const locale = useLocale();
   const { lang, ui, server, troubleshooting } = useDocsOnboarding(locale);
+  const natsCopy = natsIngressContent(locale);
   const dockerImage = `${release.containerImage}:${release.version}`;
   return (
     <DocsShell route={route}>
@@ -314,7 +316,7 @@ export function ServerDocsPage({ route }) {
           <div className="definition-grid">{server.profiles.map(([title, description]) => <div key={title}><strong>{title}</strong><p>{description}</p></div>)}</div>
           <Note tone="warn" title={server.anchorTitle}>{server.anchorBody}</Note>
         </section>
-        <section className="doc-section"><h2>{server.securityTitle}</h2><p>{server.securityBody}</p></section>
+        <section className="doc-section"><h2>{server.securityTitle}</h2><p>{server.securityBody}</p><InlineLink href="/docs/nats-ingress">{natsCopy.serverLinkLabel}</InlineLink></section>
         <section className="doc-section">
           <h2>{server.backupTitle}</h2><p>{server.backupBody}</p>
           <CodeBlock>{`# Stop the service cleanly before opening the Pebble path.\n./bin/trustdb backup create \\\n  --metastore pebble \\\n  --metastore-path .trustdb-dev/server/pebble \\\n  --out .trustdb-dev/trustdb.tdbackup\n\n./bin/trustdb backup verify \\\n  --file .trustdb-dev/trustdb.tdbackup\n\n./bin/trustdb backup restore \\\n  --file .trustdb-dev/trustdb.tdbackup \\\n  --metastore pebble \\\n  --metastore-path .trustdb-dev/restore/pebble`}</CodeBlock>
@@ -346,6 +348,7 @@ export function CliDocsPage({ route }) {
 export function SdkDocsPage({ route }) {
   const locale = useLocale();
   const { lang, ui, sdk, offline } = useDocsOnboarding(locale);
+  const natsCopy = natsIngressContent(locale);
   return (
     <DocsShell route={route}>
       <div lang={lang} data-i18n-ignore>
@@ -369,13 +372,102 @@ export function SdkDocsPage({ route }) {
           <ExpectedResult label={ui.expected}>{sdk.codeExpected}</ExpectedResult>
           <InlineLink href="https://github.com/wowtrust/trustdb/tree/main/examples/sdk-onboarding">{sdk.sourceLabel}</InlineLink>
         </section>
-        <section className="doc-section"><h2>{sdk.asyncTitle}</h2><p>{sdk.asyncBody}</p><Note title={ui.checkpoint}>{sdk.idempotencyTitle}: {sdk.idempotencyBody}</Note></section>
+        <section className="doc-section"><h2>{sdk.asyncTitle}</h2><p>{sdk.asyncBody}</p><Note title={ui.checkpoint}>{sdk.idempotencyTitle}: {sdk.idempotencyBody}</Note><InlineLink href="/docs/nats-ingress">{natsCopy.sdkLinkLabel}</InlineLink></section>
         <section className="doc-section">
           <h2>{sdk.offlineTitle}</h2><p>{sdk.offlineBody}</p>
           <CodeBlock>{`../../bin/trustdb verify \\\n  --file ../../example.txt \\\n  --sproof ./record.sproof \\\n  --server-public-key ../server.pub \\\n  --client-public-key ../client.pub`}</CodeBlock>
           <ExpectedResult label={ui.expected}>{sdk.offlineExpected}</ExpectedResult>
         </section>
         <div className="doc-next"><span>{ui.next}</span><Link href="/docs/offline-verification">{offline.title} <ArrowRight /></Link></div>
+      </div>
+    </DocsShell>
+  );
+}
+
+export function NATSIngressDocsPage({ route }) {
+  const locale = useLocale();
+  const { ui } = useDocsOnboarding(locale);
+  const natsCopy = natsIngressContent(locale);
+  const guideCopy = { ...ui, updated: natsCopy.updated, version: natsCopy.version };
+  const brokerCommand = [
+    "docker volume create trustdb-nats-data",
+    "docker run --rm --name trustdb-nats \\",
+    "  -p 127.0.0.1:4222:4222 \\",
+    "  -v trustdb-nats-data:/data \\",
+    "  nats:2 -js -sd /data",
+  ].join("\n");
+  const configBlock = [
+    "nats:",
+    "  enabled: true",
+    "  urls: [\"nats://127.0.0.1:4222\"]",
+    "  provision: true",
+  ].join("\n");
+  const serverCommand = [
+    "go build -o ./bin/trustdb ./cmd/trustdb",
+    "./bin/trustdb --config ./trustdb.yaml config validate",
+    "./bin/trustdb --config ./trustdb.yaml serve",
+  ].join("\n");
+  const sdkExample = [
+    "cfg := sdk.DefaultNATSIngressConfig()",
+    "cfg.URLs = []string{\"tls://nats.internal.example:4222\"}",
+    "cfg.ConnectionOptions = []nats.Option{",
+    "    nats.UserCredentials(\"/run/secrets/trustdb-nats.creds\"),",
+    "    nats.RootCAs(\"/etc/trust/nats-ca.pem\"),",
+    "}",
+    "",
+    "client, err := sdk.NewNATSIngressClient(ctx, cfg)",
+    "if err != nil { return err }",
+    "defer client.Close()",
+    "",
+    "submission, err := client.PublishSignedClaim(ctx, signed)",
+    "if err != nil { return err }",
+    "// Persist submission.MessageID and submission.SignedClaim together.",
+    "result, err := client.WaitResult(ctx, submission)",
+  ].join("\n");
+
+  return (
+    <DocsShell route={route}>
+      <div lang={natsCopy.lang} data-i18n-ignore>
+        <GuideTitle index="NATS" title={natsCopy.title} lead={natsCopy.lead} copy={guideCopy} />
+        <GuideSummary copy={ui} duration={natsCopy.duration} outcome={natsCopy.outcome} prerequisites={natsCopy.prerequisites} />
+        <section className="doc-section"><Note tone="warn" title={natsCopy.boundaryTitle}>{natsCopy.boundaryBody}</Note></section>
+        <section className="doc-section">
+          <h2>{natsCopy.ackTitle}</h2><p>{natsCopy.ackBody}</p>
+          <div className="concept-flow">{natsCopy.ackSteps.map(([index, title, description]) => <article key={index}><span>{index}</span><div><h3>{title}</h3><p>{description}</p></div></article>)}</div>
+        </section>
+        <section className="doc-section">
+          <h2>{natsCopy.localTitle}</h2><p>{natsCopy.localBody}</p>
+          <CodeBlock label="terminal 1">{brokerCommand}</CodeBlock>
+          <CodeBlock label="trustdb.yaml">{configBlock}</CodeBlock>
+          <CodeBlock label="terminal 2">{serverCommand}</CodeBlock>
+          <ExpectedResult label={ui.expected}>{natsCopy.localExpected}</ExpectedResult>
+          <Note title={natsCopy.localNoteTitle}>{natsCopy.localNoteBody}</Note>
+        </section>
+        <section className="doc-section">
+          <h2>{natsCopy.topologyTitle}</h2><p>{natsCopy.topologyBody}</p>
+          <div className="definition-grid">{natsCopy.topologyRows.map(([title, description]) => <div key={title}><strong>{title}</strong><p>{description}</p></div>)}</div>
+        </section>
+        <section className="doc-section">
+          <h2>{natsCopy.flowTitle}</h2><p>{natsCopy.flowBody}</p>
+          <div className="definition-grid">{natsCopy.flowRows.map(([title, description]) => <div key={title}><strong>{title}</strong><p>{description}</p></div>)}</div>
+        </section>
+        <section className="doc-section">
+          <h2>{natsCopy.sdkTitle}</h2><p>{natsCopy.sdkBody}</p>
+          <CodeBlock label="Go">{sdkExample}</CodeBlock>
+          <ExpectedResult label={ui.expected}>{natsCopy.sdkExpected}</ExpectedResult>
+          <Note title={natsCopy.resumeTitle}>{natsCopy.resumeBody}</Note>
+        </section>
+        <section className="doc-section">
+          <h2>{natsCopy.securityTitle}</h2><p>{natsCopy.securityBody}</p>
+          <ul className="doc-checklist">{natsCopy.securityChecklist.map((item) => <li key={item}>{item}</li>)}</ul>
+        </section>
+        <section className="doc-section">
+          <h2>{natsCopy.recoveryTitle}</h2><p>{natsCopy.recoveryBody}</p>
+          <ul className="doc-checklist">{natsCopy.recoveryChecklist.map((item) => <li key={item}>{item}</li>)}</ul>
+          <Note tone="warn" title={natsCopy.backupTitle}>{natsCopy.backupBody}</Note>
+          <InlineLink href="https://github.com/wowtrust/trustdb/blob/main/docs/integrations/NATS_INGRESS.md">{natsCopy.fullGuideLabel}</InlineLink>
+        </section>
+        <div className="doc-next"><span>{ui.next}</span><Link href="/docs/server">{natsCopy.nextLabel} <ArrowRight /></Link></div>
       </div>
     </DocsShell>
   );
