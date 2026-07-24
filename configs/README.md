@@ -7,6 +7,11 @@ not start without mounted transport certificates. See
 [`docs/integrations/TLS_MTLS.md`](../docs/integrations/TLS_MTLS.md) for TLS 1.2/1.3,
 CA pinning, rotation, revocation, SDK, desktop, and health-check configuration.
 Transport CA files are independent from every `keys.*` proof-signing path.
+For SM2/SM3 dual-certificate mutual authentication and SM4-GCM at an external
+transport boundary, use the separate
+[`docs/integrations/TLCP_GATEWAY.md`](../docs/integrations/TLCP_GATEWAY.md)
+profile; TrustDB listeners remain loopback plaintext inside the restricted
+gateway network namespace.
 
 Every `keys.*` path points to a canonical
 `trustdb.key-descriptor.v1` file, not raw Base64 key bytes. A software signer

@@ -30,6 +30,12 @@ The build fails unless both rebuilds are byte-identical and the loaded image:
   directory; and
 - refuses to start without the complete validated gateway environment.
 
+Deployment, dual-certificate input, readiness, CRL, atomic rotation, and
+failure-recovery procedures are documented in
+[`docs/integrations/TLCP_GATEWAY.md`](../../docs/integrations/TLCP_GATEWAY.md).
+The complete strict profile format is
+[`formats/TLCP_GATEWAY_PROFILE_V1.md`](../../formats/TLCP_GATEWAY_PROFILE_V1.md).
+
 Re-run the standalone verifier before promotion:
 
 ```sh
