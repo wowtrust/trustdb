@@ -13,10 +13,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/wowtrust/trustdb/internal/anchor/fiscobcos"
+	"github.com/wowtrust/trustdb/internal/anchorschedule"
 	"github.com/wowtrust/trustdb/internal/cryptosuite"
 	"github.com/wowtrust/trustdb/internal/globallog"
 	"github.com/wowtrust/trustdb/internal/model"
 	"github.com/wowtrust/trustdb/internal/proofstore"
+	"github.com/wowtrust/trustdb/internal/proofstore/proofstoretest"
 	"github.com/wowtrust/trustdb/internal/trustcrypto"
 	"github.com/wowtrust/trustdb/internal/trusterr"
 )
@@ -203,21 +206,11 @@ func TestBackupRoundTripPreservesAnchorScheduleAndIndependentResult(t *testing.T
 	if !ok {
 		t.Fatal("LocalStore does not implement STHAnchorResultWriter")
 	}
-	key := model.STHAnchorScheduleKey{NodeID: "node-1", LogID: "log-1", SinkName: "file"}
+	key := model.STHAnchorScheduleKey{NodeID: "node-1", LogID: "log-1", SinkName: fiscobcos.SinkName}
 	firstSTH := backupScheduleSTH(key, 1, 0x11)
-	if _, err := scheduler.UpsertSTHAnchorCandidate(ctx, model.STHAnchorCandidate{
-		Key: key, STH: firstSTH, ObservedAtUnixN: 100, DueAtUnixN: 100,
-	}); err != nil {
-		t.Fatalf("UpsertSTHAnchorCandidate first: %v", err)
-	}
-	firstAttempt, claimed, err := scheduler.ClaimSTHAnchorAttempt(ctx, key, 100, 150, "worker-1", "lease-1")
-	if err != nil || !claimed {
-		t.Fatalf("ClaimSTHAnchorAttempt first claimed=%v err=%v", claimed, err)
-	}
-	firstResult := backupScheduleResult(key, firstSTH, "anchor-1", 110)
-	if err := scheduler.CompleteSTHAnchorAttempt(ctx, key, firstAttempt.Generation, "lease-1", firstResult); err != nil {
-		t.Fatalf("CompleteSTHAnchorAttempt first: %v", err)
-	}
+	firstResultKey := key
+	firstResultKey.SinkName = "test-anchor"
+	firstResult := backupScheduleResult(firstResultKey, firstSTH, "anchor-1", 110)
 
 	inFlightSTH := backupScheduleSTH(key, 3, 0x33)
 	if _, err := scheduler.UpsertSTHAnchorCandidate(ctx, model.STHAnchorCandidate{
@@ -228,6 +221,62 @@ func TestBackupRoundTripPreservesAnchorScheduleAndIndependentResult(t *testing.T
 	inFlightAttempt, claimed, err := scheduler.ClaimSTHAnchorAttempt(ctx, key, 200, 250, "worker-2", "lease-2")
 	if err != nil || !claimed {
 		t.Fatalf("ClaimSTHAnchorAttempt in-flight claimed=%v err=%v", claimed, err)
+	}
+	payload, err := fiscobcos.NewAnchorPayload(cryptosuite.INTLV1, inFlightSTH)
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonicalPayload, err := fiscobcos.MarshalPayload(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	callData, err := fiscobcos.PublishCallData(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	providerState, err := fiscobcos.MarshalAttemptJournal(fiscobcos.AttemptJournal{
+		SchemaVersion:   fiscobcos.SchemaAttemptJournal,
+		FormatVersion:   fiscobcos.AttemptJournalVersion,
+		Generation:      inFlightAttempt.Generation,
+		Revision:        1,
+		NodeID:          key.NodeID,
+		LogID:           key.LogID,
+		SinkName:        key.SinkName,
+		TreeSize:        inFlightSTH.TreeSize,
+		RootHash:        append([]byte(nil), inFlightSTH.RootHash...),
+		SignedSTHDigest: append([]byte(nil), payload.SignedSTHDigest...),
+		CryptoMode:      fiscobcos.CryptoModeStandard,
+		ChainID:         "chain0",
+		GroupID:         "group0",
+		Contract: fiscobcos.ContractBinding{
+			Address: repeatByte(0x41, 20), CodeHash: repeatByte(0x42, 32),
+			ProtocolVersion: "trustdb-anchor-v1",
+			EventSignature:  "AnchorPublished(bytes32)",
+		},
+		ChainContextID:   repeatByte(0x43, 32),
+		CanonicalPayload: canonicalPayload,
+		Attempts: []fiscobcos.JournalAttempt{{
+			Transaction: fiscobcos.SignedTransactionAttempt{
+				Ordinal:                 1,
+				RawCanonicalTransaction: []byte("exact-signed-bcos-transaction"),
+				ChainID:                 "chain0",
+				GroupID:                 "group0",
+				To:                      repeatByte(0x41, 20),
+				Input:                   callData,
+				Signature:               repeatByte(0x44, 65),
+				Sender:                  repeatByte(0x45, 20),
+				TransactionHash:         repeatByte(0x46, 32),
+				BlockLimit:              700,
+				PreparedAtUnixN:         1,
+			},
+			Outcome: fiscobcos.AttemptOutcomeSubmitUnknown,
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := scheduler.CompareAndSwapSTHAnchorProviderState(ctx, key, inFlightAttempt.Generation, "lease-2", 225, nil, providerState); err != nil {
+		t.Fatalf("CompareAndSwapSTHAnchorProviderState: %v", err)
 	}
 	if err := scheduler.RescheduleSTHAnchorAttempt(ctx, key, inFlightAttempt.Generation, "lease-2", 2, 300, "temporary outage"); err != nil {
 		t.Fatalf("RescheduleSTHAnchorAttempt: %v", err)
@@ -279,8 +328,16 @@ func TestBackupRoundTripPreservesAnchorScheduleAndIndependentResult(t *testing.T
 	if err != nil || !found {
 		t.Fatalf("GetSTHAnchorSchedule found=%v err=%v", found, err)
 	}
-	if schedule.InFlight == nil || schedule.InFlight.Target.TreeSize != 3 || schedule.InFlight.Attempts != 2 || schedule.InFlight.NextAttemptUnixN != 300 || schedule.InFlight.LastAttemptUnixN != 300 || schedule.InFlight.LastErrorMessage != "temporary outage" {
+	if schedule.InFlight == nil || schedule.InFlight.Target.TreeSize != 3 || schedule.InFlight.Attempts != 2 || schedule.InFlight.NextAttemptUnixN != 300 || schedule.InFlight.LastAttemptUnixN != 300 || schedule.InFlight.LastErrorMessage != "temporary outage" || !bytes.Equal(schedule.InFlight.ProviderState, providerState) {
 		t.Fatalf("restored in-flight = %+v", schedule.InFlight)
+	}
+	restoredJournal, err := fiscobcos.UnmarshalAttemptJournal(schedule.InFlight.ProviderState)
+	if err != nil {
+		t.Fatalf("decode restored BCOS attempt journal: %v", err)
+	}
+	if len(restoredJournal.Attempts) != 1 ||
+		!bytes.Equal(restoredJournal.Attempts[0].Transaction.RawCanonicalTransaction, []byte("exact-signed-bcos-transaction")) {
+		t.Fatalf("restored BCOS attempt bytes changed: %+v", restoredJournal.Attempts)
 	}
 	if schedule.InFlight.LeaseOwner != "" || schedule.InFlight.LeaseToken != "" || schedule.InFlight.LeaseUntilUnixN != 0 {
 		t.Fatalf("restored stale lease = %+v", schedule.InFlight)
@@ -288,14 +345,14 @@ func TestBackupRoundTripPreservesAnchorScheduleAndIndependentResult(t *testing.T
 	if schedule.Pending == nil || schedule.Pending.Target.TreeSize != 5 || schedule.Pending.OpenedAtUnixN != 310 || schedule.Pending.DueAtUnixN != 410 {
 		t.Fatalf("restored pending = %+v", schedule.Pending)
 	}
-	if result, found, err := dst.GetSTHAnchorResult(ctx, 1); err != nil || !found || result.AnchorID != "anchor-1" {
+	if result, found, err := dst.GetSTHAnchorResult(ctx, 1); err != nil || !found || result.TreeSize != 1 {
 		t.Fatalf("restored independent result = %+v found=%v err=%v", result, found, err)
 	}
 	keyedReader := any(dst).(proofstore.STHAnchorResultKeyedReader)
 	for _, tc := range []struct {
 		key      model.STHAnchorScheduleKey
 		anchorID string
-	}{{key, "anchor-1"}, {secondSinkKey, "anchor-1-ots"}} {
+	}{{firstResultKey, "anchor-1"}, {secondSinkKey, "anchor-1-ots"}} {
 		resultKey := model.STHAnchorResultKey{NodeID: tc.key.NodeID, LogID: tc.key.LogID, SinkName: tc.key.SinkName, TreeSize: 1}
 		result, found, err := keyedReader.GetSTHAnchorResultForKey(ctx, resultKey)
 		if err != nil || !found || result.AnchorID != tc.anchorID {
@@ -305,6 +362,198 @@ func TestBackupRoundTripPreservesAnchorScheduleAndIndependentResult(t *testing.T
 	restoredCoverage := any(dst).(proofstore.L5CoverageCheckpointStore)
 	if checkpoint, found, err := restoredCoverage.GetL5CoverageCheckpoint(ctx, key); err != nil || found {
 		t.Fatalf("restored derived L5 checkpoint=%+v found=%v err=%v, want absent", checkpoint, found, err)
+	}
+}
+
+func TestRestoreRejectsTamperedBCOSJournalBeforeWrites(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	key := model.STHAnchorScheduleKey{NodeID: "node-tamper", LogID: "log-tamper", SinkName: fiscobcos.SinkName}
+	target := backupScheduleSTH(key, 3, 0x33)
+	tamperedSTH := target
+	tamperedSTH.TimestampUnixN++
+	payload, err := fiscobcos.NewAnchorPayload(cryptosuite.INTLV1, tamperedSTH)
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonicalPayload, err := fiscobcos.MarshalPayload(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	callData, err := fiscobcos.PublishCallData(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	journalBytes, err := fiscobcos.MarshalAttemptJournal(fiscobcos.AttemptJournal{
+		SchemaVersion:   fiscobcos.SchemaAttemptJournal,
+		FormatVersion:   fiscobcos.AttemptJournalVersion,
+		Generation:      1,
+		Revision:        1,
+		NodeID:          key.NodeID,
+		LogID:           key.LogID,
+		SinkName:        key.SinkName,
+		TreeSize:        target.TreeSize,
+		RootHash:        append([]byte(nil), target.RootHash...),
+		SignedSTHDigest: append([]byte(nil), payload.SignedSTHDigest...),
+		CryptoMode:      fiscobcos.CryptoModeStandard,
+		ChainID:         "chain0",
+		GroupID:         "group0",
+		Contract: fiscobcos.ContractBinding{
+			Address:         repeatByte(0x41, 20),
+			CodeHash:        repeatByte(0x42, 32),
+			ProtocolVersion: fiscobcos.TrustDBAnchorV1ProtocolVersion,
+			EventSignature:  fiscobcos.TrustDBAnchorV1EventSignature,
+		},
+		ChainContextID:   repeatByte(0x43, 32),
+		CanonicalPayload: canonicalPayload,
+		Attempts: []fiscobcos.JournalAttempt{{
+			Transaction: fiscobcos.SignedTransactionAttempt{
+				Ordinal:                 1,
+				RawCanonicalTransaction: []byte("tampered-signed-bcos-transaction"),
+				ChainID:                 "chain0",
+				GroupID:                 "group0",
+				To:                      repeatByte(0x41, 20),
+				Input:                   callData,
+				Signature:               repeatByte(0x44, 65),
+				Sender:                  repeatByte(0x45, 20),
+				TransactionHash:         repeatByte(0x46, 32),
+				BlockLimit:              700,
+				PreparedAtUnixN:         1,
+			},
+			Outcome: fiscobcos.AttemptOutcomeSubmitUnknown,
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	schedule := model.STHAnchorSchedule{
+		SchemaVersion:  model.SchemaSTHAnchorSchedule,
+		CryptoSuite:    cryptosuite.INTLV1,
+		Key:            key,
+		NextGeneration: 2,
+		Revision:       1,
+		InFlight: &model.STHAnchorAttempt{
+			Generation:       1,
+			Target:           target,
+			OpenedAtUnixN:    1,
+			DueAtUnixN:       1,
+			Attempts:         1,
+			NextAttemptUnixN: 2,
+			LastAttemptUnixN: 1,
+			ProviderState:    journalBytes,
+		},
+	}
+	if err := anchorschedule.ValidateSchedule(schedule); err != nil {
+		t.Fatalf("test schedule: %v", err)
+	}
+
+	path := filepath.Join(t.TempDir(), "tampered-journal.tdbackup")
+	file, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tw := tar.NewWriter(file)
+	manifest := Manifest{
+		SchemaVersion: SchemaManifest,
+		BackupID:      "tampered-journal",
+		CreatedAt:     time.Unix(1, 0).UTC().Format(time.RFC3339Nano),
+		Compression:   "none",
+		CryptoSuite:   cryptosuite.INTLV1,
+	}
+	var ordinal int64
+	root := model.BatchRoot{
+		SchemaVersion: model.SchemaBatchRoot,
+		CryptoSuite:   cryptosuite.INTLV1,
+		BatchID:       "must-not-restore",
+		BatchRoot:     repeatByte(0x55, 32),
+		TreeSize:      1,
+		ClosedAtUnixN: 1,
+	}
+	if err := writeCBORTracked(tw, &manifest, &ordinal, "roots/must-not-restore.tdroot", "batch_root", root); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeCBORTracked(tw, &manifest, &ordinal, "anchors/schedules/000000.tdanchor-schedule", "sth_anchor_schedule", schedule); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeJSONTracked(tw, &manifest, &ordinal, "manifest.json", "manifest", manifest); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeJSONTracked(tw, &manifest, &ordinal, "summary.json", "summary", manifest); err != nil {
+		t.Fatal(err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	dst := newBoundTestLocalStore(t, filepath.Join(t.TempDir(), "dst"))
+	if _, err := Restore(ctx, dst, path); trusterr.CodeOf(err) != trusterr.CodeDataLoss ||
+		!strings.Contains(err.Error(), "complete Signed STH") {
+		t.Fatalf("Restore tampered journal error=%v", err)
+	}
+	if _, err := dst.LatestRoot(ctx); trusterr.CodeOf(err) != trusterr.CodeNotFound {
+		t.Fatalf("restore wrote an entry before rejecting tampered journal: %v", err)
+	}
+}
+
+func TestRestoreRejectsForgedBCOSOfflineStageBeforeWrites(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	key := model.STHAnchorScheduleKey{NodeID: "node-forged-stage", LogID: "log-forged-stage", SinkName: fiscobcos.SinkName}
+	sth := backupScheduleSTH(key, 4, 0x44)
+	result := proofstoretest.FISCOBCOSResult(t, key, sth, 400)
+	result.EvidenceStage = model.AnchorEvidenceStageOfflineVerified
+
+	path := filepath.Join(t.TempDir(), "forged-bcos-stage.tdbackup")
+	file, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tw := tar.NewWriter(file)
+	manifest := Manifest{
+		SchemaVersion: SchemaManifest,
+		BackupID:      "forged-bcos-stage",
+		CreatedAt:     time.Unix(1, 0).UTC().Format(time.RFC3339Nano),
+		Compression:   "none",
+		CryptoSuite:   cryptosuite.INTLV1,
+	}
+	var ordinal int64
+	root := model.BatchRoot{
+		SchemaVersion: model.SchemaBatchRoot,
+		CryptoSuite:   cryptosuite.INTLV1,
+		BatchID:       "must-not-restore-forged-stage",
+		BatchRoot:     repeatByte(0x56, 32),
+		TreeSize:      1,
+		ClosedAtUnixN: 1,
+	}
+	if err := writeCBORTracked(tw, &manifest, &ordinal, "roots/must-not-restore-forged-stage.tdroot", "batch_root", root); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeCBORTracked(tw, &manifest, &ordinal, "anchors/sth-result/000000000.tdsth-anchor-result", "sth_anchor_result", result); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeJSONTracked(tw, &manifest, &ordinal, "manifest.json", "manifest", manifest); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeJSONTracked(tw, &manifest, &ordinal, "summary.json", "summary", manifest); err != nil {
+		t.Fatal(err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	dst := newBoundTestLocalStore(t, filepath.Join(t.TempDir(), "dst"))
+	if _, err := Restore(ctx, dst, path); trusterr.CodeOf(err) != trusterr.CodeDataLoss ||
+		!strings.Contains(err.Error(), "remain raw") {
+		t.Fatalf("Restore forged BCOS stage error=%v", err)
+	}
+	if _, err := dst.LatestRoot(ctx); trusterr.CodeOf(err) != trusterr.CodeNotFound {
+		t.Fatalf("restore wrote an entry before rejecting forged BCOS stage: %v", err)
 	}
 }
 

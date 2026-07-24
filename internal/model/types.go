@@ -816,6 +816,7 @@ type STHAnchorAttempt struct {
 	Target           SignedTreeHead `cbor:"target" json:"target"`
 	OpenedAtUnixN    int64          `cbor:"opened_at_unix_nano" json:"opened_at_unix_nano"`
 	DueAtUnixN       int64          `cbor:"due_at_unix_nano" json:"due_at_unix_nano"`
+	ProviderState    []byte         `cbor:"provider_state,omitempty" json:"provider_state,omitempty"`
 	Attempts         int            `cbor:"attempts" json:"attempts"`
 	NextAttemptUnixN int64          `cbor:"next_attempt_unix_nano,omitempty" json:"next_attempt_unix_nano,omitempty"`
 	LastAttemptUnixN int64          `cbor:"last_attempt_unix_nano,omitempty" json:"last_attempt_unix_nano,omitempty"`

@@ -255,6 +255,7 @@ type STHAnchorScheduleStore interface {
 	GetSTHAnchorSchedule(context.Context, model.STHAnchorScheduleKey) (model.STHAnchorSchedule, bool, error)
 	ListSTHAnchorSchedules(context.Context) ([]model.STHAnchorSchedule, error)
 	ClaimSTHAnchorAttempt(ctx context.Context, key model.STHAnchorScheduleKey, nowUnixN, leaseUntilUnixN int64, leaseOwner, leaseToken string) (model.STHAnchorAttempt, bool, error)
+	CompareAndSwapSTHAnchorProviderState(ctx context.Context, key model.STHAnchorScheduleKey, generation uint64, leaseToken string, nowUnixN int64, expectedProviderState, nextProviderState []byte) error
 	RescheduleSTHAnchorAttempt(ctx context.Context, key model.STHAnchorScheduleKey, generation uint64, leaseToken string, attempts int, nextAttemptUnixN int64, lastError string) error
 	FailSTHAnchorAttempt(ctx context.Context, key model.STHAnchorScheduleKey, generation uint64, leaseToken string, attempts int, lastError string) error
 	CompleteSTHAnchorAttempt(ctx context.Context, key model.STHAnchorScheduleKey, generation uint64, leaseToken string, result model.STHAnchorResult) error

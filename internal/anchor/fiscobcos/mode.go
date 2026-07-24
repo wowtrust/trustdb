@@ -13,10 +13,10 @@ const (
 	SinkName = "fisco-bcos"
 
 	SchemaTrustConfig = "trustdb.fisco-bcos-trust-config.v1"
-	SchemaAnchorProof = "trustdb.fisco-bcos-anchor-proof.v1"
+	SchemaAnchorProof = "trustdb.fisco-bcos-anchor-proof.v2"
 
 	PayloadVersion uint16 = 1
-	ProofVersion   uint64 = 1
+	ProofVersion   uint64 = 2
 
 	DomainStreamID      = "trustdb/fisco-bcos/stream/v1"
 	DomainAnchorID      = "trustdb/fisco-bcos/sth-anchor/v1"

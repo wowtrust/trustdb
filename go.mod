@@ -9,6 +9,7 @@ replace github.com/FISCO-BCOS/go-sdk/v3 => ./third_party/fisco-bcos/go-sdk-v3.0.
 require (
 	github.com/FISCO-BCOS/bcos-c-sdk v0.0.0-20240726021820-a278b4749e34
 	github.com/FISCO-BCOS/go-sdk/v3 v3.0.2
+	github.com/TarsCloud/TarsGo v1.4.5
 	github.com/cockroachdb/pebble v1.1.5
 	github.com/emmansun/gmsm v0.44.0
 	github.com/ethereum/go-ethereum v1.17.0
@@ -38,7 +39,6 @@ require (
 	github.com/DataDog/zstd v1.4.5 // indirect
 	github.com/FISCO-BCOS/crypto v0.0.0-20200202032121-bd8ab0b5d4f1 // indirect
 	github.com/ProjectZKM/Ziren/crates/go-runtime/zkvm_runtime v0.0.0-20251001021608-1fe7b43fc4d6 // indirect
-	github.com/TarsCloud/TarsGo v1.4.5 // indirect
 	github.com/antithesishq/antithesis-sdk-go v0.7.0-default-no-op // indirect
 	github.com/benbjohnson/clock v1.3.0 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect

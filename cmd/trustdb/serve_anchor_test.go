@@ -109,8 +109,11 @@ func (d *testFISCOBCOSDriver) Endpoint() string { return d.endpoint }
 func (*testFISCOBCOSDriver) ProbeChain(context.Context) (fiscobcos.ChainProbe, error) {
 	return fiscobcos.ChainProbe{}, nil
 }
-func (*testFISCOBCOSDriver) SubmitAnchor(context.Context, fiscobcos.SubmitRequest) (fiscobcos.Submission, error) {
-	return fiscobcos.Submission{}, nil
+func (*testFISCOBCOSDriver) PrepareAnchor(context.Context, fiscobcos.SubmitRequest) (fiscobcos.TransactionSubmission, error) {
+	return fiscobcos.TransactionSubmission{}, nil
+}
+func (*testFISCOBCOSDriver) SubmitPreparedAnchor(context.Context, fiscobcos.TransactionSubmission) (fiscobcos.SubmissionOutcome, error) {
+	return fiscobcos.SubmissionOutcome{}, nil
 }
 func (*testFISCOBCOSDriver) ReadAnchor(context.Context, []byte) (fiscobcos.AnchorRecord, error) {
 	return fiscobcos.AnchorRecord{}, nil

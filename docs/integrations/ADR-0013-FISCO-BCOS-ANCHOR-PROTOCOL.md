@@ -130,7 +130,7 @@ Private keys are never serialized into this configuration. Guomi mode requires s
 
 ## Evidence cannot supply trust roots
 
-`AnchorProof v1` deliberately does not contain:
+`AnchorProof v2` deliberately does not contain:
 
 - validator public keys or a validator-set threshold;
 - CA roots or peer certificate pins;
@@ -144,7 +144,7 @@ Certificate pins remain a local transport control rather than part of offline bl
 
 ## Complete proof envelope
 
-`trustdb.fisco-bcos-anchor-proof.v1` contains:
+`trustdb.fisco-bcos-anchor-proof.v2` contains:
 
 - explicit mode and algorithm identifiers;
 - chain/group/genesis/checkpoint and contract claims;
@@ -154,15 +154,26 @@ Certificate pins remain a local transport control rather than part of offline bl
 - the successful transaction hash;
 - raw canonical receipt, receipt hash, transaction/receipt indexes and Merkle paths, log index, and decoded anchor event;
 - raw canonical block header, block hash, and block number;
-- PBFT view, round, and unique validator-node signatures.
+- unique block validator-node signatures. A live PBFT view is not persisted as
+  block evidence, because the SDK cannot bind that RPC value to the block.
 
-The schema has bounded counts and byte sizes and rejects duplicate transaction hashes and duplicate finality signers. Structural validation does not trust the decoded event, receipt status, Merkle paths, block header, signatures, or claimed context. Follow-up issues must recompute each native hash and semantic binding.
+The schema has bounded counts and byte sizes and rejects duplicate transaction
+hashes and duplicate finality signers. Structural validation reconstructs the
+exact consensus field projection in
+`bcos-tars-protocol/impl/TarsHashable.h` at the pinned FISCO BCOS v3.16.3
+commit `274f864e7725fef5b8ed4c6b7a3363ee5396f104`, then recomputes its
+Keccak-256 or SM3 hash. This release hashes ordered field bytes and
+big-endian integers directly; the later upstream implementation that hashes
+`data.writeTo(output)` TARS serialization is not the admitted v3.16.3
+baseline. Validation still does not treat the decoded event, Merkle paths,
+PBFT signatures, or claimed context as trusted; follow-up issues verify those
+semantic and finality bindings.
 
 `STHAnchorResult` retains its current outer schema. For the `fisco-bcos` sink:
 
 - `AnchorID` is lowercase hexadecimal `AnchorPayload.anchor_id`;
 - NodeID, LogID, TreeSize, RootHash, and the complete Signed STH must exactly match the Global Log proof STH;
-- `Proof` is deterministic CBOR `AnchorProof v1`;
+- `Proof` is deterministic CBOR `AnchorProof v2`;
 - `.sproof v1` can carry the proof without ambiguity and now strictly decodes the provider proof during container validation.
 
 No rule is relaxed to `anchor.TreeSize >= proof.TreeSize`. A historical batch may use a later covering STH only when the Global Log inclusion path targets that exact later STH and the anchor result binds that same STH.

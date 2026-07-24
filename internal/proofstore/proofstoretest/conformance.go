@@ -11,7 +11,9 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/wowtrust/trustdb/internal/anchor/fiscobcos"
 	"github.com/wowtrust/trustdb/internal/anchorschedule"
+	"github.com/wowtrust/trustdb/internal/cryptosuite"
 	"github.com/wowtrust/trustdb/internal/model"
 	"github.com/wowtrust/trustdb/internal/proofstore"
 	"github.com/wowtrust/trustdb/internal/trusterr"
@@ -59,6 +61,7 @@ func RunConformance(t *testing.T, newStore Factory) {
 	t.Run("SignedTreeHeadListPagePaginates", func(t *testing.T) { testSignedTreeHeadListPagePaginates(t, newStore) })
 	t.Run("LatestSTHAnchorResultIsMonotonic", func(t *testing.T) { testLatestSTHAnchorResultIsMonotonic(t, newStore) })
 	t.Run("STHAnchorResultUpdatePreservesLatest", func(t *testing.T) { testSTHAnchorResultUpdatePreservesLatest(t, newStore) })
+	t.Run("FISCOBCOSResultIsByteImmutable", func(t *testing.T) { testFISCOBCOSResultIsByteImmutable(t, newStore) })
 	t.Run("STHAnchorScheduleStateMachineOptional", func(t *testing.T) { testSTHAnchorScheduleStateMachineOptional(t, newStore) })
 	t.Run("L5CoverageProjectionStateOptional", func(t *testing.T) { testL5CoverageProjectionStateOptional(t, newStore) })
 	t.Run("STHAnchorResultMissing", func(t *testing.T) { testSTHAnchorResultMissing(t, newStore) })
@@ -1323,6 +1326,225 @@ func testSTHAnchorResultUpdatePreservesLatest(t *testing.T, newStore Factory) {
 	}
 }
 
+func testFISCOBCOSResultIsByteImmutable(t *testing.T, newStore Factory) {
+	t.Parallel()
+	store, cleanup := newStore(t)
+	defer cleanup()
+	writer, ok := store.(proofstore.STHAnchorResultWriter)
+	if !ok {
+		t.Skip("store does not implement STHAnchorResultWriter")
+	}
+	updater, ok := store.(proofstore.STHAnchorResultUpdater)
+	if !ok {
+		t.Fatalf("STHAnchorResultWriter must also implement STHAnchorResultUpdater")
+	}
+	ctx := context.Background()
+	key := model.STHAnchorScheduleKey{NodeID: "node-bcos", LogID: "log-bcos", SinkName: fiscobcos.SinkName}
+	original := FISCOBCOSResult(t, key, scheduleSTH(key, 9, 0x91), 900)
+	if err := writer.PutSTHAnchorResult(ctx, original); err != nil {
+		t.Fatalf("PutSTHAnchorResult original: %v", err)
+	}
+	changed := original
+	proof, err := fiscobcos.UnmarshalProof(changed.Proof)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proof.Finality.Signatures[0].Signature[0] ^= 0xff
+	changed.Proof, err = fiscobcos.MarshalProof(proof)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.PutSTHAnchorResult(ctx, changed); trusterr.CodeOf(err) != trusterr.CodeDataLoss {
+		t.Fatalf("PutSTHAnchorResult changed BCOS proof error=%v, want data_loss", err)
+	}
+	if err := updater.UpdateSTHAnchorResult(ctx, original, changed); trusterr.CodeOf(err) != trusterr.CodeDataLoss {
+		t.Fatalf("UpdateSTHAnchorResult changed BCOS proof error=%v, want data_loss", err)
+	}
+	changed = original
+	changed.PublishedAtUnixN++
+	if err := writer.PutSTHAnchorResult(ctx, changed); trusterr.CodeOf(err) != trusterr.CodeDataLoss {
+		t.Fatalf("PutSTHAnchorResult changed BCOS metadata error=%v, want data_loss", err)
+	}
+	oversized := original
+	oversized.Proof = make([]byte, fiscobcos.MaxProofBytes+1)
+	if err := writer.PutSTHAnchorResult(ctx, oversized); trusterr.CodeOf(err) != trusterr.CodeInvalidArgument {
+		t.Fatalf("PutSTHAnchorResult oversized BCOS proof error=%v, want invalid_argument", err)
+	}
+	if err := updater.UpdateSTHAnchorResult(ctx, original, oversized); trusterr.CodeOf(err) != trusterr.CodeInvalidArgument {
+		t.Fatalf("UpdateSTHAnchorResult oversized BCOS proof error=%v, want invalid_argument", err)
+	}
+	forgedStage := original
+	forgedStage.EvidenceStage = model.AnchorEvidenceStageOfflineVerified
+	if err := writer.PutSTHAnchorResult(ctx, forgedStage); trusterr.CodeOf(err) != trusterr.CodeInvalidArgument {
+		t.Fatalf("PutSTHAnchorResult forged BCOS stage error=%v, want invalid_argument", err)
+	}
+	if err := updater.UpdateSTHAnchorResult(ctx, original, forgedStage); trusterr.CodeOf(err) != trusterr.CodeInvalidArgument {
+		t.Fatalf("UpdateSTHAnchorResult forged BCOS stage error=%v, want invalid_argument", err)
+	}
+
+	scheduler, ok := store.(proofstore.STHAnchorScheduleStore)
+	if !ok {
+		t.Fatalf("STHAnchorResultWriter must also implement STHAnchorScheduleStore")
+	}
+	completeKey := model.STHAnchorScheduleKey{NodeID: "node-bcos-complete", LogID: "log-bcos", SinkName: fiscobcos.SinkName}
+	completeSTH := scheduleSTH(completeKey, 10, 0x92)
+	if _, err := scheduler.UpsertSTHAnchorCandidate(ctx, model.STHAnchorCandidate{
+		Key: completeKey, STH: completeSTH, ObservedAtUnixN: 1000, DueAtUnixN: 1000,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	attempt, claimed, err := scheduler.ClaimSTHAnchorAttempt(ctx, completeKey, 1000, 1100, "worker", "lease")
+	if err != nil || !claimed {
+		t.Fatalf("ClaimSTHAnchorAttempt claimed=%v err=%v", claimed, err)
+	}
+	invalidCompletion := FISCOBCOSResult(t, completeKey, completeSTH, 1001)
+	invalidCompletion.EvidenceStage = model.AnchorEvidenceStageOfflineVerified
+	if err := scheduler.CompleteSTHAnchorAttempt(ctx, completeKey, attempt.Generation, attempt.LeaseToken, invalidCompletion); trusterr.CodeOf(err) != trusterr.CodeInvalidArgument {
+		t.Fatalf("CompleteSTHAnchorAttempt forged BCOS stage error=%v, want invalid_argument", err)
+	}
+	invalidCompletion.Proof = make([]byte, fiscobcos.MaxProofBytes+1)
+	invalidCompletion.EvidenceStage = model.AnchorEvidenceStageRaw
+	if err := scheduler.CompleteSTHAnchorAttempt(ctx, completeKey, attempt.Generation, attempt.LeaseToken, invalidCompletion); trusterr.CodeOf(err) != trusterr.CodeInvalidArgument {
+		t.Fatalf("CompleteSTHAnchorAttempt oversized BCOS proof error=%v, want invalid_argument", err)
+	}
+}
+
+// FISCOBCOSResult builds a structurally valid raw BCOS proof container for
+// storage, backup, and scheduler conformance tests.
+func FISCOBCOSResult(t testing.TB, key model.STHAnchorScheduleKey, sth model.SignedTreeHead, publishedAt int64) model.STHAnchorResult {
+	t.Helper()
+	payload, err := fiscobcos.NewAnchorPayload(cryptosuite.INTLV1, sth)
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonicalPayload, err := fiscobcos.MarshalPayload(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	callData, err := fiscobcos.PublishCallData(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	params, err := fiscobcos.ParametersForMode(fiscobcos.CryptoModeStandard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	transactionHash := bytes.Repeat([]byte{0x31}, 32)
+	receiptFields := fiscobcos.NativeReceiptFields{
+		Version:     0,
+		GasUsed:     "1",
+		Status:      fiscobcos.ReceiptStatusOK,
+		Logs:        []fiscobcos.NativeLogFields{{Address: "0x01", Topics: [][]byte{bytes.Repeat([]byte{0x61}, 32)}, Data: []byte{0x01}}},
+		BlockNumber: 4200,
+	}
+	rawReceipt, canonicalLogs, err := fiscobcos.MarshalNativeReceiptPreimage(receiptFields)
+	if err != nil {
+		t.Fatal(err)
+	}
+	receiptHash, err := fiscobcos.HashNativeEvidence(params.ChainHashAlgorithm, rawReceipt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	blockFields := fiscobcos.NativeBlockHeaderFields{
+		Version:          0,
+		ParentInfo:       []fiscobcos.NativeParentInfo{{BlockNumber: 4199, BlockHash: bytes.Repeat([]byte{0x70}, 32)}},
+		TransactionsRoot: bytes.Repeat([]byte{0x81}, 32),
+		ReceiptsRoot:     bytes.Repeat([]byte{0x82}, 32),
+		StateRoot:        bytes.Repeat([]byte{0x83}, 32),
+		BlockNumber:      4200,
+		GasUsed:          "1",
+		Timestamp:        100,
+		SealerList:       [][]byte{[]byte("validator-a")},
+		ConsensusWeights: []int64{1},
+	}
+	rawHeader, err := fiscobcos.MarshalNativeBlockHeaderPreimage(blockFields)
+	if err != nil {
+		t.Fatal(err)
+	}
+	blockHash, err := fiscobcos.HashNativeEvidence(params.ChainHashAlgorithm, rawHeader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	contract := fiscobcos.ContractBinding{
+		Address:         bytes.Repeat([]byte{0x41}, 20),
+		CodeHash:        bytes.Repeat([]byte{0x61}, 32),
+		ProtocolVersion: fiscobcos.TrustDBAnchorV1ProtocolVersion,
+		EventSignature:  fiscobcos.TrustDBAnchorV1EventSignature,
+	}
+	proofBytes, err := fiscobcos.MarshalProof(fiscobcos.AnchorProof{
+		SchemaVersion:           fiscobcos.SchemaAnchorProof,
+		FormatVersion:           fiscobcos.ProofVersion,
+		CryptoMode:              params.Mode,
+		ProtocolHashAlgorithm:   params.ProtocolHashAlgorithm,
+		ChainHashAlgorithm:      params.ChainHashAlgorithm,
+		ChainSignatureAlgorithm: params.ChainSignatureAlgorithm,
+		ChainID:                 "chain0",
+		GroupID:                 "group0",
+		GenesisHash:             bytes.Repeat([]byte{0x01}, 32),
+		TrustedCheckpoint:       fiscobcos.BlockCheckpoint{BlockNumber: 4096, BlockHash: bytes.Repeat([]byte{0x21}, 32)},
+		Contract:                contract,
+		ChainContextID:          bytes.Repeat([]byte{0x51}, 32),
+		CanonicalPayload:        canonicalPayload,
+		TransactionAttempts: []fiscobcos.TransactionAttempt{{
+			Ordinal:                 1,
+			RawCanonicalTransaction: []byte("signed-transaction-attempt"),
+			ChainID:                 "chain0",
+			GroupID:                 "group0",
+			To:                      append([]byte(nil), contract.Address...),
+			Input:                   callData,
+			Signature:               bytes.Repeat([]byte{0x52}, 64),
+			Sender:                  bytes.Repeat([]byte{0x91}, 20),
+			TransactionHash:         transactionHash,
+			BlockLimit:              5100,
+			SubmittedAtUnixN:        2,
+			Outcome:                 fiscobcos.AttemptOutcomeReceiptSuccess,
+		}},
+		SuccessfulAttemptOrdinal:  1,
+		SuccessfulTransactionHash: transactionHash,
+		Receipt: fiscobcos.ReceiptEvidence{
+			Fields:              receiptFields,
+			RawCanonicalReceipt: rawReceipt,
+			Status:              fiscobcos.ReceiptStatusOK,
+			StatusMessage:       "success",
+			CanonicalLogs:       canonicalLogs,
+			ReceiptHash:         receiptHash,
+			TransactionHash:     transactionHash,
+			TransactionIndex:    1,
+			TransactionProof:    [][]byte{bytes.Repeat([]byte{0x81}, 32)},
+			ReceiptIndex:        1,
+			ReceiptProof:        [][]byte{bytes.Repeat([]byte{0x82}, 32)},
+			DecodedAnchorEvent:  []byte("canonical-anchor-event"),
+		},
+		Block: fiscobcos.BlockEvidence{
+			Fields:             blockFields,
+			RawCanonicalHeader: rawHeader,
+			BlockHash:          blockHash,
+			BlockNumber:        4200,
+		},
+		Finality: fiscobcos.FinalityEvidence{Signatures: []fiscobcos.CommitSignature{{
+			ValidatorNodeID: "validator-a",
+			Signature:       bytes.Repeat([]byte{0xb1}, 64),
+		}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return model.STHAnchorResult{
+		CryptoSuite:      cryptosuite.INTLV1,
+		SchemaVersion:    model.SchemaSTHAnchorResult,
+		EvidenceStage:    model.AnchorEvidenceStageRaw,
+		NodeID:           key.NodeID,
+		LogID:            key.LogID,
+		TreeSize:         sth.TreeSize,
+		SinkName:         key.SinkName,
+		AnchorID:         fiscobcos.AnchorIDString(payload),
+		RootHash:         append([]byte(nil), sth.RootHash...),
+		STH:              sth,
+		Proof:            proofBytes,
+		PublishedAtUnixN: publishedAt,
+	}
+}
+
 func testSTHAnchorScheduleStateMachineOptional(t *testing.T, newStore Factory) {
 	t.Parallel()
 	store, cleanup := newStore(t)
@@ -1380,6 +1602,32 @@ func testSTHAnchorScheduleStateMachineOptional(t *testing.T, newStore Factory) {
 	if err != nil || !claimed || attempt.Target.TreeSize != 3 {
 		t.Fatalf("ClaimSTHAnchorAttempt attempt=%+v claimed=%v err=%v", attempt, claimed, err)
 	}
+	providerState := []byte("canonical-provider-state-v1")
+	if err := scheduler.CompareAndSwapSTHAnchorProviderState(ctx, key, attempt.Generation+1, "lease-1", 225, nil, providerState); trusterr.CodeOf(err) != trusterr.CodeFailedPrecondition {
+		t.Fatalf("CompareAndSwapSTHAnchorProviderState wrong generation error=%v", err)
+	}
+	if err := scheduler.CompareAndSwapSTHAnchorProviderState(ctx, key, attempt.Generation, "wrong", 225, nil, providerState); trusterr.CodeOf(err) != trusterr.CodeFailedPrecondition {
+		t.Fatalf("CompareAndSwapSTHAnchorProviderState wrong token error=%v", err)
+	}
+	if err := scheduler.CompareAndSwapSTHAnchorProviderState(ctx, key, attempt.Generation, "lease-1", 250, nil, providerState); trusterr.CodeOf(err) != trusterr.CodeFailedPrecondition {
+		t.Fatalf("CompareAndSwapSTHAnchorProviderState expired lease error=%v", err)
+	}
+	if err := scheduler.CompareAndSwapSTHAnchorProviderState(ctx, key, attempt.Generation, "lease-1", 225, []byte("wrong"), providerState); trusterr.CodeOf(err) != trusterr.CodeFailedPrecondition {
+		t.Fatalf("CompareAndSwapSTHAnchorProviderState wrong previous bytes error=%v", err)
+	}
+	if err := scheduler.CompareAndSwapSTHAnchorProviderState(ctx, key, attempt.Generation, "lease-1", 225, nil, make([]byte, anchorschedule.MaxProviderStateBytes+1)); trusterr.CodeOf(err) != trusterr.CodeInvalidArgument {
+		t.Fatalf("CompareAndSwapSTHAnchorProviderState oversized error=%v", err)
+	}
+	if err := scheduler.CompareAndSwapSTHAnchorProviderState(ctx, key, attempt.Generation, "lease-1", 225, nil, providerState); err != nil {
+		t.Fatalf("CompareAndSwapSTHAnchorProviderState: %v", err)
+	}
+	checkpointed, found, err := scheduler.GetSTHAnchorSchedule(ctx, key)
+	if err != nil || !found || checkpointed.InFlight == nil || !bytes.Equal(checkpointed.InFlight.ProviderState, providerState) {
+		t.Fatalf("checkpointed provider state schedule=%+v found=%v err=%v", checkpointed, found, err)
+	}
+	if err := scheduler.CompareAndSwapSTHAnchorProviderState(ctx, key, attempt.Generation, "lease-1", 225, nil, []byte("lost-update")); trusterr.CodeOf(err) != trusterr.CodeFailedPrecondition {
+		t.Fatalf("CompareAndSwapSTHAnchorProviderState stale writer error=%v", err)
+	}
 	advanced, err := scheduler.UpsertSTHAnchorCandidate(ctx, scheduleCandidate(key, 5, 0x55, 220, 320))
 	if err != nil {
 		t.Fatalf("UpsertSTHAnchorCandidate while in-flight: %v", err)
@@ -1401,7 +1649,7 @@ func testSTHAnchorScheduleStateMachineOptional(t *testing.T, newStore Factory) {
 		t.Fatalf("ClaimSTHAnchorAttempt before retry claimed=%v err=%v", claimed, err)
 	}
 	attempt, claimed, err = scheduler.ClaimSTHAnchorAttempt(ctx, key, 350, 450, "worker-2", "lease-2")
-	if err != nil || !claimed || attempt.Attempts != 1 || attempt.Target.TreeSize != 3 {
+	if err != nil || !claimed || attempt.Attempts != 1 || attempt.Target.TreeSize != 3 || !bytes.Equal(attempt.ProviderState, providerState) {
 		t.Fatalf("ClaimSTHAnchorAttempt retry attempt=%+v claimed=%v err=%v", attempt, claimed, err)
 	}
 

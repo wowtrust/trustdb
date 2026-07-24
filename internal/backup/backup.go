@@ -6,6 +6,7 @@ package backup
 
 import (
 	"archive/tar"
+	"bytes"
 	"compress/gzip"
 	"context"
 	"crypto/sha256"
@@ -20,6 +21,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/wowtrust/trustdb/internal/anchor/fiscobcos"
 	"github.com/wowtrust/trustdb/internal/anchorschedule"
 	"github.com/wowtrust/trustdb/internal/cborx"
 	"github.com/wowtrust/trustdb/internal/cryptosuite"
@@ -366,6 +368,9 @@ func Create(ctx context.Context, store proofstore.Store, path string, opts Optio
 		if err := anchorschedule.ValidateSchedule(schedule); err != nil {
 			return Manifest{}, trusterr.Wrap(trusterr.CodeDataLoss, "backup invalid STH anchor schedule", err)
 		}
+		if err := validateBCOSScheduleProviderState(schedule); err != nil {
+			return Manifest{}, err
+		}
 		name := fmt.Sprintf("anchors/schedules/%06d.tdanchor-schedule", i)
 		if err := writeCBORTracked(tw, &report, &ordinal, name, "sth_anchor_schedule", schedule); err != nil {
 			return Manifest{}, err
@@ -636,6 +641,9 @@ func RestoreWithOptions(ctx context.Context, store proofstore.Store, path string
 			if err := decodeCBOREntry(entry, &v); err != nil {
 				return err
 			}
+			if err := validateBCOSScheduleProviderState(v); err != nil {
+				return err
+			}
 			v, err := anchorschedule.ClearLeaseForRestore(v)
 			if err != nil {
 				return trusterr.Wrap(trusterr.CodeDataLoss, "restore invalid STH anchor schedule", err)
@@ -902,7 +910,22 @@ func validateStreamEntry(entry archiveEntry) error {
 		return decodeCBOREntry(entry, &v)
 	case strings.HasPrefix(entry.Name, "anchors/sth-result/"):
 		var v model.STHAnchorResult
-		return decodeCBOREntry(entry, &v)
+		if err := decodeCBOREntry(entry, &v); err != nil {
+			return err
+		}
+		key := model.STHAnchorScheduleKey{NodeID: v.NodeID, LogID: v.LogID, SinkName: v.SinkName}
+		if err := anchorschedule.ValidateResult(key, v); err != nil {
+			return trusterr.Wrap(trusterr.CodeDataLoss, "invalid STH anchor result", err)
+		}
+		if v.SinkName == fiscobcos.SinkName {
+			if len(v.Proof) > fiscobcos.MaxProofBytes {
+				return trusterr.New(trusterr.CodeDataLoss, "FISCO BCOS proof exceeds nested size limit")
+			}
+			if err := fiscobcos.ValidateProofContainer(v.STH, v); err != nil {
+				return trusterr.Wrap(trusterr.CodeDataLoss, "invalid nested FISCO BCOS proof", err)
+			}
+		}
+		return nil
 	case strings.HasPrefix(entry.Name, "anchors/schedules/"):
 		var v model.STHAnchorSchedule
 		if err := decodeCBOREntry(entry, &v); err != nil {
@@ -911,11 +934,41 @@ func validateStreamEntry(entry archiveEntry) error {
 		if err := anchorschedule.ValidateSchedule(v); err != nil {
 			return trusterr.Wrap(trusterr.CodeDataLoss, "invalid STH anchor schedule", err)
 		}
-		return nil
+		return validateBCOSScheduleProviderState(v)
 	default:
 		_, _ = io.Copy(io.Discard, entry.Reader)
 		return nil
 	}
+}
+
+func validateBCOSScheduleProviderState(schedule model.STHAnchorSchedule) error {
+	if schedule.Key.SinkName != fiscobcos.SinkName ||
+		schedule.InFlight == nil ||
+		len(schedule.InFlight.ProviderState) == 0 {
+		return nil
+	}
+	if len(schedule.InFlight.ProviderState) > fiscobcos.MaxAttemptJournalBytes {
+		return trusterr.New(trusterr.CodeDataLoss, "FISCO BCOS attempt journal exceeds nested size limit")
+	}
+	journal, err := fiscobcos.UnmarshalAttemptJournal(schedule.InFlight.ProviderState)
+	if err != nil {
+		return trusterr.Wrap(trusterr.CodeDataLoss, "invalid nested FISCO BCOS attempt journal", err)
+	}
+	if journal.Generation != schedule.InFlight.Generation ||
+		journal.NodeID != schedule.Key.NodeID || journal.LogID != schedule.Key.LogID ||
+		journal.SinkName != schedule.Key.SinkName ||
+		journal.TreeSize != schedule.InFlight.Target.TreeSize ||
+		!bytes.Equal(journal.RootHash, schedule.InFlight.Target.RootHash) {
+		return trusterr.New(trusterr.CodeDataLoss, "FISCO BCOS attempt journal does not bind restored schedule")
+	}
+	payload, err := fiscobcos.UnmarshalPayload(journal.CanonicalPayload)
+	if err != nil {
+		return trusterr.Wrap(trusterr.CodeDataLoss, "decode FISCO BCOS attempt journal payload", err)
+	}
+	if err := fiscobcos.ValidatePayloadAgainstSTH(payload, schedule.InFlight.Target); err != nil {
+		return trusterr.Wrap(trusterr.CodeDataLoss, "FISCO BCOS attempt journal payload does not bind complete Signed STH", err)
+	}
+	return nil
 }
 
 func readRestoreCheckpoint(path string) (RestoreCheckpoint, error) {

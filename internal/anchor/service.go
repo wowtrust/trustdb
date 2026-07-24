@@ -286,7 +286,23 @@ func (s *Service) processOne(ctx context.Context, attempt model.STHAnchorAttempt
 	}
 	callCtx, cancel := context.WithTimeout(ctx, s.cfg.PerCallTimeout)
 	start := time.Now()
-	result, publishErr := s.cfg.Sink.Publish(callCtx, attempt.Target)
+	var result model.STHAnchorResult
+	var publishErr error
+	if durable, ok := s.cfg.Sink.(DurableSink); ok {
+		result, publishErr = durable.PublishDurable(callCtx, attempt, func(checkpointCtx context.Context, expected, next []byte) error {
+			return s.schedule.CompareAndSwapSTHAnchorProviderState(
+				checkpointCtx,
+				s.cfg.Key,
+				attempt.Generation,
+				attempt.LeaseToken,
+				s.cfg.Clock().UTC().UnixNano(),
+				expected,
+				next,
+			)
+		})
+	} else {
+		result, publishErr = s.cfg.Sink.Publish(callCtx, attempt.Target)
+	}
 	cancel()
 	if s.cfg.Metrics != nil {
 		s.cfg.Metrics.AnchorLatency.Observe(time.Since(start).Seconds())

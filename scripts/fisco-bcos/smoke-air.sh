@@ -378,6 +378,17 @@ if ! (
     exit 1
 fi
 
+if ! (
+    cd "${REPO_ROOT}"
+    go run ./scripts/fisco-bcos/evidence-check \
+        --input "${WORK_DIR}/client-evidence.json"
+) >"${WORK_DIR}/consensus-preimage.json" \
+  2>"${WORK_DIR}/consensus-preimage.stderr"; then
+    echo "the production consensus-preimage evidence check failed" >&2
+    sed 's/^/  /' "${WORK_DIR}/consensus-preimage.stderr" >&2
+    exit 1
+fi
+
 if ! stop_nodes; then
     echo "one or more FISCO BCOS nodes required SIGKILL during teardown" >&2
     exit 1
@@ -428,6 +439,11 @@ work = Path(sys.argv[1])
     raw_evm_fixture,
 ) = sys.argv[2:]
 client = json.loads((work / "client-evidence.json").read_text(encoding="utf-8"))
+preimages = json.loads((work / "consensus-preimage.json").read_text(encoding="utf-8"))
+if preimages.get("receipt_consensus_hash_matched") is not True:
+    raise SystemExit("production receipt consensus preimage did not match the node hash")
+if preimages.get("block_consensus_hash_matched") is not True:
+    raise SystemExit("production block consensus preimage did not match the node hash")
 artifacts = json.loads((work / "artifact-verification.json").read_text(encoding="utf-8"))
 baseline = json.loads(Path(baseline_path).read_text(encoding="utf-8"))
 environment = {
@@ -533,6 +549,8 @@ evidence = {
         "stdout_is_single_json_document": True,
         "stderr_lines": client_stderr,
         "clean_teardown": client["clean_teardown"],
+        "receipt_consensus_hash_matched": preimages["receipt_consensus_hash_matched"],
+        "block_consensus_hash_matched": preimages["block_consensus_hash_matched"],
     },
     "cleanup": {
         "node_processes_absent": True,
@@ -551,6 +569,7 @@ evidence = {
             "transactions_root": with_prefix(block["txsRoot"]),
             "receipts_root": with_prefix(block["receiptsRoot"]),
             "signature_count": len(block["signatureList"]),
+            "consensus_hash_matched": preimages["block_consensus_hash_matched"],
         },
         "consensus": {
             "connected_nodes": connected_nodes,

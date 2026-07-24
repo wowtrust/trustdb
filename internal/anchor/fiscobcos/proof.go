@@ -12,42 +12,59 @@ import (
 
 const (
 	MaxProofBytes          = 16 << 20
+	MaxMerklePathNodes     = 512
+	MaxCanonicalLogs       = 512
+	MaxProofNodeBytes      = 128 << 10
+	MaxCommitSignatures    = 1024
+	MaxSignatureBytes      = 1024
 	maxTransactionAttempts = 32
-	maxMerklePathNodes     = 512
-	maxCommitSignatures    = 1024
+	maxMerklePathNodes     = MaxMerklePathNodes
+	maxCommitSignatures    = MaxCommitSignatures
 	maxRawTransactionBytes = 4 << 20
 	maxRawReceiptBytes     = 4 << 20
 	maxRawHeaderBytes      = 2 << 20
 	maxDecodedEventBytes   = 1 << 20
-	maxProofNodeBytes      = 128 << 10
-	maxSignatureBytes      = 1024
+	maxProofNodeBytes      = MaxProofNodeBytes
+	maxSignatureBytes      = MaxSignatureBytes
 )
 
 type TransactionAttempt struct {
-	RawCanonicalTransaction []byte `cbor:"raw_canonical_transaction" json:"raw_canonical_transaction"`
-	Signature               []byte `cbor:"signature" json:"signature"`
-	Sender                  []byte `cbor:"sender" json:"sender"`
-	TransactionHash         []byte `cbor:"transaction_hash" json:"transaction_hash"`
-	BlockLimit              uint64 `cbor:"block_limit" json:"block_limit"`
-	SubmittedAtUnixN        int64  `cbor:"submitted_at_unix_nano" json:"submitted_at_unix_nano"`
+	Ordinal                 uint32                 `cbor:"ordinal" json:"ordinal"`
+	RawCanonicalTransaction []byte                 `cbor:"raw_canonical_transaction" json:"raw_canonical_transaction"`
+	ChainID                 string                 `cbor:"chain_id" json:"chain_id"`
+	GroupID                 string                 `cbor:"group_id" json:"group_id"`
+	To                      []byte                 `cbor:"to" json:"to"`
+	Input                   []byte                 `cbor:"input" json:"input"`
+	Signature               []byte                 `cbor:"signature" json:"signature"`
+	Sender                  []byte                 `cbor:"sender" json:"sender"`
+	TransactionHash         []byte                 `cbor:"transaction_hash" json:"transaction_hash"`
+	BlockLimit              uint64                 `cbor:"block_limit" json:"block_limit"`
+	SubmittedAtUnixN        int64                  `cbor:"submitted_at_unix_nano" json:"submitted_at_unix_nano"`
+	Outcome                 AttemptOutcome         `cbor:"outcome" json:"outcome"`
+	Submission              *SubmissionObservation `cbor:"submission,omitempty" json:"submission,omitempty"`
 }
 
 type ReceiptEvidence struct {
-	RawCanonicalReceipt []byte   `cbor:"raw_canonical_receipt" json:"raw_canonical_receipt"`
-	ReceiptHash         []byte   `cbor:"receipt_hash" json:"receipt_hash"`
-	TransactionHash     []byte   `cbor:"transaction_hash" json:"transaction_hash"`
-	TransactionIndex    uint64   `cbor:"transaction_index" json:"transaction_index"`
-	TransactionProof    [][]byte `cbor:"transaction_proof" json:"transaction_proof"`
-	ReceiptIndex        uint64   `cbor:"receipt_index" json:"receipt_index"`
-	ReceiptProof        [][]byte `cbor:"receipt_proof" json:"receipt_proof"`
-	AnchorLogIndex      uint64   `cbor:"anchor_log_index" json:"anchor_log_index"`
-	DecodedAnchorEvent  []byte   `cbor:"decoded_anchor_event" json:"decoded_anchor_event"`
+	Fields              NativeReceiptFields `cbor:"fields" json:"fields"`
+	RawCanonicalReceipt []byte              `cbor:"raw_canonical_receipt" json:"raw_canonical_receipt"`
+	Status              int64               `cbor:"status" json:"status"`
+	StatusMessage       string              `cbor:"status_message" json:"status_message"`
+	CanonicalLogs       [][]byte            `cbor:"canonical_logs" json:"canonical_logs"`
+	ReceiptHash         []byte              `cbor:"receipt_hash" json:"receipt_hash"`
+	TransactionHash     []byte              `cbor:"transaction_hash" json:"transaction_hash"`
+	TransactionIndex    uint64              `cbor:"transaction_index" json:"transaction_index"`
+	TransactionProof    [][]byte            `cbor:"transaction_proof" json:"transaction_proof"`
+	ReceiptIndex        uint64              `cbor:"receipt_index" json:"receipt_index"`
+	ReceiptProof        [][]byte            `cbor:"receipt_proof" json:"receipt_proof"`
+	AnchorLogIndex      uint64              `cbor:"anchor_log_index" json:"anchor_log_index"`
+	DecodedAnchorEvent  []byte              `cbor:"decoded_anchor_event" json:"decoded_anchor_event"`
 }
 
 type BlockEvidence struct {
-	RawCanonicalHeader []byte `cbor:"raw_canonical_header" json:"raw_canonical_header"`
-	BlockHash          []byte `cbor:"block_hash" json:"block_hash"`
-	BlockNumber        uint64 `cbor:"block_number" json:"block_number"`
+	Fields             NativeBlockHeaderFields `cbor:"fields" json:"fields"`
+	RawCanonicalHeader []byte                  `cbor:"raw_canonical_header" json:"raw_canonical_header"`
+	BlockHash          []byte                  `cbor:"block_hash" json:"block_hash"`
+	BlockNumber        uint64                  `cbor:"block_number" json:"block_number"`
 }
 
 type CommitSignature struct {
@@ -56,8 +73,6 @@ type CommitSignature struct {
 }
 
 type FinalityEvidence struct {
-	View       uint64            `cbor:"view" json:"view"`
-	Round      uint64            `cbor:"round" json:"round"`
 	Signatures []CommitSignature `cbor:"signatures" json:"signatures"`
 }
 
@@ -80,6 +95,7 @@ type AnchorProof struct {
 	ChainContextID            []byte               `cbor:"chain_context_id" json:"chain_context_id"`
 	CanonicalPayload          []byte               `cbor:"canonical_payload" json:"canonical_payload"`
 	TransactionAttempts       []TransactionAttempt `cbor:"transaction_attempts" json:"transaction_attempts"`
+	SuccessfulAttemptOrdinal  uint32               `cbor:"successful_attempt_ordinal" json:"successful_attempt_ordinal"`
 	SuccessfulTransactionHash []byte               `cbor:"successful_transaction_hash" json:"successful_transaction_hash"`
 	Receipt                   ReceiptEvidence      `cbor:"receipt" json:"receipt"`
 	Block                     BlockEvidence        `cbor:"block" json:"block"`
@@ -102,7 +118,7 @@ func MarshalProof(proof AnchorProof) ([]byte, error) {
 
 func UnmarshalProof(data []byte) (AnchorProof, error) {
 	var proof AnchorProof
-	if err := cborx.UnmarshalLimit(data, &proof, MaxProofBytes); err != nil {
+	if err := cborx.UnmarshalLimits(data, &proof, MaxProofBytes, 4096, 128); err != nil {
 		return AnchorProof{}, fmt.Errorf("%w: decode proof: %v", ErrInvalidProof, err)
 	}
 	if err := ValidateProofStructure(proof); err != nil {
@@ -148,24 +164,99 @@ func ValidateProofStructure(proof AnchorProof) error {
 	}
 	seenAttempts := make(map[string]struct{}, len(proof.TransactionAttempts))
 	foundSuccessful := false
+	var previousBlockLimit uint64
 	for i, attempt := range proof.TransactionAttempts {
-		if len(attempt.RawCanonicalTransaction) == 0 || len(attempt.RawCanonicalTransaction) > maxRawTransactionBytes || len(attempt.Signature) == 0 || len(attempt.Signature) > maxSignatureBytes || len(attempt.Sender) == 0 || len(attempt.Sender) > 256 || len(attempt.TransactionHash) != identifierBytes || attempt.BlockLimit == 0 {
+		if attempt.Ordinal != uint32(i+1) ||
+			len(attempt.RawCanonicalTransaction) == 0 ||
+			len(attempt.RawCanonicalTransaction) > maxRawTransactionBytes ||
+			attempt.ChainID != proof.ChainID ||
+			attempt.GroupID != proof.GroupID ||
+			!bytes.Equal(attempt.To, proof.Contract.Address) ||
+			len(attempt.Input) == 0 || len(attempt.Input) > MaxPayloadBytes+4 ||
+			len(attempt.Signature) == 0 || len(attempt.Signature) > maxSignatureBytes ||
+			len(attempt.Sender) == 0 || len(attempt.Sender) > 256 ||
+			len(attempt.TransactionHash) != identifierBytes ||
+			attempt.BlockLimit == 0 || attempt.SubmittedAtUnixN <= 0 ||
+			!validCompletedAttemptOutcome(attempt.Outcome) {
 			return fmt.Errorf("%w: transaction attempt %d is incomplete or oversized", ErrInvalidProof, i)
 		}
+		if i > 0 && attempt.BlockLimit <= previousBlockLimit {
+			return fmt.Errorf("%w: transaction block limits do not strictly increase", ErrInvalidProof)
+		}
+		if i < len(proof.TransactionAttempts)-1 &&
+			attempt.Outcome != AttemptOutcomeBlockLimitExpired &&
+			attempt.Outcome != AttemptOutcomeReceiptBlockLimitRejected {
+			return fmt.Errorf("%w: non-final transaction attempt %d was not closed by block limit", ErrInvalidProof, i+1)
+		}
+		switch attempt.Outcome {
+		case AttemptOutcomeBlockLimitExpired:
+			if attempt.Submission != nil {
+				return fmt.Errorf("%w: transaction attempt %d has unexpected submission response", ErrInvalidProof, i+1)
+			}
+		case AttemptOutcomeReceiptSuccess:
+			if attempt.Submission != nil {
+				if err := validateSubmissionObservation(attempt.Submission, -1); err != nil {
+					return err
+				}
+				if attempt.Submission.Status != ReceiptStatusOK &&
+					!isDuplicateSubmissionStatus(attempt.Submission.Status) {
+					return fmt.Errorf("%w: successful attempt %d has incompatible submission status", ErrInvalidProof, i+1)
+				}
+			}
+		case AttemptOutcomeReceiptBlockLimitRejected:
+			if err := validateSubmissionObservation(attempt.Submission, ReceiptStatusCodeBlockLimit); err != nil {
+				return err
+			}
+		case AttemptOutcomeReceiptTerminalRejected:
+			if err := validateSubmissionObservation(attempt.Submission, -1); err != nil {
+				return err
+			}
+			if attempt.Submission.Status == ReceiptStatusOK ||
+				attempt.Submission.Status == ReceiptStatusCodeBlockLimit {
+				return fmt.Errorf("%w: transaction attempt %d has non-terminal status", ErrInvalidProof, i+1)
+			}
+		}
+		previousBlockLimit = attempt.BlockLimit
 		key := string(attempt.TransactionHash)
 		if _, exists := seenAttempts[key]; exists {
 			return fmt.Errorf("%w: duplicate transaction attempt hash", ErrInvalidProof)
 		}
 		seenAttempts[key] = struct{}{}
-		if bytes.Equal(attempt.TransactionHash, proof.SuccessfulTransactionHash) {
+		if attempt.Ordinal == proof.SuccessfulAttemptOrdinal &&
+			bytes.Equal(attempt.TransactionHash, proof.SuccessfulTransactionHash) &&
+			attempt.Outcome == AttemptOutcomeReceiptSuccess {
 			foundSuccessful = true
 		}
 	}
-	if len(proof.SuccessfulTransactionHash) != identifierBytes || !foundSuccessful {
+	if proof.SuccessfulAttemptOrdinal == 0 ||
+		proof.SuccessfulAttemptOrdinal > uint32(len(proof.TransactionAttempts)) ||
+		len(proof.SuccessfulTransactionHash) != identifierBytes ||
+		!foundSuccessful {
 		return fmt.Errorf("%w: successful transaction hash does not identify one immutable attempt", ErrInvalidProof)
 	}
-	if len(proof.Receipt.RawCanonicalReceipt) == 0 || len(proof.Receipt.RawCanonicalReceipt) > maxRawReceiptBytes || len(proof.Receipt.ReceiptHash) != identifierBytes || !bytes.Equal(proof.Receipt.TransactionHash, proof.SuccessfulTransactionHash) || len(proof.Receipt.DecodedAnchorEvent) == 0 || len(proof.Receipt.DecodedAnchorEvent) > maxDecodedEventBytes {
+	if len(proof.Receipt.RawCanonicalReceipt) == 0 ||
+		len(proof.Receipt.RawCanonicalReceipt) > maxRawReceiptBytes ||
+		proof.Receipt.Status != ReceiptStatusOK ||
+		len(proof.Receipt.StatusMessage) == 0 ||
+		len(proof.Receipt.StatusMessage) > maxConfigString ||
+		len(proof.Receipt.CanonicalLogs) == 0 ||
+		len(proof.Receipt.CanonicalLogs) > maxCanonicalLogs ||
+		len(proof.Receipt.ReceiptHash) != identifierBytes ||
+		!bytes.Equal(proof.Receipt.TransactionHash, proof.SuccessfulTransactionHash) ||
+		len(proof.Receipt.DecodedAnchorEvent) == 0 ||
+		len(proof.Receipt.DecodedAnchorEvent) > maxDecodedEventBytes {
 		return fmt.Errorf("%w: receipt evidence is incomplete or oversized", ErrInvalidProof)
+	}
+	canonicalReceipt, canonicalLogs, err := MarshalNativeReceiptPreimage(proof.Receipt.Fields)
+	if err != nil ||
+		!bytes.Equal(canonicalReceipt, proof.Receipt.RawCanonicalReceipt) ||
+		!sameEvidenceByteSlices(canonicalLogs, proof.Receipt.CanonicalLogs) ||
+		int64(proof.Receipt.Fields.Status) != proof.Receipt.Status {
+		return fmt.Errorf("%w: receipt fields do not reconstruct exact consensus preimage", ErrInvalidProof)
+	}
+	receiptHash, err := HashNativeEvidence(proof.ChainHashAlgorithm, canonicalReceipt)
+	if err != nil || !bytes.Equal(receiptHash, proof.Receipt.ReceiptHash) {
+		return fmt.Errorf("%w: receipt consensus hash mismatch", ErrInvalidProof)
 	}
 	if err := validateMerklePath("transaction", proof.Receipt.TransactionProof); err != nil {
 		return err
@@ -173,8 +264,35 @@ func ValidateProofStructure(proof AnchorProof) error {
 	if err := validateMerklePath("receipt", proof.Receipt.ReceiptProof); err != nil {
 		return err
 	}
+	receiptAggregate := len(proof.Receipt.RawCanonicalReceipt) + len(proof.Receipt.DecodedAnchorEvent)
+	for index, log := range proof.Receipt.CanonicalLogs {
+		if len(log) == 0 || len(log) > maxProofNodeBytes {
+			return fmt.Errorf("%w: canonical log %d is empty or oversized", ErrInvalidProof, index)
+		}
+		receiptAggregate += len(log)
+	}
+	for _, path := range [][][]byte{proof.Receipt.TransactionProof, proof.Receipt.ReceiptProof} {
+		for _, node := range path {
+			receiptAggregate += len(node)
+		}
+	}
+	if receiptAggregate > maxReceiptAggregate {
+		return fmt.Errorf("%w: receipt/log/proof aggregate exceeds %d", ErrInvalidProof, maxReceiptAggregate)
+	}
 	if len(proof.Block.RawCanonicalHeader) == 0 || len(proof.Block.RawCanonicalHeader) > maxRawHeaderBytes || len(proof.Block.BlockHash) != identifierBytes || proof.Block.BlockNumber == 0 {
 		return fmt.Errorf("%w: block evidence is incomplete or oversized", ErrInvalidProof)
+	}
+	canonicalHeader, err := MarshalNativeBlockHeaderPreimage(proof.Block.Fields)
+	if err != nil ||
+		!bytes.Equal(canonicalHeader, proof.Block.RawCanonicalHeader) ||
+		proof.Block.Fields.BlockNumber < 0 ||
+		uint64(proof.Block.Fields.BlockNumber) != proof.Block.BlockNumber ||
+		proof.Receipt.Fields.BlockNumber != proof.Block.Fields.BlockNumber {
+		return fmt.Errorf("%w: block fields do not reconstruct exact consensus preimage", ErrInvalidProof)
+	}
+	blockHash, err := HashNativeEvidence(proof.ChainHashAlgorithm, canonicalHeader)
+	if err != nil || !bytes.Equal(blockHash, proof.Block.BlockHash) {
+		return fmt.Errorf("%w: block consensus hash mismatch", ErrInvalidProof)
 	}
 	if len(proof.Finality.Signatures) == 0 || len(proof.Finality.Signatures) > maxCommitSignatures {
 		return fmt.Errorf("%w: finality signature count=%d", ErrInvalidProof, len(proof.Finality.Signatures))
@@ -190,6 +308,18 @@ func ValidateProofStructure(proof AnchorProof) error {
 		seenSigners[signature.ValidatorNodeID] = struct{}{}
 	}
 	return nil
+}
+
+func validCompletedAttemptOutcome(outcome AttemptOutcome) bool {
+	switch outcome {
+	case AttemptOutcomeBlockLimitExpired,
+		AttemptOutcomeReceiptBlockLimitRejected,
+		AttemptOutcomeReceiptTerminalRejected,
+		AttemptOutcomeReceiptSuccess:
+		return true
+	default:
+		return false
+	}
 }
 
 // ValidateProofContainer checks the immutable TrustDB binding and the strict
@@ -264,6 +394,18 @@ func validateMerklePath(name string, path [][]byte) error {
 		}
 	}
 	return nil
+}
+
+func sameEvidenceByteSlices(left, right [][]byte) bool {
+	if len(left) != len(right) || (left == nil) != (right == nil) {
+		return false
+	}
+	for index := range left {
+		if !bytes.Equal(left[index], right[index]) {
+			return false
+		}
+	}
+	return true
 }
 
 func sameContractBinding(left, right ContractBinding) bool {

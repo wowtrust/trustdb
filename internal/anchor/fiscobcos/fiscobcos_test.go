@@ -494,8 +494,52 @@ func testProof(t *testing.T, config TrustConfig, payload []byte, _ model.SignedT
 	if err != nil {
 		t.Fatal(err)
 	}
+	decodedPayload, err := UnmarshalPayload(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	callData, err := PublishCallData(decodedPayload)
+	if err != nil {
+		t.Fatal(err)
+	}
 	firstHash := sequenceBytes(0x11, 32)
 	successHash := sequenceBytes(0x31, 32)
+	receiptFields := NativeReceiptFields{
+		Version:     0,
+		GasUsed:     "1",
+		Status:      ReceiptStatusOK,
+		Logs:        []NativeLogFields{{Address: "0x01", Topics: [][]byte{sequenceBytes(0x61, 32)}, Data: []byte{0x01}}},
+		BlockNumber: 4200,
+	}
+	rawReceipt, canonicalLogs, err := MarshalNativeReceiptPreimage(receiptFields)
+	if err != nil {
+		t.Fatal(err)
+	}
+	receiptHash, err := HashNativeEvidence(config.ChainHashAlgorithm, rawReceipt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	blockFields := NativeBlockHeaderFields{
+		Version:          0,
+		ParentInfo:       []NativeParentInfo{{BlockNumber: 4199, BlockHash: sequenceBytes(0x70, 32)}},
+		TransactionsRoot: sequenceBytes(0x81, 32),
+		ReceiptsRoot:     sequenceBytes(0x82, 32),
+		StateRoot:        sequenceBytes(0x83, 32),
+		BlockNumber:      4200,
+		GasUsed:          "1",
+		Timestamp:        100,
+		Sealer:           0,
+		SealerList:       [][]byte{[]byte("validator-a")},
+		ConsensusWeights: []int64{1},
+	}
+	rawHeader, err := MarshalNativeBlockHeaderPreimage(blockFields)
+	if err != nil {
+		t.Fatal(err)
+	}
+	blockHash, err := HashNativeEvidence(config.ChainHashAlgorithm, rawHeader)
+	if err != nil {
+		t.Fatal(err)
+	}
 	return AnchorProof{
 		SchemaVersion: SchemaAnchorProof, FormatVersion: ProofVersion,
 		CryptoMode: config.CryptoMode, ProtocolHashAlgorithm: config.ProtocolHashAlgorithm,
@@ -504,17 +548,29 @@ func testProof(t *testing.T, config TrustConfig, payload []byte, _ model.SignedT
 		TrustedCheckpoint: config.TrustedCheckpoint, Contract: config.Contract, ChainContextID: contextID,
 		CanonicalPayload: append([]byte(nil), payload...),
 		TransactionAttempts: []TransactionAttempt{
-			{RawCanonicalTransaction: []byte("signed-transaction-attempt-1"), Signature: sequenceBytes(0x51, 64), Sender: sequenceBytes(0x91, 20), TransactionHash: firstHash, BlockLimit: 4500, SubmittedAtUnixN: 1},
-			{RawCanonicalTransaction: []byte("signed-transaction-attempt-2"), Signature: sequenceBytes(0x52, 64), Sender: sequenceBytes(0x91, 20), TransactionHash: successHash, BlockLimit: 5100, SubmittedAtUnixN: 2},
+			{
+				Ordinal: 1, RawCanonicalTransaction: []byte("signed-transaction-attempt-1"),
+				ChainID: config.ChainID, GroupID: config.GroupID, To: append([]byte(nil), config.Contract.Address...), Input: append([]byte(nil), callData...),
+				Signature: sequenceBytes(0x51, 64), Sender: sequenceBytes(0x91, 20), TransactionHash: firstHash,
+				BlockLimit: 4500, SubmittedAtUnixN: 1, Outcome: AttemptOutcomeBlockLimitExpired,
+			},
+			{
+				Ordinal: 2, RawCanonicalTransaction: []byte("signed-transaction-attempt-2"),
+				ChainID: config.ChainID, GroupID: config.GroupID, To: append([]byte(nil), config.Contract.Address...), Input: append([]byte(nil), callData...),
+				Signature: sequenceBytes(0x52, 64), Sender: sequenceBytes(0x91, 20), TransactionHash: successHash,
+				BlockLimit: 5100, SubmittedAtUnixN: 2, Outcome: AttemptOutcomeReceiptSuccess,
+			},
 		},
-		SuccessfulTransactionHash: successHash,
+		SuccessfulAttemptOrdinal: 2, SuccessfulTransactionHash: successHash,
 		Receipt: ReceiptEvidence{
-			RawCanonicalReceipt: []byte("canonical-success-receipt"), ReceiptHash: sequenceBytes(0x71, 32), TransactionHash: successHash,
+			Fields: receiptFields, RawCanonicalReceipt: rawReceipt, Status: ReceiptStatusOK, StatusMessage: "success",
+			CanonicalLogs: canonicalLogs,
+			ReceiptHash:   receiptHash, TransactionHash: successHash,
 			TransactionIndex: 1, TransactionProof: [][]byte{sequenceBytes(0x81, 32)}, ReceiptIndex: 1,
 			ReceiptProof: [][]byte{sequenceBytes(0x82, 32)}, AnchorLogIndex: 0, DecodedAnchorEvent: []byte("canonical-anchor-event"),
 		},
-		Block: BlockEvidence{RawCanonicalHeader: []byte("canonical-block-header"), BlockHash: sequenceBytes(0xa1, 32), BlockNumber: 4200},
-		Finality: FinalityEvidence{View: 9, Round: 2, Signatures: []CommitSignature{
+		Block: BlockEvidence{Fields: blockFields, RawCanonicalHeader: rawHeader, BlockHash: blockHash, BlockNumber: 4200},
+		Finality: FinalityEvidence{Signatures: []CommitSignature{
 			{ValidatorNodeID: "validator-a", Signature: sequenceBytes(0xb1, 64)},
 			{ValidatorNodeID: "validator-b", Signature: sequenceBytes(0xb2, 64)},
 			{ValidatorNodeID: "validator-c", Signature: sequenceBytes(0xb3, 64)},

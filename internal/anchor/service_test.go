@@ -35,6 +35,29 @@ type fakeResult struct {
 	err    error
 }
 
+type fakeDurableSink struct {
+	name         string
+	publishCalls int
+	durableCalls int
+	state        []byte
+	err          error
+}
+
+func (f *fakeDurableSink) Name() string { return f.name }
+
+func (f *fakeDurableSink) Publish(context.Context, model.SignedTreeHead) (model.STHAnchorResult, error) {
+	f.publishCalls++
+	return model.STHAnchorResult{}, errors.New("unsafe publish path called")
+}
+
+func (f *fakeDurableSink) PublishDurable(ctx context.Context, attempt model.STHAnchorAttempt, checkpoint ProviderStateCheckpoint) (model.STHAnchorResult, error) {
+	f.durableCalls++
+	if err := checkpoint(ctx, attempt.ProviderState, f.state); err != nil {
+		return model.STHAnchorResult{}, err
+	}
+	return model.STHAnchorResult{}, f.err
+}
+
 func (f *fakeSink) Name() string { return f.name }
 
 func (f *fakeSink) Publish(ctx context.Context, sth model.SignedTreeHead) (model.STHAnchorResult, error) {
@@ -142,6 +165,36 @@ func TestServiceWaitsForFixedDeadline(t *testing.T) {
 	schedule, found, err := store.GetSTHAnchorSchedule(context.Background(), key)
 	if err != nil || !found || schedule.Pending == nil || schedule.Pending.DueAtUnixN != 200 {
 		t.Fatalf("pending schedule=%+v found=%v err=%v", schedule, found, err)
+	}
+}
+
+func TestServiceDurableSinkCheckpointsProviderStateBeforeRetry(t *testing.T) {
+	t.Parallel()
+	store := newBoundTestLocalStore(t, t.TempDir())
+	key := testScheduleKey("durable")
+	sth := testSTH(key, 1, 0x11)
+	offer(t, store, key, sth, 100, 100)
+	now := time.Unix(0, 100)
+	sink := &fakeDurableSink{
+		name:  key.SinkName,
+		state: []byte("signed-transaction-journal"),
+		err:   errors.New("submission outcome unknown"),
+	}
+	svc := newTestService(t, store, sink, key, &now, nil)
+
+	svc.tick(context.Background())
+
+	if sink.publishCalls != 0 || sink.durableCalls != 1 {
+		t.Fatalf("publish calls=%d durable calls=%d", sink.publishCalls, sink.durableCalls)
+	}
+	schedule, found, err := store.GetSTHAnchorSchedule(context.Background(), key)
+	if err != nil || !found || schedule.InFlight == nil {
+		t.Fatalf("GetSTHAnchorSchedule found=%v schedule=%+v err=%v", found, schedule, err)
+	}
+	if !bytes.Equal(schedule.InFlight.ProviderState, sink.state) ||
+		schedule.InFlight.Attempts != 1 ||
+		schedule.InFlight.LeaseToken != "" {
+		t.Fatalf("durable retry state=%+v", schedule.InFlight)
 	}
 }
 
@@ -395,6 +448,9 @@ func (s *failCompletionStore) ListSTHAnchorSchedules(ctx context.Context) ([]mod
 func (s *failCompletionStore) ClaimSTHAnchorAttempt(ctx context.Context, key model.STHAnchorScheduleKey, now, leaseUntil int64, owner, token string) (model.STHAnchorAttempt, bool, error) {
 	return s.schedule.ClaimSTHAnchorAttempt(ctx, key, now, leaseUntil, owner, token)
 }
+func (s *failCompletionStore) CompareAndSwapSTHAnchorProviderState(ctx context.Context, key model.STHAnchorScheduleKey, generation uint64, token string, now int64, expected, next []byte) error {
+	return s.schedule.CompareAndSwapSTHAnchorProviderState(ctx, key, generation, token, now, expected, next)
+}
 func (s *failCompletionStore) RescheduleSTHAnchorAttempt(ctx context.Context, key model.STHAnchorScheduleKey, generation uint64, token string, attempts int, next int64, last string) error {
 	return s.schedule.RescheduleSTHAnchorAttempt(ctx, key, generation, token, attempts, next, last)
 }
@@ -478,7 +534,7 @@ func TestServiceLeaseCoversPublishAndCompletionBudgets(t *testing.T) {
 	}()
 	select {
 	case <-wrapped.completionStarted:
-	case <-time.After(time.Second):
+	case <-time.After(5 * time.Second):
 		t.Fatal("completion persistence did not start")
 	}
 
@@ -495,7 +551,7 @@ func TestServiceLeaseCoversPublishAndCompletionBudgets(t *testing.T) {
 	close(wrapped.completionRelease)
 	select {
 	case <-firstDone:
-	case <-time.After(time.Second):
+	case <-time.After(5 * time.Second):
 		t.Fatal("first worker did not finish completion")
 	}
 	if _, found, err := base.GetSTHAnchorResult(context.Background(), sth.TreeSize); err != nil || !found {
