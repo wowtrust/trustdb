@@ -23,6 +23,7 @@ const zhCN = {
       ]],
       ["接入", [
         ["Go SDK 教程", "/docs/sdk"],
+        ["NATS / JetStream 入口", "/docs/nats-ingress"],
         ["离线验证", "/docs/offline-verification"],
         ["CLI 参考", "/docs/cli"],
         ["桌面客户端", "/docs/desktop"],
@@ -48,10 +49,11 @@ const zhCN = {
     secondary: "先理解证据模型",
     chooseEyebrow: "Choose your outcome",
     chooseTitle: ["不用猜阅读顺序。", "从你的目标开始。"],
-    chooseLead: "五条路径共享同一套证据语义；你可以先评估，再逐步进入业务接入和生产运维。",
+    chooseLead: "六条路径共享同一套证据语义；你可以先评估，再逐步进入业务接入和生产运维。",
     paths: [
       ["10 MIN", "本地跑通", "从空目录生成 L3 ProofBundle，并验证原文件未被修改。", "/docs/quick-start", "得到 example.tdproof"],
       ["BUILD", "接入 Go SDK", "启动本地服务，提交文件，等待 L4，导出并本地验证 .sproof。", "/docs/sdk", "得到可运行示例与 record.sproof"],
+      ["STREAM", "接入 NATS 入口", "用 JetStream 耐久汇聚 signed claim，并在超时或重启后恢复不可变 L2 result。", "/docs/nats-ingress", "得到有界消息入口与恢复规则"],
       ["VERIFY", "验证收到的证据", "在服务关闭、网络断开的条件下，用独立取得的可信公钥复算证据。", "/docs/offline-verification", "得到离线验证结果"],
       ["OPERATE", "部署生产服务", "配置持久卷、密钥边界、网络保护、健康检查、备份与恢复演练。", "/docs/server", "得到上线检查清单"],
       ["RECOVER", "定位常见故障", "按症状排查权限、密钥、证明就绪、锚定、Pebble 锁和 schema 问题。", "/docs/troubleshooting", "得到安全修复步骤"],
@@ -61,7 +63,7 @@ const zhCN = {
     modelSteps: [
       ["01", "理解", "明确 TrustDB 证明什么、不证明什么，以及 L1–L5 如何逐级增加可验证材料。"],
       ["02", "体验", "用 CLI 在本地生成密钥、声明和 L3 证明，亲手验证一次成功与一次篡改失败。"],
-      ["03", "接入", "用 Go SDK 把签名、提交、异步证明等待、.sproof 导出和验证放入业务流程。"],
+      ["03", "接入", "用 Go SDK 完成签名、提交和证明处理；需要耐久汇聚时选择可选 NATS / JetStream 写入口。"],
       ["04", "上线", "固定版本与配置，分离信任根，保护网络边界，并完成备份和恢复演练。"],
     ],
     boundaryTitle: "原文件可以不进入 TrustDB，验证也不依赖 TrustDB 在线。",
@@ -223,7 +225,7 @@ const en = {
   nav: {
     groups: [
       ["Start", [["Docs home", "/docs"], ["Understand TrustDB", "/docs/concepts"], ["10-minute quick start", "/docs/quick-start"]]],
-      ["Build", [["Go SDK tutorial", "/docs/sdk"], ["Offline verification", "/docs/offline-verification"], ["CLI reference", "/docs/cli"], ["Desktop client", "/docs/desktop"]]],
+      ["Build", [["Go SDK tutorial", "/docs/sdk"], ["NATS / JetStream ingress", "/docs/nats-ingress"], ["Offline verification", "/docs/offline-verification"], ["CLI reference", "/docs/cli"], ["Desktop client", "/docs/desktop"]]],
       ["Operate", [["Production deployment", "/docs/server"], ["Troubleshooting", "/docs/troubleshooting"]]],
       ["Reference", [["Install the desktop client", "/docs/desktop-install"], ["Build from source", "/docs/source-build"], [".sproof v1", "/sproof"], ["Performance baseline", "/performance"]]],
     ],
@@ -233,10 +235,11 @@ const en = {
     lead: "Reach a locally verified L3 proof in ten minutes, then continue to the Go SDK, production deployment, or recipient-side .sproof verification. Every path includes prerequisites, copyable commands, expected output, and failure guidance.",
     meta: "TrustDB onboarding path · v1.0.0", primary: "Start the 10-minute tutorial", secondary: "Understand the evidence model first",
     chooseEyebrow: "Choose your outcome", chooseTitle: ["No reading-order puzzle.", "Start with your goal."],
-    chooseLead: "Five paths share the same proof semantics. Evaluate locally, integrate into your application, then operate it safely.",
+    chooseLead: "Six paths share the same proof semantics. Evaluate locally, integrate into your application, then operate it safely.",
     paths: [
       ["10 MIN", "Run it locally", "Create an L3 ProofBundle from an empty directory and verify that the source file is unchanged.", "/docs/quick-start", "Produces example.tdproof"],
       ["BUILD", "Integrate the Go SDK", "Start a local server, submit a file, wait for L4, export .sproof, and verify it locally.", "/docs/sdk", "Produces a runnable example and record.sproof"],
+      ["STREAM", "Add NATS ingress", "Durably fan signed claims into TrustDB through JetStream and recover immutable L2 results after timeout or restart.", "/docs/nats-ingress", "Produces a bounded broker path and recovery rules"],
       ["VERIFY", "Verify delivered evidence", "Recompute the proof with independently obtained trusted keys while the service and network are unavailable.", "/docs/offline-verification", "Produces an offline verification result"],
       ["OPERATE", "Deploy to production", "Plan persistent data, key boundaries, network protection, health checks, backup, and recovery rehearsal.", "/docs/server", "Produces a go-live checklist"],
       ["RECOVER", "Resolve common failures", "Diagnose permissions, keys, proof readiness, anchoring, Pebble locks, and schema failures by symptom.", "/docs/troubleshooting", "Produces safe recovery steps"],
@@ -245,7 +248,7 @@ const en = {
     modelSteps: [
       ["01", "Understand", "Learn what TrustDB proves, what it does not, and how L1–L5 add independently verifiable material."],
       ["02", "Experience", "Use the CLI to create keys, a claim, and an L3 proof, then observe one success and one tamper failure."],
-      ["03", "Integrate", "Use the Go SDK for signing, submission, asynchronous proof waiting, .sproof export, and verification."],
+      ["03", "Integrate", "Use the Go SDK for signing and proof handling; add the optional NATS / JetStream write path when durable fan-in is required."],
       ["04", "Operate", "Pin versions and configuration, separate trust roots, protect the network edge, and rehearse restore."],
     ],
     boundaryTitle: "The source file can stay outside TrustDB, and verification does not require TrustDB to be online.",

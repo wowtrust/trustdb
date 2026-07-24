@@ -21,6 +21,7 @@ export const fr = {
       ]],
       ["Intégrer", [
         ["Tutoriel du SDK Go", "/docs/sdk"],
+        ["Entrée NATS / JetStream", "/docs/nats-ingress"],
         ["Vérification hors ligne", "/docs/offline-verification"],
         ["Référence CLI", "/docs/cli"],
         ["Client de bureau", "/docs/desktop"],
@@ -46,10 +47,11 @@ export const fr = {
     secondary: "Comprendre d’abord le modèle de preuve",
     chooseEyebrow: "Choisissez votre objectif",
     chooseTitle: ["Plus besoin de deviner l’ordre.", "Commencez par votre objectif."],
-    chooseLead: "Cinq parcours partagent exactement la même sémantique de preuve. Évaluez TrustDB localement, intégrez-le à votre application, puis exploitez-le en toute sécurité.",
+    chooseLead: "Six parcours partagent exactement la même sémantique de preuve. Évaluez TrustDB localement, intégrez-le à votre application, puis exploitez-le en toute sécurité.",
     paths: [
       ["10 MIN", "L’exécuter localement", "Créez un ProofBundle L3 depuis un dossier vide et vérifiez que le fichier source n’a pas été modifié.", "/docs/quick-start", "Produit example.tdproof"],
       ["BUILD", "Intégrer le SDK Go", "Démarrez un serveur local, soumettez un fichier, attendez L4, exportez .sproof et vérifiez-le localement.", "/docs/sdk", "Produit un exemple exécutable et record.sproof"],
+      ["STREAM", "Ajouter l’entrée NATS", "Regroupez durablement les claims signés via JetStream et récupérez le résultat L2 immuable après délai ou redémarrage.", "/docs/nats-ingress", "Produit un chemin broker borné et des règles de reprise"],
       ["VERIFY", "Vérifier une preuve reçue", "Recalculez la preuve avec des clés de confiance obtenues indépendamment, sans service ni réseau disponibles.", "/docs/offline-verification", "Produit un résultat de vérification hors ligne"],
       ["OPERATE", "Déployer en production", "Planifiez les données persistantes, les limites des clés, la protection réseau, les contrôles d’état, la sauvegarde et un exercice de restauration.", "/docs/server", "Produit une checklist de mise en production"],
       ["RECOVER", "Résoudre les incidents courants", "Diagnostiquez par symptôme les permissions, les clés, la disponibilité des preuves, l’ancrage, les verrous Pebble et les erreurs de schéma.", "/docs/troubleshooting", "Produit des étapes de reprise sûres"],
@@ -59,7 +61,7 @@ export const fr = {
     modelSteps: [
       ["01", "Comprendre", "Découvrez ce que TrustDB prouve, ce qu’il ne prouve pas et comment L1–L5 ajoutent progressivement des éléments vérifiables indépendamment."],
       ["02", "Expérimenter", "Utilisez la CLI pour créer des clés, une déclaration et une preuve L3, puis observez une réussite et un échec après altération."],
-      ["03", "Intégrer", "Utilisez le SDK Go pour la signature, la soumission, l’attente asynchrone des preuves, l’export .sproof et la vérification."],
+      ["03", "Intégrer", "Utilisez le SDK Go pour signer et traiter les preuves ; ajoutez l’entrée NATS / JetStream facultative pour un regroupement durable."],
       ["04", "Exploiter", "Figez les versions et la configuration, séparez les racines de confiance, protégez la périphérie réseau et répétez la restauration."],
     ],
     boundaryTitle: "Le fichier source peut rester hors de TrustDB, et la vérification n’exige pas que TrustDB soit en ligne.",
@@ -233,6 +235,7 @@ export const ko = {
       ]],
       ["연동", [
         ["Go SDK 튜토리얼", "/docs/sdk"],
+        ["NATS / JetStream ingress", "/docs/nats-ingress"],
         ["오프라인 검증", "/docs/offline-verification"],
         ["CLI 레퍼런스", "/docs/cli"],
         ["데스크톱 클라이언트", "/docs/desktop"],
@@ -258,10 +261,11 @@ export const ko = {
     secondary: "먼저 증거 모델 이해하기",
     chooseEyebrow: "목표 선택",
     chooseTitle: ["읽는 순서를 고민하지 마세요.", "목표에서 시작하세요."],
-    chooseLead: "다섯 경로는 동일한 증명 의미 체계를 공유합니다. 로컬에서 평가하고 애플리케이션에 연동한 뒤 안전하게 운영하세요.",
+    chooseLead: "여섯 경로는 동일한 증명 의미 체계를 공유합니다. 로컬에서 평가하고 애플리케이션에 연동한 뒤 안전하게 운영하세요.",
     paths: [
       ["10 MIN", "로컬에서 실행", "빈 디렉터리에서 L3 ProofBundle을 만들고 원본 파일이 바뀌지 않았는지 검증합니다.", "/docs/quick-start", "example.tdproof 생성"],
       ["BUILD", "Go SDK 연동", "로컬 서버를 시작하고 파일을 제출해 L4를 기다린 뒤 .sproof를 내보내 로컬에서 검증합니다.", "/docs/sdk", "실행 가능한 예제와 record.sproof 생성"],
+      ["STREAM", "NATS ingress 추가", "JetStream으로 signed claim을 내구성 있게 모으고 timeout 또는 재시작 뒤 immutable L2 result를 복구합니다.", "/docs/nats-ingress", "제한된 broker 경로와 복구 규칙 확보"],
       ["VERIFY", "전달받은 증거 검증", "서비스와 네트워크를 사용할 수 없는 상태에서 독립적으로 확보한 신뢰 키로 증명을 다시 계산합니다.", "/docs/offline-verification", "오프라인 검증 결과 생성"],
       ["OPERATE", "프로덕션에 배포", "영구 데이터, 키 경계, 네트워크 보호, 상태 확인, 백업과 복구 리허설을 계획합니다.", "/docs/server", "운영 전 점검표 완성"],
       ["RECOVER", "일반적인 장애 해결", "권한, 키, 증명 준비 상태, 앵커링, Pebble 잠금, schema 오류를 증상별로 진단합니다.", "/docs/troubleshooting", "안전한 복구 절차 확보"],
@@ -271,7 +275,7 @@ export const ko = {
     modelSteps: [
       ["01", "이해", "TrustDB가 무엇을 증명하고 무엇을 증명하지 않는지, L1–L5가 독립 검증 가능한 자료를 어떻게 더하는지 배웁니다."],
       ["02", "체험", "CLI로 키, claim, L3 증명을 만든 뒤 정상 성공과 변조 실패를 각각 확인합니다."],
-      ["03", "연동", "Go SDK로 서명, 제출, 비동기 증명 대기, .sproof 내보내기와 검증을 구현합니다."],
+      ["03", "연동", "Go SDK로 서명과 증명을 처리하고, 내구성 있는 집계가 필요하면 선택적 NATS / JetStream 쓰기 경로를 추가합니다."],
       ["04", "운영", "버전과 설정을 고정하고 신뢰 루트를 분리하며 네트워크 경계를 보호한 뒤 복구를 연습합니다."],
     ],
     boundaryTitle: "원본 파일은 TrustDB 밖에 둘 수 있으며, 검증할 때 TrustDB가 온라인일 필요도 없습니다.",

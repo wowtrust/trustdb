@@ -6,13 +6,14 @@ import { ArrowRight } from "@phosphor-icons/react";
 import { SiteFooter, SiteHeader, PageHero } from "./components/SiteChrome";
 import { useRoute, Link } from "./router";
 import { HomePage } from "./pages/HomePage";
-import { CliDocsPage, ConceptsDocsPage, DesktopDocsPage, DesktopInstallPage, DocsIndexPage, MissingDocsPage, OfflineVerificationPage, QuickStartPage, SdkDocsPage, ServerDocsPage, SourceBuildPage, TroubleshootingPage } from "./pages/DocsPages";
+import { CliDocsPage, ConceptsDocsPage, DesktopDocsPage, DesktopInstallPage, DocsIndexPage, MissingDocsPage, NATSIngressDocsPage, OfflineVerificationPage, QuickStartPage, SdkDocsPage, ServerDocsPage, SourceBuildPage, TroubleshootingPage } from "./pages/DocsPages";
 import { PerformancePage } from "./pages/PerformancePage";
 import { SproofPage } from "./pages/SproofPage";
 import { ChangelogPage, DownloadsPage } from "./pages/ReleasePages";
 import { t, useLocale } from "./i18n";
 import { productExplanation } from "./content/productExplanation";
 import { useDocsOnboarding } from "./content/docsOnboarding";
+import { natsIngressContent } from "./content/natsIngress";
 
 gsap.registerPlugin(ScrollTrigger, useGSAP);
 
@@ -24,6 +25,7 @@ const titles = {
   "/docs/server": "服务器 · TrustDB 文档",
   "/docs/cli": "CLI · TrustDB 文档",
   "/docs/sdk": "Go SDK · TrustDB 文档",
+  "/docs/nats-ingress": "NATS / JetStream · TrustDB 文档",
   "/docs/offline-verification": "离线验证 · TrustDB 文档",
   "/docs/desktop": "桌面客户端 · TrustDB 文档",
   "/docs/desktop-install": "安装桌面客户端 · TrustDB 文档",
@@ -43,6 +45,7 @@ function RouteView({ route }) {
   if (route === "/docs/server") return <ServerDocsPage route={route} />;
   if (route === "/docs/cli") return <CliDocsPage route={route} />;
   if (route === "/docs/sdk") return <SdkDocsPage route={route} />;
+  if (route === "/docs/nats-ingress") return <NATSIngressDocsPage route={route} />;
   if (route === "/docs/offline-verification") return <OfflineVerificationPage route={route} />;
   if (route === "/docs/desktop") return <DesktopDocsPage route={route} />;
   if (route === "/docs/desktop-install") return <DesktopInstallPage route={route} />;
@@ -67,6 +70,7 @@ export function App() {
       "/docs": docsCopy.ui.home,
       "/docs/quick-start": docsCopy.quickStart.title,
       "/docs/sdk": docsCopy.sdk.title,
+      "/docs/nats-ingress": natsIngressContent(locale).title,
       "/docs/offline-verification": docsCopy.offline.title,
       "/docs/server": docsCopy.server.title,
       "/docs/troubleshooting": docsCopy.troubleshooting.title,
