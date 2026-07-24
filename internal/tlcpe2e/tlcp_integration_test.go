@@ -165,6 +165,75 @@ func TestTLCPGatewayHTTPAndGRPCMutualAuthentication(t *testing.T) {
 		}
 	})
 
+	t.Run("request body threshold", func(t *testing.T) {
+		const maximum = 16 << 20
+		body := bytes.Repeat([]byte{'a'}, maximum)
+		request := "POST /echo-size HTTP/1.1\r\nHost: " + serverName +
+			"\r\nContent-Length: " + strconv.Itoa(len(body)) +
+			"\r\nConnection: close\r\n\r\n" + string(body)
+		result, err := runOpenSSLText(
+			running,
+			fixture,
+			"http/1.1",
+			nil,
+			request,
+			true,
+		)
+		if err != nil || !strings.Contains(result, "HTTP/1.1 200 OK") ||
+			!strings.Contains(result, strconv.Itoa(maximum)) {
+			t.Fatalf("maximum request body was not accepted: %v\n%s", err, result)
+		}
+
+		result, err = runOpenSSLText(
+			running,
+			fixture,
+			"http/1.1",
+			nil,
+			"POST /echo-size HTTP/1.1\r\nHost: "+serverName+
+				"\r\nContent-Length: "+strconv.Itoa(maximum+1)+
+				"\r\nConnection: close\r\n\r\n",
+			true,
+		)
+		if !strings.Contains(result, "HTTP/1.1 413 Request Entity Too Large") {
+			t.Fatalf("oversized request body was not rejected at 16 MiB: %v\n%s", err, result)
+		}
+	})
+
+	t.Run("sustained authenticated traffic", func(t *testing.T) {
+		const rounds = 4
+		const clients = 4
+		errs := make(chan error, rounds*clients*2)
+		var group sync.WaitGroup
+		for index := 0; index < clients; index++ {
+			group.Add(1)
+			go func() {
+				defer group.Done()
+				for round := 0; round < rounds; round++ {
+					result, err := runOpenSSLText(
+						running,
+						fixture,
+						"http/1.1",
+						nil,
+						"GET /healthz HTTP/1.1\r\nHost: "+serverName+
+							"\r\nConnection: close\r\n\r\n",
+						true,
+					)
+					if err != nil || !strings.Contains(result, "HTTP/1.1 200 OK") {
+						errs <- fmt.Errorf("sustained HTTP request failed: %w: %s", err, result)
+					}
+					if err := runGRPCHealthClient(running, fixture); err != nil {
+						errs <- fmt.Errorf("sustained gRPC request failed: %w", err)
+					}
+				}
+			}()
+		}
+		group.Wait()
+		close(errs)
+		for err := range errs {
+			t.Error(err)
+		}
+	})
+
 	t.Run("slow partial header is bounded", func(t *testing.T) {
 		if err := runSlowHeaderClient(running, fixture); err != nil {
 			t.Fatal(err)
@@ -315,6 +384,22 @@ func TestTLCPGatewayHTTPAndGRPCMutualAuthentication(t *testing.T) {
 
 	t.Run("atomic certificate rotation", func(t *testing.T) {
 		first, second := prepareServerGenerations(t, fixture)
+		firstFixture := fixtureForGeneration(fixture, first)
+		secondFixture := fixtureForGeneration(fixture, second)
+		for _, name := range []string{
+			"server-ca.pem",
+			"client-ca.pem",
+			"client-signing.pem",
+			"client-encryption.pem",
+			"server-ca.crl",
+			"client-ca.crl",
+		} {
+			firstDigest := testFileDigest(t, filepath.Join(fixture.dir, first.name, name))
+			secondDigest := testFileDigest(t, filepath.Join(fixture.dir, second.name, name))
+			if firstDigest == secondDigest {
+				t.Fatalf("%s did not rotate between generations", name)
+			}
+		}
 		activeGeneration := first
 		activeGeneration.name = "active"
 		activeGeneration.profileFile = "/certs/active/active-profile.json"
@@ -325,10 +410,10 @@ func TestTLCPGatewayHTTPAndGRPCMutualAuthentication(t *testing.T) {
 			fixture,
 			generationEnvironment(activeGeneration, httpPort, grpcPort),
 		)
-		if err := runGRPCHealthClient(active, fixture); err != nil {
+		if err := runGRPCHealthClient(active, firstFixture); err != nil {
 			t.Fatalf("initial generation gRPC canary: %v", err)
 		}
-		if got := serverPublicKeySHA256(t, active, fixture); got != first.signingPublicKeySHA256 {
+		if got := serverPublicKeySHA256(t, active, firstFixture); got != first.signingPublicKeySHA256 {
 			t.Fatalf("initial signing public key = %s, want %s", got, first.signingPublicKeySHA256)
 		}
 
@@ -345,8 +430,8 @@ func TestTLCPGatewayHTTPAndGRPCMutualAuthentication(t *testing.T) {
 		if logs := dockerOutput(t, "logs", failedCandidate); !strings.Contains(logs, "key values mismatch") {
 			t.Fatalf("invalid candidate did not fail closed:\n%s", logs)
 		}
-		runHTTPClient(t, active, fixture, nil)
-		if err := runGRPCHealthClient(active, fixture); err != nil {
+		runHTTPClient(t, active, firstFixture, nil)
+		if err := runGRPCHealthClient(active, firstFixture); err != nil {
 			t.Fatalf("failed candidate disrupted the active generation: %v", err)
 		}
 
@@ -370,11 +455,11 @@ func TestTLCPGatewayHTTPAndGRPCMutualAuthentication(t *testing.T) {
 		}
 		_ = publishedAddress(t, active.upstreamContainer, canaryHTTPPort)
 		_ = publishedAddress(t, active.upstreamContainer, canaryGRPCPort)
-		runHTTPClient(t, candidate, fixture, nil)
-		if err := runGRPCHealthClient(candidate, fixture); err != nil {
+		runHTTPClient(t, candidate, secondFixture, nil)
+		if err := runGRPCHealthClient(candidate, secondFixture); err != nil {
 			t.Fatalf("candidate generation gRPC canary: %v", err)
 		}
-		if got := serverPublicKeySHA256(t, candidate, fixture); got != second.signingPublicKeySHA256 {
+		if got := serverPublicKeySHA256(t, candidate, secondFixture); got != second.signingPublicKeySHA256 {
 			t.Fatalf("candidate signing public key = %s, want %s", got, second.signingPublicKeySHA256)
 		}
 
@@ -389,41 +474,73 @@ func TestTLCPGatewayHTTPAndGRPCMutualAuthentication(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		waitForServerPublicKey(t, active, fixture, second.signingPublicKeySHA256, reloadTimeout)
+		waitForRuntimeReadiness(t, active.gatewayContainer, reloadTimeout)
+		if got := serverPublicKeySHA256(t, active, secondFixture); got != second.signingPublicKeySHA256 {
+			t.Fatalf("rotated signing public key = %s, want %s", got, second.signingPublicKeySHA256)
+		}
 		if elapsed := time.Since(started); elapsed > reloadTimeout {
 			t.Fatalf("gateway reload took %s, want at most %s", elapsed, reloadTimeout)
 		}
-		runHTTPClient(t, active, fixture, nil)
-		if err := runGRPCHealthClient(active, fixture); err != nil {
+		runHTTPClient(t, active, secondFixture, nil)
+		if err := runGRPCHealthClient(active, secondFixture); err != nil {
 			t.Fatalf("rotated generation gRPC canary: %v", err)
 		}
-
-		runtimeBeforeFailure := runtimeFileDigests(t, active.gatewayContainer)
-		brokenGeneration := "generation-broken"
-		copyGeneration(t, fixture.dir, second.name, brokenGeneration)
-		copyTestFile(
-			t,
-			filepath.Join(fixture.dir, brokenGeneration, "server-signing.pem"),
-			filepath.Join(fixture.dir, brokenGeneration, "server-encryption.pem"),
-		)
-		activateGeneration(t, fixture.dir, brokenGeneration)
-		if output, err := exec.Command(
-			"docker",
-			prepareRuntimeCommand(active.gatewayContainer)...,
-		).CombinedOutput(); err == nil {
-			t.Fatalf("invalid post-switch generation unexpectedly prepared:\n%s", output)
+		oldClient := firstFixture
+		oldClient.serverCA = secondFixture.serverCA
+		if result, err := runOpenSSLText(
+			active,
+			oldClient,
+			"http/1.1",
+			nil,
+			"GET /health HTTP/1.1\r\nHost: "+serverName+"\r\nConnection: close\r\n\r\n",
+			true,
+		); strings.Contains(result, "HTTP/1.1 200 OK") ||
+			!strings.Contains(result, "400 The SSL certificate error") {
+			t.Fatalf("rotated client CA accepted the old readiness identity: err=%v\n%s", err, result)
 		}
-		if got := runtimeFileDigests(t, active.gatewayContainer); got != runtimeBeforeFailure {
+		oldServerTrust := secondFixture
+		oldServerTrust.serverCA = firstFixture.serverCA
+		if result, err := runOpenSSLText(
+			active,
+			oldServerTrust,
+			"http/1.1",
+			nil,
+			"GET /health HTTP/1.1\r\nHost: "+serverName+"\r\nConnection: close\r\n\r\n",
+			true,
+		); err == nil || strings.Contains(result, "HTTP/1.1 200 OK") {
+			t.Fatalf("rotated server CA remained trusted by the old bundle: err=%v\n%s", err, result)
+		}
+
+		runtimeBeforeFailure := runtimeConfigurationDigest(t, active.gatewayContainer)
+		activeProfilePath := filepath.Join(fixture.dir, second.name, "active-profile.json")
+		previousProfile, err := os.ReadFile(activeProfilePath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rewriteGenerationGRPCUpstream(
+			t,
+			activeProfilePath,
+			"127.0.0.1:19091",
+		)
+		prepareRuntimeInContainer(t, active.gatewayContainer)
+		if got := runtimeConfigurationDigest(t, active.gatewayContainer); got == runtimeBeforeFailure {
+			t.Fatal("failed-canary configuration was not promoted")
+		}
+		runDocker(t, "kill", "--signal", "HUP", active.gatewayContainer)
+		waitForRuntimeReadinessFailure(t, active.gatewayContainer, reloadTimeout)
+		replaceTestFile(t, activeProfilePath, previousProfile)
+		prepareRuntimeInContainer(t, active.gatewayContainer)
+		runDocker(t, "kill", "--signal", "HUP", active.gatewayContainer)
+		waitForRuntimeReadiness(t, active.gatewayContainer, reloadTimeout)
+		if got := runtimeConfigurationDigest(t, active.gatewayContainer); got != runtimeBeforeFailure {
 			t.Fatalf(
-				"failed runtime preparation replaced active files:\nbefore: %s\nafter: %s",
+				"rollback did not restore the previous runtime files:\nwant: %s\ngot:  %s",
 				runtimeBeforeFailure,
 				got,
 			)
 		}
-		activateGeneration(t, fixture.dir, second.name)
-		waitForHealthy(t, active.gatewayContainer)
-		runHTTPClient(t, active, fixture, nil)
-		if err := runGRPCHealthClient(active, fixture); err != nil {
+		runHTTPClient(t, active, secondFixture, nil)
+		if err := runGRPCHealthClient(active, secondFixture); err != nil {
 			t.Fatalf("rollback generation gRPC canary: %v", err)
 		}
 	})
@@ -659,6 +776,13 @@ func gatewayDockerArgs(
 		case "TLCP_GATEWAY_GRPC_BIND":
 			profile.Network.GatewayGRPCBind = value
 			profileChanged = true
+		case "TLCP_PROOF_KEY_DESCRIPTOR_FILE":
+			profile.ProofKeyDescriptorFiles = []string{value}
+			profileChanged = true
+		case "TLCP_READINESS_SIGNING_CHAIN_FILE",
+			"TLCP_READINESS_SIGNING_KEY_REFERENCE",
+			"TLCP_READINESS_ENCRYPTION_CHAIN_FILE",
+			"TLCP_READINESS_ENCRYPTION_KEY_REFERENCE":
 		default:
 			t.Fatalf("unsupported TLCP profile test override %q", name)
 		}
@@ -673,10 +797,15 @@ func gatewayDockerArgs(
 	environment := map[string]string{
 		"TLCP_PROFILE_FILE":                       profilePath,
 		"TLCP_EXPECTED_GATEWAY_IMAGE_DIGEST":      profile.Implementation.GatewayImageDigest,
-		"TLCP_READINESS_SIGNING_CHAIN_FILE":       "/certs/" + filepath.Base(fixture.clientSigningCert),
-		"TLCP_READINESS_SIGNING_KEY_REFERENCE":    "/certs/" + filepath.Base(fixture.clientSigningKey),
-		"TLCP_READINESS_ENCRYPTION_CHAIN_FILE":    "/certs/" + filepath.Base(fixture.clientEncryptionCert),
-		"TLCP_READINESS_ENCRYPTION_KEY_REFERENCE": "/certs/" + filepath.Base(fixture.clientEncryptionKey),
+		"TLCP_READINESS_SIGNING_CHAIN_FILE":       fixtureContainerPath(t, fixture, fixture.clientSigningCert),
+		"TLCP_READINESS_SIGNING_KEY_REFERENCE":    fixtureContainerPath(t, fixture, fixture.clientSigningKey),
+		"TLCP_READINESS_ENCRYPTION_CHAIN_FILE":    fixtureContainerPath(t, fixture, fixture.clientEncryptionCert),
+		"TLCP_READINESS_ENCRYPTION_KEY_REFERENCE": fixtureContainerPath(t, fixture, fixture.clientEncryptionKey),
+	}
+	for name, value := range extra {
+		if strings.HasPrefix(name, "TLCP_READINESS_") {
+			environment[name] = value
+		}
 	}
 	args := []string{
 		"run", "--detach",
@@ -840,7 +969,7 @@ func opensslDockerArgs(
 		"-servername", serverName,
 		"-verify_hostname", serverName,
 		"-verify_return_error",
-		"-CAfile", "/certs/" + filepath.Base(fixture.serverCA),
+		"-CAfile", fixtureContainerPath(nil, fixture, fixture.serverCA),
 		"-enable_ntls",
 		"-ntls",
 		"-cipher", "ECDHE-SM2-SM4-GCM-SM3",
@@ -849,13 +978,28 @@ func opensslDockerArgs(
 	}
 	if withClientCertificate {
 		args = append(args,
-			"-sign_cert", "/certs/"+filepath.Base(fixture.clientSigningCert),
-			"-sign_key", "/certs/"+filepath.Base(fixture.clientSigningKey),
-			"-enc_cert", "/certs/"+filepath.Base(fixture.clientEncryptionCert),
-			"-enc_key", "/certs/"+filepath.Base(fixture.clientEncryptionKey),
+			"-sign_cert", fixtureContainerPath(nil, fixture, fixture.clientSigningCert),
+			"-sign_key", fixtureContainerPath(nil, fixture, fixture.clientSigningKey),
+			"-enc_cert", fixtureContainerPath(nil, fixture, fixture.clientEncryptionCert),
+			"-enc_key", fixtureContainerPath(nil, fixture, fixture.clientEncryptionKey),
 		)
 	}
 	return args
+}
+
+func fixtureContainerPath(t testing.TB, fixture certificateFixture, path string) string {
+	if t != nil {
+		t.Helper()
+	}
+	relative, err := filepath.Rel(fixture.dir, path)
+	if err != nil || relative == "." || relative == ".." ||
+		strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		if t != nil {
+			t.Fatalf("fixture path %q is outside %q", path, fixture.dir)
+		}
+		panic(fmt.Sprintf("fixture path %q is outside %q", path, fixture.dir))
+	}
+	return "/certs/" + filepath.ToSlash(relative)
 }
 
 func runGRPCHealthClient(running runningGateway, fixture certificateFixture) error {
@@ -1117,6 +1261,43 @@ func waitForUnhealthy(t *testing.T, container string) {
 	t.Fatalf("container %s did not become unhealthy", container)
 }
 
+func waitForRuntimeReadiness(t *testing.T, container string, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	var last []byte
+	for time.Now().Before(deadline) {
+		output, err := exec.Command(
+			"docker",
+			"exec",
+			container,
+			"/usr/local/bin/trustdb-tlcp-readiness",
+		).CombinedOutput()
+		last = output
+		if err == nil {
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	t.Fatalf("container %s did not pass runtime readiness:\n%s", container, last)
+}
+
+func waitForRuntimeReadinessFailure(t *testing.T, container string, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if _, err := exec.Command(
+			"docker",
+			"exec",
+			container,
+			"/usr/local/bin/trustdb-tlcp-readiness",
+		).CombinedOutput(); err != nil {
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	t.Fatalf("container %s continued to pass the failed post-HUP canary", container)
+}
+
 func runDocker(t *testing.T, args ...string) string {
 	t.Helper()
 	output, err := exec.Command("docker", args...).CombinedOutput()
@@ -1272,6 +1453,10 @@ func prepareServerGenerations(
 		"client-ca.crl",
 		"crl-bundle.pem",
 		"proof-server.pub",
+		"client-signing.pem",
+		"client-signing.key",
+		"client-encryption.pem",
+		"client-encryption.key",
 	} {
 		copyTestFile(t, filepath.Join(fixture.dir, name), filepath.Join(firstDir, name))
 	}
@@ -1282,13 +1467,27 @@ func prepareServerGenerations(
 		t.Fatal(err)
 	}
 	now := time.Now().UTC()
+	secondServerCA, secondServerCAKey := createCA(
+		t,
+		filepath.Join(secondDir, "server-ca.pem"),
+		101,
+		"TLCP Server CA generation 2",
+		now,
+	)
+	secondClientCA, secondClientCAKey := createCA(
+		t,
+		filepath.Join(secondDir, "client-ca.pem"),
+		102,
+		"TLCP Client CA generation 2",
+		now,
+	)
 	signing, _ := createEndpoint(
 		t,
 		filepath.Join(secondDir, "server-signing.pem"),
 		filepath.Join(secondDir, "server-signing.key"),
-		fixture.serverCAObject,
-		fixture.serverCAKey,
-		30,
+		secondServerCA,
+		secondServerCAKey,
+		110,
 		serverName,
 		smx509.KeyUsageDigitalSignature,
 		smx509.ExtKeyUsageServerAuth,
@@ -1298,24 +1497,59 @@ func prepareServerGenerations(
 		t,
 		filepath.Join(secondDir, "server-encryption.pem"),
 		filepath.Join(secondDir, "server-encryption.key"),
-		fixture.serverCAObject,
-		fixture.serverCAKey,
-		31,
+		secondServerCA,
+		secondServerCAKey,
+		111,
 		serverName,
 		smx509.KeyUsageKeyEncipherment,
 		smx509.ExtKeyUsageServerAuth,
 		now,
 	)
-	for _, name := range []string{"server-ca.pem", "client-ca.pem"} {
-		copyTestFile(t, filepath.Join(fixture.dir, name), filepath.Join(secondDir, name))
-	}
+	secondClientSigning, _ := createEndpoint(
+		t,
+		filepath.Join(secondDir, "client-signing.pem"),
+		filepath.Join(secondDir, "client-signing.key"),
+		secondClientCA,
+		secondClientCAKey,
+		120,
+		"TLCP readiness generation 2",
+		smx509.KeyUsageDigitalSignature,
+		smx509.ExtKeyUsageClientAuth,
+		now,
+	)
+	secondClientEncryption, _ := createEndpoint(
+		t,
+		filepath.Join(secondDir, "client-encryption.pem"),
+		filepath.Join(secondDir, "client-encryption.key"),
+		secondClientCA,
+		secondClientCAKey,
+		121,
+		"TLCP readiness generation 2",
+		smx509.KeyUsageKeyEncipherment,
+		smx509.ExtKeyUsageClientAuth,
+		now,
+	)
+	appendCertificate(t, filepath.Join(secondDir, "client-signing.pem"), secondClientCA)
+	appendCertificate(t, filepath.Join(secondDir, "client-encryption.pem"), secondClientCA)
 	copyTestFile(
 		t,
 		filepath.Join(fixture.dir, "proof-server.pub"),
 		filepath.Join(secondDir, "proof-server.pub"),
 	)
-	secondServerCRL := createCRL(t, fixture.serverCAObject, fixture.serverCAKey, now.Add(time.Minute), nil)
-	secondClientCRL := createCRL(t, fixture.clientCAObject, fixture.clientCAKey, now.Add(time.Minute), nil)
+	secondServerCRL := createCRL(
+		t,
+		secondServerCA,
+		secondServerCAKey,
+		now.Add(time.Minute),
+		nil,
+	)
+	secondClientCRL := createCRL(
+		t,
+		secondClientCA,
+		secondClientCAKey,
+		now.Add(time.Minute),
+		nil,
+	)
 	secondServerPEM := pem.EncodeToMemory(&pem.Block{Type: "X509 CRL", Bytes: secondServerCRL})
 	secondClientPEM := pem.EncodeToMemory(&pem.Block{Type: "X509 CRL", Bytes: secondClientCRL})
 	writePEMFile(t, filepath.Join(secondDir, "server-ca.crl"), secondServerPEM)
@@ -1327,6 +1561,9 @@ func prepareServerGenerations(
 	)
 	second.signingPublicKeySHA256 = publicKeySHA256(t, signing)
 	second.encryptionPublicKeySHA256 = publicKeySHA256(t, encryption)
+	if publicKeySHA256(t, secondClientSigning) == publicKeySHA256(t, secondClientEncryption) {
+		t.Fatal("second-generation readiness identity reused one key")
+	}
 	writeGenerationProfile(t, fixture, first, "active", httpPort, grpcPort)
 	writeGenerationProfile(t, fixture, second, "active", httpPort, grpcPort)
 	activateGeneration(t, fixture.dir, first.name)
@@ -1384,11 +1621,18 @@ func prepareExpiredServerGeneration(
 }
 
 func generationEnvironment(generation serverGeneration, httpBind, grpcBind string) map[string]string {
-	if generation.profileFile != "" {
-		return map[string]string{"TLCP_PROFILE_FILE": generation.profileFile}
-	}
 	prefix := "/certs/" + generation.name
 	environment := map[string]string{
+		"TLCP_READINESS_SIGNING_CHAIN_FILE":       prefix + "/client-signing.pem",
+		"TLCP_READINESS_SIGNING_KEY_REFERENCE":    prefix + "/client-signing.key",
+		"TLCP_READINESS_ENCRYPTION_CHAIN_FILE":    prefix + "/client-encryption.pem",
+		"TLCP_READINESS_ENCRYPTION_KEY_REFERENCE": prefix + "/client-encryption.key",
+	}
+	if generation.profileFile != "" {
+		environment["TLCP_PROFILE_FILE"] = generation.profileFile
+		return environment
+	}
+	for name, value := range map[string]string{
 		"TLCP_SERVER_SIGNING_CHAIN_FILE":    prefix + "/server-signing.pem",
 		"TLCP_SERVER_ENCRYPTION_CHAIN_FILE": prefix + "/server-encryption.pem",
 		"TLCP_SERVER_CA_FILE":               prefix + "/server-ca.pem",
@@ -1396,14 +1640,31 @@ func generationEnvironment(generation serverGeneration, httpBind, grpcBind strin
 		"TLCP_SERVER_CRL_FILE":              prefix + "/server-ca.crl",
 		"TLCP_CLIENT_CRL_FILE":              prefix + "/client-ca.crl",
 		"TLCP_CRL_BUNDLE_FILE":              prefix + "/crl-bundle.pem",
+		"TLCP_PROOF_KEY_DESCRIPTOR_FILE":    prefix + "/proof-server.pub",
 		"TLCP_SIGNING_KEY_REFERENCE":        prefix + "/server-signing.key",
 		"TLCP_SIGNING_PUBLIC_KEY_SHA256":    generation.signingPublicKeySHA256,
 		"TLCP_ENCRYPTION_KEY_REFERENCE":     prefix + "/server-encryption.key",
 		"TLCP_ENCRYPTION_PUBLIC_KEY_SHA256": generation.encryptionPublicKeySHA256,
 		"TLCP_GATEWAY_HTTP_BIND":            "0.0.0.0:" + httpBind,
 		"TLCP_GATEWAY_GRPC_BIND":            "0.0.0.0:" + grpcBind,
+	} {
+		environment[name] = value
 	}
 	return environment
+}
+
+func fixtureForGeneration(
+	fixture certificateFixture,
+	generation serverGeneration,
+) certificateFixture {
+	result := fixture
+	prefix := filepath.Join(fixture.dir, generation.name)
+	result.clientSigningCert = filepath.Join(prefix, "client-signing.pem")
+	result.clientSigningKey = filepath.Join(prefix, "client-signing.key")
+	result.clientEncryptionCert = filepath.Join(prefix, "client-encryption.pem")
+	result.clientEncryptionKey = filepath.Join(prefix, "client-encryption.key")
+	result.serverCA = filepath.Join(prefix, "server-ca.pem")
+	return result
 }
 
 func writeGenerationProfile(
@@ -1428,6 +1689,7 @@ func writeGenerationProfile(
 		prefix + "/client-ca.crl",
 	}
 	profile.Revocation.GatewayCRLBundleFile = prefix + "/crl-bundle.pem"
+	profile.ProofKeyDescriptorFiles = []string{prefix + "/proof-server.pub"}
 	profile.Network.GatewayHTTPBind = "0.0.0.0:" + httpBind
 	profile.Network.GatewayGRPCBind = "0.0.0.0:" + grpcBind
 	data, err := json.MarshalIndent(profile, "", "  ")
@@ -1442,7 +1704,25 @@ func writeGenerationProfile(
 
 func prepareRuntimeInContainer(t *testing.T, container string) {
 	t.Helper()
-	runDocker(t, prepareRuntimeCommand(container)...)
+	deadline := time.Now().Add(5 * time.Second)
+	var output []byte
+	var err error
+	for {
+		output, err = exec.Command("docker", prepareRuntimeCommand(container)...).CombinedOutput()
+		if err == nil {
+			return
+		}
+		if !strings.Contains(string(output), "invalid argument") ||
+			time.Now().After(deadline) {
+			t.Fatalf(
+				"docker %s: %v\n%s",
+				strings.Join(prepareRuntimeCommand(container), " "),
+				err,
+				output,
+			)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
 }
 
 func prepareRuntimeCommand(container string) []string {
@@ -1454,7 +1734,7 @@ func prepareRuntimeCommand(container string) []string {
 	}
 }
 
-func runtimeFileDigests(t *testing.T, container string) string {
+func runtimeConfigurationDigest(t *testing.T, container string) string {
 	t.Helper()
 	return dockerOutput(
 		t,
@@ -1462,8 +1742,63 @@ func runtimeFileDigests(t *testing.T, container string) string {
 		container,
 		"sha256sum",
 		"/run/tlcp-gateway/nginx.conf",
-		"/run/tlcp-gateway/runtime-manifest.json",
 	)
+}
+
+func testFileDigest(t *testing.T, path string) string {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256(data)
+	return hex.EncodeToString(digest[:])
+}
+
+func rewriteGenerationGRPCUpstream(t *testing.T, path, upstream string) {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var profile tlcpprofile.Profile
+	if err := json.Unmarshal(data, &profile); err != nil {
+		t.Fatal(err)
+	}
+	profile.Network.TrustDBGRPCUpstream = upstream
+	data, err = json.MarshalIndent(profile, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	replaceTestFile(t, path, append(data, '\n'))
+}
+
+func replaceTestFile(t *testing.T, path string, data []byte) {
+	t.Helper()
+	file, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	temporary := file.Name()
+	defer os.Remove(temporary)
+	if err := file.Chmod(0o644); err != nil {
+		_ = file.Close()
+		t.Fatal(err)
+	}
+	if _, err := file.Write(data); err != nil {
+		_ = file.Close()
+		t.Fatal(err)
+	}
+	if err := file.Sync(); err != nil {
+		_ = file.Close()
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(temporary, path); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func copyTestFile(t *testing.T, source, destination string) {

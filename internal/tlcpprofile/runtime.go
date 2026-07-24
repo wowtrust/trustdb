@@ -186,6 +186,7 @@ func RenderNginxConfiguration(profile Profile) []byte {
 	builder.WriteString("    client_header_timeout 10s;\n")
 	builder.WriteString("    client_body_timeout 30s;\n")
 	builder.WriteString("    client_max_body_size 16m;\n")
+	builder.WriteString("    client_body_temp_path /var/cache/tlcp-gateway/client-body;\n")
 	builder.WriteString("    keepalive_timeout 15s;\n")
 	builder.WriteString("    keepalive_requests 100;\n")
 	builder.WriteString("    send_timeout 30s;\n")

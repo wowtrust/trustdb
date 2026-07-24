@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -48,6 +49,19 @@ func run() error {
 	}
 	mux.HandleFunc("/health", healthHandler)
 	mux.HandleFunc("/healthz", healthHandler)
+	mux.HandleFunc("/echo-size", func(writer http.ResponseWriter, request *http.Request) {
+		if request.Method != http.MethodPost {
+			http.Error(writer, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		size, err := io.Copy(io.Discard, request.Body)
+		if err != nil {
+			http.Error(writer, "read body", http.StatusBadRequest)
+			return
+		}
+		writer.Header().Set("Content-Type", "text/plain")
+		_, _ = fmt.Fprintf(writer, "%d", size)
+	})
 	httpServer := &http.Server{
 		Handler:           mux,
 		ReadHeaderTimeout: 2 * time.Second,

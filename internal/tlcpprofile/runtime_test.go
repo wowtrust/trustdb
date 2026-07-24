@@ -40,6 +40,7 @@ func TestPrepareAndVerifyRuntimeBindsProfileTrustAndConfiguration(t *testing.T) 
 	for _, required := range []string{
 		"client_header_timeout 10s;",
 		"client_max_body_size 16m;",
+		"client_body_temp_path /var/cache/tlcp-gateway/client-body;",
 		"http2_max_concurrent_streams 64;",
 		"limit_conn tlcp_clients 32;",
 		"proxy_connect_timeout 5s;",
