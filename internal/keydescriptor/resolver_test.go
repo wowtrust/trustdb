@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/wowtrust/trustdb/internal/cryptosuite"
+	"github.com/wowtrust/trustdb/internal/keyenvelope"
 	"github.com/wowtrust/trustdb/internal/model"
 	"github.com/wowtrust/trustdb/internal/trustcrypto"
 )
@@ -46,6 +47,50 @@ func TestSoftwareResolverLoadsDescriptorRelativeMaterial(t *testing.T) {
 	}
 	if !ed25519.Verify(publicKey, message, signature.Signature) {
 		t.Fatal("resolved signer produced invalid signature")
+	}
+}
+
+func TestSoftwareResolverOpensAuthenticatedEnvelope(t *testing.T) {
+	t.Parallel()
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	descriptor := softwareDescriptor(publicKey, "client.material")
+	descriptor.Software.Protection = SoftwareProtectionSM4Envelope
+	provider := keyenvelope.NewPassphraseKEKProvider(func(ctx context.Context) ([]byte, error) {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		return []byte("correct horse battery staple"), nil
+	})
+	encrypted, err := keyenvelope.Seal(context.Background(), softwareEnvelopeMetadata(descriptor), privateKey, provider)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := keyenvelope.WriteFile(filepath.Join(dir, descriptor.Software.MaterialPath), encrypted); err != nil {
+		t.Fatal(err)
+	}
+	software, err := NewSoftwareProvider(provider)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolver, err := NewResolver(software)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signer, err := resolver.ResolveSigner(context.Background(), descriptor, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	message := []byte("authenticated envelope signer")
+	signature, err := signer.Sign(context.Background(), message)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ed25519.Verify(publicKey, message, signature.Signature) {
+		t.Fatal("encrypted software signer produced invalid signature")
 	}
 }
 

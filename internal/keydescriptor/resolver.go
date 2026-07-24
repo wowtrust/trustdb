@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/wowtrust/trustdb/internal/cryptosuite"
+	"github.com/wowtrust/trustdb/internal/keyenvelope"
 	"github.com/wowtrust/trustdb/internal/trustcrypto"
 )
 
@@ -60,7 +61,13 @@ func NewResolver(providers ...SignerProvider) (*Resolver, error) {
 }
 
 func NewDefaultResolver() *Resolver {
-	resolver, err := NewResolver(SoftwareProvider{})
+	software, err := NewSoftwareProvider(keyenvelope.NewPassphraseKEKProvider(
+		keyenvelope.EnvPassphraseSource(keyenvelope.DefaultPassphraseEnv),
+	))
+	if err != nil {
+		panic(err)
+	}
+	resolver, err := NewResolver(software)
 	if err != nil {
 		panic(err)
 	}
@@ -227,14 +234,30 @@ func isSignerProviderName(name string) bool {
 }
 
 // SoftwareProvider resolves development/reference software keys whose private
-// material lives in a separate, owner-readable file. SM4 envelope opening is
-// deliberately implemented by #451; recognizing its descriptor here does not
-// permit a plaintext fallback.
-type SoftwareProvider struct{}
+// material lives in a separate, owner-readable file. Encrypted material is
+// opened only through the exact KEK provider named by its canonical envelope;
+// there is no plaintext or provider fallback.
+type SoftwareProvider struct {
+	kekProviders map[string]keyenvelope.KEKProvider
+}
+
+func NewSoftwareProvider(providers ...keyenvelope.KEKProvider) (SoftwareProvider, error) {
+	software := SoftwareProvider{kekProviders: make(map[string]keyenvelope.KEKProvider, len(providers))}
+	for _, provider := range providers {
+		if provider == nil || strings.TrimSpace(provider.Name()) == "" {
+			return SoftwareProvider{}, fmt.Errorf("%w: invalid KEK provider", ErrInvalidResolver)
+		}
+		if _, exists := software.kekProviders[provider.Name()]; exists {
+			return SoftwareProvider{}, fmt.Errorf("%w: duplicate KEK provider", ErrInvalidResolver)
+		}
+		software.kekProviders[provider.Name()] = provider
+	}
+	return software, nil
+}
 
 func (SoftwareProvider) Name() string { return ProviderSoftware }
 
-func (SoftwareProvider) ResolveSigner(ctx context.Context, descriptor Descriptor, materialBaseDir string) (trustcrypto.Signer, error) {
+func (p SoftwareProvider) ResolveSigner(ctx context.Context, descriptor Descriptor, materialBaseDir string) (trustcrypto.Signer, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -244,14 +267,28 @@ func (SoftwareProvider) ResolveSigner(ctx context.Context, descriptor Descriptor
 	if descriptor.Provider != ProviderSoftware || descriptor.Software == nil {
 		return nil, invalid("software provider requires software reference")
 	}
-	if descriptor.Software.Protection != SoftwareProtectionPlaintextDev {
-		return nil, fmt.Errorf("%w: %q", ErrUnsupportedProtection, descriptor.Software.Protection)
-	}
 	path, err := secureMaterialPath(materialBaseDir, descriptor.Software.MaterialPath)
 	if err != nil {
 		return nil, err
 	}
-	material, err := readSoftwareMaterial(path)
+	var material []byte
+	switch descriptor.Software.Protection {
+	case SoftwareProtectionPlaintextDev:
+		material, err = readSoftwareMaterial(path)
+	case SoftwareProtectionSM4Envelope:
+		encoded, readErr := keyenvelope.ReadFile(path)
+		if readErr != nil {
+			return nil, readErr
+		}
+		defer clear(encoded)
+		providers := make([]keyenvelope.KEKProvider, 0, len(p.kekProviders))
+		for _, provider := range p.kekProviders {
+			providers = append(providers, provider)
+		}
+		material, err = keyenvelope.Open(ctx, encoded, softwareEnvelopeMetadata(descriptor), providers...)
+	default:
+		return nil, fmt.Errorf("%w: %q", ErrUnsupportedProtection, descriptor.Software.Protection)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -263,6 +300,44 @@ func (SoftwareProvider) ResolveSigner(ctx context.Context, descriptor Descriptor
 		return trustcrypto.NewSM2Signer(descriptor.KeyID, material)
 	default:
 		return nil, fmt.Errorf("%w: suite %s", ErrUnsupportedProvider, descriptor.CryptoSuite)
+	}
+}
+
+// RewrapSoftwareEnvelopeFile rotates only the KEK operation for an encrypted
+// software key. The descriptor, private key, public identity, and encrypted
+// content remain unchanged; ReplaceFile provides the durable atomic boundary.
+func RewrapSoftwareEnvelopeFile(ctx context.Context, descriptorPath string, oldProvider, newProvider keyenvelope.KEKProvider) error {
+	descriptor, err := ReadFile(descriptorPath)
+	if err != nil {
+		return err
+	}
+	if descriptor.Kind != KindSigner || descriptor.Provider != ProviderSoftware || descriptor.Software == nil ||
+		descriptor.Software.Protection != SoftwareProtectionSM4Envelope {
+		return fmt.Errorf("%w: descriptor is not an encrypted software signer", ErrUnsupportedProtection)
+	}
+	path, err := secureMaterialPath(filepath.Dir(descriptorPath), descriptor.Software.MaterialPath)
+	if err != nil {
+		return err
+	}
+	data, err := keyenvelope.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	defer clear(data)
+	rotated, err := keyenvelope.Rewrap(ctx, data, softwareEnvelopeMetadata(descriptor), oldProvider, newProvider)
+	if err != nil {
+		return err
+	}
+	defer clear(rotated)
+	return keyenvelope.ReplaceFile(path, rotated)
+}
+
+func softwareEnvelopeMetadata(descriptor Descriptor) keyenvelope.Metadata {
+	return keyenvelope.Metadata{
+		CryptoSuite:        string(descriptor.CryptoSuite),
+		KeyID:              descriptor.KeyID,
+		KeyAlgorithm:       descriptor.Algorithm,
+		PrivateKeyEncoding: descriptor.Software.Encoding,
 	}
 }
 
