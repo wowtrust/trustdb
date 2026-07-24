@@ -155,9 +155,11 @@ RootHash, Signed STH digest, publisher, payload version, log index, and the
 successful transaction. Contract readback is an additional consistency check,
 not a substitute for the event and receipt evidence.
 
-Until #466 verifies transaction/receipt inclusion and #467 verifies PBFT
-finality from verifier-local trust roots, this proof remains
-`external_observation`. It cannot promote records to L5.
+#466 now verifies transaction and receipt inclusion as the independent
+`bcos_receipt_inclusion` stage documented in
+[ADR-0015](ADR-0015-FISCO-BCOS-OFFLINE-RECEIPT-INCLUSION.md). Until #467
+verifies PBFT finality from verifier-local trust roots, the proof remains
+`external_observation` and cannot promote records to L5.
 
 ## Canonical encodings
 
