@@ -24,13 +24,14 @@ Validate every deployment profile before starting or rotating the gateway:
 
 ```sh
 go run ./cmd/trustdb-tlcp-profile validate \
-  --profile /etc/trustdb/tlcp/profile.json \
-  --forbid-key-ref /etc/trustdb/keys/server.json \
-  --forbid-public-key-sha256 "$TRUSTDB_PROOF_KEY_SHA256"
+  --profile /etc/trustdb/tlcp/profile.json
 ```
 
-The two `--forbid-*` checks make accidental reuse of a TrustDB proof-signing
-key fail closed. Repeat them for every active proof-signing key.
+Every production profile must contain the exact reference and canonical public
+key SHA-256 of every active TrustDB proof signer in `proof_signing_keys`.
+Validation fails when this inventory is empty or overlaps either gateway key.
+The optional `--forbid-*` flags add rollout-time identities; they do not replace
+the mandatory production inventory.
 
 ## Deployment boundary
 
@@ -46,7 +47,9 @@ TLCP client ── SM2/SM3/SM4 mTLS ──> TLCP gateway
 
 Only the gateway ports are published. Bind TrustDB HTTP and gRPC to
 `127.0.0.1`; do not publish ports `8080` or `9090`, use host networking, or
-attach a debug container to the namespace. The reference container runs as
+attach a debug container to the namespace. During rotation, exactly one
+short-lived `tlcp-gateway-candidate` may join on the canary ports and must be
+removed after promotion or failure. The reference container runs as
 UID/GID `10001`, drops every Linux capability, uses a read-only root
 filesystem, and needs writable tmpfs mounts only for:
 
@@ -60,26 +63,17 @@ TrustDB must not receive either gateway private-key mount.
 
 | Environment variable | Meaning |
 | --- | --- |
-| `TLCP_ENVIRONMENT` | `production` or `test`; software key files are test-only. |
-| `TLCP_SERVER_NAME` | Exact server DNS name present in both certificate SAN sets. |
-| `TLCP_SERVER_SIGNING_CHAIN_FILE` | Leaf-first SM2/SM3 signing chain. |
-| `TLCP_SERVER_ENCRYPTION_CHAIN_FILE` | Leaf-first SM2/SM3 encryption chain. |
-| `TLCP_CLIENT_CA_FILE` | Client trust anchors. |
-| `TLCP_CRL_BUNDLE_FILE` | Current CRL for every required issuer. |
-| `TLCP_SIGNING_KEY_PROVIDER` | `engine`, `pkcs11`, or `sdf` in production; `file` in tests. |
-| `TLCP_SIGNING_KEY_REFERENCE` | Opaque `engine:<id>:<key-id>` production reference. |
-| `TLCP_SIGNING_PUBLIC_KEY_SHA256` | Canonical DER public-key SHA-256 matching the signing certificate. |
-| `TLCP_ENCRYPTION_KEY_PROVIDER` | Provider for the distinct encryption key. |
-| `TLCP_ENCRYPTION_KEY_REFERENCE` | Distinct opaque production reference. |
-| `TLCP_ENCRYPTION_PUBLIC_KEY_SHA256` | Canonical DER public-key SHA-256 matching the encryption certificate. |
-| `TLCP_GATEWAY_HTTP_BIND` | External HTTP listener, normally `0.0.0.0:8443`. |
-| `TLCP_GATEWAY_GRPC_BIND` | External gRPC listener, normally `0.0.0.0:9443`. |
-| `TLCP_TRUSTDB_HTTP_UPSTREAM` | Loopback-only TrustDB HTTP listener. |
-| `TLCP_TRUSTDB_GRPC_UPSTREAM` | Loopback-only TrustDB gRPC listener. |
+| `TLCP_PROFILE_FILE` | Absolute path to the strict profile; all runtime paths, providers, binds, proof-key identities, and timeouts come from this file. |
+| `TLCP_EXPECTED_GATEWAY_IMAGE_DIGEST` | Exact deployed OCI manifest digest; must equal the profile. |
+| `TLCP_READINESS_SIGNING_CHAIN_FILE` | Dedicated probe client signing chain. |
+| `TLCP_READINESS_SIGNING_KEY_REFERENCE` | Dedicated probe signing key reference. |
+| `TLCP_READINESS_ENCRYPTION_CHAIN_FILE` | Dedicated probe client encryption chain. |
+| `TLCP_READINESS_ENCRYPTION_KEY_REFERENCE` | Dedicated probe encryption key reference. |
 
 Production private keys must be generated in, and remain inside, the selected
-HSM/SDF/PKCS#11 boundary. `file` is deliberately rejected when
-`TLCP_ENVIRONMENT=production`.
+HSM/SDF/PKCS#11 boundary. `file` gateway-key references are deliberately
+rejected when the profile uses `environment=production`. The readiness identity
+is a separate least-privilege client identity and is never a proof signer.
 
 Tengine uses one `ssl_ciphers` directive while constructing both its ordinary
 TLS and NTLS contexts. The generated configuration therefore contains an RSA
@@ -94,22 +88,51 @@ Do not use a listener-only TCP check. A gateway becomes ready only after a
 credentialed probe has completed all of the following within the profile's
 `startup` and `canary` bounds:
 
-1. validate the profile, certificate roles, chains, current validity, CRLs,
-   provider references, and public-key fingerprints;
+1. revalidate the profile, its exact image digest, generated configuration,
+   runtime-manifest digest bindings, certificate roles/chains/SAN/current
+   validity, CRL files and exact runtime bundle, provider references, mandatory
+   proof-key separation, and public-key fingerprints;
 2. complete TLCP mutual authentication and require `NTLSv1.1`;
 3. require `ECDHE-SM2-SM4-GCM-SM3`;
-4. call TrustDB's HTTP `/health` through the gateway;
+4. call TrustDB's HTTP `/healthz` through the gateway;
 5. call `grpc.health.v1.Health/Check` through HTTP/2 and require `SERVING`.
 
 Failure of any step keeps the deployment unready. The probe credential is a
 dedicated least-privilege client dual certificate; it is not a TrustDB
-proof-signing key.
+proof-signing key. The image declares
+`/usr/local/bin/trustdb-tlcp-readiness` as its Docker health check. Configure
+the same executable as the Kubernetes `readinessProbe.exec` command because
+Kubernetes does not consume Docker image health checks.
+
+Startup writes `/run/tlcp-gateway/runtime-manifest.json` and
+`/run/tlcp-gateway/nginx.conf` with mode `0600`. The runtime manifest contains
+only profile hashes, public fingerprints, expiry bounds, and build identity; it
+never contains private material.
+
+## Runtime resource bounds
+
+The generated gateway configuration fixes the following public-edge limits:
+
+- 10-second header and 30-second body/send timeouts;
+- 5-second upstream connect and 30-second HTTP/gRPC upstream timeouts;
+- 16 MiB maximum request body, matching TrustDB's batch transport bound;
+- 15-second keepalive with at most 100 requests;
+- at most 64 concurrent HTTP/2 streams and 32 connections per client address;
+- 2,048 connections per worker and a 16,384 descriptor ceiling.
+
+Set container CPU, memory, PID, and file-descriptor limits explicitly. Start
+with `--cpus=2 --memory=1g --pids-limit=256 --ulimit nofile=16384:16384`, then
+qualify different values with the concurrent handshake, HTTP/gRPC, slow-header,
+and sustained-load gates for the target machine. Put a connection-aware L4
+load balancer in front of an Internet-facing listener; per-address limits do
+not stop a distributed handshake flood.
 
 ## Certificate and CRL rotation
 
-Treat signing certificate/key, encryption certificate/key, CA bundles, and
-CRLs as one immutable generation. Never replace these files individually in
-the active directory.
+Treat signing certificate/key, encryption certificate/key, server/client CA
+files, every individually validated CRL, and the exact runtime CRL bundle as
+one immutable generation. Never replace these files individually in the active
+directory.
 
 1. Enroll distinct non-exportable signing and encryption keys and issue both
    certificates with the same subject and SAN identity.
@@ -120,15 +143,22 @@ the active directory.
    probes. The active gateway continues serving the previous generation.
 5. Atomically replace the `active` relative symlink with the candidate
    generation using a sibling link plus `rename(2)`.
-6. send `SIGHUP` to the Tengine master and require the new server public-key
+6. run `/usr/local/bin/tlcp-gateway-prepare-runtime` inside the active
+   container; it stages the new runtime files, revalidates all public inputs,
+   runs Tengine's full configuration/private-key check, and promotes the files
+   only after that check succeeds;
+7. send `SIGHUP` to the Tengine master and require the new server public-key
    fingerprint to appear within the profile's `reload` timeout;
-7. repeat both live probes through the production ports, then retire the
+8. repeat both live probes through the production ports, then retire the
    candidate and retain the previous generation for bounded rollback.
 
 If validation or a candidate canary fails, do not change `active`. If reload or
-post-switch canaries fail, atomically restore the previous link and reload it
-before declaring the incident contained. Never delete the previous generation
-until the rollback window and active-connection lifetime have elapsed.
+post-switch canaries fail, atomically restore the previous link, regenerate the
+previous runtime manifest/configuration with
+`tlcp-gateway-prepare-runtime`, and reload it before declaring the incident
+contained. A validation or Tengine configuration failure does not replace
+either active runtime file. Never delete the previous generation until the
+rollback window and active-connection lifetime have elapsed.
 
 For emergency client revocation, build and sign a complete replacement CRL
 bundle, stage it in a new generation, and follow the same process. A revoked
@@ -160,7 +190,9 @@ go test -count=1 -mod=readonly -tags="integration tlcp" \
 The test executes real HTTP and HTTP/2 gRPC through Tengine/Tongsuo and covers
 missing client credentials, wrong CA, wrong cipher, standard TLS, mismatched or
 missing encryption material, expiry, CRL revocation, failed candidate
-retention, dual canaries, atomic generation switch, and bounded reload.
+retention, dual canaries, atomic certificate/CA/CRL generation switch,
+post-switch rollback, credentialed readiness, concurrent HTTP/gRPC, slow-header
+termination, and bounded reload.
 Windows and macOS remain supported developer platforms for the profile
 validator and test compilation; the production gateway runtime is Linux.
 

@@ -8,6 +8,9 @@ All source archives, source licenses, container inputs, Debian snapshot
 packages, build arguments, and the Syft scanner are pinned in `baseline.json`.
 The build uses `SOURCE_DATE_EPOCH`, rewrites OCI layer timestamps, disables
 embedded provenance attestations, and compares two complete OCI archives.
+Both passes use `--no-cache`, so the second pass recompiles Tengine, Tongsuo,
+and the embedded Go profile/readiness tools instead of replaying the first
+pass's cached layers.
 
 Build and independently verify one architecture:
 
@@ -26,6 +29,8 @@ The build fails unless both rebuilds are byte-identical and the loaded image:
 
 - runs as UID/GID `10001`;
 - contains the exact Tengine and Tongsuo binaries and source licenses;
+- contains the pinned strict profile validator and credentialed readiness
+  executable;
 - exposes only a writable runtime directory, not a writable configuration
   directory; and
 - refuses to start without the complete validated gateway environment.

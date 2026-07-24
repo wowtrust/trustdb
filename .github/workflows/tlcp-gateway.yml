@@ -6,11 +6,13 @@ on:
       - ".github/workflows/tlcp-gateway.yml"
       - "cmd/trustdb-tlcp-build-record/**"
       - "cmd/trustdb-tlcp-profile/**"
+      - "cmd/trustdb-tlcp-readiness/**"
       - "docs/integrations/TLCP_GATEWAY.md"
       - "formats/TLCP_GATEWAY_PROFILE_V1.md"
       - "internal/tlcpbuild/**"
       - "internal/tlcpe2e/**"
       - "internal/tlcpprofile/**"
+      - "internal/tlcpready/**"
       - "packaging/tlcp-gateway/**"
       - "test/vectors/tlcp-gateway-profile-v1.json"
       - "go.mod"
@@ -22,11 +24,13 @@ on:
       - ".github/workflows/tlcp-gateway.yml"
       - "cmd/trustdb-tlcp-build-record/**"
       - "cmd/trustdb-tlcp-profile/**"
+      - "cmd/trustdb-tlcp-readiness/**"
       - "docs/integrations/TLCP_GATEWAY.md"
       - "formats/TLCP_GATEWAY_PROFILE_V1.md"
       - "internal/tlcpbuild/**"
       - "internal/tlcpe2e/**"
       - "internal/tlcpprofile/**"
+      - "internal/tlcpready/**"
       - "packaging/tlcp-gateway/**"
       - "test/vectors/tlcp-gateway-profile-v1.json"
       - "go.mod"
@@ -69,11 +73,13 @@ jobs:
       - name: Test profile and build contracts
         run: |
           go test -count=1 -mod=readonly \
-            ./internal/tlcpprofile ./internal/tlcpbuild \
-            ./cmd/trustdb-tlcp-profile ./cmd/trustdb-tlcp-build-record
+            ./internal/tlcpprofile ./internal/tlcpready ./internal/tlcpbuild \
+            ./cmd/trustdb-tlcp-profile ./cmd/trustdb-tlcp-readiness \
+            ./cmd/trustdb-tlcp-build-record
           go vet \
-            ./internal/tlcpprofile ./internal/tlcpbuild \
-            ./cmd/trustdb-tlcp-profile ./cmd/trustdb-tlcp-build-record
+            ./internal/tlcpprofile ./internal/tlcpready ./internal/tlcpbuild \
+            ./cmd/trustdb-tlcp-profile ./cmd/trustdb-tlcp-readiness \
+            ./cmd/trustdb-tlcp-build-record
 
       - name: Build twice and verify OCI, SBOM, and build record
         id: build
@@ -141,9 +147,9 @@ jobs:
 
       - name: Test portable profile and build-record tools
         run: |
-          go test -count=1 -mod=readonly ./internal/tlcpprofile ./internal/tlcpbuild
-          go test -count=1 -mod=readonly ./cmd/trustdb-tlcp-profile ./cmd/trustdb-tlcp-build-record
-          go build -trimpath ./cmd/trustdb-tlcp-profile ./cmd/trustdb-tlcp-build-record
+          go test -count=1 -mod=readonly ./internal/tlcpprofile ./internal/tlcpready ./internal/tlcpbuild
+          go test -count=1 -mod=readonly ./cmd/trustdb-tlcp-profile ./cmd/trustdb-tlcp-readiness ./cmd/trustdb-tlcp-build-record
+          go build -trimpath ./cmd/trustdb-tlcp-profile ./cmd/trustdb-tlcp-readiness ./cmd/trustdb-tlcp-build-record
 
       - name: Compile TLCP integration harness
         run: go test -count=1 -mod=readonly -tags="integration tlcp" -run "^$" ./internal/tlcpe2e
