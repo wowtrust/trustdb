@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/wowtrust/trustdb/internal/anchor/fiscobcos"
 	"github.com/wowtrust/trustdb/internal/cryptosuite"
 	"github.com/wowtrust/trustdb/internal/globallog"
 	"github.com/wowtrust/trustdb/internal/model"
@@ -203,7 +204,7 @@ func TestBackupRoundTripPreservesAnchorScheduleAndIndependentResult(t *testing.T
 	if !ok {
 		t.Fatal("LocalStore does not implement STHAnchorResultWriter")
 	}
-	key := model.STHAnchorScheduleKey{NodeID: "node-1", LogID: "log-1", SinkName: "file"}
+	key := model.STHAnchorScheduleKey{NodeID: "node-1", LogID: "log-1", SinkName: fiscobcos.SinkName}
 	firstSTH := backupScheduleSTH(key, 1, 0x11)
 	if _, err := scheduler.UpsertSTHAnchorCandidate(ctx, model.STHAnchorCandidate{
 		Key: key, STH: firstSTH, ObservedAtUnixN: 100, DueAtUnixN: 100,
@@ -229,7 +230,59 @@ func TestBackupRoundTripPreservesAnchorScheduleAndIndependentResult(t *testing.T
 	if err != nil || !claimed {
 		t.Fatalf("ClaimSTHAnchorAttempt in-flight claimed=%v err=%v", claimed, err)
 	}
-	providerState := []byte("canonical-bcos-attempt-journal")
+	payload, err := fiscobcos.NewAnchorPayload(cryptosuite.INTLV1, inFlightSTH)
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonicalPayload, err := fiscobcos.MarshalPayload(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	callData, err := fiscobcos.PublishCallData(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	providerState, err := fiscobcos.MarshalAttemptJournal(fiscobcos.AttemptJournal{
+		SchemaVersion:   fiscobcos.SchemaAttemptJournal,
+		FormatVersion:   fiscobcos.AttemptJournalVersion,
+		Generation:      inFlightAttempt.Generation,
+		Revision:        1,
+		NodeID:          key.NodeID,
+		LogID:           key.LogID,
+		SinkName:        key.SinkName,
+		TreeSize:        inFlightSTH.TreeSize,
+		RootHash:        append([]byte(nil), inFlightSTH.RootHash...),
+		SignedSTHDigest: append([]byte(nil), payload.SignedSTHDigest...),
+		CryptoMode:      fiscobcos.CryptoModeStandard,
+		ChainID:         "chain0",
+		GroupID:         "group0",
+		Contract: fiscobcos.ContractBinding{
+			Address: repeatByte(0x41, 20), CodeHash: repeatByte(0x42, 32),
+			ProtocolVersion: "trustdb-anchor-v1",
+			EventSignature:  "AnchorPublished(bytes32)",
+		},
+		ChainContextID:   repeatByte(0x43, 32),
+		CanonicalPayload: canonicalPayload,
+		Attempts: []fiscobcos.JournalAttempt{{
+			Transaction: fiscobcos.SignedTransactionAttempt{
+				Ordinal:                 1,
+				RawCanonicalTransaction: []byte("exact-signed-bcos-transaction"),
+				ChainID:                 "chain0",
+				GroupID:                 "group0",
+				To:                      repeatByte(0x41, 20),
+				Input:                   callData,
+				Signature:               repeatByte(0x44, 65),
+				Sender:                  repeatByte(0x45, 20),
+				TransactionHash:         repeatByte(0x46, 32),
+				BlockLimit:              700,
+				PreparedAtUnixN:         1,
+			},
+			Outcome: fiscobcos.AttemptOutcomeSubmitUnknown,
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := scheduler.CompareAndSwapSTHAnchorProviderState(ctx, key, inFlightAttempt.Generation, "lease-2", 225, nil, providerState); err != nil {
 		t.Fatalf("CompareAndSwapSTHAnchorProviderState: %v", err)
 	}
@@ -285,6 +338,14 @@ func TestBackupRoundTripPreservesAnchorScheduleAndIndependentResult(t *testing.T
 	}
 	if schedule.InFlight == nil || schedule.InFlight.Target.TreeSize != 3 || schedule.InFlight.Attempts != 2 || schedule.InFlight.NextAttemptUnixN != 300 || schedule.InFlight.LastAttemptUnixN != 300 || schedule.InFlight.LastErrorMessage != "temporary outage" || !bytes.Equal(schedule.InFlight.ProviderState, providerState) {
 		t.Fatalf("restored in-flight = %+v", schedule.InFlight)
+	}
+	restoredJournal, err := fiscobcos.UnmarshalAttemptJournal(schedule.InFlight.ProviderState)
+	if err != nil {
+		t.Fatalf("decode restored BCOS attempt journal: %v", err)
+	}
+	if len(restoredJournal.Attempts) != 1 ||
+		!bytes.Equal(restoredJournal.Attempts[0].Transaction.RawCanonicalTransaction, []byte("exact-signed-bcos-transaction")) {
+		t.Fatalf("restored BCOS attempt bytes changed: %+v", restoredJournal.Attempts)
 	}
 	if schedule.InFlight.LeaseOwner != "" || schedule.InFlight.LeaseToken != "" || schedule.InFlight.LeaseUntilUnixN != 0 {
 		t.Fatalf("restored stale lease = %+v", schedule.InFlight)
