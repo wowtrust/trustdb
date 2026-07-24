@@ -189,6 +189,7 @@ jobs:
           $env:PATH = "$cache;$env:PATH"
           $env:CGO_ENABLED = "1"
           $env:CGO_LDFLAGS = "-L$cache"
+          $env:GOWORK = "off"
           go test -count=1 -mod=readonly ./...
           if ($LASTEXITCODE -ne 0) { throw "Windows Go SDK/C SDK link test failed" }
 
