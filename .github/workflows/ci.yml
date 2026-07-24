@@ -59,6 +59,42 @@ jobs:
             exit 1
           fi
 
+  cn-sm-interoperability:
+    name: CN_SM_V1 interoperability
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Reject unreviewed vector drift
+        run: go run -mod=readonly ./test/cnsmvectors/cmd/generate -check
+
+      - name: Run corpus and independent OpenSSL oracle
+        run: go test -count=1 -mod=readonly ./test/cnsmvectors
+
+      - name: Run server interoperability consumer
+        run: go test -count=1 -mod=readonly ./internal/app -run '^TestServerGenerationMatchesSharedCNSMInteropCorpus$'
+
+      - name: Run provider interoperability consumer
+        run: go test -count=1 -mod=readonly ./internal/trustcrypto -run '^TestProviderContractConsumesSharedCNSMInteropSignatures$'
+
+      - name: Run offline verifier interoperability consumer
+        run: go test -count=1 -mod=readonly ./internal/sproof -run '^TestOfflineVerifierConsumesSharedCNSMInteropProofWithoutExternalAccess$'
+
+      - name: Run Go SDK interoperability consumer
+        run: go test -count=1 -mod=readonly ./sdk -run '^TestGoSDKConsumesSharedCNSMInteropProof$'
+
+      - name: Run CLI interoperability consumer
+        run: go test -count=1 -mod=readonly ./cmd/trustdb -run '^TestCLIConsumesSharedCNSMInteropProofOffline$'
+
   backend:
     name: Backend unit tests
     runs-on: ubuntu-latest
