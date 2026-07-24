@@ -11,6 +11,7 @@ exe_suffix="${EXE_SUFFIX:-}"
 archive_kind="${ARCHIVE_KIND:-tar.gz}"
 package="trustdb-$VERSION-$TARGET_OS-$TARGET_ARCH"
 output="release-bin/trustdb$exe_suffix"
+pkcs11_output="release-bin/trustdb-signer-pkcs11$exe_suffix"
 root="release-stage/$package"
 
 actual_os="$(go env GOOS)"
@@ -31,6 +32,12 @@ grep -F "\"os\":\"$TARGET_OS\"" release-bin/version.json
 grep -F "\"arch\":\"$TARGET_ARCH\"" release-bin/version.json
 
 cp "$output" "$root/bin/"
+if [ "$TARGET_OS" = "linux" ] && [ "$CGO_ENABLED" = "1" ]; then
+  go build -trimpath -tags=pkcs11 \
+    -ldflags="-s -w" \
+    -o "$pkcs11_output" ./cmd/trustdb-signer-pkcs11
+  cp "$pkcs11_output" "$root/bin/"
+fi
 cp release-bin/version.json "$root/BUILD_INFO.json"
 cp -R release-admin/. "$root/admin/"
 cp configs/production.yaml "$root/config/production.yaml"

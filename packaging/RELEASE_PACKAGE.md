@@ -27,3 +27,11 @@ evaluation.
 Copy `config/production.yaml`, adjust paths and deployment settings, and set `keys.server_private` plus either `keys.client_public` or a key registry. To enable the bundled Admin Web, configure `admin.enabled`, credentials, a session secret of at least 32 bytes, and set `admin.web_dir` to this package's `admin` directory.
 
 TiKV remains compiled into every server/CLI package. Set `metastore: tikv` and provide `proofstore.tikv_pd_endpoints`, `proofstore.tikv_keyspace`, and `proofstore.tikv_namespace` when deploying against a TiKV cluster.
+
+Linux packages also contain `bin/trustdb-signer-pkcs11`, the isolated native
+PKCS#11 signer sidecar. It loads no module until explicitly configured and
+does not change the default software-signer path. Follow
+[`docs/integrations/PKCS11_SIGNER.md`](https://github.com/wowtrust/trustdb/blob/main/docs/integrations/PKCS11_SIGNER.md)
+for token preparation, owner-only PIN files, mechanism profiles, and hardware
+qualification. macOS and Windows packages do not currently bundle this
+optional native sidecar.

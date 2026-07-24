@@ -1,0 +1,163 @@
+name: PKCS11 Provider
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/pkcs11-provider.yml"
+      - "cmd/trustdb-signer-pkcs11/**"
+      - "internal/pkcs11signer/**"
+      - "internal/keydescriptor/**"
+      - "sdk/signerplugin/**"
+      - "go.mod"
+      - "go.sum"
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/pkcs11-provider.yml"
+      - "cmd/trustdb-signer-pkcs11/**"
+      - "internal/pkcs11signer/**"
+      - "internal/keydescriptor/**"
+      - "sdk/signerplugin/**"
+      - "go.mod"
+      - "go.sum"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pkcs11-provider-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux-package-and-softhsm:
+    name: Linux package and SoftHSM
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Install PKCS11 interoperability tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends file softhsm2 opensc
+
+      - name: Run portable and native contract tests
+        run: |
+          go test -count=1 ./internal/pkcs11signer ./cmd/trustdb-signer-pkcs11
+          go test -count=1 -tags=pkcs11 ./internal/pkcs11signer ./cmd/trustdb-signer-pkcs11
+          go test -race -count=1 ./internal/pkcs11signer ./cmd/trustdb-signer-pkcs11
+          go vet -tags=pkcs11 ./internal/pkcs11signer ./cmd/trustdb-signer-pkcs11
+
+      - name: Build linux amd64 sidecar
+        env:
+          CGO_ENABLED: "1"
+          GOOS: linux
+          GOARCH: amd64
+        run: |
+          mkdir -p "$RUNNER_TEMP/trustdb-pkcs11/bin"
+          go build -trimpath -tags=pkcs11 \
+            -o "$RUNNER_TEMP/trustdb-pkcs11/bin/trustdb-signer-pkcs11" \
+            ./cmd/trustdb-signer-pkcs11
+          file "$RUNNER_TEMP/trustdb-pkcs11/bin/trustdb-signer-pkcs11"
+          ldd "$RUNNER_TEMP/trustdb-pkcs11/bin/trustdb-signer-pkcs11"
+
+      - name: Verify release package includes sidecar
+        env:
+          VERSION: "0.0.0-pkcs11-smoke"
+          BUILD_DATE: "2026-07-24T00:00:00Z"
+          TARGET_OS: linux
+          TARGET_ARCH: amd64
+          CGO_ENABLED: "1"
+          ARCHIVE_KIND: tar.gz
+          GITHUB_SHA: "pkcs11-packaging-smoke"
+        run: |
+          mkdir -p release-admin
+          bash packaging/release/build-server.sh
+          tar -tzf release-output/trustdb-0.0.0-pkcs11-smoke-linux-amd64.tar.gz \
+            | grep -F "/bin/trustdb-signer-pkcs11"
+
+      - name: Provision isolated SoftHSM token
+        shell: bash
+        env:
+          TOKEN_PIN: "846295"
+          TOKEN_SO_PIN: "84629500"
+        run: |
+          set -euo pipefail
+          token_dir="$RUNNER_TEMP/trustdb-pkcs11/tokens"
+          pin_file="$RUNNER_TEMP/trustdb-pkcs11/token.pin"
+          config_file="$RUNNER_TEMP/trustdb-pkcs11/softhsm2.conf"
+          mkdir -p "$token_dir"
+          {
+            echo "directories.tokendir = $token_dir"
+            echo "objectstore.backend = file"
+            echo "log.level = ERROR"
+          } >"$config_file"
+          printf '%s\n' "$TOKEN_PIN" >"$pin_file"
+          chmod 600 "$pin_file"
+          export SOFTHSM2_CONF="$config_file"
+          softhsm2-util --init-token --free --label trustdb \
+            --so-pin "$TOKEN_SO_PIN" --pin "$TOKEN_PIN"
+          module_path="$(dpkg -L libsofthsm2 | grep '/libsofthsm2\\.so$' | head -n 1)"
+          test -n "$module_path"
+          pkcs11-tool --module "$module_path" --token-label trustdb \
+            --login --pin "$TOKEN_PIN" --keypairgen --key-type EC:edwards25519 \
+            --id 01 --label receipt-key --usage-sign
+          pkcs11-tool --module "$module_path" --token-label trustdb \
+            --list-mechanisms | grep -i EDDSA
+          {
+            echo "SOFTHSM2_CONF=$config_file"
+            echo "TRUSTDB_PKCS11_INTEGRATION_MODULE=$module_path"
+            echo "TRUSTDB_PKCS11_INTEGRATION_BINARY=$RUNNER_TEMP/trustdb-pkcs11/bin/trustdb-signer-pkcs11"
+            echo "TRUSTDB_PKCS11_INTEGRATION_KEY_URI=pkcs11:id=%01;object=receipt-key;token=trustdb;type=private"
+            echo "TRUSTDB_PKCS11_MODULE=$module_path"
+            echo "TRUSTDB_PKCS11_TOKEN_URI=pkcs11:token=trustdb"
+            echo "TRUSTDB_PKCS11_PIN_FILE=$pin_file"
+            echo "TRUSTDB_PKCS11_ALGORITHMS=INTL_V1"
+            echo "TRUSTDB_PKCS11_MAX_CONCURRENCY=8"
+          } >>"$GITHUB_ENV"
+
+      - name: Run supervised SoftHSM interoperability test
+        run: go test -count=1 -tags="pkcs11 pkcs11_integration" ./internal/pkcs11signer
+
+  portable-platforms:
+    name: Portable contract (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - macos-15
+          - windows-2025
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Test portable provider contract
+        run: go test -count=1 ./internal/pkcs11signer ./cmd/trustdb-signer-pkcs11
+
+      - name: Build non-native diagnostic stub
+        run: go build ./cmd/trustdb-signer-pkcs11
+
+      - name: Compile native adapter on macOS
+        if: runner.os == 'macOS'
+        env:
+          CGO_ENABLED: "1"
+        run: go test -count=1 -tags=pkcs11 ./internal/pkcs11signer ./cmd/trustdb-signer-pkcs11
