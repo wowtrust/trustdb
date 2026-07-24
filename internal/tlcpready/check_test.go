@@ -3,8 +3,12 @@ package tlcpready
 import (
 	"bytes"
 	"errors"
+	"io"
 	"strings"
 	"testing"
+
+	"golang.org/x/net/http2"
+	"golang.org/x/net/http2/hpack"
 )
 
 func TestLoopbackAddressPreservesOnlyTheValidatedPort(t *testing.T) {
@@ -125,5 +129,161 @@ func TestVerifyGRPCResponseRequiresServingAndExactTLCP(t *testing.T) {
 				t.Fatal("invalid readiness response was accepted")
 			}
 		})
+	}
+}
+
+func TestReadGRPCResponseAcceptsOnlyTheBoundedHealthExchange(t *testing.T) {
+	var wire bytes.Buffer
+	writer := http2.NewFramer(&wire, nil)
+	if err := writer.WriteSettings(); err != nil {
+		t.Fatal(err)
+	}
+	writeTestHeaders(t, writer, false, hpack.HeaderField{
+		Name: "content-type", Value: "application/grpc",
+	})
+	if err := writer.WriteData(
+		1,
+		false,
+		[]byte{0, 0, 0, 0, 2, 0x08, 0x01},
+	); err != nil {
+		t.Fatal(err)
+	}
+	writeTestHeaders(t, writer, true, hpack.HeaderField{
+		Name: "grpc-status", Value: "0",
+	})
+	diagnostics := newBoundedSynchronizedBuffer(maxReadinessOutputBytes)
+	_, _ = diagnostics.Write([]byte(
+		"Protocol version: NTLSv1.1\n" +
+			"Ciphersuite: ECDHE-SM2-SM4-GCM-SM3\n",
+	))
+	reader := http2.NewFramer(io.Discard, bytes.NewReader(wire.Bytes()))
+	reader.SetMaxReadFrameSize(maxGRPCFrameBytes)
+	if err := readGRPCResponse(reader, diagnostics); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestReadGRPCResponseRejectsUnboundedDataWithoutRetainingIt(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		chunks [][]byte
+	}{
+		{
+			name:   "single oversized frame",
+			chunks: [][]byte{bytes.Repeat([]byte{1}, maxGRPCResponseBytes+1)},
+		},
+		{
+			name: "continued response",
+			chunks: [][]byte{
+				bytes.Repeat([]byte{1}, maxGRPCResponseBytes),
+				{1},
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var wire bytes.Buffer
+			writer := http2.NewFramer(&wire, nil)
+			for _, chunk := range test.chunks {
+				if err := writer.WriteData(1, false, chunk); err != nil {
+					t.Fatal(err)
+				}
+			}
+			reader := http2.NewFramer(io.Discard, bytes.NewReader(wire.Bytes()))
+			reader.SetMaxReadFrameSize(maxGRPCFrameBytes)
+			err := readGRPCResponse(
+				reader,
+				newBoundedSynchronizedBuffer(maxReadinessOutputBytes),
+			)
+			if err == nil || !strings.Contains(err.Error(), "exceeds 7 bytes") {
+				t.Fatalf("readGRPCResponse() error = %v", err)
+			}
+		})
+	}
+}
+
+func TestReadGRPCResponseRejectsAHostileContinuousFrameStream(t *testing.T) {
+	var wire bytes.Buffer
+	writer := http2.NewFramer(&wire, nil)
+	for index := 0; index < maxGRPCFrameCount+1; index++ {
+		if err := writer.WritePing(false, [8]byte{byte(index)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	reader := http2.NewFramer(io.Discard, bytes.NewReader(wire.Bytes()))
+	reader.SetMaxReadFrameSize(maxGRPCFrameBytes)
+	err := readGRPCResponse(
+		reader,
+		newBoundedSynchronizedBuffer(maxReadinessOutputBytes),
+	)
+	if err == nil || !strings.Contains(err.Error(), "frame count exceeds") {
+		t.Fatalf("readGRPCResponse() error = %v", err)
+	}
+}
+
+func TestReadGRPCResponseRejectsOversizedHeaders(t *testing.T) {
+	var wire bytes.Buffer
+	writer := http2.NewFramer(&wire, nil)
+	var encoded bytes.Buffer
+	encoder := hpack.NewEncoder(&encoded)
+	if err := encoder.WriteField(hpack.HeaderField{
+		Name:  "hostile",
+		Value: strings.Repeat("x", maxGRPCHeaderBytes),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.WriteHeaders(http2.HeadersFrameParam{
+		StreamID:      1,
+		BlockFragment: encoded.Bytes(),
+		EndHeaders:    true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	reader := http2.NewFramer(io.Discard, bytes.NewReader(wire.Bytes()))
+	reader.SetMaxReadFrameSize(maxGRPCFrameBytes)
+	err := readGRPCResponse(
+		reader,
+		newBoundedSynchronizedBuffer(maxReadinessOutputBytes),
+	)
+	if err == nil || !strings.Contains(err.Error(), "header") {
+		t.Fatalf("readGRPCResponse() error = %v", err)
+	}
+}
+
+func TestBoundedDiagnosticsRejectsOpenSSLFloods(t *testing.T) {
+	diagnostics := newBoundedSynchronizedBuffer(4)
+	written, err := diagnostics.Write([]byte("overflow"))
+	if written != 4 || !errors.Is(err, errReadinessOutputLimit) {
+		t.Fatalf("Write() = (%d, %v), want (4, output limit)", written, err)
+	}
+	if !diagnostics.Exceeded() || len(diagnostics.Bytes()) != 4 {
+		t.Fatalf(
+			"bounded diagnostics = exceeded %v, bytes %d",
+			diagnostics.Exceeded(),
+			len(diagnostics.Bytes()),
+		)
+	}
+}
+
+func writeTestHeaders(
+	t *testing.T,
+	framer *http2.Framer,
+	endStream bool,
+	fields ...hpack.HeaderField,
+) {
+	t.Helper()
+	var block bytes.Buffer
+	encoder := hpack.NewEncoder(&block)
+	for _, field := range fields {
+		if err := encoder.WriteField(field); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := framer.WriteHeaders(http2.HeadersFrameParam{
+		StreamID:      1,
+		BlockFragment: block.Bytes(),
+		EndHeaders:    true,
+		EndStream:     endStream,
+	}); err != nil {
+		t.Fatal(err)
 	}
 }

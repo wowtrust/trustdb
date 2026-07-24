@@ -22,6 +22,10 @@ import (
 const (
 	maxReadinessOutputBytes = 64 << 10
 	maxHTTPStatusLineBytes  = 4096
+	maxGRPCFrameBytes       = 16 << 10
+	maxGRPCHeaderBytes      = 16 << 10
+	maxGRPCResponseBytes    = 7
+	maxGRPCFrameCount       = 128
 )
 
 var errReadinessOutputLimit = errors.New("readiness command output exceeds limit")
@@ -176,8 +180,8 @@ func checkGRPC(ctx context.Context, config Config) error {
 		config.OpenSSLPath,
 		opensslArgs(config, config.GRPCAddress, "h2")...,
 	)
-	var diagnostics synchronizedBuffer
-	command.Stderr = &diagnostics
+	diagnostics := newBoundedSynchronizedBuffer(maxReadinessOutputBytes)
+	command.Stderr = diagnostics
 	stdin, err := command.StdinPipe()
 	if err != nil {
 		return err
@@ -198,6 +202,7 @@ func checkGRPC(ctx context.Context, config Config) error {
 	}()
 
 	framer := http2.NewFramer(stdin, stdout)
+	framer.SetMaxReadFrameSize(maxGRPCFrameBytes)
 	if _, err := io.WriteString(stdin, http2.ClientPreface); err != nil {
 		return err
 	}
@@ -227,18 +232,51 @@ func checkGRPC(ctx context.Context, config Config) error {
 		return err
 	}
 
-	var response []byte
+	return readGRPCResponse(framer, diagnostics)
+}
+
+func readGRPCResponse(
+	framer *http2.Framer,
+	diagnostics *boundedSynchronizedBuffer,
+) error {
+	response := make([]byte, 0, maxGRPCResponseBytes)
 	grpcStatus := ""
+	headerBytes := 0
 	decoder := hpack.NewDecoder(4096, func(field hpack.HeaderField) {
+		headerBytes += len(field.Name) + len(field.Value)
 		if field.Name == "grpc-status" {
 			grpcStatus = field.Value
 		}
 	})
+	decoder.SetMaxStringLength(maxGRPCHeaderBytes)
+	var (
+		headerBlockBytes int
+		headerStreamID   uint32
+		frameCount       int
+	)
 	for {
+		if diagnostics.Exceeded() {
+			return fmt.Errorf(
+				"%w (%d bytes)",
+				errReadinessOutputLimit,
+				maxReadinessOutputBytes,
+			)
+		}
+		if frameCount >= maxGRPCFrameCount {
+			return fmt.Errorf(
+				"gRPC readiness frame count exceeds %d",
+				maxGRPCFrameCount,
+			)
+		}
 		frame, err := framer.ReadFrame()
 		if err != nil {
-			return fmt.Errorf("read HTTP/2 frame: %w: %s", err, diagnostics.String())
+			return fmt.Errorf(
+				"read HTTP/2 frame: %w: %s",
+				err,
+				boundedDiagnostics(diagnostics.Bytes()),
+			)
 		}
+		frameCount++
 		switch value := frame.(type) {
 		case *http2.SettingsFrame:
 			if !value.IsAck() {
@@ -247,16 +285,52 @@ func checkGRPC(ctx context.Context, config Config) error {
 				}
 			}
 		case *http2.HeadersFrame:
-			if _, err := decoder.Write(value.HeaderBlockFragment()); err != nil {
+			if headerStreamID != 0 {
+				return errors.New("received HEADERS before the previous header block ended")
+			}
+			headerStreamID = value.StreamID
+			if err := decodeGRPCHeaderFragment(
+				decoder,
+				value.HeaderBlockFragment(),
+				&headerBlockBytes,
+				&headerBytes,
+			); err != nil {
 				return err
 			}
+			if value.HeadersEnded() {
+				headerStreamID = 0
+			}
 			if value.StreamEnded() {
+				if headerStreamID != 0 {
+					return errors.New("gRPC trailers ended the stream before END_HEADERS")
+				}
 				if grpcStatus != "0" {
 					return fmt.Errorf("gRPC health status is %q", grpcStatus)
 				}
-				return verifyGRPCResponse(response, waitForDiagnostics(&diagnostics))
+				return verifyGRPCResponse(response, waitForDiagnostics(diagnostics))
+			}
+		case *http2.ContinuationFrame:
+			if headerStreamID == 0 || value.StreamID != headerStreamID {
+				return errors.New("received an unexpected HTTP/2 CONTINUATION frame")
+			}
+			if err := decodeGRPCHeaderFragment(
+				decoder,
+				value.HeaderBlockFragment(),
+				&headerBlockBytes,
+				&headerBytes,
+			); err != nil {
+				return err
+			}
+			if value.HeadersEnded() {
+				headerStreamID = 0
 			}
 		case *http2.DataFrame:
+			if len(value.Data()) > maxGRPCResponseBytes-len(response) {
+				return fmt.Errorf(
+					"gRPC health response exceeds %d bytes",
+					maxGRPCResponseBytes,
+				)
+			}
 			response = append(response, value.Data()...)
 		case *http2.GoAwayFrame:
 			return fmt.Errorf("gateway returned GOAWAY %s", value.ErrCode)
@@ -264,11 +338,38 @@ func checkGRPC(ctx context.Context, config Config) error {
 	}
 }
 
-func waitForDiagnostics(diagnostics *synchronizedBuffer) string {
+func decodeGRPCHeaderFragment(
+	decoder *hpack.Decoder,
+	fragment []byte,
+	blockBytes *int,
+	decodedBytes *int,
+) error {
+	if len(fragment) > maxGRPCHeaderBytes-*blockBytes {
+		return fmt.Errorf(
+			"gRPC header block exceeds %d bytes",
+			maxGRPCHeaderBytes,
+		)
+	}
+	*blockBytes += len(fragment)
+	previousDecoded := *decodedBytes
+	if _, err := decoder.Write(fragment); err != nil {
+		return fmt.Errorf("decode gRPC header block: %w", err)
+	}
+	if *decodedBytes < previousDecoded ||
+		*decodedBytes > maxGRPCHeaderBytes {
+		return fmt.Errorf(
+			"decoded gRPC headers exceed %d bytes",
+			maxGRPCHeaderBytes,
+		)
+	}
+	return nil
+}
+
+func waitForDiagnostics(diagnostics *boundedSynchronizedBuffer) string {
 	const expected = "Protocol version: NTLSv1.1"
 	deadline := time.Now().Add(500 * time.Millisecond)
 	for {
-		value := diagnostics.String()
+		value := string(diagnostics.Bytes())
 		if strings.Contains(value, expected) || time.Now().After(deadline) {
 			return value
 		}
@@ -282,7 +383,7 @@ func verifyGRPCResponse(response []byte, diagnostics string) error {
 		binary.BigEndian.Uint32(response[1:5]) != 2 ||
 		response[5] != 0x08 ||
 		response[6] != 0x01 {
-		return fmt.Errorf("unexpected gRPC health response %x", response)
+		return errors.New("unexpected gRPC health response")
 	}
 	return requireTLCPDiagnostics(diagnostics)
 }
@@ -305,11 +406,6 @@ func boundedDiagnostics(value []byte) string {
 		value = value[len(value)-maximum:]
 	}
 	return string(value)
-}
-
-type synchronizedBuffer struct {
-	mutex  sync.Mutex
-	buffer bytes.Buffer
 }
 
 type boundedCommandOutput struct {
@@ -356,14 +452,41 @@ func (output *boundedCommandOutput) snapshot() (stdout, stderr []byte, exceeded 
 		output.exceeded
 }
 
-func (buffer *synchronizedBuffer) Write(data []byte) (int, error) {
+type boundedSynchronizedBuffer struct {
+	mutex    sync.Mutex
+	buffer   bytes.Buffer
+	limit    int
+	exceeded bool
+}
+
+func newBoundedSynchronizedBuffer(limit int) *boundedSynchronizedBuffer {
+	return &boundedSynchronizedBuffer{limit: limit}
+}
+
+func (buffer *boundedSynchronizedBuffer) Write(data []byte) (int, error) {
 	buffer.mutex.Lock()
 	defer buffer.mutex.Unlock()
+	remaining := buffer.limit - buffer.buffer.Len()
+	if remaining <= 0 {
+		buffer.exceeded = true
+		return 0, errReadinessOutputLimit
+	}
+	if len(data) > remaining {
+		_, _ = buffer.buffer.Write(data[:remaining])
+		buffer.exceeded = true
+		return remaining, errReadinessOutputLimit
+	}
 	return buffer.buffer.Write(data)
 }
 
-func (buffer *synchronizedBuffer) String() string {
+func (buffer *boundedSynchronizedBuffer) Bytes() []byte {
 	buffer.mutex.Lock()
 	defer buffer.mutex.Unlock()
-	return buffer.buffer.String()
+	return append([]byte(nil), buffer.buffer.Bytes()...)
+}
+
+func (buffer *boundedSynchronizedBuffer) Exceeded() bool {
+	buffer.mutex.Lock()
+	defer buffer.mutex.Unlock()
+	return buffer.exceeded
 }
