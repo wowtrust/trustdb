@@ -15,7 +15,7 @@ const (
 	MaxAttemptJournalBytes = 16 << 20
 	MaxReceiptAggregate    = 4 << 20
 
-	maxJournalArrayElements     = 1024
+	maxJournalArrayElements     = MaxNativeEvidenceItems
 	maxJournalMapPairs          = 64
 	maxReceiptAggregate         = MaxReceiptAggregate
 	maxCanonicalLogs            = MaxCanonicalLogs

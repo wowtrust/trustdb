@@ -116,6 +116,42 @@ func TestAttemptJournalPreservesSuccessfulReceiptMaterial(t *testing.T) {
 	}
 }
 
+func TestAttemptJournalRoundTripsValidNativeCollectionAboveLegacyDecoderLimit(t *testing.T) {
+	t.Parallel()
+
+	_, _, journal := testAttemptJournal(t)
+	journal.Revision++
+	journal.Attempts[0].Outcome = AttemptOutcomeReceiptSuccess
+	receipt := testAttemptReceipt(journal.Attempts[0].Transaction.TransactionHash, ReceiptStatusOK)
+	receipt.Fields.Logs[0].Topics = make([][]byte, 1025)
+	for index := range receipt.Fields.Logs[0].Topics {
+		receipt.Fields.Logs[0].Topics[index] = sequenceBytes(byte(index), 32)
+	}
+	raw, logs, err := MarshalNativeReceiptPreimage(receipt.Fields)
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt.RawCanonicalReceipt = raw
+	receipt.CanonicalLogs = logs
+	receipt.ReceiptHash, err = HashNativeEvidence(HashKeccak256, raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	journal.Attempts[0].Receipt = receipt
+
+	data, err := MarshalAttemptJournal(journal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := UnmarshalAttemptJournal(data)
+	if err != nil {
+		t.Fatalf("UnmarshalAttemptJournal rejected marshal-valid native collection: %v", err)
+	}
+	if got := len(decoded.Attempts[0].Receipt.Fields.Logs[0].Topics); got != 1025 {
+		t.Fatalf("topic count=%d, want 1025", got)
+	}
+}
+
 func TestAttemptJournalPreservesIncludedTerminalReceipt(t *testing.T) {
 	t.Parallel()
 	_, _, journal := testAttemptJournal(t)

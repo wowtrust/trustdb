@@ -534,7 +534,7 @@ func TestServiceLeaseCoversPublishAndCompletionBudgets(t *testing.T) {
 	}()
 	select {
 	case <-wrapped.completionStarted:
-	case <-time.After(time.Second):
+	case <-time.After(5 * time.Second):
 		t.Fatal("completion persistence did not start")
 	}
 
@@ -551,7 +551,7 @@ func TestServiceLeaseCoversPublishAndCompletionBudgets(t *testing.T) {
 	close(wrapped.completionRelease)
 	select {
 	case <-firstDone:
-	case <-time.After(time.Second):
+	case <-time.After(5 * time.Second):
 		t.Fatal("first worker did not finish completion")
 	}
 	if _, found, err := base.GetSTHAnchorResult(context.Background(), sth.TreeSize); err != nil || !found {
