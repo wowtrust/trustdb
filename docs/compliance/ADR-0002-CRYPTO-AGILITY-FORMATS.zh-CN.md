@@ -125,7 +125,7 @@ crypto_suite: exact suite identifier
 | Batch manifest | `trustdb.batch-manifest.v1` | `trustdb.batch-manifest.v2` |
 | Batch tree leaf | `trustdb.batch-tree-leaf.v1` | `trustdb.batch-tree-leaf.v2` |
 | Batch tree node | `trustdb.batch-tree-node.v1` | `trustdb.batch-tree-node.v2` |
-| Key event | `trustdb.key-event.v1` | `trustdb.key-event.v2` |
+| Key event | `trustdb.key-event.v2` | `trustdb.key-event.v3` |
 | Idempotency decision | `trustdb.idempotency-decision.v1` | `trustdb.idempotency-decision.v2` |
 | Global Log leaf | `trustdb.global-log-leaf.v1` | `trustdb.global-log-leaf.v2` |
 | Global Log node | `trustdb.global-log-node.v1` | `trustdb.global-log-node.v2` |
@@ -142,6 +142,8 @@ crypto_suite: exact suite identifier
 | Contiguous WAL checkpoint | `trustdb.wal-checkpoint.v2` | `trustdb.wal-checkpoint.v3` |
 
 WAL checkpoint 使用 v3 是因为当前 v2 已用于“从 sequence 1 到 LastSequence 连续”的 durable 语义；不得覆盖该含义。
+
+Key registry 已由 #450 独立完成破坏性 V2 切换，因此 `key_event` 当前 schema 已推进到 v2；它不表示其余 Model V2 对象已经可用于服务端生成。Registry V2 文件拒绝旧 event frame，不实现 v1 双读或迁移；下一次改变 event 字段或生命周期语义必须使用 `trustdb.key-event.v3`。
 
 `record_id`、signature input、Merkle leaf/node、STH 和 anchor payload 的计算都以 v2 对象及其 suite 为输入。不能先生成 v1 字节，再在外层贴上 `crypto_suite`。
 

@@ -116,7 +116,9 @@ CLI 的 claim、commit、serve、verify、registry 和 benchmark 入口都通过
 - 不提供 provider 或 protection fallback；
 - 未知 future schema version 明确失败。
 
-开发环境重新运行 `trustdb keygen`。生产环境应由密钥管理员创建指向目标 provider 的 v1 描述符，并在启用服务前核对公钥、KeyID、suite、证书链和 capability。
+开发环境重新运行 `trustdb key generate`。生产环境应由密钥管理员创建指向目标 provider 的 v1 描述符，并在启用服务前核对公钥、KeyID、suite、证书链和 capability。
+
+`trustdb key generate --suite CN_SM_V1` 只生成开发/互操作用 SM2 软件密钥；生产密钥必须在 HSM、SDF 或 KMS 边界内生成，再通过 descriptor 导入 Registry V2。Registry 导入保留完整 canonical descriptor，因此 provider handle、证书链和公开材料不会被降级为裸公钥。
 
 ## 9. 验证 Gate
 
@@ -132,10 +134,11 @@ CLI 的 claim、commit、serve、verify、registry 和 benchmark 入口都通过
 ## 10. 后续工作
 
 - #451：实现 authenticated `sm4-envelope-v1`，停止新路径持久化 plaintext private material；
+- #450：suite-aware Registry V2、SM2/INTL 注册、原子轮换、撤销、失陷和证书有效期约束已完成，见 [`ADR-0009`](ADR-0009-SUITE-AWARE-KEY-REGISTRY-V2.zh-CN.md)；
 - #452：PKCS#11 provider；
 - #453：SDF/HSM provider；
 - #454：V2 Server 全链路传播并启用 `CN_SM_V1`；
 - #455：`.sproof v2` 的 suite/certificate/trust material；
 - #456/#457：Go SDK 与 Desktop 的 suite-aware identity 和非导出 signer 接口。
 
-在 #451–#454 完成前，可以准确声明“TrustDB 已完成版本化、不可歧义、provider-neutral 的密钥配置和解析边界”，不能声明当前 `keygen` 的 `plaintext-dev-v1` 已达到生产 HSM 或国密密钥存储要求。
+在 #451–#454 完成前，可以准确声明“TrustDB 已完成版本化、不可歧义、provider-neutral 的密钥配置、解析和 Registry V2 生命周期边界”，不能声明当前 `key generate` 的 `plaintext-dev-v1` 已达到生产 HSM 或国密密钥存储要求。

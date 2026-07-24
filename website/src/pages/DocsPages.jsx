@@ -9,7 +9,7 @@ import { Link } from "../router";
 import sdkOnboardingSource from "../../../examples/sdk-onboarding/main.go?raw";
 
 const cliGroups = [
-  ["密钥与身份", "keygen · key-register · key-revoke · key-list"],
+  ["密钥与身份", "key generate · key import · key rotate · key revoke · key compromise · key list · key inspect"],
   ["证据工作流", "claim-file · commit · commit-batch · verify · proof inspect"],
   ["服务与诊断", "serve · doctor · config · version"],
   ["透明日志与锚定", "global-log · anchor"],
@@ -200,8 +200,8 @@ export function QuickStartPage({ route }) {
     "Invoke-TrustDB version",
     "Set-Content -Path .\\example.txt -Value 'hello TrustDB' -Encoding ascii",
     "New-Item -ItemType Directory -Path .trustdb-dev | Out-Null",
-    "Invoke-TrustDB keygen --out .trustdb-dev --prefix client",
-    "Invoke-TrustDB keygen --out .trustdb-dev --prefix server",
+    "Invoke-TrustDB key generate --out .trustdb-dev --prefix client",
+    "Invoke-TrustDB key generate --out .trustdb-dev --prefix server",
     "Invoke-TrustDB claim-file `",
     "  --file .\\example.txt `",
     "  --private-key .trustdb-dev\\client.key `",
@@ -251,7 +251,7 @@ export function QuickStartPage({ route }) {
         </section>
         <section className="doc-section">
           <h2>{quickStart.keysTitle}</h2><p>{quickStart.keysBody}</p>
-          <CodeBlock>{`./bin/trustdb keygen --out .trustdb-dev --prefix client\n./bin/trustdb keygen --out .trustdb-dev --prefix server\nls -l .trustdb-dev`}</CodeBlock>
+          <CodeBlock>{`./bin/trustdb key generate --out .trustdb-dev --prefix client\n./bin/trustdb key generate --out .trustdb-dev --prefix server\nls -l .trustdb-dev`}</CodeBlock>
           <Note tone="warn" title={ui.checkpoint}>{quickStart.keysWarning}</Note>
           <ExpectedResult label={ui.expected}>{quickStart.keysExpected}</ExpectedResult>
         </section>
@@ -335,7 +335,7 @@ export function CliDocsPage({ route }) {
     <DocsShell route={route}>
       <ArticleTitle index="07" title="CLI" lead="trustdb 是服务器、验证器和运维工具的统一入口。" />
       <section className="doc-section"><h2>命令地图</h2><div className="cli-map">{cliGroups.map(([title, commands]) => <div key={title}><strong>{title}</strong><code>{commands}</code></div>)}</div><CodeBlock>trustdb --help{"\n"}trustdb verify --help{"\n"}trustdb serve --help</CodeBlock><p>如果没有把 <code>bin</code> 加入 PATH，请使用发布目录中的 <code>./bin/trustdb</code>。</p><InlineLink href="/downloads">下载 CLI</InlineLink></section>
-      <section className="doc-section"><h2>验证模式</h2><p><strong>本地模式</strong>从 <code>.sproof</code> 或分离的 L3/L4/L5 文件验证；<strong>服务器模式</strong>按 record_id 拉取证明。两者都要求服务端公钥，以及客户端公钥或受信任密钥注册表。</p><CodeBlock>trustdb verify --file ./invoice.pdf --sproof ./invoice.sproof \{"\n"}  --server-public-key ./server.pub --client-public-key ./client.pub{"\n\n"}trustdb verify --file ./invoice.pdf --server http://127.0.0.1:8080 \{"\n"}  --record tr1example --server-public-key ./server.pub \{"\n"}  --key-registry ./registry.jsonl --registry-public-key ./registry.pub</CodeBlock><Note title="L5 规则">本地 <code>--anchor</code> 必须同时提供 <code>--global-proof</code>；<code>--skip-anchor</code> 会主动忽略可用的 L5 anchor result。</Note></section>
+      <section className="doc-section"><h2>验证模式</h2><p><strong>本地模式</strong>从 <code>.sproof</code> 或分离的 L3/L4/L5 文件验证；<strong>服务器模式</strong>按 record_id 拉取证明。两者都要求服务端公钥，以及客户端公钥或受信任密钥注册表。</p><CodeBlock>trustdb verify --file ./invoice.pdf --sproof ./invoice.sproof \{"\n"}  --server-public-key ./server.pub --client-public-key ./client.pub{"\n\n"}trustdb verify --file ./invoice.pdf --server http://127.0.0.1:8080 \{"\n"}  --record tr1example --server-public-key ./server.pub \{"\n"}  --key-registry ./clients.tdkeys --registry-public-key ./registry.pub</CodeBlock><Note title="L5 规则">本地 <code>--anchor</code> 必须同时提供 <code>--global-proof</code>；<code>--skip-anchor</code> 会主动忽略可用的 L5 anchor result。</Note></section>
       <section className="doc-section"><h2>全局标志</h2><p>每个命令都可接收 <code>--config</code>、<code>--data-dir</code> 与结构化日志配置。异步日志的缓冲区与 drop 策略会影响可观测性，不改变证明语义。</p><div className="flag-list"><code>--config</code><span>YAML 配置路径</span><code>--log-format</code><span>json / console / text</span><code>--log-output</code><span>stderr / file / both</span><code>--log-level</code><span>debug / info / warn / error</span></div></section>
       <section className="doc-section"><h2>Shell 补全</h2><CodeBlock>trustdb completion zsh &gt; "${'{'}fpath[1]{'}'}"/_trustdb{"\n"}trustdb completion bash &gt; /usr/local/etc/bash_completion.d/trustdb</CodeBlock></section>
       <div className="doc-next"><span>下一篇</span><Link href="/docs/desktop">桌面客户端 <ArrowRight /></Link></div>
