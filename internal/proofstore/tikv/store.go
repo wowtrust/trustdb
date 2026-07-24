@@ -4384,7 +4384,7 @@ func (s *Store) PutSTHAnchorResult(ctx context.Context, result model.STHAnchorRe
 			if err := anchorschedule.ValidateResult(storedKey, stored); err != nil {
 				return trusterr.Wrap(trusterr.CodeDataLoss, "invalid stored sth anchor result", err)
 			}
-			if !anchorschedule.SameResultBinding(stored, result) {
+			if !anchorschedule.SameStoredResult(stored, result) {
 				return trusterr.New(trusterr.CodeDataLoss, "sth anchor result conflicts with immutable result")
 			}
 			return s.writeAnchorResultTransaction(ctx, txn, stored, false)
@@ -4410,6 +4410,9 @@ func (s *Store) UpdateSTHAnchorResult(ctx context.Context, expected, result mode
 	}
 	if !anchorschedule.SameResultBinding(expected, result) {
 		return trusterr.New(trusterr.CodeDataLoss, "sth anchor result update changes immutable binding")
+	}
+	if result.SinkName == "fisco-bcos" && !anchorschedule.SameStoredResult(expected, result) {
+		return trusterr.New(trusterr.CodeDataLoss, "FISCO BCOS anchor result is byte-immutable")
 	}
 	expectedUpdate := expected
 	expectedUpdate.Proof = append([]byte(nil), result.Proof...)
@@ -4913,7 +4916,7 @@ func (s *Store) CompleteSTHAnchorAttempt(ctx context.Context, key model.STHAncho
 			if err := anchorschedule.ValidateResult(key, stored); err != nil {
 				return trusterr.Wrap(trusterr.CodeDataLoss, "invalid stored sth anchor result", err)
 			}
-			if !anchorschedule.SameResultBinding(stored, result) {
+			if !anchorschedule.SameStoredResult(stored, result) {
 				return trusterr.New(trusterr.CodeDataLoss, "sth anchor completion conflicts with immutable result")
 			}
 			if err := s.writeAnchorResultTransaction(ctx, txn, stored, false); err != nil {
@@ -5070,7 +5073,7 @@ func (s *Store) writeAnchorResultTransaction(ctx context.Context, txn *transacti
 			if err := validateTiKVStoredSTHAnchorResult(resultKey, existing); err != nil {
 				return err
 			}
-			if !anchorschedule.SameResultBinding(existing, result) {
+			if !anchorschedule.SameStoredResult(existing, result) {
 				return trusterr.New(trusterr.CodeDataLoss, "sth anchor result conflicts with immutable stored binding")
 			}
 		}

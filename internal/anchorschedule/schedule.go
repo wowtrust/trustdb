@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/wowtrust/trustdb/internal/cborx"
 	"github.com/wowtrust/trustdb/internal/cryptosuite"
 	"github.com/wowtrust/trustdb/internal/model"
 	"github.com/wowtrust/trustdb/internal/trusterr"
@@ -685,6 +686,17 @@ func SameResultBinding(left, right model.STHAnchorResult) bool {
 		left.AnchorID == right.AnchorID &&
 		bytes.Equal(left.RootHash, right.RootHash) &&
 		SameTarget(left.STH, right.STH)
+}
+
+// SameStoredResult applies the BCOS sink's byte-immutable evidence contract.
+// Other sinks retain their existing proof-enrichment behavior.
+func SameStoredResult(left, right model.STHAnchorResult) bool {
+	if left.SinkName != "fisco-bcos" && right.SinkName != "fisco-bcos" {
+		return SameResultBinding(left, right)
+	}
+	leftCBOR, leftErr := cborx.Marshal(left)
+	rightCBOR, rightErr := cborx.Marshal(right)
+	return leftErr == nil && rightErr == nil && bytes.Equal(leftCBOR, rightCBOR)
 }
 
 func Sort(schedules []model.STHAnchorSchedule) {

@@ -3810,7 +3810,7 @@ func (s *Store) PutSTHAnchorResult(ctx context.Context, result model.STHAnchorRe
 		if err := validateStoredSTHAnchorResult(existing); err != nil {
 			return err
 		}
-		if !anchorschedule.SameResultBinding(existing, result) {
+		if !anchorschedule.SameStoredResult(existing, result) {
 			return trusterr.New(trusterr.CodeDataLoss, "stored STH anchor result conflicts with replacement")
 		}
 		result = existing
@@ -3849,6 +3849,9 @@ func (s *Store) UpdateSTHAnchorResult(ctx context.Context, expected, result mode
 	}
 	if !anchorschedule.SameResultBinding(expected, result) {
 		return trusterr.New(trusterr.CodeDataLoss, "sth anchor result update changes immutable binding")
+	}
+	if result.SinkName == "fisco-bcos" && !anchorschedule.SameStoredResult(expected, result) {
+		return trusterr.New(trusterr.CodeDataLoss, "FISCO BCOS anchor result is byte-immutable")
 	}
 	expectedUpdate := expected
 	expectedUpdate.Proof = append([]byte(nil), result.Proof...)
@@ -4232,7 +4235,7 @@ func (s *Store) CompleteSTHAnchorAttempt(ctx context.Context, key model.STHAncho
 		if err := validateStoredSTHAnchorResult(existing); err != nil {
 			return err
 		}
-		if !anchorschedule.SameResultBinding(existing, result) {
+		if !anchorschedule.SameStoredResult(existing, result) {
 			return trusterr.New(trusterr.CodeDataLoss, "stored STH anchor result conflicts with completed attempt")
 		}
 		if !scheduleFound {

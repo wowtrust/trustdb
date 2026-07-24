@@ -59,6 +59,7 @@ func RunConformance(t *testing.T, newStore Factory) {
 	t.Run("SignedTreeHeadListPagePaginates", func(t *testing.T) { testSignedTreeHeadListPagePaginates(t, newStore) })
 	t.Run("LatestSTHAnchorResultIsMonotonic", func(t *testing.T) { testLatestSTHAnchorResultIsMonotonic(t, newStore) })
 	t.Run("STHAnchorResultUpdatePreservesLatest", func(t *testing.T) { testSTHAnchorResultUpdatePreservesLatest(t, newStore) })
+	t.Run("FISCOBCOSResultIsByteImmutable", func(t *testing.T) { testFISCOBCOSResultIsByteImmutable(t, newStore) })
 	t.Run("STHAnchorScheduleStateMachineOptional", func(t *testing.T) { testSTHAnchorScheduleStateMachineOptional(t, newStore) })
 	t.Run("L5CoverageProjectionStateOptional", func(t *testing.T) { testL5CoverageProjectionStateOptional(t, newStore) })
 	t.Run("STHAnchorResultMissing", func(t *testing.T) { testSTHAnchorResultMissing(t, newStore) })
@@ -1320,6 +1321,39 @@ func testSTHAnchorResultUpdatePreservesLatest(t *testing.T, newStore Factory) {
 	stale.Proof = []byte("stale-concurrent-proof")
 	if err := updater.UpdateSTHAnchorResult(ctx, original, stale); trusterr.CodeOf(err) != trusterr.CodeFailedPrecondition {
 		t.Fatalf("stale update error=%v, want failed_precondition", err)
+	}
+}
+
+func testFISCOBCOSResultIsByteImmutable(t *testing.T, newStore Factory) {
+	t.Parallel()
+	store, cleanup := newStore(t)
+	defer cleanup()
+	writer, ok := store.(proofstore.STHAnchorResultWriter)
+	if !ok {
+		t.Skip("store does not implement STHAnchorResultWriter")
+	}
+	updater, ok := store.(proofstore.STHAnchorResultUpdater)
+	if !ok {
+		t.Fatalf("STHAnchorResultWriter must also implement STHAnchorResultUpdater")
+	}
+	ctx := context.Background()
+	key := model.STHAnchorScheduleKey{NodeID: "node-bcos", LogID: "log-bcos", SinkName: "fisco-bcos"}
+	original := scheduleResult(key, scheduleSTH(key, 9, 0x91), "anchor-bcos", 900)
+	if err := writer.PutSTHAnchorResult(ctx, original); err != nil {
+		t.Fatalf("PutSTHAnchorResult original: %v", err)
+	}
+	changed := original
+	changed.Proof = []byte("different-complete-cbor")
+	if err := writer.PutSTHAnchorResult(ctx, changed); trusterr.CodeOf(err) != trusterr.CodeDataLoss {
+		t.Fatalf("PutSTHAnchorResult changed BCOS proof error=%v, want data_loss", err)
+	}
+	if err := updater.UpdateSTHAnchorResult(ctx, original, changed); trusterr.CodeOf(err) != trusterr.CodeDataLoss {
+		t.Fatalf("UpdateSTHAnchorResult changed BCOS proof error=%v, want data_loss", err)
+	}
+	changed = original
+	changed.PublishedAtUnixN++
+	if err := writer.PutSTHAnchorResult(ctx, changed); trusterr.CodeOf(err) != trusterr.CodeDataLoss {
+		t.Fatalf("PutSTHAnchorResult changed BCOS metadata error=%v, want data_loss", err)
 	}
 }
 

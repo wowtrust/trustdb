@@ -2708,6 +2708,9 @@ func (s LocalStore) UpdateSTHAnchorResult(ctx context.Context, expected, result 
 	if !anchorschedule.SameResultBinding(expected, result) {
 		return trusterr.New(trusterr.CodeDataLoss, "sth anchor result update changes immutable binding")
 	}
+	if result.SinkName == "fisco-bcos" && !anchorschedule.SameStoredResult(expected, result) {
+		return trusterr.New(trusterr.CodeDataLoss, "FISCO BCOS anchor result is byte-immutable")
+	}
 	expectedUpdate := expected
 	expectedUpdate.Proof = append([]byte(nil), result.Proof...)
 	if !reflect.DeepEqual(expectedUpdate, result) {
@@ -2759,8 +2762,8 @@ func (s LocalStore) putSTHAnchorResultLocked(ctx context.Context, result model.S
 		if err := anchorschedule.ValidateResult(existingKey, existing); err != nil {
 			return trusterr.Wrap(trusterr.CodeDataLoss, "stored STH anchor result is invalid", err)
 		}
-		if !anchorschedule.SameResultBinding(existing, result) {
-			return trusterr.New(trusterr.CodeDataLoss, "STH anchor result conflicts with immutable stored binding")
+		if !anchorschedule.SameStoredResult(existing, result) {
+			return trusterr.New(trusterr.CodeDataLoss, "STH anchor result conflicts with immutable stored value")
 		}
 		if err := s.prepareLatestSTHAnchorReferencesLocked(ctx, existing); err != nil {
 			return err
@@ -3351,8 +3354,8 @@ func (s LocalStore) CompleteSTHAnchorAttempt(ctx context.Context, key model.STHA
 		if err := anchorschedule.ValidateResult(existingKey, existing); err != nil {
 			return trusterr.Wrap(trusterr.CodeDataLoss, "stored STH anchor result is invalid", err)
 		}
-		if !anchorschedule.SameResultBinding(existing, result) {
-			return trusterr.New(trusterr.CodeDataLoss, "STH anchor result conflicts with immutable stored binding")
+		if !anchorschedule.SameStoredResult(existing, result) {
+			return trusterr.New(trusterr.CodeDataLoss, "STH anchor result conflicts with immutable stored value")
 		}
 		result = existing
 	}

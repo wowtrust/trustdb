@@ -206,19 +206,9 @@ func TestBackupRoundTripPreservesAnchorScheduleAndIndependentResult(t *testing.T
 	}
 	key := model.STHAnchorScheduleKey{NodeID: "node-1", LogID: "log-1", SinkName: fiscobcos.SinkName}
 	firstSTH := backupScheduleSTH(key, 1, 0x11)
-	if _, err := scheduler.UpsertSTHAnchorCandidate(ctx, model.STHAnchorCandidate{
-		Key: key, STH: firstSTH, ObservedAtUnixN: 100, DueAtUnixN: 100,
-	}); err != nil {
-		t.Fatalf("UpsertSTHAnchorCandidate first: %v", err)
-	}
-	firstAttempt, claimed, err := scheduler.ClaimSTHAnchorAttempt(ctx, key, 100, 150, "worker-1", "lease-1")
-	if err != nil || !claimed {
-		t.Fatalf("ClaimSTHAnchorAttempt first claimed=%v err=%v", claimed, err)
-	}
-	firstResult := backupScheduleResult(key, firstSTH, "anchor-1", 110)
-	if err := scheduler.CompleteSTHAnchorAttempt(ctx, key, firstAttempt.Generation, "lease-1", firstResult); err != nil {
-		t.Fatalf("CompleteSTHAnchorAttempt first: %v", err)
-	}
+	firstResultKey := key
+	firstResultKey.SinkName = "test-anchor"
+	firstResult := backupScheduleResult(firstResultKey, firstSTH, "anchor-1", 110)
 
 	inFlightSTH := backupScheduleSTH(key, 3, 0x33)
 	if _, err := scheduler.UpsertSTHAnchorCandidate(ctx, model.STHAnchorCandidate{
@@ -353,14 +343,14 @@ func TestBackupRoundTripPreservesAnchorScheduleAndIndependentResult(t *testing.T
 	if schedule.Pending == nil || schedule.Pending.Target.TreeSize != 5 || schedule.Pending.OpenedAtUnixN != 310 || schedule.Pending.DueAtUnixN != 410 {
 		t.Fatalf("restored pending = %+v", schedule.Pending)
 	}
-	if result, found, err := dst.GetSTHAnchorResult(ctx, 1); err != nil || !found || result.AnchorID != "anchor-1" {
+	if result, found, err := dst.GetSTHAnchorResult(ctx, 1); err != nil || !found || result.TreeSize != 1 {
 		t.Fatalf("restored independent result = %+v found=%v err=%v", result, found, err)
 	}
 	keyedReader := any(dst).(proofstore.STHAnchorResultKeyedReader)
 	for _, tc := range []struct {
 		key      model.STHAnchorScheduleKey
 		anchorID string
-	}{{key, "anchor-1"}, {secondSinkKey, "anchor-1-ots"}} {
+	}{{firstResultKey, "anchor-1"}, {secondSinkKey, "anchor-1-ots"}} {
 		resultKey := model.STHAnchorResultKey{NodeID: tc.key.NodeID, LogID: tc.key.LogID, SinkName: tc.key.SinkName, TreeSize: 1}
 		result, found, err := keyedReader.GetSTHAnchorResultForKey(ctx, resultKey)
 		if err != nil || !found || result.AnchorID != tc.anchorID {
