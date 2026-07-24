@@ -238,6 +238,14 @@ func readSigner(ctx context.Context, path string) (trustcrypto.Signer, keydescri
 	return signer, descriptor, nil
 }
 
+func readLifecycleSigner(ctx context.Context, path string) (trustcrypto.Signer, keydescriptor.Descriptor, error) {
+	signer, descriptor, err := keydescriptor.NewDefaultResolver().ResolveLifecycleSignerFile(ctx, path)
+	if err != nil {
+		return nil, keydescriptor.Descriptor{}, err
+	}
+	return signer, descriptor, nil
+}
+
 func requireKeyID(configured string, descriptor keydescriptor.Descriptor) error {
 	if configured == "" {
 		return usageError("key-id is required")

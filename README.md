@@ -86,7 +86,7 @@ Desktop packages carry a release-specific self-signed certificate and its public
 ## What It Provides
 
 - Deterministic CBOR models for claims, receipts, proof bundles, global-log proofs, STHs, anchor results, backups, and `.sproof` files.
-- Ed25519 signing for client, server, and key-registry workflows.
+- Ed25519 signing for current client/server evidence, plus a suite-bound V2 key registry with Ed25519 and SM2 lifecycle events, historical lookup, rotation, revocation, and compromise handling.
 - WAL-backed ingest with bounded queues, configurable fsync policy, replay, checkpoints, and graceful shutdown.
 - Optional NATS JetStream ingress for durable fan-in, bounded broker backpressure, immutable acceptance results, and restart-safe result recovery.
 - Batch Merkle proofs, persisted record indexes, and paginated record/root APIs.
@@ -158,12 +158,23 @@ mkdir -p .trustdb-dev
 Generate one-time client and server identities. Each command writes a signer
 descriptor (`.key`), a public verifier descriptor (`.pub`), and separate
 development software material (`.material`). The descriptor files are
-canonical CBOR, not raw private keys. `keygen` replaces same-name files, so do
+canonical CBOR, not raw private keys. `key generate` replaces same-name files, so do
 not rerun it for an identity that has already issued evidence:
 
 ```bash
-./bin/trustdb keygen --out .trustdb-dev --prefix client
-./bin/trustdb keygen --out .trustdb-dev --prefix server
+./bin/trustdb key generate --out .trustdb-dev --prefix client
+./bin/trustdb key generate --out .trustdb-dev --prefix server
+```
+
+For a development SM2 identity, select the suite explicitly. This enables key
+provisioning and registry lifecycle testing; CN_SM_V1 server evidence generation
+remains gated until the V2 server cutover in #454:
+
+```bash
+./bin/trustdb key generate \
+  --suite CN_SM_V1 \
+  --out .trustdb-dev/sm2 \
+  --prefix client
 ```
 
 The generated `plaintext-dev-v1` material is protected by owner-only file
@@ -277,6 +288,7 @@ The screenshot below is rendered directly from the current desktop client code:
 - [docs/compliance/ADR-0006-SM3-AND-RFC6962-MERKLE-PROFILES.zh-CN.md](docs/compliance/ADR-0006-SM3-AND-RFC6962-MERKLE-PROFILES.zh-CN.md): SM3 hashing, exact suite-bound RFC6962 Merkle profiles, cross-suite rejection, and performance contracts (Chinese).
 - [docs/compliance/ADR-0007-CANONICAL-SM2-SM3-SIGNATURES.zh-CN.md](docs/compliance/ADR-0007-CANONICAL-SM2-SM3-SIGNATURES.zh-CN.md): canonical SM2-SM3 signing, strict DER/public-key validation, fixed user ID, suite-bound signature inputs, and production enablement boundaries (Chinese).
 - [docs/compliance/ADR-0008-VERSIONED-KEY-DESCRIPTORS.zh-CN.md](docs/compliance/ADR-0008-VERSIONED-KEY-DESCRIPTORS.zh-CN.md): canonical software, PKCS#11, SDF, remote, certificate, resolver, redaction, and destructive migration rules (Chinese).
+- [docs/compliance/ADR-0009-SUITE-AWARE-KEY-REGISTRY-V2.zh-CN.md](docs/compliance/ADR-0009-SUITE-AWARE-KEY-REGISTRY-V2.zh-CN.md): suite-bound V2 registry manifest, SM2/INTL lifecycle, atomic rotation, crash recovery, and external trust-root rules (Chinese).
 - [COMMUNITY.md](COMMUNITY.md): support, discussion, and first-contribution entry points.
 - [ROADMAP.md](ROADMAP.md): public product direction and ways to influence it.
 - [SECURITY.md](SECURITY.md): private vulnerability reporting and supported-version policy.
@@ -287,6 +299,7 @@ The screenshot below is rendered directly from the current desktop client code:
 - [CONTRIBUTING.md](CONTRIBUTING.md): issue, PR, commit, validation, and review standards.
 - [formats/SPROOF_V1.md](formats/SPROOF_V1.md): stable `.sproof` v1 exchange format.
 - [formats/KEY_DESCRIPTOR_V1.md](formats/KEY_DESCRIPTOR_V1.md): canonical key descriptor schema, provider union, resolution contract, redaction, and migration rules.
+- [formats/KEY_REGISTRY_V2.md](formats/KEY_REGISTRY_V2.md): byte-level V2 registry framing, manifest, event-chain, lifecycle, recovery, and compatibility contract.
 - [formats/DISTRIBUTED_ARCHITECTURE.md](formats/DISTRIBUTED_ARCHITECTURE.md): distributed/storage-compute separation notes.
 - [docs/performance/trustdb-sustained-stream-persistence-assessment-2026-07-23.zh-CN.md](docs/performance/trustdb-sustained-stream-persistence-assessment-2026-07-23.zh-CN.md): the single performance reference for L2-L5, HTTP/gRPC, backpressure, persistence, and configuration semantics (Chinese).
 - [docs/performance/trustdb-performance-optimization-2026-07.zh-CN.md](docs/performance/trustdb-performance-optimization-2026-07.zh-CN.md): performance implementation notes (Chinese).

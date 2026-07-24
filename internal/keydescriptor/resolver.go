@@ -71,6 +71,18 @@ func NewDefaultResolver() *Resolver {
 // availability, delegates to exactly one provider, and verifies that the
 // returned handle and public key exactly match the descriptor.
 func (r *Resolver) ResolveSigner(ctx context.Context, descriptor Descriptor, materialBaseDir string) (trustcrypto.Signer, error) {
+	return r.resolveSigner(ctx, descriptor, materialBaseDir, false)
+}
+
+// ResolveLifecycleSigner resolves a signer for key-registry lifecycle events.
+// It accepts a known but not yet server-enabled suite so SM2 keys and registry
+// events can be provisioned before CN_SM_V1 evidence generation is enabled.
+// Callers must not use this method to sign claims, receipts, STHs, or anchors.
+func (r *Resolver) ResolveLifecycleSigner(ctx context.Context, descriptor Descriptor, materialBaseDir string) (trustcrypto.Signer, error) {
+	return r.resolveSigner(ctx, descriptor, materialBaseDir, true)
+}
+
+func (r *Resolver) resolveSigner(ctx context.Context, descriptor Descriptor, materialBaseDir string, allowKnownSuite bool) (trustcrypto.Signer, error) {
 	if r == nil {
 		return nil, fmt.Errorf("%w: resolver is nil", ErrInvalidResolver)
 	}
@@ -83,8 +95,14 @@ func (r *Resolver) ResolveSigner(ctx context.Context, descriptor Descriptor, mat
 	if descriptor.Kind != KindSigner {
 		return nil, invalid("descriptor kind %q cannot resolve a signer", descriptor.Kind)
 	}
-	if _, err := cryptosuite.RequireAvailable(descriptor.CryptoSuite); err != nil {
-		return nil, err
+	if allowKnownSuite {
+		if _, err := cryptosuite.RequireKnown(descriptor.CryptoSuite); err != nil {
+			return nil, err
+		}
+	} else {
+		if _, err := cryptosuite.RequireAvailable(descriptor.CryptoSuite); err != nil {
+			return nil, err
+		}
 	}
 	provider, ok := r.providers[descriptor.Provider]
 	if !ok {
@@ -94,7 +112,7 @@ func (r *Resolver) ResolveSigner(ctx context.Context, descriptor Descriptor, mat
 	if err != nil {
 		return nil, fmt.Errorf("resolve signer with provider %q: %w", descriptor.Provider, err)
 	}
-	if err := validateResolvedSigner(ctx, descriptor, signer); err != nil {
+	if err := validateResolvedSigner(ctx, descriptor, signer, allowKnownSuite); err != nil {
 		return nil, err
 	}
 	return signer, nil
@@ -106,6 +124,18 @@ func (r *Resolver) ResolveSignerFile(ctx context.Context, descriptorPath string)
 		return nil, Descriptor{}, err
 	}
 	signer, err := r.ResolveSigner(ctx, descriptor, filepath.Dir(descriptorPath))
+	if err != nil {
+		return nil, Descriptor{}, err
+	}
+	return signer, descriptor, nil
+}
+
+func (r *Resolver) ResolveLifecycleSignerFile(ctx context.Context, descriptorPath string) (trustcrypto.Signer, Descriptor, error) {
+	descriptor, err := ReadFile(descriptorPath)
+	if err != nil {
+		return nil, Descriptor{}, err
+	}
+	signer, err := r.ResolveLifecycleSigner(ctx, descriptor, filepath.Dir(descriptorPath))
 	if err != nil {
 		return nil, Descriptor{}, err
 	}
@@ -136,11 +166,15 @@ func WriteFile(path string, descriptor Descriptor) error {
 	return writeFileExclusive(path, data, 0o600)
 }
 
-func validateResolvedSigner(ctx context.Context, descriptor Descriptor, signer trustcrypto.Signer) error {
+func validateResolvedSigner(ctx context.Context, descriptor Descriptor, signer trustcrypto.Signer, allowKnownSuite bool) error {
 	if signer == nil {
 		return fmt.Errorf("%w: provider returned nil signer", ErrSignerMismatch)
 	}
-	if err := trustcrypto.ValidateSigner(ctx, descriptor.CryptoSuite, signer); err != nil {
+	if allowKnownSuite {
+		if err := validateKnownSuiteSigner(ctx, descriptor.CryptoSuite, signer); err != nil {
+			return fmt.Errorf("%w: %v", ErrSignerMismatch, err)
+		}
+	} else if err := trustcrypto.ValidateSigner(ctx, descriptor.CryptoSuite, signer); err != nil {
 		return fmt.Errorf("%w: %v", ErrSignerMismatch, err)
 	}
 	handle := signer.Handle()
@@ -156,6 +190,31 @@ func validateResolvedSigner(ctx context.Context, descriptor Descriptor, signer t
 		return fmt.Errorf("%w: provider public key differs", ErrSignerMismatch)
 	}
 	return nil
+}
+
+func validateKnownSuiteSigner(ctx context.Context, suiteID cryptosuite.ID, signer trustcrypto.Signer) error {
+	suite, err := cryptosuite.RequireKnown(suiteID)
+	if err != nil {
+		return err
+	}
+	if signer == nil {
+		return errors.New("signer is nil")
+	}
+	if !signer.Capabilities().Supports(trustcrypto.CapabilitySign) || !signer.Capabilities().Supports(trustcrypto.CapabilityPublicKey) {
+		return trustcrypto.ErrUnsupportedCapability
+	}
+	handle := signer.Handle()
+	if err := handle.Validate(); err != nil {
+		return err
+	}
+	if handle.Algorithm != suite.Signature.Algorithm {
+		return fmt.Errorf("signer algorithm %q does not match suite %s", handle.Algorithm, suiteID)
+	}
+	publicKey, err := signer.PublicKey(ctx)
+	if err != nil {
+		return err
+	}
+	return trustcrypto.ValidatePublicKeyForSuite(suiteID, publicKey)
 }
 
 func isSignerProviderName(name string) bool {

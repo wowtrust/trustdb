@@ -99,9 +99,10 @@ OpenSSL 是测试 oracle，不进入生产路径。`CN_SM_V1` 正式可用前仍
 ## 6. 后续边界
 
 - #449：版本化 software/hardware key descriptor 已完成，见 [`ADR-0008`](ADR-0008-VERSIONED-KEY-DESCRIPTORS.zh-CN.md)；
+- #450：SM2/INTL Registry V2 生命周期与 CLI 已完成，见 [`ADR-0009`](ADR-0009-SUITE-AWARE-KEY-REGISTRY-V2.zh-CN.md)；
 - #452/#453：真实 PKCS#11 与 SDF/HSM provider；
 - #454：V2 Server 全链路携带 suite，并在完整 gate 中启用 `CN_SM_V1`；
 - #455：`.sproof v2` 完整携带 SM2 STH、SM3 path 和离线 trust material；
-- #456/#457：Go SDK、CLI 和 Desktop 复用同一 user ID、DER、公钥和签名输入契约。
+- #456/#457：Go SDK 和 Desktop 复用同一 user ID、DER、公钥和签名输入契约。
 
 在这些工作完成前，项目可以准确声明“已实现并验证 canonical SM2-SM3 密码核心”，不能声明当前 Server 已支持生产 `CN_SM_V1` 写入或现有 `.sproof v1` 已成为国密证据。

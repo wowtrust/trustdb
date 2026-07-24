@@ -1,10 +1,13 @@
 package main
 
 import (
+	"context"
 	"crypto/ed25519"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/wowtrust/trustdb/internal/keystore"
 )
 
 // TestResolveClientKeysPrefersExplicitPubKey guards the bug where a non-empty
@@ -58,8 +61,9 @@ func TestResolveClientKeysExplicitRegistryWins(t *testing.T) {
 		t.Fatalf("writeKey() error = %v", err)
 	}
 	registryPath := filepath.Join(tmp, "keys.tdkeys")
+	registryPublicPath := initializeTestRegistry(t, tmp, registryPath)
 
-	gotPub, resolver, err := resolveClientKeys(pubPath, registryPath, "", true)
+	gotPub, resolver, err := resolveClientKeys(pubPath, registryPath, registryPublicPath, true)
 	if err != nil {
 		t.Fatalf("resolveClientKeys() error = %v", err)
 	}
@@ -79,8 +83,9 @@ func TestResolveClientKeysRegistryFallback(t *testing.T) {
 
 	tmp := t.TempDir()
 	registryPath := filepath.Join(tmp, "keys.tdkeys")
+	registryPublicPath := initializeTestRegistry(t, tmp, registryPath)
 
-	gotPub, resolver, err := resolveClientKeys("", registryPath, "", false)
+	gotPub, resolver, err := resolveClientKeys("", registryPath, registryPublicPath, false)
 	if err != nil {
 		t.Fatalf("resolveClientKeys() error = %v", err)
 	}
@@ -90,6 +95,34 @@ func TestResolveClientKeysRegistryFallback(t *testing.T) {
 	if resolver == nil {
 		t.Fatalf("resolveClientKeys() resolver = nil, want registry-backed resolver")
 	}
+}
+
+func initializeTestRegistry(t *testing.T, dir, registryPath string) string {
+	t.Helper()
+	publicKey, privateKey, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	privatePath := filepath.Join(dir, "registry.key")
+	publicPath := filepath.Join(dir, "registry.pub")
+	if err := writeKey(privatePath, privateKey); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeKey(publicPath, publicKey); err != nil {
+		t.Fatal(err)
+	}
+	signer, _, err := readLifecycleSigner(context.Background(), privatePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	trustedPublic, _, err := readPublicKeyDescriptor(publicPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := keystore.Open(registryPath, signer, trustedPublic); err != nil {
+		t.Fatal(err)
+	}
+	return publicPath
 }
 
 func TestSafeOutputFileNamePreventsTraversalAndCollisions(t *testing.T) {
