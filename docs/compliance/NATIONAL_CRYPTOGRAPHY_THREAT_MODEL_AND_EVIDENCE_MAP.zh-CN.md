@@ -206,7 +206,7 @@ flowchart LR
 
 - **风险**：Critical。Merkle proof 只能说明交易属于给定 block/receipt root，不能单独证明该 block 已被可信 validator quorum 最终确认。
 - **攻击路径**：只导出 tx hash/receipt、信任单节点 header、忽略 PBFT signatures、把 `latest` block 当 finalized。
-- **控制**：`Decision`：离线 verifier 分阶段输出 receipt inclusion 与 PBFT finality，block header 由本地 validator checkpoint 验签，任一阶段缺失不得输出 L5；`Planned`：BCOS evidence schema、receipt proof 和 PBFT verifier。
+- **控制**：`Existing`：离线 verifier 分阶段输出 receipt inclusion、PBFT finality 与 exact anchor binding；block header 由本地 static validator checkpoint 验签，任一阶段缺失不得输出 L5。
 - **Owner**：Security & Cryptography；Local Evidence Verifier；External Crypto & BCOS Operators。
 - **验证与证据**：篡改 transaction/receipt path/header/signature、签名不足/重复/非成员、错误 block number/hash；断网验证报告分别列出两个 stage。
 - **Gate / Issues**：`G4`；#465–#468、#471、#481。
@@ -216,7 +216,7 @@ flowchart LR
 
 - **风险**：Critical。使用新区块自带 validator set 验证自己会形成循环信任；使用过期集合会错误接受或拒绝 proof。
 - **攻击路径**：证据跨成员变更、伪造变更事件、跳过中间 epoch、阈值或权重计算错误。
-- **控制**：`Decision`：MVP 只接受静态本地 validator checkpoint，proof 跨变更立即失败；`Planned`：从可信 checkpoint 开始、每一步由前一集合认证、连续且无缺口的 transition chain。
+- **控制**：`Existing`：MVP 只接受静态本地 validator checkpoint，目标 header 的成员或权重变化立即失败；`Planned`：从可信 checkpoint 开始、每一步由前一集合认证、连续且无缺口的 transition chain。
 - **Owner**：Security & Cryptography；External Crypto & BCOS Operators；Local Evidence Verifier。
 - **验证与证据**：跨 epoch 拒绝、缺失/乱序/重复 transition、错误阈值、撤销 validator 签名、静态与轮换四节点 integration evidence。
 - **Gate / Issues**：`G4`；#467、#469、#471、#481。

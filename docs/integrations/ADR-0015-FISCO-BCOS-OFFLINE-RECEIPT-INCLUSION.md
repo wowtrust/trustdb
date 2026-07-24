@@ -1,6 +1,7 @@
 # ADR-0015: Offline FISCO BCOS receipt inclusion verification
 
-- Status: Accepted
+- Status: Accepted receipt-inclusion boundary; PBFT completion is defined by
+  [ADR-0016](ADR-0016-FISCO-BCOS-STATIC-PBFT-FINALITY.md)
 - Date: 2026-07-25
 - Issue: [#466](https://github.com/wowtrust/trustdb/issues/466)
 - Depends on: [#465](https://github.com/wowtrust/trustdb/issues/465) and
@@ -29,9 +30,10 @@ separate offline stage named `bcos_receipt_inclusion`. Passing this stage means:
 This is an inclusion statement about a specific carried BCOS block header. It
 is not evidence that the block belongs to the verifier's trusted finalized
 PBFT chain. The immutable result therefore remains
-`evidence_stage=external_observation`, the `.sproof` remains L4, and no L5
-projector or proofstore state is changed. PBFT finality is a later, independent
-fail-closed stage.
+`evidence_stage=external_observation`; receipt inclusion alone remains L4 and
+does not change projector or proofstore state. ADR-0016 adds independent PBFT
+finality and exact-binding stages that may promote only the local offline
+verification result to L5.
 
 ## Verifier-local trust only
 
@@ -200,7 +202,8 @@ For raw BCOS evidence:
 - generic `anchor` is `not_present`, because no offline L5 anchor has been
   established;
 - `bcos_receipt_inclusion` is `passed`, `failed`, `skipped`, or `not_run`;
-- the recomputed proof level remains L4; and
+- the recomputed proof level remains L4 unless the independent ADR-0016
+  finality and exact-binding stages also pass; and
 - `AnchorSink` and `AnchorID` are reported only after inclusion succeeds.
 
 Generic `AnchorBindingConsistency` continues to require

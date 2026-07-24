@@ -28,10 +28,29 @@ const (
 	maxSupportedBCOSTransactionVersion int32 = 1
 )
 
-// VerifyReceiptInclusion verifies the BCOS transaction, receipt, binary Merkle
-// paths, and TrustDBAnchorV1 event using only the supplied bytes and local
-// TrustConfig. It deliberately does not verify or claim PBFT finality.
+// VerifyReceiptInclusion preserves the complete #466 receipt contract: native
+// inclusion plus the exact TrustDBAnchorV1 call/event binding. Staged offline
+// verification calls VerifyNativeReceiptInclusion and
+// VerifyExactAnchorBinding separately so those failure boundaries remain
+// visible. This function deliberately does not verify or claim PBFT finality.
 func VerifyReceiptInclusion(
+	sth model.SignedTreeHead,
+	result model.STHAnchorResult,
+	config TrustConfig,
+) error {
+	if err := VerifyNativeReceiptInclusion(sth, result, config); err != nil {
+		return err
+	}
+	return VerifyExactAnchorBinding(sth, result, config)
+}
+
+// VerifyNativeReceiptInclusion first applies the common fail-closed container
+// and verifier-local chain/contract/checkpoint pins, then verifies the
+// canonical signed transaction, transaction and receipt Merkle paths,
+// successful receipt, and exact block roots. It does not interpret the
+// transaction call or anchor event as a TrustDB binding and does not verify
+// PBFT finality.
+func VerifyNativeReceiptInclusion(
 	sth model.SignedTreeHead,
 	result model.STHAnchorResult,
 	config TrustConfig,
@@ -46,16 +65,12 @@ func VerifyReceiptInclusion(
 	if err != nil {
 		return err
 	}
-	payload, err := UnmarshalPayload(proof.CanonicalPayload)
-	if err != nil {
-		return fmt.Errorf("%w: decode canonical payload: %v", ErrInvalidProof, err)
-	}
 	if proof.Receipt.Status != ReceiptStatusOK ||
 		proof.Receipt.StatusMessage != "success" {
 		return fmt.Errorf("%w: receipt does not carry the exact successful status", ErrInvalidProof)
 	}
 	attempt := proof.TransactionAttempts[proof.SuccessfulAttemptOrdinal-1]
-	if err := verifyCanonicalTransaction(proof.CryptoMode, config.SM2UserID, proof, attempt, payload); err != nil {
+	if err := verifyCanonicalTransaction(proof.CryptoMode, config.SM2UserID, proof, attempt); err != nil {
 		return err
 	}
 	if err := verifyBCOSMerklePath(
@@ -81,10 +96,39 @@ func VerifyReceiptInclusion(
 	if proof.Receipt.TransactionIndex != proof.Receipt.ReceiptIndex {
 		return fmt.Errorf("%w: transaction and receipt indices differ", ErrInvalidProof)
 	}
-	if err := verifyAnchorEvent(proof.CryptoMode, proof, payload, attempt); err != nil {
+	return nil
+}
+
+// VerifyExactAnchorBinding independently reapplies the common container and
+// local context checks, then proves that the exact Signed STH payload,
+// contract call, and one receipt event all identify the same TrustDB anchor.
+// Callers must run receipt inclusion first; this function does not establish
+// that the carried receipt belongs to the carried block.
+func VerifyExactAnchorBinding(
+	sth model.SignedTreeHead,
+	result model.STHAnchorResult,
+	config TrustConfig,
+) error {
+	if result.EvidenceStage != model.AnchorEvidenceStageRaw {
+		return fmt.Errorf("%w: exact anchor binding requires immutable raw BCOS evidence", ErrInvalidProof)
+	}
+	if err := ValidateProofAgainstTrustConfig(sth, result, config); err != nil {
 		return err
 	}
-	return nil
+	proof, err := UnmarshalProof(result.Proof)
+	if err != nil {
+		return err
+	}
+	payload, err := UnmarshalPayload(proof.CanonicalPayload)
+	if err != nil {
+		return fmt.Errorf("%w: decode canonical payload: %v", ErrInvalidProof, err)
+	}
+	attempt := proof.TransactionAttempts[proof.SuccessfulAttemptOrdinal-1]
+	callData, err := PublishCallDataForMode(proof.CryptoMode, payload)
+	if err != nil || !bytes.Equal(callData, attempt.Input) {
+		return fmt.Errorf("%w: transaction input does not exactly publish the bound payload", ErrInvalidProof)
+	}
+	return verifyAnchorEvent(proof.CryptoMode, proof, payload, attempt)
 }
 
 func verifyCanonicalTransaction(
@@ -92,7 +136,6 @@ func verifyCanonicalTransaction(
 	sm2UserID string,
 	proof AnchorProof,
 	attempt TransactionAttempt,
-	payload AnchorPayload,
 ) error {
 	transaction, err := decodeCanonicalTransaction(attempt.RawCanonicalTransaction)
 	if err != nil {
@@ -116,10 +159,6 @@ func verifyCanonicalTransaction(
 		!bytes.Equal(computedHash, attempt.TransactionHash) ||
 		!bytes.Equal(computedHash, proof.SuccessfulTransactionHash) {
 		return fmt.Errorf("%w: transaction consensus hash mismatch", ErrInvalidProof)
-	}
-	callData, err := PublishCallDataForMode(mode, payload)
-	if err != nil || !bytes.Equal(callData, attempt.Input) {
-		return fmt.Errorf("%w: transaction input does not exactly publish the bound payload", ErrInvalidProof)
 	}
 	sender, err := verifyTransactionSignature(mode, sm2UserID, computedHash, attempt.Signature)
 	if err != nil {

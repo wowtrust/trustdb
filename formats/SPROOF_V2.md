@@ -138,12 +138,20 @@ The offline verifier reports these ordered stages:
 9. `batch_merkle`
 10. `global_log`
 11. `anchor`
+12. `bcos_receipt_inclusion`
+13. `bcos_pbft_finality`
+14. `bcos_exact_anchor_binding`
 
 Each stage is `passed`, `failed`, `not_present`, `skipped`, or `not_run`.
 A failed stage prevents every later applicable stage from running. Optional
 Global Log or anchor evidence is reported as `not_present`; an anchor ignored
 by explicit verifier policy is `skipped`. The result also reports
 `external_network_access=false` and `external_provider_access=false`.
+
+For a raw FISCO BCOS anchor, generic `anchor` is `not_present`. The three
+provider stages are independently recomputed from verifier-local
+`TrustConfig`; all three must pass before the offline result reports L5.
+`--skip-anchor` marks all three provider stages `skipped`.
 
 The CLI uses the verifier-local public descriptors passed through
 `--client-public-key`, `--server-public-key`, and
