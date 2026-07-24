@@ -30,8 +30,8 @@ security properties missing from the released Go bindings:
 3. cancellation-safe, expiring opaque callback tokens with no blocking
    goroutine or borrowed C-string lifetime;
 4. observation of the loaded C SDK version and shared-library path, including
-   Unicode-safe Windows paths and expansion of loader-reported 8.3 names before
-   enforcing the pinned release filename.
+   provider-module resolution from the actual Windows IAT target, Unicode-safe
+   paths, and expansion of 8.3 names before enforcing the pinned release filename.
 
 Production files outside `client/connection.go`,
 `bindings/go/csdk/csdk_wrapper.go`, and the three `library_path_*.go` files are
