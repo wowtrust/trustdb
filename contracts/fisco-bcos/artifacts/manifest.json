@@ -1,0 +1,52 @@
+{
+  "canonical_event": "AnchorPublished(bytes32,bytes32,uint64,bytes32,bytes32,address,uint16)",
+  "contract": "TrustDBAnchorV1",
+  "modes": {
+    "guomi": {
+      "abi_sha256": "d08a8ea1af94a1360a261ad5d71f22e7c673d1fcb6a47fd374ed82883906db3f",
+      "compiler": {
+        "archive": "solc-linux-gm.tar.gz",
+        "archive_sha256": "cde864ecd0cb1ea4e852bd28c9f550fdf3be215292a2538bc08afe4175b15483",
+        "release": "v0.8.11",
+        "source_commit": "415673533ae8ae4e9da5af544822499d04f69a52",
+        "version": "Gm version: 0.8.11+commit.1c3fd7c1.mod.Linux.g++"
+      },
+      "creation_byte_count": 3568,
+      "creation_bytecode_sha256": "d7f0940fdfbda2d7364b0065efa7325aeee00d5978964a18249ab8db0af50236",
+      "runtime_byte_count": 2706,
+      "runtime_bytecode_sha256": "ed588bdc235a4e2b2d81e6468bbde3856d74bf54803c926f2eba75def1d34a6f",
+      "runtime_code_hash": "f6b192653d35edd15bb315191178c5e8aae1528331b727e3a2da5ffbe7d2f31b",
+      "runtime_code_hash_algorithm": "sm3"
+    },
+    "standard": {
+      "abi_sha256": "d08a8ea1af94a1360a261ad5d71f22e7c673d1fcb6a47fd374ed82883906db3f",
+      "compiler": {
+        "archive": "solc-linux.tar.gz",
+        "archive_sha256": "cd65442d14f23ccdc09ee8a27f49d2fa8da9f51fa2c82be6ff118b509fb7d0cb",
+        "release": "v0.8.11",
+        "source_commit": "415673533ae8ae4e9da5af544822499d04f69a52",
+        "version": "Version: 0.8.11+commit.d7f03943.Linux.g++"
+      },
+      "creation_byte_count": 3571,
+      "creation_bytecode_sha256": "27f10df9838a11701d0ec47b5f23b7f45f6055c1f5c1ad1caf3337db5a7a4738",
+      "runtime_byte_count": 2706,
+      "runtime_bytecode_sha256": "fcf9c278dd9712e21e3b374d1214d9f29e57cb81f32cbc90009591ed7ee7b7ec",
+      "runtime_code_hash": "e1acef142c1ca5b295e0012f3cc8e73be009f717209a2d40a073bda6a2261df3",
+      "runtime_code_hash_algorithm": "keccak256"
+    }
+  },
+  "payload_version": 1,
+  "schema": "trustdb.fisco-bcos-contract-artifacts.v1",
+  "settings": {
+    "evm_version": "london",
+    "metadata_hash": "none",
+    "optimizer": true,
+    "optimizer_runs": 200,
+    "solidity": "0.8.11"
+  },
+  "source": {
+    "license": "Apache-2.0",
+    "path": "contracts/fisco-bcos/TrustDBAnchorV1.sol",
+    "sha256": "1338963b8a2633130f478983449e4553f97c3d7f3e03cbea41d7d1e5d771f06d"
+  }
+}

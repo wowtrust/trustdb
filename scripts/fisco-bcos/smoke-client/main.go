@@ -231,13 +231,23 @@ func main() {
 	}
 
 	address := common.HexToAddress(deployReceipt.ContractAddress)
+	var anchoredEvent *abi.Event
+	eventTopics := []string{}
+	if !cfg.RawEVM {
+		var ok bool
+		anchoredEvent, ok = parsed.Events["Anchored"]
+		if !ok {
+			fatalf("compiled ABI does not contain Anchored event")
+		}
+		eventTopics = []string{anchoredEvent.ID().Hex()}
+	}
 	eventChannel := make(chan types.Log, 1)
 	fromBlock := int64(deployReceipt.BlockNumber)
 	taskID, err := c.SubscribeEventLogs(ctx, types.EventLogParams{
 		FromBlock: fromBlock,
 		ToBlock:   -1,
 		Addresses: []string{strings.ToLower(address.Hex())},
-		Topics:    []string{},
+		Topics:    eventTopics,
 	}, func(status int, logs []types.Log) {
 		if status == 0 && len(logs) > 0 {
 			select {
@@ -294,10 +304,6 @@ func main() {
 			fatalf("raw EVM fixture emitted unexpected topics or data")
 		}
 	} else {
-		anchoredEvent, ok := parsed.Events["Anchored"]
-		if !ok {
-			fatalf("compiled ABI does not contain Anchored event")
-		}
 		expectedTopics := []common.Hash{
 			anchoredEvent.ID(),
 			common.BytesToHash(expectedDigest[:]),

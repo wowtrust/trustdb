@@ -1,0 +1,28 @@
+{
+  "schema": "trustdb.fisco-bcos-contract-roles.v1",
+  "contract": "TrustDBAnchorV1",
+  "roles": {
+    "administrator": {
+      "cardinality": 1,
+      "mutable": false,
+      "permissions": [
+        "authorize-publisher",
+        "revoke-publisher"
+      ],
+      "constraints": [
+        "cannot-revoke-last-publisher",
+        "cannot-publish-unless-separately-authorized"
+      ]
+    },
+    "publisher": {
+      "minimum_cardinality": 1,
+      "mutable_by": "administrator",
+      "permissions": [
+        "publish-anchor"
+      ],
+      "constraints": [
+        "authorization-checked-on-every-publication"
+      ]
+    }
+  }
+}

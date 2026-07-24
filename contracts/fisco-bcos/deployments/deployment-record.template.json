@@ -1,0 +1,25 @@
+{
+  "schema": "trustdb.fisco-bcos-contract-deployment.v1",
+  "contract": "TrustDBAnchorV1",
+  "contract_protocol_version": "trustdb-anchor-v1",
+  "contract_event_signature": "AnchorPublished(bytes32,bytes32,uint64,bytes32,bytes32,address,uint16)",
+  "payload_version": 1,
+  "crypto_mode": "standard-or-guomi",
+  "chain_id": "replace-with-chain-id",
+  "group_id": "replace-with-group-id",
+  "genesis_hash": "0xreplace",
+  "checkpoint_block_number": 0,
+  "checkpoint_block_hash": "0xreplace",
+  "contract_address": "0xreplace",
+  "deployment_transaction_hash": "0xreplace",
+  "deployment_block_number": 0,
+  "runtime_code_hash_algorithm": "keccak256-or-sm3",
+  "runtime_code_hash": "0xreplace",
+  "artifact_manifest_sha256": "replace",
+  "administrator": "0xreplace",
+  "initial_publishers": [
+    "0xreplace"
+  ],
+  "recorded_at": "replace-with-rfc3339",
+  "recorded_by": "replace-with-change-ticket-or-operator-id"
+}
