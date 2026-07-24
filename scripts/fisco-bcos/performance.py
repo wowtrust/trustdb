@@ -71,6 +71,8 @@ def build_performance_block(
         sample_count = client_performance["sample_count"]
         timing_samples = client_performance["timing_samples"]
         verification_samples = verification_performance["samples"]
+        client_run_binding = client_performance["run_binding"]
+        verification_run_binding = verification_performance["run_binding"]
     except (KeyError, TypeError) as error:
         raise ValueError("performance evidence is incomplete") from error
 
@@ -95,6 +97,15 @@ def build_performance_block(
     mode = client.get("mode")
     if mode not in ("standard", "guomi"):
         raise ValueError("performance evidence has an unsupported crypto mode")
+    if verification.get("mode") != mode:
+        raise ValueError("client and local verification crypto modes differ")
+    if (
+        not isinstance(client_run_binding, str)
+        or len(client_run_binding) != 64
+        or any(character not in "0123456789abcdef" for character in client_run_binding)
+        or verification_run_binding != client_run_binding
+    ):
+        raise ValueError("client and local verification run bindings differ")
 
     stages = _summarize_stages(timing_samples, CLIENT_STAGES)
     stages.update(_summarize_stages(verification_samples, VERIFICATION_STAGES))
@@ -104,6 +115,7 @@ def build_performance_block(
     return {
         "schema_version": 1,
         "mode": mode,
+        "run_binding": client_run_binding,
         "n": sample_count,
         "warmup_n": warmup_count,
         "methodology": {

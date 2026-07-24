@@ -42,15 +42,18 @@ class PerformanceStatsTests(unittest.TestCase):
         client = {
             "mode": "guomi",
             "performance": {
+                "run_binding": "a" * 64,
                 "warmup_count": 3,
                 "sample_count": 20,
-                "payload": "fixed anchor(bytes32) call with one 32-byte digest",
+                "payload": "deterministic unique anchor(bytes32) calls with one 32-byte digest each",
                 "deployment_excluded": True,
                 "timing_samples": [copy.deepcopy(client_sample) for _ in range(20)],
             }
         }
         verification = {
+            "mode": "guomi",
             "performance": {
+                "run_binding": "a" * 64,
                 "warmup_count": 3,
                 "sample_count": 20,
                 "samples": [copy.deepcopy(verification_sample) for _ in range(20)],
@@ -70,14 +73,18 @@ class PerformanceStatsTests(unittest.TestCase):
 
     def test_build_rejects_mismatched_sample_counts(self):
         client = {
+            "mode": "standard",
             "performance": {
+                "run_binding": "a" * 64,
                 "warmup_count": 3,
                 "sample_count": 20,
                 "timing_samples": [{} for _ in range(19)],
             }
         }
         verification = {
+            "mode": "standard",
             "performance": {
+                "run_binding": "a" * 64,
                 "warmup_count": 3,
                 "sample_count": 20,
                 "samples": [{} for _ in range(20)],
@@ -101,7 +108,9 @@ class PerformanceStatsTests(unittest.TestCase):
             "pbft_verification_ns": 8,
         }
         client = {
+            "mode": "standard",
             "performance": {
+                "run_binding": "a" * 64,
                 "warmup_count": 3,
                 "sample_count": 20,
                 "deployment_excluded": False,
@@ -109,7 +118,9 @@ class PerformanceStatsTests(unittest.TestCase):
             }
         }
         verification = {
+            "mode": "standard",
             "performance": {
+                "run_binding": "a" * 64,
                 "warmup_count": 3,
                 "sample_count": 20,
                 "samples": [verification_timing for _ in range(20)],
@@ -118,6 +129,58 @@ class PerformanceStatsTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "deployment"):
             performance.build_performance_block(client, verification)
+
+    def test_build_rejects_cross_mode_verification_timings(self):
+        client, verification = self._valid_inputs()
+        verification["mode"] = "standard"
+
+        with self.assertRaisesRegex(ValueError, "crypto modes"):
+            performance.build_performance_block(client, verification)
+
+    def test_build_rejects_timings_from_another_run(self):
+        client, verification = self._valid_inputs()
+        verification["performance"]["run_binding"] = "b" * 64
+
+        with self.assertRaisesRegex(ValueError, "run bindings"):
+            performance.build_performance_block(client, verification)
+
+    @staticmethod
+    def _valid_inputs():
+        timing = {
+            "prepare_sign_encode_ns": 1,
+            "submit_to_receipt_ns": 2,
+            "receipt_proof_retrieval_ns": 3,
+            "transaction_proof_retrieval_ns": 4,
+            "block_retrieval_ns": 5,
+        }
+        verification_timing = {
+            "receipt_verification_ns": 6,
+            "block_verification_ns": 7,
+            "pbft_verification_ns": 8,
+        }
+        return (
+            {
+                "mode": "guomi",
+                "performance": {
+                    "run_binding": "a" * 64,
+                    "warmup_count": 3,
+                    "sample_count": 20,
+                    "deployment_excluded": True,
+                    "timing_samples": [copy.deepcopy(timing) for _ in range(20)],
+                },
+            },
+            {
+                "mode": "guomi",
+                "performance": {
+                    "run_binding": "a" * 64,
+                    "warmup_count": 3,
+                    "sample_count": 20,
+                    "samples": [
+                        copy.deepcopy(verification_timing) for _ in range(20)
+                    ],
+                },
+            },
+        )
 
 
 if __name__ == "__main__":

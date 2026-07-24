@@ -147,23 +147,34 @@ Every compiler-backed run now carries a dedicated `performance` block. The
 runner deploys the probe once and excludes that deployment from all
 measurements. It then completes 3–20 full-pipeline warmup calls and records
 20–100 sequential calls. The default is 5 warmups and 20 measured calls.
-Standard and Guomi execute the same fixed `anchor(bytes32)` logical payload
-with the same 32-byte digest; only their required native selector, hashing,
-signature and transport algorithms differ. Use the same host profile, smoke
+Standard and Guomi execute the same deterministic sequence of fresh
+`anchor(bytes32)` logical payloads. Each call derives a unique 32-byte digest
+as SHA-256 of the fixed performance domain plus its big-endian sample index;
+only the required native selector, hashing, signature and transport algorithms
+differ. A successful compiled-contract sample must emit both
+`AnchorPublished` and `Anchored`, so an accidental idempotent-duplicate path
+fails the run. The SHA-256 sequence is a harness workload generator, not a
+TrustDB or Guomi cryptographic primitive. Use the same host profile, smoke
 version, warmup count and sample count for a comparison pair.
 
 Each stage reports `n`, nearest-rank p50, nearest-rank p95 and maximum in
 nanoseconds. Network-facing stages are prepare/sign/encode,
 submit-to-receipt, receipt-proof retrieval, transaction-proof retrieval and
 block retrieval. After the SDK closes and all four nodes and listeners are
-confirmed absent, the production Go verifier consumes the retained receipts
+confirmed absent, and while the exclusive host smoke lock remains held, the
+production Go verifier consumes the retained receipts
 and headers, first warms its local path using the discarded network warmups,
 then separately measures receipt-preimage, block-preimage and PBFT-quorum
 verification. Deployment, four-node startup,
 compiler work, certificate validation, readiness, teardown and JSON
 aggregation are deliberately outside the measured stages. Raw per-sample
 timings and verification inputs remain in `raw_client_output` and
-`consensus-preimage.json` so reviewers can recompute the summaries.
+`consensus-preimage.json` so reviewers can recompute the summaries. A
+domain-separated run binding covers the crypto mode, warmup/sample counts,
+every retained transaction and block hash, and every measured network timing.
+The aggregator requires the local verifier to return the exact same mode and
+binding, preventing timings from another run or crypto mode from being spliced
+into the result.
 
 These results are a controlled sequential comparison, not a throughput or
 capacity benchmark. The smoke issues one transaction at a time and includes

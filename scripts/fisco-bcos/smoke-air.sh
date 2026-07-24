@@ -412,10 +412,6 @@ for base in (int(sys.argv[1]), int(sys.argv[2])):
                 raise SystemExit(f"FISCO BCOS listener still accepts connections on port {port}")
 PY
 
-rm -f "${SMOKE_LOCK}/pid"
-rmdir "${SMOKE_LOCK}"
-SMOKE_LOCK=""
-
 if ! (
     cd "${REPO_ROOT}"
     GOWORK=off go run -mod=readonly ./scripts/fisco-bcos/evidence-check \
@@ -436,6 +432,10 @@ if ! python3 "${SCRIPT_DIR}/performance.py" \
     sed 's/^/  /' "${WORK_DIR}/performance.stderr" >&2
     exit 1
 fi
+
+rm -f "${SMOKE_LOCK}/pid"
+rmdir "${SMOKE_LOCK}"
+SMOKE_LOCK=""
 
 if [[ ${ROOT_SM_CERT_WAS_PRESENT} == false && -e ${REPO_ROOT}/sm_cert.cnf ]] || \
    [[ ${ROOT_SM_PARAM_WAS_PRESENT} == false && -e ${REPO_ROOT}/sm_sm2.param ]]; then

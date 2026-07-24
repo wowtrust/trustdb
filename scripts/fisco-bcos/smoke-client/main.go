@@ -2,6 +2,9 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -63,6 +66,7 @@ type performanceVerificationSample struct {
 }
 
 type performanceEvidence struct {
+	RunBinding                string                          `json:"run_binding"`
 	WarmupCount               int                             `json:"warmup_count"`
 	SampleCount               int                             `json:"sample_count"`
 	Payload                   string                          `json:"payload"`
@@ -249,6 +253,7 @@ func collectPerformanceEvidence(
 	hash common.Hash,
 	receipt *types.Receipt,
 	phases txPhaseDurations,
+	expectFreshAnchor bool,
 ) (performanceTimingSample, performanceVerificationSample, error) {
 	if receipt == nil {
 		return performanceTimingSample{}, performanceVerificationSample{}, errors.New("nil performance receipt")
@@ -261,6 +266,12 @@ func collectPerformanceEvidence(
 	}
 	if queriedReceipt == nil || queriedReceipt.Status != types.Success || queriedReceipt.ReceiptProof == nil {
 		return performanceTimingSample{}, performanceVerificationSample{}, errors.New("performance receipt is unsuccessful or lacks its proof field")
+	}
+	if expectFreshAnchor && len(queriedReceipt.Logs) != 2 {
+		return performanceTimingSample{}, performanceVerificationSample{}, fmt.Errorf(
+			"fresh performance anchor emitted %d logs, expected AnchorPublished and Anchored",
+			len(queriedReceipt.Logs),
+		)
 	}
 	transactionProofStarted := time.Now()
 	transaction, err := c.GetTransactionByHash(ctx, hash, true)
@@ -297,8 +308,8 @@ func runPerformanceSamples(
 	ctx context.Context,
 	c *client.Client,
 	cfg config,
+	parsed abi.ABI,
 	address common.Address,
-	callInput []byte,
 ) (performanceEvidence, error) {
 	current, err := c.GetBlockNumber(ctx)
 	if err != nil {
@@ -308,7 +319,7 @@ func runPerformanceSamples(
 		WarmupCount:        cfg.PerformanceWarmup,
 		SampleCount:        cfg.PerformanceSamples,
 		DeploymentExcluded: true,
-		Payload:            "fixed anchor(bytes32) call with one 32-byte digest",
+		Payload:            "deterministic unique anchor(bytes32) calls with one 32-byte digest each",
 		TimingSamples:      make([]performanceTimingSample, 0, cfg.PerformanceSamples),
 		WarmupVerificationSamples: make(
 			[]performanceVerificationSample,
@@ -322,10 +333,14 @@ func runPerformanceSamples(
 		),
 	}
 	if cfg.RawEVM {
-		result.Payload = "fixed raw-EVM call with one input byte"
+		result.Payload = "deterministic unique raw-EVM calls with one input byte each"
 	}
 	total := cfg.PerformanceWarmup + cfg.PerformanceSamples
 	for index := 0; index < total; index++ {
+		callInput, err := performanceCallInput(parsed, cfg.RawEVM, index)
+		if err != nil {
+			return performanceEvidence{}, err
+		}
 		hash, receipt, phases, err := sendEncoded(ctx, c, &address, callInput, "", current+600)
 		if err != nil {
 			return performanceEvidence{}, fmt.Errorf("performance transaction %d: %w", index, err)
@@ -337,7 +352,14 @@ func runPerformanceSamples(
 			}
 			return performanceEvidence{}, fmt.Errorf("performance transaction %d receipt status: %d", index, status)
 		}
-		timing, verification, err := collectPerformanceEvidence(ctx, c, hash, receipt, phases)
+		timing, verification, err := collectPerformanceEvidence(
+			ctx,
+			c,
+			hash,
+			receipt,
+			phases,
+			!cfg.RawEVM,
+		)
 		if err != nil {
 			return performanceEvidence{}, fmt.Errorf("collect performance transaction %d: %w", index, err)
 		}
@@ -348,7 +370,103 @@ func runPerformanceSamples(
 		result.TimingSamples = append(result.TimingSamples, timing)
 		result.VerificationSamples = append(result.VerificationSamples, verification)
 	}
+	runBinding, err := performanceRunBinding(cfg.Mode, result)
+	if err != nil {
+		return performanceEvidence{}, err
+	}
+	result.RunBinding = runBinding
 	return result, nil
+}
+
+func performanceCallInput(parsed abi.ABI, rawEVM bool, index int) ([]byte, error) {
+	if index < 0 || index >= 256 {
+		return nil, errors.New("performance sample index is outside the bounded input domain")
+	}
+	if rawEVM {
+		return []byte{byte(index)}, nil
+	}
+	digest := performanceDigest(index)
+	input, err := parsed.Pack("anchor", digest)
+	if err != nil {
+		return nil, fmt.Errorf("pack performance anchor call %d: %w", index, err)
+	}
+	return input, nil
+}
+
+func performanceDigest(index int) [32]byte {
+	var encodedIndex [8]byte
+	binary.BigEndian.PutUint64(encodedIndex[:], uint64(index))
+	hash := sha256.New()
+	_, _ = hash.Write([]byte("trustdb.fisco-bcos.performance-anchor.v1\x00"))
+	_, _ = hash.Write(encodedIndex[:])
+	var result [32]byte
+	copy(result[:], hash.Sum(nil))
+	return result
+}
+
+func performanceRunBinding(mode string, input performanceEvidence) (string, error) {
+	hash := sha256.New()
+	_, _ = hash.Write([]byte("trustdb.fisco-bcos.performance.v1\x00"))
+	if err := writeBindingString(hash, mode); err != nil {
+		return "", err
+	}
+	var counts [8]byte
+	binary.BigEndian.PutUint32(counts[:4], uint32(input.WarmupCount))
+	binary.BigEndian.PutUint32(counts[4:], uint32(input.SampleCount))
+	_, _ = hash.Write(counts[:])
+	samples := make(
+		[]performanceVerificationSample,
+		0,
+		len(input.WarmupVerificationSamples)+len(input.VerificationSamples),
+	)
+	samples = append(samples, input.WarmupVerificationSamples...)
+	samples = append(samples, input.VerificationSamples...)
+	for index, sample := range samples {
+		if sample.Receipt == nil || sample.Block == nil {
+			return "", fmt.Errorf("performance binding sample %d is incomplete", index)
+		}
+		if err := writeBindingString(hash, strings.ToLower(sample.Receipt.TransactionHash)); err != nil {
+			return "", err
+		}
+		if err := writeBindingString(hash, strings.ToLower(sample.Block.Hash)); err != nil {
+			return "", err
+		}
+	}
+	for index, sample := range input.TimingSamples {
+		values := [...]int64{
+			sample.PrepareSignEncodeNS,
+			sample.SubmitToReceiptNS,
+			sample.ReceiptProofRetrievalNS,
+			sample.TransactionProofRetrievalNS,
+			sample.BlockRetrievalNS,
+		}
+		for stage, value := range values {
+			if value < 0 {
+				return "", fmt.Errorf("performance timing sample %d stage %d is negative", index, stage)
+			}
+			var encoded [8]byte
+			binary.BigEndian.PutUint64(encoded[:], uint64(value))
+			_, _ = hash.Write(encoded[:])
+		}
+	}
+	return hex.EncodeToString(hash.Sum(nil)), nil
+}
+
+type bindingWriter interface {
+	Write([]byte) (int, error)
+}
+
+func writeBindingString(destination bindingWriter, value string) error {
+	if value == "" || len(value) > 1<<16 {
+		return errors.New("performance binding value is empty or oversized")
+	}
+	var size [4]byte
+	binary.BigEndian.PutUint32(size[:], uint32(len(value)))
+	if _, err := destination.Write(size[:]); err != nil {
+		return err
+	}
+	_, err := destination.Write([]byte(value))
+	return err
 }
 
 func main() {
@@ -508,7 +626,7 @@ func main() {
 	if len(sealers) != 4 {
 		fatalf("expected four sealers, got %d", len(sealers))
 	}
-	performance, err := runPerformanceSamples(ctx, c, cfg, address, callInput)
+	performance, err := runPerformanceSamples(ctx, c, cfg, parsed, address)
 	if err != nil {
 		fatalf("collect post-warmup performance evidence: %v", err)
 	}

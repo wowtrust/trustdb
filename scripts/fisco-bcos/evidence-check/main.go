@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -32,11 +34,21 @@ type verificationSample struct {
 	Block   *types.Block   `json:"block"`
 }
 
+type smokePerformanceTimingSample struct {
+	PrepareSignEncodeNS         int64 `json:"prepare_sign_encode_ns"`
+	SubmitToReceiptNS           int64 `json:"submit_to_receipt_ns"`
+	ReceiptProofRetrievalNS     int64 `json:"receipt_proof_retrieval_ns"`
+	TransactionProofRetrievalNS int64 `json:"transaction_proof_retrieval_ns"`
+	BlockRetrievalNS            int64 `json:"block_retrieval_ns"`
+}
+
 type smokePerformanceEvidence struct {
-	WarmupCount               int                  `json:"warmup_count"`
-	SampleCount               int                  `json:"sample_count"`
-	WarmupVerificationSamples []verificationSample `json:"warmup_verification_samples"`
-	VerificationSamples       []verificationSample `json:"verification_samples"`
+	RunBinding                string                         `json:"run_binding"`
+	WarmupCount               int                            `json:"warmup_count"`
+	SampleCount               int                            `json:"sample_count"`
+	TimingSamples             []smokePerformanceTimingSample `json:"timing_samples"`
+	WarmupVerificationSamples []verificationSample           `json:"warmup_verification_samples"`
+	VerificationSamples       []verificationSample           `json:"verification_samples"`
 }
 
 type verificationTimingSample struct {
@@ -46,12 +58,14 @@ type verificationTimingSample struct {
 }
 
 type performanceResult struct {
+	RunBinding  string                     `json:"run_binding"`
 	WarmupCount int                        `json:"warmup_count"`
 	SampleCount int                        `json:"sample_count"`
 	Samples     []verificationTimingSample `json:"samples"`
 }
 
 type result struct {
+	Mode                        string            `json:"mode"`
 	ReceiptConsensusHashMatched bool              `json:"receipt_consensus_hash_matched"`
 	BlockConsensusHashMatched   bool              `json:"block_consensus_hash_matched"`
 	PBFTCommitSignaturesValid   bool              `json:"pbft_commit_signatures_valid"`
@@ -117,6 +131,7 @@ func main() {
 		fatalf("verify performance samples: %v", err)
 	}
 	if err := json.NewEncoder(os.Stdout).Encode(result{
+		Mode:                        evidence.Mode,
 		ReceiptConsensusHashMatched: true,
 		BlockConsensusHashMatched:   true,
 		PBFTCommitSignaturesValid:   true,
@@ -135,9 +150,17 @@ func verifyPerformanceSamples(input smokePerformanceEvidence, mode string) (perf
 		input.SampleCount < 20 || input.SampleCount > 100 {
 		return performanceResult{}, errors.New("performance sample bounds are invalid")
 	}
-	if len(input.WarmupVerificationSamples) != input.WarmupCount ||
+	if len(input.TimingSamples) != input.SampleCount ||
+		len(input.WarmupVerificationSamples) != input.WarmupCount ||
 		len(input.VerificationSamples) != input.SampleCount {
 		return performanceResult{}, errors.New("performance sample counts do not match their declarations")
+	}
+	runBinding, err := performanceRunBinding(mode, input)
+	if err != nil {
+		return performanceResult{}, err
+	}
+	if input.RunBinding == "" || input.RunBinding != runBinding {
+		return performanceResult{}, errors.New("performance run binding does not match the retained samples")
 	}
 	for index, sample := range input.WarmupVerificationSamples {
 		if _, err := verifyTimedSample(sample, mode); err != nil {
@@ -145,6 +168,7 @@ func verifyPerformanceSamples(input smokePerformanceEvidence, mode string) (perf
 		}
 	}
 	result := performanceResult{
+		RunBinding:  runBinding,
 		WarmupCount: input.WarmupCount,
 		SampleCount: input.SampleCount,
 		Samples:     make([]verificationTimingSample, 0, input.SampleCount),
@@ -157,6 +181,71 @@ func verifyPerformanceSamples(input smokePerformanceEvidence, mode string) (perf
 		result.Samples = append(result.Samples, timing)
 	}
 	return result, nil
+}
+
+func performanceRunBinding(mode string, input smokePerformanceEvidence) (string, error) {
+	hash := sha256.New()
+	_, _ = hash.Write([]byte("trustdb.fisco-bcos.performance.v1\x00"))
+	if err := writeBindingString(hash, mode); err != nil {
+		return "", err
+	}
+	var counts [8]byte
+	binary.BigEndian.PutUint32(counts[:4], uint32(input.WarmupCount))
+	binary.BigEndian.PutUint32(counts[4:], uint32(input.SampleCount))
+	_, _ = hash.Write(counts[:])
+	samples := make(
+		[]verificationSample,
+		0,
+		len(input.WarmupVerificationSamples)+len(input.VerificationSamples),
+	)
+	samples = append(samples, input.WarmupVerificationSamples...)
+	samples = append(samples, input.VerificationSamples...)
+	for index, sample := range samples {
+		if sample.Receipt == nil || sample.Block == nil {
+			return "", fmt.Errorf("performance binding sample %d is incomplete", index)
+		}
+		if err := writeBindingString(hash, strings.ToLower(sample.Receipt.TransactionHash)); err != nil {
+			return "", err
+		}
+		if err := writeBindingString(hash, strings.ToLower(sample.Block.Hash)); err != nil {
+			return "", err
+		}
+	}
+	for index, sample := range input.TimingSamples {
+		values := [...]int64{
+			sample.PrepareSignEncodeNS,
+			sample.SubmitToReceiptNS,
+			sample.ReceiptProofRetrievalNS,
+			sample.TransactionProofRetrievalNS,
+			sample.BlockRetrievalNS,
+		}
+		for stage, value := range values {
+			if value < 0 {
+				return "", fmt.Errorf("performance timing sample %d stage %d is negative", index, stage)
+			}
+			var encoded [8]byte
+			binary.BigEndian.PutUint64(encoded[:], uint64(value))
+			_, _ = hash.Write(encoded[:])
+		}
+	}
+	return hex.EncodeToString(hash.Sum(nil)), nil
+}
+
+type bindingWriter interface {
+	Write([]byte) (int, error)
+}
+
+func writeBindingString(destination bindingWriter, value string) error {
+	if value == "" || len(value) > 1<<16 {
+		return errors.New("performance binding value is empty or oversized")
+	}
+	var size [4]byte
+	binary.BigEndian.PutUint32(size[:], uint32(len(value)))
+	if _, err := destination.Write(size[:]); err != nil {
+		return err
+	}
+	_, err := destination.Write([]byte(value))
+	return err
 }
 
 func verifyTimedSample(sample verificationSample, mode string) (verificationTimingSample, error) {
