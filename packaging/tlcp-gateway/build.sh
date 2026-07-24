@@ -51,6 +51,7 @@ image_digest=$(
 )
 
 docker run --rm \
+  --env SYFT_CHECK_FOR_APP_UPDATE=false \
   --volume "$work:/work" \
   "$syft_image" \
   "oci-archive:/work/gateway-first.oci.tar" \
