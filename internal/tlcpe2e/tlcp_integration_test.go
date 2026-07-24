@@ -9,6 +9,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/x509/pkix"
+	"encoding/base64"
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
@@ -32,6 +33,7 @@ import (
 	"github.com/emmansun/gmsm/smx509"
 	"github.com/wowtrust/trustdb/internal/cryptosuite"
 	"github.com/wowtrust/trustdb/internal/keydescriptor"
+	"github.com/wowtrust/trustdb/internal/keystore"
 	"github.com/wowtrust/trustdb/internal/tlcpprofile"
 	"github.com/wowtrust/trustdb/internal/trustcrypto"
 	"golang.org/x/net/http2"
@@ -120,7 +122,8 @@ func TestTLCPGatewayHTTPAndGRPCMutualAuthentication(t *testing.T) {
 	httpResult := runHTTPClient(t, running, fixture, nil)
 	for _, expected := range []string{
 		"HTTP/1.1 200 OK",
-		`{"status":"ok","transport":"loopback"}`,
+		`"ok":true`,
+		`"transport_security":"plaintext"`,
 		"Protocol version: NTLSv1.1",
 		"Ciphersuite: ECDHE-SM2-SM4-GCM-SM3",
 	} {
@@ -131,6 +134,79 @@ func TestTLCPGatewayHTTPAndGRPCMutualAuthentication(t *testing.T) {
 	if err := runGRPCHealthClient(running, fixture); err != nil {
 		t.Fatal(err)
 	}
+
+	t.Run("active identity challenge is not externally proxied", func(t *testing.T) {
+		result, err := runOpenSSLText(
+			running,
+			fixture,
+			"http/1.1",
+			nil,
+			"GET "+tlcpprofile.ActiveIdentityChallengePath+
+				"?nonce=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"+
+				" HTTP/1.1\r\nHost: "+serverName+
+				"\r\nConnection: close\r\n\r\n",
+			true,
+		)
+		if err != nil || !strings.Contains(result, "HTTP/1.1 404 Not Found") {
+			t.Fatalf("active identity endpoint escaped loopback: %v\n%s", err, result)
+		}
+	})
+
+	t.Run("stale identity manifest fails online readiness", func(t *testing.T) {
+		manifestPath := filepath.Join(
+			fixture.dir,
+			"trustdb-active-identities.json",
+		)
+		original, err := os.ReadFile(manifestPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		stalePublic, _, err := ed25519.GenerateKey(rand.Reader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		staleDescriptor := keydescriptor.Descriptor{
+			SchemaVersion: keydescriptor.SchemaV1,
+			Kind:          keydescriptor.KindVerifier,
+			Provider:      keydescriptor.ProviderPublic,
+			CryptoSuite:   cryptosuite.INTLV1,
+			KeyID:         "stale-proof-signer",
+			Algorithm:     cryptosuite.SignatureEd25519,
+			PublicKey: keydescriptor.PublicKeyMaterial{
+				Encoding: cryptosuite.Ed25519PublicKeyEncoding,
+				Bytes:    stalePublic,
+			},
+		}
+		staleData, err := keydescriptor.Marshal(staleDescriptor)
+		if err != nil {
+			t.Fatal(err)
+		}
+		registryData, err := os.ReadFile(filepath.Join(
+			fixture.dir,
+			"trustdb-registry.pub",
+		))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tlcpprofile.WriteTrustDBIdentityManifest(
+			manifestPath,
+			staleData,
+			registryData,
+		); err != nil {
+			t.Fatal(err)
+		}
+		output, readinessErr := exec.Command(
+			"docker",
+			"exec",
+			running.gatewayContainer,
+			"/usr/local/bin/trustdb-tlcp-readiness",
+		).CombinedOutput()
+		if readinessErr == nil {
+			t.Fatalf("stale manifest passed readiness:\n%s", output)
+		}
+		replaceTestFile(t, manifestPath, original)
+		waitForRuntimeReadiness(t, running.gatewayContainer, 10*time.Second)
+	})
 
 	t.Run("bounded concurrent HTTP and gRPC", func(t *testing.T) {
 		const clients = 8
@@ -170,7 +246,8 @@ func TestTLCPGatewayHTTPAndGRPCMutualAuthentication(t *testing.T) {
 	t.Run("request body threshold", func(t *testing.T) {
 		const maximum = 16 << 20
 		body := bytes.Repeat([]byte{'a'}, maximum)
-		request := "POST /echo-size HTTP/1.1\r\nHost: " + serverName +
+		request := "POST /v2/claims/batch HTTP/1.1\r\nHost: " + serverName +
+			"\r\nContent-Type: application/cbor" +
 			"\r\nContent-Length: " + strconv.Itoa(len(body)) +
 			"\r\nConnection: close\r\n\r\n" + string(body)
 		result, err := runOpenSSLText(
@@ -181,9 +258,10 @@ func TestTLCPGatewayHTTPAndGRPCMutualAuthentication(t *testing.T) {
 			request,
 			true,
 		)
-		if err != nil || !strings.Contains(result, "HTTP/1.1 200 OK") ||
-			!strings.Contains(result, strconv.Itoa(maximum)) {
-			t.Fatalf("maximum request body was not accepted: %v\n%s", err, result)
+		if err != nil ||
+			strings.Contains(result, "413 Request Entity Too Large") ||
+			!strings.Contains(result, "HTTP/1.1 400 Bad Request") {
+			t.Fatalf("maximum request body did not reach TrustDB: %v\n%s", err, result)
 		}
 
 		result, err = runOpenSSLText(
@@ -191,7 +269,8 @@ func TestTLCPGatewayHTTPAndGRPCMutualAuthentication(t *testing.T) {
 			fixture,
 			"http/1.1",
 			nil,
-			"POST /echo-size HTTP/1.1\r\nHost: "+serverName+
+			"POST /v2/claims/batch HTTP/1.1\r\nHost: "+serverName+
+				"\r\nContent-Type: application/cbor"+
 				"\r\nContent-Length: "+strconv.Itoa(maximum+1)+
 				"\r\nConnection: close\r\n\r\n",
 			true,
@@ -589,10 +668,9 @@ func buildUpstreamImage(t *testing.T, root, architecture string) string {
 	binaryPath := filepath.Join(dir, "upstream")
 	command := exec.Command(
 		"go", "build",
-		"-tags=integration",
 		"-trimpath",
 		"-o", binaryPath,
-		"./internal/tlcpe2e/testserver",
+		"./cmd/trustdb",
 	)
 	command.Dir = root
 	command.Env = append(
@@ -638,10 +716,32 @@ func startGateway(
 		"--publish", "127.0.0.1::"+grpcPort,
 		"--publish", "127.0.0.1::"+canaryHTTPPort,
 		"--publish", "127.0.0.1::"+canaryGRPCPort,
+		"--user", "0:0",
 		"--read-only",
+		"--tmpfs", "/data:uid=10001,gid=10001,mode=0700",
+		"--mount", "type=bind,src="+fixture.dir+",dst=/certs",
 		upstreamImage,
+		"--log-level", "info",
+		"serve",
+		"--listen", "127.0.0.1:18080",
+		"--grpc-listen", "127.0.0.1:19090",
+		"--server-id", "tlcp-e2e",
+		"--server-key-id", "active-proof-signer",
+		"--server-private-key", "/certs/trustdb-server.key",
+		"--server-public-key", "/certs/trustdb-server.pub",
+		"--key-registry", "/certs/keys.tdkeys",
+		"--registry-public-key", "/certs/trustdb-registry.pub",
+		"--tlcp-gateway-profile", activeProfilePath(fixture, extra),
+		"--tlcp-identity-manifest", activeIdentityManifestPath(
+			fixture,
+			extra,
+		),
+		"--wal", "/data/wal",
+		"--proof-dir", "/data/proofs",
+		"--metastore", "file",
+		"--anchor-sink", "off",
 	)
-	waitForLog(t, upstream, "upstream ready")
+	waitForLog(t, upstream, "starting trustdb server")
 	startGatewayContainerNamed(t, gateway, upstream, gatewayImage, fixture, extra)
 	waitForLog(t, gateway, "start worker processes")
 	waitForHealthy(t, gateway)
@@ -655,6 +755,36 @@ func startGateway(
 		httpPort:          httpPort,
 		grpcPort:          grpcPort,
 	}
+}
+
+func activeProfilePath(
+	fixture certificateFixture,
+	extra map[string]string,
+) string {
+	if path := strings.TrimSpace(extra["TLCP_PROFILE_FILE"]); path != "" {
+		return path
+	}
+	return fixtureContainerPath(nil, fixture, fixture.profileFile)
+}
+
+func activeIdentityManifestPath(
+	fixture certificateFixture,
+	extra map[string]string,
+) string {
+	profilePath := activeProfilePath(fixture, extra)
+	hostPath := filepath.Join(
+		fixture.dir,
+		filepath.FromSlash(strings.TrimPrefix(profilePath, "/certs/")),
+	)
+	data, err := os.ReadFile(hostPath)
+	if err != nil {
+		panic(fmt.Sprintf("read active E2E profile %q: %v", hostPath, err))
+	}
+	var profile tlcpprofile.Profile
+	if err := json.Unmarshal(data, &profile); err != nil {
+		panic(fmt.Sprintf("decode active E2E profile %q: %v", hostPath, err))
+	}
+	return profile.TrustDBIdentityManifestFile
 }
 
 func startGatewayContainer(
@@ -826,7 +956,7 @@ func runHTTPClient(
 		fixture,
 		"http/1.1",
 		extra,
-		"GET /health HTTP/1.1\r\nHost: "+serverName+"\r\nConnection: close\r\n\r\n",
+		"GET /healthz HTTP/1.1\r\nHost: "+serverName+"\r\nConnection: close\r\n\r\n",
 		true,
 	)
 	if err != nil {
@@ -849,6 +979,10 @@ func runOpenSSLText(
 	withClientCertificate bool,
 ) (string, error) {
 	args := opensslDockerArgs(running, fixture, alpn, withClientCertificate)
+	// runTextCommand closes stdin immediately after the complete request. Keep
+	// s_client reading until the peer closes the HTTP connection so EOF on the
+	// local pipe cannot discard the response.
+	args = append(args, "-ign_eof")
 	args = append(args, extra...)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -1005,12 +1139,10 @@ func opensslDockerArgs(
 ) []string {
 	port := runningPort(running, alpn)
 	args := []string{
-		"run", "--rm", "--interactive",
-		"--network", "container:" + running.upstreamContainer,
+		"exec", "--interactive",
 		"--user", "0:0",
-		"--mount", "type=bind,src=" + fixture.dir + ",dst=/certs,readonly",
-		"--entrypoint", "/opt/tongsuo/bin/openssl",
-		running.gatewayImage,
+		running.gatewayContainer,
+		"/opt/tongsuo/bin/openssl",
 		"s_client",
 		"-connect", "127.0.0.1:" + port,
 		"-servername", serverName,
@@ -1256,7 +1388,7 @@ func publishedAddress(t *testing.T, container, port string) string {
 
 func waitForLog(t *testing.T, container, text string) {
 	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
+	deadline := time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {
 		logs := dockerOutput(t, "logs", container)
 		if strings.Contains(logs, text) {
@@ -1363,10 +1495,11 @@ func dockerOutput(t *testing.T, args ...string) string {
 func newCertificateFixture(t *testing.T) certificateFixture {
 	t.Helper()
 	dir := t.TempDir()
-	// The gateway deliberately runs as UID 10001. Test fixtures are ephemeral,
-	// test-only software keys and must be readable through a native Linux bind
-	// mount even when the test runner has a different UID.
-	if err := os.Chmod(dir, 0o755); err != nil {
+	// TrustDB atomically replaces its generated public identity manifest through
+	// this bind mount. Docker Desktop does not preserve the host test runner's
+	// UID for the container, so the ephemeral directory must permit the rename.
+	// Private test key material remains independently restricted to mode 0600.
+	if err := os.Chmod(dir, 0o777); err != nil {
 		t.Fatal(err)
 	}
 	now := time.Now().UTC()
@@ -1407,10 +1540,7 @@ func newCertificateFixture(t *testing.T) certificateFixture {
 		filepath.Join(dir, "crl-bundle.pem"),
 		append(append([]byte(nil), serverCRLPEM...), clientCRLPEM...),
 	)
-	writeE2ETrustDBIdentityManifest(
-		t,
-		filepath.Join(dir, "trustdb-active-identities.json"),
-	)
+	writeE2ETrustDBKeys(t, dir)
 	fixture := certificateFixture{
 		dir:                    dir,
 		serverSigningSHA256:    publicKeySHA256(t, serverSigning),
@@ -1484,7 +1614,10 @@ func prepareServerGenerations(
 		encryptionPublicKeySHA256: fixture.serverEncryptionSHA256,
 	}
 	firstDir := filepath.Join(fixture.dir, first.name)
-	if err := os.Mkdir(firstDir, 0o755); err != nil {
+	if err := os.Mkdir(firstDir, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(firstDir, 0o777); err != nil {
 		t.Fatal(err)
 	}
 	for _, name := range []string{
@@ -1514,7 +1647,10 @@ func prepareServerGenerations(
 
 	second := serverGeneration{name: "generation-2"}
 	secondDir := filepath.Join(fixture.dir, second.name)
-	if err := os.Mkdir(secondDir, 0o755); err != nil {
+	if err := os.Mkdir(secondDir, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(secondDir, 0o777); err != nil {
 		t.Fatal(err)
 	}
 	now := time.Now().UTC()
@@ -2058,40 +2194,128 @@ func writePEMFile(t *testing.T, path string, data []byte) {
 	}
 }
 
-func writeE2ETrustDBIdentityManifest(t *testing.T, path string) {
+func writeE2ETrustDBKeys(t *testing.T, dir string) {
 	t.Helper()
-	_, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	proofSigner, _ := writeE2ESigner(
+		t,
+		dir,
+		"trustdb-server",
+		"active-proof-signer",
+	)
+	registrySigner, registryPublic := writeE2ESigner(
+		t,
+		dir,
+		"trustdb-registry",
+		"active-registry-signer",
+	)
+	registryPath := filepath.Join(dir, "keys.tdkeys")
+	if _, err := keystore.Open(
+		registryPath,
+		registrySigner,
+		registryPublic,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(registryPath, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	activePublic, err := proofSigner.PublicKey(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	signer := trustcrypto.MustNewEd25519Signer("e2e-proof-signer", privateKey)
-	activePublicKey, err := signer.PublicKey(context.Background())
+	if !sameE2EPublicKey(activePublic, mustE2EPublicDescriptor(
+		t,
+		filepath.Join(dir, "trustdb-server.pub"),
+	)) {
+		t.Fatal("E2E TrustDB signer descriptor does not match its active signer")
+	}
+}
+
+func writeE2ESigner(
+	t *testing.T,
+	dir, prefix, keyID string,
+) (trustcrypto.Signer, trustcrypto.PublicKeyDescriptor) {
+	t.Helper()
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		t.Fatal(err)
 	}
-	descriptor := keydescriptor.Descriptor{
+	signer := trustcrypto.MustNewEd25519Signer(keyID, privateKey)
+	verifier := keydescriptor.Descriptor{
 		SchemaVersion: keydescriptor.SchemaV1,
 		Kind:          keydescriptor.KindVerifier,
 		Provider:      keydescriptor.ProviderPublic,
 		CryptoSuite:   cryptosuite.INTLV1,
-		KeyID:         "e2e-proof-signer",
+		KeyID:         keyID,
 		Algorithm:     cryptosuite.SignatureEd25519,
 		PublicKey: keydescriptor.PublicKeyMaterial{
 			Encoding: cryptosuite.Ed25519PublicKeyEncoding,
-			Bytes:    activePublicKey.Bytes,
+			Bytes:    append([]byte(nil), publicKey...),
 		},
 	}
-	data, err := keydescriptor.Marshal(descriptor)
-	if err != nil {
-		t.Fatal(err)
+	private := verifier.Clone()
+	private.Kind = keydescriptor.KindSigner
+	private.Provider = keydescriptor.ProviderSoftware
+	private.Software = &keydescriptor.SoftwareKeyReference{
+		MaterialPath: prefix + ".material",
+		Encoding:     cryptosuite.Ed25519PrivateKeyEncoding,
+		Protection:   keydescriptor.SoftwareProtectionPlaintextDev,
 	}
-	if _, err := tlcpprofile.WriteTrustDBIdentityManifest(
-		path,
-		data,
-		nil,
+	material := base64.RawURLEncoding.EncodeToString(privateKey)
+	if err := os.WriteFile(
+		filepath.Join(dir, prefix+".material"),
+		[]byte(material),
+		0o600,
 	); err != nil {
 		t.Fatal(err)
 	}
+	for path, descriptor := range map[string]keydescriptor.Descriptor{
+		filepath.Join(dir, prefix+".key"): private,
+		filepath.Join(dir, prefix+".pub"): verifier,
+	} {
+		data, err := keydescriptor.Marshal(descriptor)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, data, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	publicDescriptor, err := verifier.PublicKeyDescriptor()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return signer, publicDescriptor
+}
+
+func mustE2EPublicDescriptor(
+	t *testing.T,
+	path string,
+) trustcrypto.PublicKeyDescriptor {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	descriptor, err := keydescriptor.Unmarshal(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	publicKey, err := descriptor.PublicKeyDescriptor()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return publicKey
+}
+
+func sameE2EPublicKey(
+	left, right trustcrypto.PublicKeyDescriptor,
+) bool {
+	return left.Suite == right.Suite &&
+		left.KeyID == right.KeyID &&
+		left.Algorithm == right.Algorithm &&
+		left.Encoding == right.Encoding &&
+		bytes.Equal(left.Bytes, right.Bytes)
 }
 
 func publicKeySHA256(t *testing.T, certificate *smx509.Certificate) string {
