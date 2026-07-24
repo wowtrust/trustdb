@@ -97,8 +97,25 @@ The transaction is decoded by the pinned pure-Go TARS implementation and
 re-encoded byte for byte. Before that decoder runs, a bounded TARS preflight
 walks every header, scalar, string, list, map, simple list, and nested struct.
 Every wire length must fit inside the already bounded transaction; nesting and
-element counts are capped. Unknown fields, alternate encodings, trailing
+element counts are capped. A transaction-schema preflight additionally
+requires the generated reader's fixed-size `dataHash` and `sender` fields to
+use canonical byte SimpleLists of exactly 32 and 20 bytes. This rejects
+malicious LIST counts before they can index the SDK's fixed arrays. The SDK
+decode call has a narrow panic-to-error boundary as defense in depth; it does
+not replace the schema checks. Unknown fields, alternate encodings, trailing
 bytes, oversized allocation claims, and non-canonical round trips fail.
+
+This proof version admits BCOS transaction-data versions 0 and 1 only. The
+current TrustDB writer generates version 0: its repository-pinned Go wrapper
+calls `bcos_sdk_create_transaction_data`, whose pinned
+`TransactionBuilder::createTransactionData` path is asserted as version 0 by
+the same C SDK's `testTransaction.cpp`. The `V1` suffix in the Go wrapper
+method name does not mean BCOS transaction-data version 1. The verifier also
+supports and directly tests the separate version-1 consensus hash projection
+implemented by the pinned Go SDK. Version 2 and every other value fail before
+signature or inclusion verification: Go SDK `v3.0.2` does not define the
+version-2 extension-field hash projection used by this verifier, so accepting
+it would silently omit consensus fields.
 
 The verifier then requires exact equality for:
 
@@ -143,10 +160,12 @@ nodes, non-32-byte hashes, duplicate/missing current hashes, index overflow,
 wrong order, wrong root, or trailing data fail closed. Parsing is limited to
 512 proof nodes and the existing receipt aggregate byte budget.
 
-Golden vectors in
+Repository-generated conformance vectors in
 `test/vectors/fisco-bcos-receipt-inclusion-{standard,guomi}-v1.json` pin the
-standard and Guomi hashes, ABI identifiers, and official flat proof format to
-the FISCO BCOS `v3.16.3` Merkle implementation.
+standard and Guomi hashes and ABI identifiers derived from the documented flat
+proof format in the FISCO BCOS `v3.16.3` Merkle implementation. These are
+TrustDB-authored, format-derived test inputs, not captured upstream fixtures
+or live-node evidence.
 
 ## Strict event binding
 
@@ -197,11 +216,13 @@ chain context, and missing local trust fail.
 
 Tests cover:
 
-- official-format standard and Guomi golden vectors;
+- format-derived standard and Guomi conformance vectors, explicitly identified
+  as TrustDB-authored rather than upstream fixtures;
 - standard BCOS with a `CN_SM_V1` STH and Guomi BCOS with an `INTL_V1` STH;
 - disconnected/nonexistent endpoint, provider, and certificate references;
 - wrong mode and exact Signed STH suite drift;
-- mutation and strict bounds;
+- mutation, strict bounds, fixed-array decoder regressions, and explicit
+  transaction-data v0/v1 admission with all other versions rejected;
 - fuzzing of TARS and Merkle parsers;
 - L4 stage reporting and skip behavior; and
 - export of a covering raw BCOS result without L5 promotion.
@@ -235,3 +256,8 @@ Windows and macOS builds compile the same verification path.
   defines the pinned receipt and block-header hash projections.
 - The repository-pinned Go SDK `v3.0.2` defines the standard/SM transaction
   data hash and canonical TARS transaction structures.
+- The repository-pinned C SDK commit
+  [`a278b4749e34`](https://github.com/FISCO-BCOS/bcos-c-sdk/blob/a278b4749e342d2b111d736045db9ed98a63224d/bcos-c-sdk/bcos_sdk_c_uti_tx.cpp)
+  defines the writer's `bcos_sdk_create_transaction_data` path; its
+  [`testTransaction.cpp`](https://github.com/FISCO-BCOS/bcos-c-sdk/blob/a278b4749e342d2b111d736045db9ed98a63224d/test/testTransaction.cpp)
+  asserts that this path decodes to transaction-data version 0.

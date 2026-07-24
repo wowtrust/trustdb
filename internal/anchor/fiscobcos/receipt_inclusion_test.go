@@ -11,6 +11,7 @@ import (
 
 	"github.com/FISCO-BCOS/go-sdk/v3/smcrypto"
 	"github.com/FISCO-BCOS/go-sdk/v3/types"
+	"github.com/TarsCloud/TarsGo/tars/protocol/codec"
 	"github.com/ethereum/go-ethereum/common"
 	ethcrypto "github.com/ethereum/go-ethereum/crypto"
 
@@ -161,7 +162,7 @@ func TestBCOSMerkleProofStrictEncodingAndIndex(t *testing.T) {
 	}
 }
 
-func TestOfficialBCOSReceiptInclusionGoldenVectors(t *testing.T) {
+func TestBCOSReceiptInclusionFormatDerivedVectors(t *testing.T) {
 	t.Parallel()
 
 	for _, name := range []string{
@@ -177,6 +178,7 @@ func TestOfficialBCOSReceiptInclusionGoldenVectors(t *testing.T) {
 			}
 			var vector struct {
 				SchemaVersion    string     `json:"schema_version"`
+				FixtureOrigin    string     `json:"fixture_origin"`
 				Source           string     `json:"source"`
 				CryptoMode       CryptoMode `json:"crypto_mode"`
 				ChainHash        string     `json:"chain_hash_algorithm"`
@@ -193,8 +195,9 @@ func TestOfficialBCOSReceiptInclusionGoldenVectors(t *testing.T) {
 				t.Fatal(err)
 			}
 			if vector.SchemaVersion != "trustdb.test.fisco-bcos-receipt-inclusion.v1" ||
+				vector.FixtureOrigin != "trustdb-derived-conformance-vector" ||
 				vector.Source != "https://github.com/FISCO-BCOS/FISCO-BCOS/blob/v3.16.3/bcos-crypto/bcos-crypto/merkle/Merkle.h" {
-				t.Fatal("golden vector does not pin the official v3.16.3 Merkle source")
+				t.Fatal("derived vector does not identify its origin and the pinned v3.16.3 Merkle source")
 			}
 			leaf := mustDecodeHex(t, vector.LeafHash)
 			root := mustDecodeHex(t, vector.RootHash)
@@ -203,7 +206,7 @@ func TestOfficialBCOSReceiptInclusionGoldenVectors(t *testing.T) {
 				path[i] = mustDecodeHex(t, vector.Proof[i])
 			}
 			if err := verifyBCOSMerklePath(
-				"golden",
+				"format-derived",
 				leaf,
 				path,
 				vector.LeafIndex,
@@ -221,6 +224,75 @@ func TestOfficialBCOSReceiptInclusionGoldenVectors(t *testing.T) {
 				t.Fatalf("event topic=%x error=%v", topic, err)
 			}
 		})
+	}
+}
+
+func TestCanonicalTransactionDecoderRejectsFixedArrayOverflowWithoutPanic(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		tag   byte
+		count int32
+	}{
+		{name: "data_hash_list_33", tag: transactionDataHashTag, count: transactionHashBytes + 1},
+		{name: "sender_list_21", tag: transactionSenderTag, count: transactionSenderBytes + 1},
+	}
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			encoded := tarsByteList(t, tc.tag, tc.count)
+			if err := validateBoundedTARS(encoded); err != nil {
+				t.Fatalf("generic bounds unexpectedly rejected regression input: %v", err)
+			}
+			if _, err := decodeCanonicalTransaction(encoded); err == nil {
+				t.Fatal("fixed-array overflow encoding was accepted")
+			}
+		})
+	}
+}
+
+func TestCanonicalTransactionDecoderRequiresExactFixedSimpleListLengths(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		tag    byte
+		length int32
+	}{
+		{name: "short_data_hash", tag: transactionDataHashTag, length: transactionHashBytes - 1},
+		{name: "long_data_hash", tag: transactionDataHashTag, length: transactionHashBytes + 1},
+		{name: "short_sender", tag: transactionSenderTag, length: transactionSenderBytes - 1},
+		{name: "long_sender", tag: transactionSenderTag, length: transactionSenderBytes + 1},
+	}
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			encoded := tarsByteSimpleList(t, tc.tag, tc.length)
+			if _, err := decodeCanonicalTransaction(encoded); err == nil {
+				t.Fatal("noncanonical fixed-width SimpleList was accepted")
+			}
+		})
+	}
+}
+
+func TestCanonicalTransactionDecoderVersionGate(t *testing.T) {
+	t.Parallel()
+
+	for _, version := range []int32{
+		minSupportedBCOSTransactionVersion,
+		maxSupportedBCOSTransactionVersion,
+	} {
+		if _, err := decodeCanonicalTransaction(canonicalTransactionForVersion(version)); err != nil {
+			t.Fatalf("supported transaction data version %d failed: %v", version, err)
+		}
+	}
+	for _, version := range []int32{-1, 2} {
+		if _, err := decodeCanonicalTransaction(canonicalTransactionForVersion(version)); err == nil {
+			t.Fatalf("unsupported transaction data version %d was accepted", version)
+		}
 	}
 }
 
@@ -242,7 +314,42 @@ func FuzzBoundedTARSPreflight(f *testing.F) {
 			t.Skip()
 		}
 		_ = validateBoundedTARS(encoded)
+		_, _ = decodeCanonicalTransaction(encoded)
 	})
+}
+
+func tarsByteList(t *testing.T, tag byte, count int32) []byte {
+	t.Helper()
+	buffer := codec.NewBuffer()
+	mustTARSEncode(t, buffer.WriteHead(codec.LIST, tag))
+	mustTARSEncode(t, buffer.WriteInt32(count, 0))
+	for i := int32(0); i < count; i++ {
+		mustTARSEncode(t, buffer.WriteUint8(1, 0))
+	}
+	return buffer.ToBytes()
+}
+
+func tarsByteSimpleList(t *testing.T, tag byte, length int32) []byte {
+	t.Helper()
+	buffer := codec.NewBuffer()
+	mustTARSEncode(t, buffer.WriteHead(codec.SimpleList, tag))
+	mustTARSEncode(t, buffer.WriteHead(codec.BYTE, 0))
+	mustTARSEncode(t, buffer.WriteInt32(length, 0))
+	mustTARSEncode(t, buffer.WriteSliceUint8(bytes.Repeat([]byte{1}, int(length))))
+	return buffer.ToBytes()
+}
+
+func canonicalTransactionForVersion(version int32) []byte {
+	to := common.BytesToAddress(bytes.Repeat([]byte{0x51}, transactionSenderBytes))
+	transaction := types.NewSimpleTx(&to, []byte{0x01, 0x02}, "", "version-gate", "", false)
+	transaction.Data.Version = version
+	transaction.Data.ChainID = "chain0"
+	transaction.Data.GroupID = "group0"
+	transaction.Data.BlockLimit = 5100
+	transaction.Hash()
+	sender := common.BytesToAddress(bytes.Repeat([]byte{0x52}, transactionSenderBytes))
+	transaction.Sender = &sender
+	return transaction.Bytes()
 }
 
 func validReceiptInclusionFixture(

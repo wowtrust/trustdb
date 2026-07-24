@@ -21,7 +21,12 @@ import (
 	"github.com/wowtrust/trustdb/internal/model"
 )
 
-const maxBCOSMerkleGroupWidth = 2
+const (
+	maxBCOSMerkleGroupWidth = 2
+
+	minSupportedBCOSTransactionVersion int32 = 0
+	maxSupportedBCOSTransactionVersion int32 = 1
+)
 
 // VerifyReceiptInclusion verifies the BCOS transaction, receipt, binary Merkle
 // paths, and TrustDBAnchorV1 event using only the supplied bytes and local
@@ -89,15 +94,9 @@ func verifyCanonicalTransaction(
 	attempt TransactionAttempt,
 	payload AnchorPayload,
 ) error {
-	if err := validateBoundedTARS(attempt.RawCanonicalTransaction); err != nil {
+	transaction, err := decodeCanonicalTransaction(attempt.RawCanonicalTransaction)
+	if err != nil {
 		return err
-	}
-	var transaction types.Transaction
-	if err := transaction.ReadFrom(codec.NewReader(attempt.RawCanonicalTransaction)); err != nil {
-		return fmt.Errorf("%w: decode canonical TARS transaction: %v", ErrInvalidProof, err)
-	}
-	if !bytes.Equal(transaction.Bytes(), attempt.RawCanonicalTransaction) {
-		return fmt.Errorf("%w: transaction is not canonical TARS", ErrInvalidProof)
 	}
 	if transaction.DataHash == nil || transaction.Data.To == nil ||
 		transaction.Data.ChainID != proof.ChainID ||
@@ -131,6 +130,58 @@ func verifyCanonicalTransaction(
 	}
 	if transaction.Sender != nil && !bytes.Equal(transaction.Sender.Bytes(), sender) {
 		return fmt.Errorf("%w: TARS sender does not match signature", ErrInvalidProof)
+	}
+	return nil
+}
+
+func decodeCanonicalTransaction(raw []byte) (types.Transaction, error) {
+	if err := validateBoundedTARS(raw); err != nil {
+		return types.Transaction{}, err
+	}
+	if err := validateTransactionTARSSchema(raw); err != nil {
+		return types.Transaction{}, err
+	}
+	var transaction types.Transaction
+	if err := readCanonicalTransaction(&transaction, raw); err != nil {
+		return types.Transaction{}, err
+	}
+	if transaction.DataHash == nil || transaction.Sender == nil {
+		return types.Transaction{}, fmt.Errorf(
+			"%w: canonical TARS transaction omits a fixed data hash or sender",
+			ErrInvalidProof,
+		)
+	}
+	if !bytes.Equal(transaction.Bytes(), raw) {
+		return types.Transaction{}, fmt.Errorf("%w: transaction is not canonical TARS", ErrInvalidProof)
+	}
+	if transaction.Data.Version < minSupportedBCOSTransactionVersion ||
+		transaction.Data.Version > maxSupportedBCOSTransactionVersion {
+		return types.Transaction{}, fmt.Errorf(
+			"%w: unsupported BCOS transaction data version %d; supported versions are %d and %d",
+			ErrInvalidProof,
+			transaction.Data.Version,
+			minSupportedBCOSTransactionVersion,
+			maxSupportedBCOSTransactionVersion,
+		)
+	}
+	return transaction, nil
+}
+
+// readCanonicalTransaction is a narrow defense-in-depth boundary around the
+// pinned generated SDK decoder. validateTransactionTARSSchema rejects the
+// currently known fixed-array hazards before this call; an unexpected decoder
+// panic from a future dependency still becomes a fail-closed proof error.
+func readCanonicalTransaction(transaction *types.Transaction, raw []byte) (err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			err = fmt.Errorf(
+				"%w: canonical TARS transaction decoder panic",
+				ErrInvalidProof,
+			)
+		}
+	}()
+	if err := transaction.ReadFrom(codec.NewReader(raw)); err != nil {
+		return fmt.Errorf("%w: decode canonical TARS transaction: %v", ErrInvalidProof, err)
 	}
 	return nil
 }

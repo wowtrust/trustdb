@@ -24,6 +24,11 @@ const (
 
 	maxTARSDepth  = 32
 	maxTARSValues = 1 << 16
+
+	transactionDataHashTag = 2
+	transactionSenderTag   = 7
+	transactionHashBytes   = 32
+	transactionSenderBytes = 20
 )
 
 // validateBoundedTARS walks an untrusted TARS value before the official SDK
@@ -46,6 +51,55 @@ func validateBoundedTARS(data []byte) error {
 	return nil
 }
 
+// validateTransactionTARSSchema protects the fixed-size fields used by the
+// pinned generated Transaction reader. That reader accepts LIST as well as
+// SimpleList, but writes LIST elements directly into common.Hash and
+// common.Address arrays before checking their lengths. Requiring the exact
+// canonical SimpleList representation here prevents those writes from ever
+// indexing past the fixed arrays.
+func validateTransactionTARSSchema(data []byte) error {
+	p := tarsPreflight{data: data, remainingValues: maxTARSValues}
+	seenDataHash := false
+	seenSender := false
+	for p.offset < len(data) {
+		kind, tag, err := p.startValue(0)
+		if err != nil {
+			return err
+		}
+		switch tag {
+		case transactionDataHashTag:
+			if seenDataHash {
+				return fmt.Errorf("%w: duplicate TARS transaction data hash", ErrInvalidProof)
+			}
+			seenDataHash = true
+			if err := p.fixedByteSimpleList(
+				kind,
+				transactionHashBytes,
+				"transaction data hash",
+			); err != nil {
+				return err
+			}
+		case transactionSenderTag:
+			if seenSender {
+				return fmt.Errorf("%w: duplicate TARS transaction sender", ErrInvalidProof)
+			}
+			seenSender = true
+			if err := p.fixedByteSimpleList(
+				kind,
+				transactionSenderBytes,
+				"transaction sender",
+			); err != nil {
+				return err
+			}
+		default:
+			if err := p.valueBody(kind, 0, false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 type tarsPreflight struct {
 	data            []byte
 	offset          int
@@ -53,14 +107,22 @@ type tarsPreflight struct {
 }
 
 func (p *tarsPreflight) value(depth int, allowStructEnd bool) error {
-	if depth > maxTARSDepth || p.remainingValues <= 0 {
-		return fmt.Errorf("%w: TARS nesting or value count exceeds bounds", ErrInvalidProof)
-	}
-	p.remainingValues--
-	kind, err := p.head()
+	kind, _, err := p.startValue(depth)
 	if err != nil {
 		return err
 	}
+	return p.valueBody(kind, depth, allowStructEnd)
+}
+
+func (p *tarsPreflight) startValue(depth int) (int, int, error) {
+	if depth > maxTARSDepth || p.remainingValues <= 0 {
+		return 0, 0, fmt.Errorf("%w: TARS nesting or value count exceeds bounds", ErrInvalidProof)
+	}
+	p.remainingValues--
+	return p.headWithTag()
+}
+
+func (p *tarsPreflight) valueBody(kind int, depth int, allowStructEnd bool) error {
 	switch kind {
 	case tarsByte:
 		return p.skip(1)
@@ -127,8 +189,8 @@ func (p *tarsPreflight) value(depth int, allowStructEnd bool) error {
 	case tarsZero:
 		return nil
 	case tarsSimpleList:
-		elementKind, err := p.head()
-		if err != nil || elementKind != tarsByte {
+		elementKind, elementTag, err := p.headWithTag()
+		if err != nil || elementKind != tarsByte || elementTag != 0 {
 			return fmt.Errorf("%w: unsupported TARS simple-list element", ErrInvalidProof)
 		}
 		length, err := p.integerValue()
@@ -141,19 +203,46 @@ func (p *tarsPreflight) value(depth int, allowStructEnd bool) error {
 	}
 }
 
+func (p *tarsPreflight) fixedByteSimpleList(kind int, length int, name string) error {
+	if kind != tarsSimpleList {
+		return fmt.Errorf("%w: %s must use canonical TARS SimpleList", ErrInvalidProof, name)
+	}
+	elementKind, elementTag, err := p.headWithTag()
+	if err != nil || elementKind != tarsByte || elementTag != 0 {
+		return fmt.Errorf("%w: %s has an invalid TARS element type", ErrInvalidProof, name)
+	}
+	actual, err := p.integerValue()
+	if err != nil || actual != int64(length) {
+		return fmt.Errorf(
+			"%w: %s must contain exactly %d bytes",
+			ErrInvalidProof,
+			name,
+			length,
+		)
+	}
+	return p.skip(length)
+}
+
 func (p *tarsPreflight) head() (int, error) {
+	kind, _, err := p.headWithTag()
+	return kind, err
+}
+
+func (p *tarsPreflight) headWithTag() (int, int, error) {
 	if err := p.require(1); err != nil {
-		return 0, err
+		return 0, 0, err
 	}
 	head := p.data[p.offset]
 	p.offset++
 	tag := int(head >> 4)
 	if tag == 15 {
-		if err := p.skip(1); err != nil {
-			return 0, err
+		if err := p.require(1); err != nil {
+			return 0, 0, err
 		}
+		tag = int(p.data[p.offset])
+		p.offset++
 	}
-	return int(head & 0x0f), nil
+	return int(head & 0x0f), tag, nil
 }
 
 func (p *tarsPreflight) integerValue() (int64, error) {

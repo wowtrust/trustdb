@@ -1,5 +1,6 @@
 {
   "schema_version": "trustdb.test.fisco-bcos-receipt-inclusion.v1",
+  "fixture_origin": "trustdb-derived-conformance-vector",
   "source": "https://github.com/FISCO-BCOS/FISCO-BCOS/blob/v3.16.3/bcos-crypto/bcos-crypto/merkle/Merkle.h",
   "crypto_mode": "guomi",
   "chain_hash_algorithm": "sm3",
