@@ -13,5 +13,10 @@ func newBoundTestLocalStore(t testing.TB, root string) proofstore.LocalStore {
 	if err != nil {
 		t.Fatalf("open test local proofstore: %v", err)
 	}
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Errorf("close test local proofstore: %v", err)
+		}
+	})
 	return *store
 }

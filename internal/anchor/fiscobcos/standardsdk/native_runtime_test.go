@@ -145,6 +145,64 @@ func TestVerifyNativeRuntimeAcceptsExactLinuxAMD64ReleaseMetadata(t *testing.T) 
 	}
 }
 
+func TestVerifyNativeRuntimeBindsWindowsReportedCommitToSourceProvenance(t *testing.T) {
+	t.Parallel()
+	content := []byte("pinned windows/amd64 native fixture")
+	sum := sha256.Sum256(content)
+	path := filepath.Join(t.TempDir(), "bcos-c-sdk.dll")
+	if err := os.WriteFile(path, content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	pin := nativeArtifactPin{
+		name: "bcos-c-sdk.dll", size: int64(len(content)),
+		sha256:  hex.EncodeToString(sum[:]),
+		version: supportedNativeVersion, commit: supportedNativeCommit,
+		reportedCommit: windowsAMD64ReportedNativeCommit,
+	}
+	windowsVersion := strings.Replace(
+		nativeVersionFixture,
+		supportedNativeCommit,
+		windowsAMD64ReportedNativeCommit,
+		1,
+	)
+	got, err := verifyNativeRuntime(windowsVersion, path, pin)
+	if err != nil {
+		t.Fatalf("verifyNativeRuntime(windows/amd64): %v", err)
+	}
+	if got != fiscobcos.StandardSDKVersion {
+		t.Fatalf("SDK identity = %q, want source provenance %q", got, fiscobcos.StandardSDKVersion)
+	}
+
+	for _, test := range []struct {
+		name    string
+		version string
+		pin     nativeArtifactPin
+	}{
+		{
+			name:    "different reported commit",
+			version: nativeVersionFixture,
+			pin:     pin,
+		},
+		{
+			name:    "different source provenance",
+			version: windowsVersion,
+			pin: func() nativeArtifactPin {
+				invalid := pin
+				invalid.commit = windowsAMD64ReportedNativeCommit
+				return invalid
+			}(),
+		},
+	} {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			if _, err := verifyNativeRuntime(test.version, path, test.pin); !errors.Is(err, fiscobcos.ErrUnsupportedSDK) {
+				t.Fatalf("mismatched Windows runtime error = %v, want ErrUnsupportedSDK", err)
+			}
+		})
+	}
+}
+
 func TestParseNativeVersionRejectsEmptyRequiredFields(t *testing.T) {
 	t.Parallel()
 	version, commit, err := parseNativeVersion(linuxAMD64NativeVersionFixture)

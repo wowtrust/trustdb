@@ -40,7 +40,11 @@ Files ending in `_trustdb_test.go` are TrustDB-owned boundary tests.
 `abi/bind/template.go` also has whitespace-only fixes required by TrustDB's
 repository-wide `git diff --check` gate.
 
-TrustDB additionally verifies the loaded v3.6.0 native artifact (commit
-`53240138c396c10cb0e1a2b7b4d5c0cdaa0ac539`) against the platform-specific
-filename, byte length, and SHA-256 pins in
-`configs/compatibility/fisco-bcos-v3.16.3.json` before opening a driver.
+TrustDB additionally verifies the loaded v3.6.0 native artifact against source
+provenance commit `53240138c396c10cb0e1a2b7b4d5c0cdaa0ac539` and the
+platform-specific filename, byte length, and SHA-256 pins in
+`configs/compatibility/fisco-bcos-v3.16.3.json` before opening a driver. The
+official Linux/amd64 library reports embedded commit `0`, and the official
+Windows/amd64 DLL reports `73a3f93b2b88bd4af93e1df9c8f8c4f0be57a8ae`;
+those platform build values are accepted only for their exact pinned artifact
+and never replace the release source provenance.

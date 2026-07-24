@@ -27,6 +27,8 @@ type nativeArtifactPin struct {
 	reportedCommit string
 }
 
+const windowsAMD64ReportedNativeCommit = "73a3f93b2b88bd4af93e1df9c8f8c4f0be57a8ae"
+
 var nativeArtifactPins = map[string]nativeArtifactPin{
 	"linux/amd64": {
 		name: "libbcos-c-sdk.so", size: 18_160_440,
@@ -58,7 +60,9 @@ var nativeArtifactPins = map[string]nativeArtifactPin{
 		name: "bcos-c-sdk.dll", size: 14_499_328,
 		sha256:  "2e805fa3cb79e441059e69e981a3d23f1613e7006594d929aa83bec1a0f3a751",
 		version: supportedNativeVersion, commit: supportedNativeCommit,
-		reportedCommit: supportedNativeCommit,
+		// The official Windows DLL embeds a platform build commit that differs
+		// from the v3.6.0 source provenance. The exact DLL digest binds the two.
+		reportedCommit: windowsAMD64ReportedNativeCommit,
 	},
 }
 
