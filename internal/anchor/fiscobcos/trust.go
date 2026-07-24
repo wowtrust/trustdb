@@ -415,6 +415,13 @@ func validateEndpoint(endpoint, transportMode string) (string, error) {
 	}
 	canonicalHost := host
 	if address, parseErr := netip.ParseAddr(host); parseErr == nil {
+		if address.Zone() != "" {
+			return "", fmt.Errorf(
+				"%w: endpoint %q must not use a host-dependent IPv6 zone",
+				ErrInvalidTrustConfig,
+				endpoint,
+			)
+		}
 		canonicalHost = address.Unmap().String()
 	} else {
 		if strings.Contains(host, ":") || looksLikeLegacyIPv4Literal(host) {

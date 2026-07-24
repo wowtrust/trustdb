@@ -369,6 +369,20 @@ func TestTrustConfigRejectsEndpointAliasesAndIgnoredURLComponents(t *testing.T) 
 				"gm-tls://0x7f000001:20200",
 			},
 		},
+		{
+			name: "zoned IPv6 numeric alias",
+			endpoints: []string{
+				"[fe80::1%1]:20200",
+				"[fe80::1%01]:20200",
+			},
+		},
+		{
+			name: "zoned IPv6 interface alias",
+			endpoints: []string{
+				"gm-tls://[fe80::1%25lo]:20200",
+				"gm-tls://[fe80::1%251]:20200",
+			},
+		},
 	}
 	for _, tc := range tests {
 		tc := tc

@@ -1578,8 +1578,11 @@ func parseEndpoint(endpoint, transportMode string) (string, int, error) {
 	if err != nil || strings.TrimSpace(host) == "" {
 		return "", 0, fmt.Errorf("invalid FISCO BCOS endpoint %q", endpoint)
 	}
-	if _, parseErr := netip.ParseAddr(host); parseErr != nil &&
-		(strings.Contains(host, ":") || looksLikeLegacyIPv4Literal(host)) {
+	if address, parseErr := netip.ParseAddr(host); parseErr == nil {
+		if address.Zone() != "" {
+			return "", 0, fmt.Errorf("invalid FISCO BCOS zoned endpoint %q", endpoint)
+		}
+	} else if strings.Contains(host, ":") || looksLikeLegacyIPv4Literal(host) {
 		return "", 0, fmt.Errorf("invalid FISCO BCOS numeric endpoint %q", endpoint)
 	}
 	port, err := strconv.Atoi(portText)
