@@ -92,6 +92,17 @@ type Metrics struct {
 	// after commits keep happening suggests the prune hook is not wired
 	// up or the keep-segments window is too generous.
 	WALBytesPrunedTotal prometheus.Counter
+	// NATSIngressInFlight reports deliveries currently executing the worker
+	// state machine. It excludes messages still waiting in JetStream.
+	NATSIngressInFlight prometheus.Gauge
+	// NATSIngressDeliveries counts successful broker actions using the bounded
+	// action labels ack, nak, term_result, and term_rejection.
+	NATSIngressDeliveries *prometheus.CounterVec
+	// NATSIngressOutcomeStoreRetries counts failed durable outcome writes before
+	// the worker retries without acknowledging the original delivery.
+	NATSIngressOutcomeStoreRetries *prometheus.CounterVec
+	// NATSIngressErrors counts worker errors using bounded lifecycle stages.
+	NATSIngressErrors *prometheus.CounterVec
 }
 
 func NewRegistry() (*prometheus.Registry, *Metrics) {
@@ -254,6 +265,22 @@ func NewMetrics() *Metrics {
 			Name: "trustdb_wal_bytes_pruned_total",
 			Help: "Cumulative bytes reclaimed from pruned WAL segments since process start.",
 		}),
+		NATSIngressInFlight: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "trustdb_nats_ingress_in_flight",
+			Help: "Current NATS ingress deliveries executing the worker state machine.",
+		}),
+		NATSIngressDeliveries: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "trustdb_nats_ingress_deliveries_total",
+			Help: "NATS ingress deliveries by successful broker action.",
+		}, []string{"action"}),
+		NATSIngressOutcomeStoreRetries: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "trustdb_nats_ingress_outcome_store_retries_total",
+			Help: "NATS ingress durable outcome store retries by outcome kind.",
+		}, []string{"kind"}),
+		NATSIngressErrors: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "trustdb_nats_ingress_errors_total",
+			Help: "NATS ingress worker errors by bounded lifecycle stage.",
+		}, []string{"stage"}),
 	}
 }
 
@@ -294,6 +321,10 @@ func (m *Metrics) Collectors() []prometheus.Collector {
 		m.WALActiveSegmentID,
 		m.WALSegmentsTotal,
 		m.WALBytesPrunedTotal,
+		m.NATSIngressInFlight,
+		m.NATSIngressDeliveries,
+		m.NATSIngressOutcomeStoreRetries,
+		m.NATSIngressErrors,
 	}
 }
 

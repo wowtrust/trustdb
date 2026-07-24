@@ -55,6 +55,43 @@ trustdb_global_log_published_roots_total 3
 	}
 }
 
+func TestNATSIngressMetricsExposeBoundedLabels(t *testing.T) {
+	t.Parallel()
+
+	reg, metrics := NewRegistry()
+	metrics.NATSIngressInFlight.Set(2)
+	metrics.NATSIngressDeliveries.WithLabelValues("ack").Add(3)
+	metrics.NATSIngressDeliveries.WithLabelValues("nak").Inc()
+	metrics.NATSIngressOutcomeStoreRetries.WithLabelValues("result").Add(2)
+	metrics.NATSIngressErrors.WithLabelValues("consume").Inc()
+
+	expected := `
+# HELP trustdb_nats_ingress_deliveries_total NATS ingress deliveries by successful broker action.
+# TYPE trustdb_nats_ingress_deliveries_total counter
+trustdb_nats_ingress_deliveries_total{action="ack"} 3
+trustdb_nats_ingress_deliveries_total{action="nak"} 1
+# HELP trustdb_nats_ingress_errors_total NATS ingress worker errors by bounded lifecycle stage.
+# TYPE trustdb_nats_ingress_errors_total counter
+trustdb_nats_ingress_errors_total{stage="consume"} 1
+# HELP trustdb_nats_ingress_in_flight Current NATS ingress deliveries executing the worker state machine.
+# TYPE trustdb_nats_ingress_in_flight gauge
+trustdb_nats_ingress_in_flight 2
+# HELP trustdb_nats_ingress_outcome_store_retries_total NATS ingress durable outcome store retries by outcome kind.
+# TYPE trustdb_nats_ingress_outcome_store_retries_total counter
+trustdb_nats_ingress_outcome_store_retries_total{kind="result"} 2
+`
+	if err := testutil.GatherAndCompare(
+		reg,
+		strings.NewReader(expected),
+		"trustdb_nats_ingress_deliveries_total",
+		"trustdb_nats_ingress_errors_total",
+		"trustdb_nats_ingress_in_flight",
+		"trustdb_nats_ingress_outcome_store_retries_total",
+	); err != nil {
+		t.Fatalf("GatherAndCompare() error = %v", err)
+	}
+}
+
 func TestWALCheckpointAndReplayMetrics(t *testing.T) {
 	t.Parallel()
 

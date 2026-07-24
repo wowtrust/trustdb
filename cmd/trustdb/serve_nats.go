@@ -9,6 +9,7 @@ import (
 	"github.com/rs/zerolog"
 	trustconfig "github.com/wowtrust/trustdb/internal/config"
 	"github.com/wowtrust/trustdb/internal/natsingress"
+	"github.com/wowtrust/trustdb/internal/observability"
 	"github.com/wowtrust/trustdb/internal/submission"
 	"github.com/wowtrust/trustdb/internal/trusterr"
 )
@@ -23,7 +24,7 @@ type serveNATSIngress struct {
 	runErr  error
 }
 
-func startServeNATSIngress(ctx context.Context, cfg trustconfig.NATS, submitter submission.Submitter, logger zerolog.Logger) (*serveNATSIngress, error) {
+func startServeNATSIngress(ctx context.Context, cfg trustconfig.NATS, submitter submission.Submitter, metrics *observability.Metrics, logger zerolog.Logger) (*serveNATSIngress, error) {
 	if !cfg.Enabled {
 		return nil, nil
 	}
@@ -50,14 +51,20 @@ func startServeNATSIngress(ctx context.Context, cfg trustconfig.NATS, submitter 
 		cleanup()
 		return nil, fmt.Errorf("build optional NATS outcome sink: %w", err)
 	}
+	workerOptions := []natsingress.WorkerOption{
+		natsingress.WithWorkerErrorHandler(func(err error) {
+			logger.Warn().Err(err).Msg("NATS ingress worker delivery error")
+		}),
+	}
+	if metrics != nil {
+		workerOptions = append(workerOptions, natsingress.WithWorkerObserver(serveNATSObserver{metrics: metrics}))
+	}
 	worker, err := natsingress.NewWorker(
 		runtime.Consumer(),
 		submitter,
 		sink,
 		cfg,
-		natsingress.WithWorkerErrorHandler(func(err error) {
-			logger.Warn().Err(err).Msg("NATS ingress worker delivery error")
-		}),
+		workerOptions...,
 	)
 	if err != nil {
 		cleanup()
@@ -87,6 +94,30 @@ func startServeNATSIngress(ctx context.Context, cfg trustconfig.NATS, submitter 
 		Int("fetch_batch_per_worker", worker.PerWorkerBatch()).
 		Msg("optional NATS ingress started")
 	return service, nil
+}
+
+type serveNATSObserver struct {
+	metrics *observability.Metrics
+}
+
+func (o serveNATSObserver) DeliveryStarted() {
+	o.metrics.NATSIngressInFlight.Inc()
+}
+
+func (o serveNATSObserver) DeliveryFinished() {
+	o.metrics.NATSIngressInFlight.Dec()
+}
+
+func (o serveNATSObserver) DeliveryAction(action string) {
+	o.metrics.NATSIngressDeliveries.WithLabelValues(action).Inc()
+}
+
+func (o serveNATSObserver) OutcomeStoreRetry(kind string) {
+	o.metrics.NATSIngressOutcomeStoreRetries.WithLabelValues(kind).Inc()
+}
+
+func (o serveNATSObserver) WorkerError(stage string) {
+	o.metrics.NATSIngressErrors.WithLabelValues(stage).Inc()
 }
 
 func (s *serveNATSIngress) Done() <-chan struct{} {

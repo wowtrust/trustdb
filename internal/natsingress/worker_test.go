@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -84,6 +85,68 @@ func TestWorkerProcessPersistsAcceptedResultBeforeConfirmedAck(t *testing.T) {
 	}
 	if got, want := sequence.snapshot(), []string{"submit", "store", "double_ack"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("events = %v, want %v", got, want)
+	}
+}
+
+func TestWorkerObserverTracksBoundedDeliveryActions(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name       string
+		message    func(*testing.T) *workerTestMessage
+		submit     submission.Submitter
+		wantAction string
+	}{
+		{
+			name:       "accepted",
+			message:    func(t *testing.T) *workerTestMessage { return newWorkerTestMessage(t, mustRequest(t), 1) },
+			submit:     submitterFunc(func(context.Context, model.SignedClaim) (submission.Outcome, error) { return fixtureOutcome(), nil }),
+			wantAction: DeliveryActionAck,
+		},
+		{
+			name:    "scheduled redelivery",
+			message: func(t *testing.T) *workerTestMessage { return newWorkerTestMessage(t, mustRequest(t), 1) },
+			submit: submitterFunc(func(context.Context, model.SignedClaim) (submission.Outcome, error) {
+				return submission.Outcome{}, trusterr.New(trusterr.CodeResourceExhausted, "busy")
+			}),
+			wantAction: DeliveryActionNak,
+		},
+		{
+			name:    "terminal result",
+			message: func(t *testing.T) *workerTestMessage { return newWorkerTestMessage(t, mustRequest(t), 1) },
+			submit: submitterFunc(func(context.Context, model.SignedClaim) (submission.Outcome, error) {
+				return submission.Outcome{}, trusterr.New(trusterr.CodeInvalidArgument, "invalid")
+			}),
+			wantAction: DeliveryActionTermResult,
+		},
+		{
+			name: "terminal rejection",
+			message: func(t *testing.T) *workerTestMessage {
+				message := newWorkerTestMessage(t, mustRequest(t), 1)
+				message.data = []byte("malformed")
+				return message
+			},
+			submit: submitterFunc(func(context.Context, model.SignedClaim) (submission.Outcome, error) {
+				t.Fatal("malformed delivery reached submitter")
+				return submission.Outcome{}, nil
+			}),
+			wantAction: DeliveryActionTermRejection,
+		},
+	} {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			observer := newWorkerTestObserver()
+			worker := testWorker(tc.submit, sinkFunc(func(context.Context, DeliveryOutcome) error { return nil }))
+			worker.observer = observer
+			if err := worker.Process(context.Background(), tc.message(t)); err != nil {
+				t.Fatalf("Process() error = %v", err)
+			}
+			current, maximum, actions, _, _ := observer.snapshot()
+			if current != 0 || maximum != 1 || !reflect.DeepEqual(actions, []string{tc.wantAction}) {
+				t.Fatalf("observer current=%d max=%d actions=%v", current, maximum, actions)
+			}
+		})
 	}
 }
 
@@ -209,6 +272,8 @@ func TestWorkerProcessRetriesOutcomeSinkWithoutResubmitting(t *testing.T) {
 			return nil
 		}),
 	)
+	observer := newWorkerTestObserver()
+	worker.observer = observer
 	worker.ackWait = 6 * time.Millisecond
 	worker.outcomeRetryWait = 4 * time.Millisecond
 
@@ -220,6 +285,49 @@ func TestWorkerProcessRetriesOutcomeSinkWithoutResubmitting(t *testing.T) {
 	}
 	if message.inProgress.Load() == 0 {
 		t.Fatal("worker did not extend ack deadline during sink outage")
+	}
+	_, _, _, retries, _ := observer.snapshot()
+	if !reflect.DeepEqual(retries, []string{OutcomeKindResult, OutcomeKindResult}) {
+		t.Fatalf("outcome store retries = %v", retries)
+	}
+}
+
+func TestWorkerObserverTracksProcessAndAckProgressErrors(t *testing.T) {
+	t.Parallel()
+
+	observer := newWorkerTestObserver()
+	request := mustRequest(t)
+	message := newWorkerTestMessage(t, request, 1)
+	message.doubleAckErr = errors.New("ack unavailable")
+	worker := testWorker(
+		submitterFunc(func(context.Context, model.SignedClaim) (submission.Outcome, error) { return fixtureOutcome(), nil }),
+		sinkFunc(func(context.Context, DeliveryOutcome) error { return nil }),
+	)
+	worker.observer = observer
+	if err := worker.Process(context.Background(), message); err == nil {
+		t.Fatal("Process() error = nil, want acknowledgement failure")
+	}
+	select {
+	case <-observer.errorObserved:
+	default:
+		t.Fatal("process error was not observed")
+	}
+
+	heartbeatMessage := newWorkerTestMessage(t, request, 1)
+	heartbeatMessage.inProgressErr = errors.New("heartbeat unavailable")
+	worker.ackWait = 3 * time.Millisecond
+	stop := worker.keepAlive(context.Background(), heartbeatMessage)
+	select {
+	case <-observer.errorObserved:
+	case <-time.After(time.Second):
+		stop()
+		t.Fatal("ack progress error was not observed")
+	}
+	stop()
+
+	_, _, _, _, stages := observer.snapshot()
+	if !slices.Contains(stages, WorkerErrorStageProcess) || !slices.Contains(stages, WorkerErrorStageAckProgress) {
+		t.Fatalf("worker error stages = %v", stages)
 	}
 }
 
@@ -541,14 +649,16 @@ func (sequence *eventSequence) snapshot() []string {
 }
 
 type workerTestMessage struct {
-	subject     string
-	reply       string
-	headers     nats.Header
-	data        []byte
-	meta        *jetstream.MsgMetadata
-	metadataErr error
-	events      *eventSequence
-	inProgress  atomic.Int32
+	subject       string
+	reply         string
+	headers       nats.Header
+	data          []byte
+	meta          *jetstream.MsgMetadata
+	metadataErr   error
+	doubleAckErr  error
+	inProgressErr error
+	events        *eventSequence
+	inProgress    atomic.Int32
 }
 
 func newWorkerTestMessage(t *testing.T, request Request, delivered uint64) *workerTestMessage {
@@ -581,15 +691,18 @@ func (message *workerTestMessage) Reply() string        { return message.reply }
 func (message *workerTestMessage) Ack() error           { message.events.add("ack"); return nil }
 func (message *workerTestMessage) DoubleAck(context.Context) error {
 	message.events.add("double_ack")
-	return nil
+	return message.doubleAckErr
 }
 func (message *workerTestMessage) Nak() error { message.events.add("nak"); return nil }
 func (message *workerTestMessage) NakWithDelay(time.Duration) error {
 	message.events.add("nak")
 	return nil
 }
-func (message *workerTestMessage) InProgress() error { message.inProgress.Add(1); return nil }
-func (message *workerTestMessage) Term() error       { message.events.add("term"); return nil }
+func (message *workerTestMessage) InProgress() error {
+	message.inProgress.Add(1)
+	return message.inProgressErr
+}
+func (message *workerTestMessage) Term() error { message.events.add("term"); return nil }
 func (message *workerTestMessage) TermWithReason(string) error {
 	message.events.add("term")
 	return nil
@@ -599,6 +712,7 @@ func testWorker(submitter submission.Submitter, sink OutcomeSink) *Worker {
 	return &Worker{
 		submitter:        submitter,
 		sink:             sink,
+		observer:         noopWorkerObserver{},
 		ackWait:          time.Hour,
 		nakDelay:         time.Millisecond,
 		outcomeRetryWait: time.Millisecond,
@@ -606,6 +720,61 @@ func testWorker(submitter submission.Submitter, sink OutcomeSink) *Worker {
 		subject:          "trustdb.ingress.test.claims",
 		onError:          func(error) {},
 	}
+}
+
+type workerTestObserver struct {
+	mu            sync.Mutex
+	inFlight      int
+	maxInFlight   int
+	actions       []string
+	retries       []string
+	errors        []string
+	errorObserved chan struct{}
+}
+
+func newWorkerTestObserver() *workerTestObserver {
+	return &workerTestObserver{errorObserved: make(chan struct{}, 8)}
+}
+
+func (o *workerTestObserver) DeliveryStarted() {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.inFlight++
+	o.maxInFlight = max(o.maxInFlight, o.inFlight)
+}
+
+func (o *workerTestObserver) DeliveryFinished() {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.inFlight--
+}
+
+func (o *workerTestObserver) DeliveryAction(action string) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.actions = append(o.actions, action)
+}
+
+func (o *workerTestObserver) OutcomeStoreRetry(kind string) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.retries = append(o.retries, kind)
+}
+
+func (o *workerTestObserver) WorkerError(stage string) {
+	o.mu.Lock()
+	o.errors = append(o.errors, stage)
+	o.mu.Unlock()
+	select {
+	case o.errorObserved <- struct{}{}:
+	default:
+	}
+}
+
+func (o *workerTestObserver) snapshot() (int, int, []string, []string, []string) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.inFlight, o.maxInFlight, slices.Clone(o.actions), slices.Clone(o.retries), slices.Clone(o.errors)
 }
 
 func workerHeaders(messageID string) nats.Header {

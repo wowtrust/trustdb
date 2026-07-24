@@ -11,9 +11,11 @@ import (
 	server "github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	trustconfig "github.com/wowtrust/trustdb/internal/config"
 	"github.com/wowtrust/trustdb/internal/model"
 	"github.com/wowtrust/trustdb/internal/natsingress"
+	"github.com/wowtrust/trustdb/internal/observability"
 	"github.com/wowtrust/trustdb/internal/prooflevel"
 	"github.com/wowtrust/trustdb/internal/submission"
 )
@@ -21,7 +23,7 @@ import (
 func TestStartServeNATSIngressDisabledIsStrictNoOp(t *testing.T) {
 	cfg := trustconfig.Default().NATS
 	cfg.URLs = []string{"nats://127.0.0.1:1"}
-	service, err := startServeNATSIngress(context.Background(), cfg, nil, silentLogger())
+	service, err := startServeNATSIngress(context.Background(), cfg, nil, nil, silentLogger())
 	if err != nil {
 		t.Fatalf("startServeNATSIngress() error = %v", err)
 	}
@@ -33,7 +35,7 @@ func TestStartServeNATSIngressDisabledIsStrictNoOp(t *testing.T) {
 func TestStartServeNATSIngressFailsClosedWhenBrokerIsUnavailable(t *testing.T) {
 	cfg := serveNATSTestConfig("nats://127.0.0.1:1")
 	cfg.ConnectTimeout = "50ms"
-	service, err := startServeNATSIngress(context.Background(), cfg, acceptedServeNATSSubmitter(), silentLogger())
+	service, err := startServeNATSIngress(context.Background(), cfg, acceptedServeNATSSubmitter(), nil, silentLogger())
 	if err == nil || !strings.Contains(err.Error(), "start optional NATS ingress") {
 		t.Fatalf("startServeNATSIngress() service=%#v error=%v", service, err)
 	}
@@ -55,7 +57,8 @@ func TestServeNATSIngressStoresAcceptedResultBeforeAck(t *testing.T) {
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())
-	service, err := startServeNATSIngress(ctx, cfg, submitter, silentLogger())
+	_, metrics := observability.NewRegistry()
+	service, err := startServeNATSIngress(ctx, cfg, submitter, metrics, silentLogger())
 	if err != nil {
 		t.Fatalf("startServeNATSIngress() error = %v", err)
 	}
@@ -88,12 +91,18 @@ func TestServeNATSIngressStoresAcceptedResultBeforeAck(t *testing.T) {
 	if submitted != 1 {
 		t.Fatalf("submission count = %d, want 1", submitted)
 	}
+	if got := testutil.ToFloat64(metrics.NATSIngressDeliveries.WithLabelValues(natsingress.DeliveryActionAck)); got != 1 {
+		t.Fatalf("NATS ack metric = %v, want 1", got)
+	}
+	if got := testutil.ToFloat64(metrics.NATSIngressInFlight); got != 0 {
+		t.Fatalf("NATS in-flight metric = %v, want 0", got)
+	}
 }
 
 func TestServeNATSIngressStoresMalformedDeliveryInDeadLetterStream(t *testing.T) {
 	s := startServeNATSTestServer(t)
 	cfg := serveNATSTestConfig(s.ClientURL())
-	service, err := startServeNATSIngress(context.Background(), cfg, acceptedServeNATSSubmitter(), silentLogger())
+	service, err := startServeNATSIngress(context.Background(), cfg, acceptedServeNATSSubmitter(), nil, silentLogger())
 	if err != nil {
 		t.Fatalf("startServeNATSIngress() error = %v", err)
 	}
@@ -140,7 +149,7 @@ func TestServeNATSIngressShutdownLeavesInFlightDeliveryForRestart(t *testing.T) 
 	})
 
 	firstCtx, cancelFirst := context.WithCancel(context.Background())
-	first, err := startServeNATSIngress(firstCtx, cfg, firstSubmitter, silentLogger())
+	first, err := startServeNATSIngress(firstCtx, cfg, firstSubmitter, nil, silentLogger())
 	if err != nil {
 		t.Fatalf("startServeNATSIngress(first) error = %v", err)
 	}
@@ -158,7 +167,7 @@ func TestServeNATSIngressShutdownLeavesInFlightDeliveryForRestart(t *testing.T) 
 	}
 
 	cfg.Provision = false
-	second, err := startServeNATSIngress(context.Background(), cfg, acceptedServeNATSSubmitter(), silentLogger())
+	second, err := startServeNATSIngress(context.Background(), cfg, acceptedServeNATSSubmitter(), nil, silentLogger())
 	if err != nil {
 		t.Fatalf("startServeNATSIngress(second) error = %v", err)
 	}
@@ -173,7 +182,8 @@ func TestServeNATSIngressShutdownLeavesInFlightDeliveryForRestart(t *testing.T) 
 func TestServeNATSIngressReportsUnexpectedWorkerExit(t *testing.T) {
 	s := startServeNATSTestServer(t)
 	cfg := serveNATSTestConfig(s.ClientURL())
-	service, err := startServeNATSIngress(context.Background(), cfg, acceptedServeNATSSubmitter(), silentLogger())
+	_, metrics := observability.NewRegistry()
+	service, err := startServeNATSIngress(context.Background(), cfg, acceptedServeNATSSubmitter(), metrics, silentLogger())
 	if err != nil {
 		t.Fatalf("startServeNATSIngress() error = %v", err)
 	}
@@ -185,6 +195,9 @@ func TestServeNATSIngressReportsUnexpectedWorkerExit(t *testing.T) {
 	}
 	if err := service.Err(); err == nil {
 		t.Fatal("worker exit error = nil, want fatal transport error")
+	}
+	if got := testutil.ToFloat64(metrics.NATSIngressErrors.WithLabelValues(natsingress.WorkerErrorStageConsume)); got == 0 {
+		t.Fatal("NATS consume error metric = 0, want non-zero")
 	}
 	closeServeNATSIngress(t, service)
 }

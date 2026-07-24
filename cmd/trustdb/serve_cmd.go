@@ -606,7 +606,7 @@ func newServeCommand(rt *runtimeConfig) *cobra.Command {
 
 			serveCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 			defer stop()
-			natsIngress, err := startServeNATSIngress(serveCtx, rt.cfg.NATS, submissionSvc, rt.logger)
+			natsIngress, err := startServeNATSIngress(serveCtx, rt.cfg.NATS, submissionSvc, metrics, rt.logger)
 			if err != nil {
 				return err
 			}

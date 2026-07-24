@@ -72,6 +72,7 @@ type Worker struct {
 	consumer  jetstream.Consumer
 	submitter submission.Submitter
 	sink      OutcomeSink
+	observer  WorkerObserver
 
 	workers          int
 	perWorkerBatch   int
@@ -86,11 +87,51 @@ type Worker struct {
 
 type WorkerOption func(*Worker)
 
+const (
+	DeliveryActionAck           = "ack"
+	DeliveryActionNak           = "nak"
+	DeliveryActionTermResult    = "term_result"
+	DeliveryActionTermRejection = "term_rejection"
+
+	OutcomeKindResult    = "result"
+	OutcomeKindRejection = "rejection"
+
+	WorkerErrorStageConsume     = "consume"
+	WorkerErrorStageProcess     = "process"
+	WorkerErrorStageAckProgress = "ack_progress"
+)
+
+// WorkerObserver receives constant-cardinality runtime events. Implementations
+// must return promptly and must not retain request, result, or message data.
+type WorkerObserver interface {
+	DeliveryStarted()
+	DeliveryFinished()
+	DeliveryAction(action string)
+	OutcomeStoreRetry(kind string)
+	WorkerError(stage string)
+}
+
+type noopWorkerObserver struct{}
+
+func (noopWorkerObserver) DeliveryStarted()         {}
+func (noopWorkerObserver) DeliveryFinished()        {}
+func (noopWorkerObserver) DeliveryAction(string)    {}
+func (noopWorkerObserver) OutcomeStoreRetry(string) {}
+func (noopWorkerObserver) WorkerError(string)       {}
+
 // WithWorkerErrorHandler observes recoverable processing and pull-loop errors.
 // The handler may run concurrently and should return promptly.
 func WithWorkerErrorHandler(handler func(error)) WorkerOption {
 	return func(worker *Worker) {
 		worker.onError = handler
+	}
+}
+
+// WithWorkerObserver attaches aggregate runtime instrumentation. A nil or
+// typed-nil observer is treated as a no-op.
+func WithWorkerObserver(observer WorkerObserver) WorkerOption {
+	return func(worker *Worker) {
+		worker.observer = observer
 	}
 }
 
@@ -140,6 +181,7 @@ func NewWorker(consumer jetstream.Consumer, submitter submission.Submitter, sink
 		consumer:         consumer,
 		submitter:        submitter,
 		sink:             sink,
+		observer:         noopWorkerObserver{},
 		workers:          workers,
 		perWorkerBatch:   min(cfg.FetchBatch, max(1, cfg.MaxAckPending/workers)),
 		fetchWait:        fetchWait,
@@ -157,6 +199,9 @@ func NewWorker(consumer jetstream.Consumer, submitter submission.Submitter, sink
 	}
 	if worker.onError == nil {
 		worker.onError = func(error) {}
+	}
+	if nilInterface(worker.observer) {
+		worker.observer = noopWorkerObserver{}
 	}
 	return worker, nil
 }
@@ -242,6 +287,7 @@ func (w *Worker) Run(ctx context.Context) error {
 				consumeErrMu.Lock()
 				lastConsumeErr = err
 				consumeErrMu.Unlock()
+				w.observer.WorkerError(WorkerErrorStageConsume)
 				w.report(fmt.Errorf("NATS ingress consume loop: %w", err))
 			}),
 		)
@@ -249,6 +295,7 @@ func (w *Worker) Run(ctx context.Context) error {
 			close(startupCanceled)
 			stopAll(false)
 			waitAll()
+			w.observer.WorkerError(WorkerErrorStageConsume)
 			return fmt.Errorf("start NATS ingress consume loop %d: %w", index, err)
 		}
 		consumeContexts = append(consumeContexts, consumeContext)
@@ -273,6 +320,7 @@ func (w *Worker) Run(ctx context.Context) error {
 		if err != nil {
 			return fmt.Errorf("NATS ingress consume loop %d stopped: %w", index, err)
 		}
+		w.observer.WorkerError(WorkerErrorStageConsume)
 		return fmt.Errorf("NATS ingress consume loop %d stopped unexpectedly", index)
 	}
 }
@@ -280,7 +328,7 @@ func (w *Worker) Run(ctx context.Context) error {
 // Process handles one delivery according to the durable outcome-before-ack
 // state machine. It is exported for transport integration tests and custom
 // supervisors; callers should normally use Run.
-func (w *Worker) Process(ctx context.Context, message jetstream.Msg) error {
+func (w *Worker) Process(ctx context.Context, message jetstream.Msg) (err error) {
 	if w == nil {
 		return errors.New("NATS ingress worker is nil")
 	}
@@ -290,6 +338,13 @@ func (w *Worker) Process(ctx context.Context, message jetstream.Msg) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	w.observer.DeliveryStarted()
+	defer w.observer.DeliveryFinished()
+	defer func() {
+		if err != nil && ctx.Err() == nil {
+			w.observer.WorkerError(WorkerErrorStageProcess)
+		}
+	}()
 
 	stopHeartbeat := w.keepAlive(ctx, message)
 	stop := func() {
@@ -324,6 +379,7 @@ func (w *Worker) Process(ctx context.Context, message jetstream.Msg) error {
 			if err := message.DoubleAck(ctx); err != nil {
 				return fmt.Errorf("confirm NATS ingress acknowledgement: %w", err)
 			}
+			w.observer.DeliveryAction(DeliveryActionAck)
 			return nil
 		}
 		err = trusterr.Wrap(trusterr.CodeInternal, "build NATS accepted result", resultErr)
@@ -334,6 +390,7 @@ func (w *Worker) Process(ctx context.Context, message jetstream.Msg) error {
 		if nakErr := message.NakWithDelay(w.nakDelay); nakErr != nil {
 			return fmt.Errorf("schedule NATS ingress redelivery: %w", nakErr)
 		}
+		w.observer.DeliveryAction(DeliveryActionNak)
 		return nil
 	}
 
@@ -373,6 +430,11 @@ func (w *Worker) storeAndTerminate(ctx context.Context, message jetstream.Msg, o
 	if err := message.Term(); err != nil {
 		return fmt.Errorf("terminate NATS ingress delivery: %w", err)
 	}
+	action := DeliveryActionTermResult
+	if outcome.Rejection != nil {
+		action = DeliveryActionTermRejection
+	}
+	w.observer.DeliveryAction(action)
 	return nil
 }
 
@@ -387,6 +449,7 @@ func (w *Worker) storeUntilConfirmed(ctx context.Context, outcome DeliveryOutcom
 		if err := w.sink.Store(ctx, outcome); err == nil {
 			return nil
 		} else {
+			w.observer.OutcomeStoreRetry(outcomeKind(outcome))
 			w.report(fmt.Errorf("store NATS ingress delivery outcome: %w", err))
 		}
 
@@ -413,6 +476,7 @@ func (w *Worker) keepAlive(ctx context.Context, message jetstream.Msg) func() {
 			select {
 			case <-ticker.C:
 				if err := message.InProgress(); err != nil && ctx.Err() == nil {
+					w.observer.WorkerError(WorkerErrorStageAckProgress)
 					w.report(fmt.Errorf("extend NATS ingress acknowledgement deadline: %w", err))
 				}
 			case <-ctx.Done():
@@ -428,6 +492,13 @@ func (w *Worker) keepAlive(ctx context.Context, message jetstream.Msg) func() {
 			<-finished
 		})
 	}
+}
+
+func outcomeKind(outcome DeliveryOutcome) string {
+	if outcome.Rejection != nil {
+		return OutcomeKindRejection
+	}
+	return OutcomeKindResult
 }
 
 func (w *Worker) report(err error) {
