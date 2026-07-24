@@ -19,6 +19,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -170,6 +171,154 @@ func TestCertificateAndCARotationPublishAtomicSnapshots(t *testing.T) {
 	}
 }
 
+func TestReloadRejectsInvalidChainAndRetainsLastKnownGoodCertificate(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	goodCA := newTestCA(t, "good-ca")
+	goodCert, goodKey, _ := issueTestCertificate(t, goodCA, "good-server", []string{"trustdb.test"}, false, time.Now().Add(-time.Minute), time.Now().Add(time.Hour))
+	certFile := writeBytes(t, dir, "server.crt", goodCert)
+	keyFile := writeBytes(t, dir, "server.key", goodKey)
+	manager, err := NewServerManager(ServerConfig{Mode: ModeTLS, CertFile: certFile, KeyFile: keyFile, ReloadInterval: "1h"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+	address := startTestTLSServer(t, manager)
+	client := newTestClientManager(t, ClientConfig{
+		CAFile: writePEM(t, dir, "good-ca.pem", "CERTIFICATE", goodCA.cert.Raw), ServerName: "trustdb.test", ReloadInterval: "1h",
+	})
+
+	expiredCA := newTestCAWithValidity(t, "expired-ca", time.Now().Add(-2*time.Hour), time.Now().Add(-time.Hour))
+	expiredChain, expiredKey, _ := issueTestCertificate(t, expiredCA, "replacement", []string{"trustdb.test"}, false, time.Now().Add(-time.Minute), time.Now().Add(time.Hour))
+	replaceFile(t, certFile, expiredChain)
+	replaceFile(t, keyFile, expiredKey)
+	if err := manager.Reload(); err == nil || !strings.Contains(err.Error(), "expired") {
+		t.Fatalf("expired-intermediate reload error = %v", err)
+	}
+
+	otherCA := newTestCA(t, "other-ca")
+	otherChain, otherKey, _ := issueTestCertificate(t, otherCA, "replacement", []string{"trustdb.test"}, false, time.Now().Add(-time.Minute), time.Now().Add(time.Hour))
+	leafBlock, _ := pem.Decode(otherChain)
+	if leafBlock == nil {
+		t.Fatal("replacement leaf PEM missing")
+	}
+	wronglyLinked := append(pem.EncodeToMemory(leafBlock), pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: goodCA.cert.Raw})...)
+	replaceFile(t, certFile, wronglyLinked)
+	replaceFile(t, keyFile, otherKey)
+	if err := manager.Reload(); err == nil || !strings.Contains(err.Error(), "does not issue") {
+		t.Fatalf("wrongly-linked reload error = %v", err)
+	}
+
+	replaceFile(t, certFile, append(append([]byte(nil), goodCert...), []byte("trailing garbage")...))
+	replaceFile(t, keyFile, goodKey)
+	if err := manager.Reload(); err == nil || !strings.Contains(err.Error(), "trailing data") {
+		t.Fatalf("trailing-data reload error = %v", err)
+	}
+	if err := dialTestTLS(client, address); err != nil {
+		t.Fatalf("invalid replacements displaced last known-good certificate: %v", err)
+	}
+}
+
+func TestReloadRejectsExpiredAndMalformedCAAndRetainsLastKnownGoodRoots(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	ca := newTestCA(t, "server-ca")
+	cert, key, _ := issueTestCertificate(t, ca, "server", []string{"trustdb.test"}, false, time.Now().Add(-time.Minute), time.Now().Add(time.Hour))
+	server, err := NewServerManager(ServerConfig{
+		Mode: ModeTLS, CertFile: writeBytes(t, dir, "server.crt", cert), KeyFile: writeBytes(t, dir, "server.key", key), ReloadInterval: "1h",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer server.Close()
+	address := startTestTLSServer(t, server)
+	caFile := writePEM(t, dir, "ca.pem", "CERTIFICATE", ca.cert.Raw)
+	client := newTestClientManager(t, ClientConfig{CAFile: caFile, ServerName: "trustdb.test", ReloadInterval: "1h"})
+
+	expiredCA := newTestCAWithValidity(t, "expired-ca", time.Now().Add(-2*time.Hour), time.Now().Add(-time.Hour))
+	replaceFile(t, caFile, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: expiredCA.cert.Raw}))
+	if err := client.Reload(); err == nil || !strings.Contains(err.Error(), "expired") {
+		t.Fatalf("expired-CA reload error = %v", err)
+	}
+	replaceFile(t, caFile, append(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: ca.cert.Raw}), []byte("trailing garbage")...))
+	if err := client.Reload(); err == nil || !strings.Contains(err.Error(), "trailing data") {
+		t.Fatalf("malformed-CA reload error = %v", err)
+	}
+	if err := dialTestTLS(client, address); err != nil {
+		t.Fatalf("invalid CA replacements displaced last known-good roots: %v", err)
+	}
+}
+
+func TestReloadCallbackCanCloseManagerAndNoFurtherCallbackStarts(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	ca := newTestCA(t, "ca")
+	caFile := writePEM(t, dir, "ca.pem", "CERTIFICATE", ca.cert.Raw)
+	manager, err := NewClientManager(ClientConfig{CAFile: caFile, ReloadInterval: "1ms"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	replaceFile(t, caFile, []byte("invalid CA data"))
+	callbackReturned := make(chan struct{})
+	var callbackCount atomic.Int32
+	manager.Start(context.Background(), func(error) {
+		callbackCount.Add(1)
+		_ = manager.Close()
+		close(callbackReturned)
+	})
+	select {
+	case <-callbackReturned:
+	case <-time.After(2 * time.Second):
+		t.Fatal("reload callback deadlocked while calling Close")
+	}
+	if err := manager.Reload(); !errors.Is(err, errManagerClosed) {
+		t.Fatalf("Reload after Close error = %v, want manager closed", err)
+	}
+	count := callbackCount.Load()
+	time.Sleep(20 * time.Millisecond)
+	if got := callbackCount.Load(); got != count {
+		t.Fatalf("reload callback ran after Close: before=%d after=%d", count, got)
+	}
+}
+
+func TestCloseWaitsForInFlightReloadBarrier(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	ca := newTestCA(t, "ca")
+	manager, err := NewClientManager(ClientConfig{
+		CAFile: writePEM(t, dir, "ca.pem", "CERTIFICATE", ca.cert.Raw), ReloadInterval: "1h",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager.reloadMu.Lock()
+	closeReturned := make(chan struct{})
+	go func() {
+		_ = manager.Close()
+		close(closeReturned)
+	}()
+	deadline := time.Now().Add(2 * time.Second)
+	for !manager.isClosed() && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if !manager.isClosed() {
+		manager.reloadMu.Unlock()
+		t.Fatal("Close did not enter the closed state")
+	}
+	select {
+	case <-closeReturned:
+		manager.reloadMu.Unlock()
+		t.Fatal("Close returned before the in-flight reload barrier cleared")
+	case <-time.After(20 * time.Millisecond):
+	}
+	manager.reloadMu.Unlock()
+	select {
+	case <-closeReturned:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Close did not return after the reload barrier cleared")
+	}
+}
+
 func TestCAPinningAndExpiredCertificateLoad(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -290,13 +439,18 @@ type testCA struct {
 
 func newTestCA(t *testing.T, name string) testCA {
 	t.Helper()
+	return newTestCAWithValidity(t, name, time.Now().Add(-time.Hour), time.Now().Add(24*time.Hour))
+}
+
+func newTestCAWithValidity(t *testing.T, name string, notBefore, notAfter time.Time) testCA {
+	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		t.Fatal(err)
 	}
 	template := &x509.Certificate{
 		SerialNumber: randomSerial(t), Subject: pkix.Name{CommonName: name},
-		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(24 * time.Hour),
+		NotBefore: notBefore, NotAfter: notAfter,
 		IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
 	}
 	raw, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)

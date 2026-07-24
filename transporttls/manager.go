@@ -2,11 +2,13 @@ package transporttls
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/hex"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"math/big"
@@ -25,6 +27,13 @@ type managerRole uint8
 const (
 	serverRole managerRole = iota + 1
 	clientRole
+)
+
+type certificatePurpose uint8
+
+const (
+	serverCertificate certificatePurpose = iota + 1
+	clientCertificate
 )
 
 type snapshot struct {
@@ -46,10 +55,16 @@ type Manager struct {
 	clientConfig   ClientConfig
 	state          atomic.Pointer[snapshot]
 	reloadInterval time.Duration
+	reloadMu       sync.Mutex
 	lifecycleMu    sync.Mutex
 	closed         bool
 	cancel         context.CancelFunc
+	reloadWG       sync.WaitGroup
+	closeDone      chan struct{}
+	callbackActive bool
 }
+
+var errManagerClosed = errors.New("transporttls: manager is closed")
 
 func NewServerManager(config ServerConfig) (*Manager, error) {
 	config = config.normalized()
@@ -60,7 +75,7 @@ func NewServerManager(config ServerConfig) (*Manager, error) {
 		return nil, errors.New("transporttls: plaintext mode does not use a TLS manager")
 	}
 	interval, _ := time.ParseDuration(config.ReloadInterval)
-	m := &Manager{role: serverRole, serverConfig: config, reloadInterval: interval}
+	m := &Manager{role: serverRole, serverConfig: config, reloadInterval: interval, closeDone: make(chan struct{})}
 	if err := m.Reload(); err != nil {
 		return nil, err
 	}
@@ -73,18 +88,23 @@ func NewClientManager(config ClientConfig) (*Manager, error) {
 		return nil, err
 	}
 	interval, _ := time.ParseDuration(config.ReloadInterval)
-	m := &Manager{role: clientRole, clientConfig: config, reloadInterval: interval}
+	m := &Manager{role: clientRole, clientConfig: config, reloadInterval: interval, closeDone: make(chan struct{})}
 	if err := m.Reload(); err != nil {
 		return nil, err
 	}
 	return m, nil
 }
 
-// Start begins periodic reload. onError may log failures; a failure never
-// replaces the active snapshot or interrupts established connections.
+// Start begins periodic reload. onError may log failures and may safely call
+// Close. At most one callback is active at a time; Close prevents any new
+// callback from starting. A failure never replaces the active snapshot or
+// interrupts established connections.
 func (m *Manager) Start(parent context.Context, onError func(error)) {
 	if m == nil {
 		return
+	}
+	if parent == nil {
+		parent = context.Background()
 	}
 	m.lifecycleMu.Lock()
 	if m.closed || m.cancel != nil {
@@ -93,8 +113,10 @@ func (m *Manager) Start(parent context.Context, onError func(error)) {
 	}
 	ctx, cancel := context.WithCancel(parent)
 	m.cancel = cancel
+	m.reloadWG.Add(1)
 	m.lifecycleMu.Unlock()
 	go func() {
+		defer m.reloadWG.Done()
 		ticker := time.NewTicker(m.reloadInterval)
 		defer ticker.Stop()
 		for {
@@ -102,12 +124,41 @@ func (m *Manager) Start(parent context.Context, onError func(error)) {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				if err := m.Reload(); err != nil && onError != nil {
-					onError(err)
+				if err := m.Reload(); err != nil && !errors.Is(err, errManagerClosed) {
+					m.dispatchReloadError(onError, err)
 				}
 			}
 		}
 	}()
+}
+
+func (m *Manager) dispatchReloadError(onError func(error), err error) {
+	if onError == nil {
+		return
+	}
+	m.lifecycleMu.Lock()
+	if m.closed || m.callbackActive {
+		m.lifecycleMu.Unlock()
+		return
+	}
+	m.callbackActive = true
+	m.lifecycleMu.Unlock()
+
+	// Keep callbacks outside reloadWG so a callback may safely call Close.
+	// The start handshake ensures Close cannot return before a callback that
+	// was accepted before shutdown has actually begun; closed prevents any
+	// later callback from being accepted.
+	started := make(chan struct{})
+	go func() {
+		defer func() {
+			m.lifecycleMu.Lock()
+			m.callbackActive = false
+			m.lifecycleMu.Unlock()
+		}()
+		close(started)
+		onError(err)
+	}()
+	<-started
 }
 
 func (m *Manager) Close() error {
@@ -116,15 +167,30 @@ func (m *Manager) Close() error {
 	}
 	m.lifecycleMu.Lock()
 	if m.closed {
+		done := m.closeDone
 		m.lifecycleMu.Unlock()
+		if done != nil {
+			<-done
+		}
 		return nil
 	}
 	m.closed = true
 	cancel := m.cancel
+	if m.closeDone == nil {
+		m.closeDone = make(chan struct{})
+	}
+	done := m.closeDone
 	m.lifecycleMu.Unlock()
 	if cancel != nil {
 		cancel()
 	}
+	// Wait for any in-flight or queued reload before waiting for the periodic
+	// worker. Reload re-checks closed after loading, so a snapshot prepared
+	// concurrently with Close can never be published.
+	m.reloadMu.Lock()
+	m.reloadMu.Unlock()
+	m.reloadWG.Wait()
+	close(done)
 	return nil
 }
 
@@ -133,6 +199,11 @@ func (m *Manager) Close() error {
 func (m *Manager) Reload() error {
 	if m == nil {
 		return errors.New("transporttls: nil manager")
+	}
+	m.reloadMu.Lock()
+	defer m.reloadMu.Unlock()
+	if m.isClosed() {
+		return errManagerClosed
 	}
 	var (
 		next *snapshot
@@ -149,12 +220,21 @@ func (m *Manager) Reload() error {
 	if err != nil {
 		return err
 	}
+	if m.isClosed() {
+		return errManagerClosed
+	}
 	m.state.Store(next)
 	return nil
 }
 
+func (m *Manager) isClosed() bool {
+	m.lifecycleMu.Lock()
+	defer m.lifecycleMu.Unlock()
+	return m.closed
+}
+
 func loadServerSnapshot(config ServerConfig) (*snapshot, error) {
-	cert, err := loadCertificate(config.CertFile, config.KeyFile, true)
+	cert, err := loadCertificate(config.CertFile, config.KeyFile, serverCertificate)
 	if err != nil {
 		return nil, fmt.Errorf("load server TLS certificate: %w", err)
 	}
@@ -196,7 +276,7 @@ func loadClientSnapshot(config ClientConfig) (*snapshot, error) {
 	}
 	next := &snapshot{roots: roots, minVersion: min, maxVersion: max, checker: config.Checker}
 	if strings.TrimSpace(config.CertFile) != "" {
-		next.certificate, err = loadCertificate(config.CertFile, config.KeyFile, true)
+		next.certificate, err = loadCertificate(config.CertFile, config.KeyFile, clientCertificate)
 		if err != nil {
 			return nil, fmt.Errorf("load client TLS certificate: %w", err)
 		}
@@ -212,28 +292,36 @@ func loadClientSnapshot(config ClientConfig) (*snapshot, error) {
 	return next, nil
 }
 
-func loadCertificate(certFile, keyFile string, requireCurrent bool) (*tls.Certificate, error) {
-	cert, err := tls.LoadX509KeyPair(strings.TrimSpace(certFile), strings.TrimSpace(keyFile))
+func loadCertificate(certFile, keyFile string, purpose certificatePurpose) (*tls.Certificate, error) {
+	certPEM, err := os.ReadFile(strings.TrimSpace(certFile))
 	if err != nil {
 		return nil, err
 	}
-	if len(cert.Certificate) == 0 {
-		return nil, errors.New("certificate chain is empty")
-	}
-	leaf, err := x509.ParseCertificate(cert.Certificate[0])
+	keyPEM, err := os.ReadFile(strings.TrimSpace(keyFile))
 	if err != nil {
 		return nil, err
 	}
-	if requireCurrent {
-		now := time.Now()
-		if now.Before(leaf.NotBefore) {
-			return nil, fmt.Errorf("certificate is not valid before %s", leaf.NotBefore.UTC().Format(time.RFC3339))
-		}
-		if !now.Before(leaf.NotAfter) {
-			return nil, fmt.Errorf("certificate expired at %s", leaf.NotAfter.UTC().Format(time.RFC3339))
-		}
+	parsed, err := parseCertificatePEM(certPEM)
+	if err != nil {
+		return nil, err
 	}
-	cert.Leaf = leaf
+	if err := validateEndpointCertificateChain(parsed, purpose, time.Now()); err != nil {
+		return nil, err
+	}
+	cert, err := tls.X509KeyPair(certPEM, keyPEM)
+	if err != nil {
+		return nil, err
+	}
+	if len(cert.Certificate) != len(parsed) {
+		return nil, errors.New("certificate chain changed while loading")
+	}
+	cert.Leaf = parsed[0]
+	// Trust anchors are never needed on the wire. Keeping them in the input
+	// enables strict full-chain validation while avoiding redundant root
+	// certificates in TLS Certificate messages.
+	if len(parsed) > 1 && isSelfSigned(parsed[len(parsed)-1]) {
+		cert.Certificate = cert.Certificate[:len(cert.Certificate)-1]
+	}
 	return &cert, nil
 }
 
@@ -253,11 +341,122 @@ func loadCertPool(path string, allowSystem bool) (*x509.CertPool, error) {
 	if err != nil {
 		return nil, err
 	}
+	certificates, err := parseCertificatePEM(pemBytes)
+	if err != nil {
+		return nil, err
+	}
 	pool := x509.NewCertPool()
-	if !pool.AppendCertsFromPEM(pemBytes) {
-		return nil, errors.New("CA file contains no certificates")
+	now := time.Now()
+	seen := make(map[[sha256.Size]byte]struct{}, len(certificates))
+	for index, cert := range certificates {
+		if err := validateCurrentCertificate(cert, now); err != nil {
+			return nil, fmt.Errorf("CA certificate %d: %w", index, err)
+		}
+		if !cert.BasicConstraintsValid || !cert.IsCA || cert.KeyUsage&x509.KeyUsageCertSign == 0 {
+			return nil, fmt.Errorf("CA certificate %d is not authorized to sign certificates", index)
+		}
+		fingerprint := sha256.Sum256(cert.Raw)
+		if _, ok := seen[fingerprint]; ok {
+			return nil, fmt.Errorf("CA certificate %d duplicates an earlier certificate", index)
+		}
+		seen[fingerprint] = struct{}{}
+		pool.AddCert(cert)
 	}
 	return pool, nil
+}
+
+func parseCertificatePEM(data []byte) ([]*x509.Certificate, error) {
+	remaining := data
+	var certificates []*x509.Certificate
+	for {
+		remaining = bytes.TrimSpace(remaining)
+		if len(remaining) == 0 {
+			break
+		}
+		if !bytes.HasPrefix(remaining, []byte("-----BEGIN CERTIFICATE-----")) {
+			return nil, errors.New("certificate PEM contains malformed or trailing data")
+		}
+		block, rest := pem.Decode(remaining)
+		if block == nil {
+			return nil, errors.New("certificate PEM contains a malformed block")
+		}
+		if block.Type != "CERTIFICATE" || len(block.Headers) != 0 {
+			return nil, fmt.Errorf("certificate PEM contains unsupported block %q", block.Type)
+		}
+		cert, err := x509.ParseCertificate(block.Bytes)
+		if err != nil {
+			return nil, fmt.Errorf("parse certificate %d: %w", len(certificates), err)
+		}
+		certificates = append(certificates, cert)
+		remaining = rest
+	}
+	if len(certificates) == 0 {
+		return nil, errors.New("certificate PEM contains no certificates")
+	}
+	return certificates, nil
+}
+
+func validateEndpointCertificateChain(certificates []*x509.Certificate, purpose certificatePurpose, now time.Time) error {
+	if len(certificates) < 2 {
+		return errors.New("certificate chain must contain a leaf followed by at least one CA certificate")
+	}
+	leaf := certificates[0]
+	if leaf.BasicConstraintsValid && leaf.IsCA {
+		return errors.New("certificate chain leaf must be an end-entity certificate")
+	}
+	seen := make(map[[sha256.Size]byte]struct{}, len(certificates))
+	for index, cert := range certificates {
+		if err := validateCurrentCertificate(cert, now); err != nil {
+			return fmt.Errorf("certificate %d: %w", index, err)
+		}
+		fingerprint := sha256.Sum256(cert.Raw)
+		if _, ok := seen[fingerprint]; ok {
+			return fmt.Errorf("certificate %d duplicates an earlier certificate", index)
+		}
+		seen[fingerprint] = struct{}{}
+		if index == 0 {
+			continue
+		}
+		if !cert.BasicConstraintsValid || !cert.IsCA || cert.KeyUsage&x509.KeyUsageCertSign == 0 {
+			return fmt.Errorf("certificate %d is not an authorized CA", index)
+		}
+		if err := certificates[index-1].CheckSignatureFrom(cert); err != nil {
+			return fmt.Errorf("certificate %d does not issue certificate %d: %w", index, index-1, err)
+		}
+	}
+	roots := x509.NewCertPool()
+	roots.AddCert(certificates[len(certificates)-1])
+	intermediates := x509.NewCertPool()
+	for _, cert := range certificates[1 : len(certificates)-1] {
+		intermediates.AddCert(cert)
+	}
+	usage := x509.ExtKeyUsageServerAuth
+	if purpose == clientCertificate {
+		usage = x509.ExtKeyUsageClientAuth
+	}
+	if _, err := leaf.Verify(x509.VerifyOptions{
+		Roots:         roots,
+		Intermediates: intermediates,
+		CurrentTime:   now,
+		KeyUsages:     []x509.ExtKeyUsage{usage},
+	}); err != nil {
+		return fmt.Errorf("verify certificate chain: %w", err)
+	}
+	return nil
+}
+
+func validateCurrentCertificate(cert *x509.Certificate, now time.Time) error {
+	if now.Before(cert.NotBefore) {
+		return fmt.Errorf("certificate is not valid before %s", cert.NotBefore.UTC().Format(time.RFC3339))
+	}
+	if !now.Before(cert.NotAfter) {
+		return fmt.Errorf("certificate expired at %s", cert.NotAfter.UTC().Format(time.RFC3339))
+	}
+	return nil
+}
+
+func isSelfSigned(cert *x509.Certificate) bool {
+	return cert.CheckSignatureFrom(cert) == nil
 }
 
 func parsePins(values []string) (map[[sha256.Size]byte]struct{}, error) {
