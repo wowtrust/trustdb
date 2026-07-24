@@ -193,6 +193,15 @@ func verifyPBFTCommitSignature(
 		if len(signature) != bcosStandardSignatureBytes || signature[64] > 3 {
 			return fmt.Errorf("standard signature must be 65-byte [R || S || recovery-id<=3]")
 		}
+		r := new(big.Int).SetBytes(signature[:32])
+		s := new(big.Int).SetBytes(signature[32:64])
+		order := crypto.S256().Params().N
+		halfOrder := new(big.Int).Rsh(new(big.Int).Set(order), 1)
+		if r.Sign() <= 0 || s.Sign() <= 0 ||
+			r.Cmp(order) >= 0 || s.Cmp(order) >= 0 ||
+			s.Cmp(halfOrder) > 0 {
+			return fmt.Errorf("standard signature has non-canonical R/S values")
+		}
 		recovered, err := crypto.SigToPub(blockHash, signature)
 		if err != nil {
 			return fmt.Errorf("recover secp256k1 signer: %v", err)

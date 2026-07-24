@@ -3,11 +3,17 @@ package sproof
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
+	"encoding/hex"
 	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/FISCO-BCOS/go-sdk/v3/types"
+	"github.com/ethereum/go-ethereum/common"
+	ethcrypto "github.com/ethereum/go-ethereum/crypto"
 
 	"github.com/wowtrust/trustdb/internal/anchor/fiscobcos"
 	"github.com/wowtrust/trustdb/internal/app"
@@ -185,11 +191,11 @@ func TestOfflineV2EndToEndAcrossSuitesAndTampering(t *testing.T) {
 	}
 }
 
-func TestOfflineRawBCOSReceiptInclusionHasDistinctL4Stage(t *testing.T) {
+func TestOfflineRawBCOSStagesRequireTrustAndReachL5(t *testing.T) {
 	t.Parallel()
 
 	fixture := newOfflineE2EFixture(t, cryptosuite.INTLV1)
-	attachStructuralRawBCOSEvidence(t, &fixture.proof)
+	bcosTrust := attachStructuralRawBCOSEvidence(t, &fixture.proof)
 	if got := Level(fixture.proof).String(); got != "L4" {
 		t.Fatalf("Level(raw BCOS evidence) = %s, want L4", got)
 	}
@@ -209,6 +215,8 @@ func TestOfflineRawBCOSReceiptInclusionHasDistinctL4Stage(t *testing.T) {
 	}
 	assertOfflineStage(t, result, string(verify.StageAnchor), OfflineStageNotPresent)
 	assertOfflineStage(t, result, OfflineStageBCOSReceiptInclusion, OfflineStageFailed)
+	assertOfflineStage(t, result, OfflineStageBCOSPBFTFinality, OfflineStageNotRun)
+	assertOfflineStage(t, result, OfflineStageBCOSAnchorBinding, OfflineStageNotRun)
 
 	result, err = VerifyOffline(
 		bytes.NewReader(fixture.content),
@@ -221,9 +229,31 @@ func TestOfflineRawBCOSReceiptInclusionHasDistinctL4Stage(t *testing.T) {
 	}
 	assertOfflineStage(t, result, string(verify.StageAnchor), OfflineStageNotPresent)
 	assertOfflineStage(t, result, OfflineStageBCOSReceiptInclusion, OfflineStageSkipped)
+	assertOfflineStage(t, result, OfflineStageBCOSPBFTFinality, OfflineStageSkipped)
+	assertOfflineStage(t, result, OfflineStageBCOSAnchorBinding, OfflineStageSkipped)
+
+	fixture.trust.FISCOBCOS = &bcosTrust
+	result, err = VerifyOffline(
+		bytes.NewReader(fixture.content),
+		fixture.proof,
+		fixture.trust,
+		OfflineOptions{},
+	)
+	if err != nil || !result.Valid || result.ProofLevel != "L5" {
+		t.Fatalf("VerifyOffline(static PBFT) result=%+v error=%v", result, err)
+	}
+	if result.ExternalNetworkAccess || result.ExternalProviderAccess {
+		t.Fatalf("VerifyOffline(static PBFT) used external access: %+v", result)
+	}
+	assertOfflineStage(t, result, OfflineStageBCOSReceiptInclusion, OfflineStagePassed)
+	assertOfflineStage(t, result, OfflineStageBCOSPBFTFinality, OfflineStagePassed)
+	assertOfflineStage(t, result, OfflineStageBCOSAnchorBinding, OfflineStagePassed)
 }
 
-func attachStructuralRawBCOSEvidence(t *testing.T, proof *model.SingleProof) {
+func attachStructuralRawBCOSEvidence(
+	t *testing.T,
+	proof *model.SingleProof,
+) fiscobcos.TrustConfig {
 	t.Helper()
 	config, err := fiscobcos.NewTrustConfig(fiscobcos.CryptoModeStandard)
 	if err != nil {
@@ -257,10 +287,14 @@ func attachStructuralRawBCOSEvidence(t *testing.T, proof *model.SingleProof) {
 		ClientSigningCertificateRef: "missing/client.pem",
 		ClientSigningKeyRef:         "missing/client.key",
 	}
-	validatorKey := make([]byte, 65)
-	validatorKey[0] = 0x04
+	validatorPrivate, err := ethcrypto.ToECDSA(bytes.Repeat([]byte{0x02}, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	validatorKey := ethcrypto.FromECDSAPub(&validatorPrivate.PublicKey)
+	validatorNodeID := "0x" + hex.EncodeToString(validatorKey[1:])
 	config.Validators = []fiscobcos.ValidatorDescriptor{{
-		NodeID:            "validator-1",
+		NodeID:            validatorNodeID,
 		Algorithm:         fiscobcos.StandardAccountAlg,
 		PublicKeyEncoding: fiscobcos.StandardKeyEncoding,
 		PublicKey:         validatorKey,
@@ -277,14 +311,63 @@ func attachStructuralRawBCOSEvidence(t *testing.T, proof *model.SingleProof) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	contextID, err := fiscobcos.ChainContextID(config)
+
+	to := common.BytesToAddress(config.Contract.Address)
+	transaction := types.NewSimpleTx(&to, callData, "", "offline-bcos", "", false)
+	transaction.Data.Version = 0
+	transaction.Data.ChainID = config.ChainID
+	transaction.Data.GroupID = config.GroupID
+	transaction.Data.BlockLimit = 100
+	txHash := transaction.Hash().Bytes()
+	publisherPrivate, err := ethcrypto.ToECDSA(bytes.Repeat([]byte{0x01}, 32))
 	if err != nil {
 		t.Fatal(err)
 	}
-	txHash := bytes.Repeat([]byte{0x11}, 32)
+	transactionSignature, err := ethcrypto.Sign(txHash, publisherPrivate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	publisher := ethcrypto.PubkeyToAddress(publisherPrivate.PublicKey).Bytes()
+	transaction.Signature = transactionSignature
+	senderAddress := common.BytesToAddress(publisher)
+	transaction.Sender = &senderAddress
+	rawTransaction := transaction.Bytes()
+
+	eventTopic, err := fiscobcos.EventTopicForMode(
+		fiscobcos.CryptoModeStandard,
+		config.Contract.EventSignature,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	publisherTopic := make([]byte, 32)
+	copy(publisherTopic[12:], publisher)
+	eventData := make([]byte, 4*32)
+	binary.BigEndian.PutUint64(eventData[24:32], payload.TreeSize)
+	copy(eventData[32:64], payload.RootHash)
+	copy(eventData[64:96], payload.SignedSTHDigest)
+	binary.BigEndian.PutUint16(eventData[126:128], payload.Version)
+	decodedEvent, err := fiscobcos.MarshalNativeAnchorEvent(fiscobcos.AnchorPublishedEvent{
+		ContractAddress: config.Contract.Address,
+		AnchorID:        payload.AnchorID,
+		StreamID:        payload.StreamID,
+		TreeSize:        payload.TreeSize,
+		RootHash:        payload.RootHash,
+		SignedSTHDigest: payload.SignedSTHDigest,
+		Publisher:       publisher,
+		PayloadVersion:  payload.Version,
+		LogIndex:        0,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	receiptFields := fiscobcos.NativeReceiptFields{
-		Version: 0, GasUsed: "1", Status: fiscobcos.ReceiptStatusOK,
-		Logs:        []fiscobcos.NativeLogFields{{Address: "01", Topics: [][]byte{bytes.Repeat([]byte{0x12}, 32)}}},
+		Version: 0, GasUsed: "21000", Status: fiscobcos.ReceiptStatusOK,
+		Logs: []fiscobcos.NativeLogFields{{
+			Address: hex.EncodeToString(config.Contract.Address),
+			Topics:  [][]byte{eventTopic, payload.AnchorID, payload.StreamID, publisherTopic},
+			Data:    eventData,
+		}},
 		BlockNumber: 2,
 	}
 	rawReceipt, logs, err := fiscobcos.MarshalNativeReceiptPreimage(receiptFields)
@@ -298,13 +381,13 @@ func attachStructuralRawBCOSEvidence(t *testing.T, proof *model.SingleProof) {
 	blockFields := fiscobcos.NativeBlockHeaderFields{
 		Version:          0,
 		ParentInfo:       []fiscobcos.NativeParentInfo{{BlockNumber: 1, BlockHash: bytes.Repeat([]byte{0x13}, 32)}},
-		TransactionsRoot: bytes.Repeat([]byte{0x14}, 32),
-		ReceiptsRoot:     bytes.Repeat([]byte{0x15}, 32),
+		TransactionsRoot: append([]byte(nil), txHash...),
+		ReceiptsRoot:     append([]byte(nil), receiptHash...),
 		StateRoot:        bytes.Repeat([]byte{0x16}, 32),
 		BlockNumber:      2,
-		GasUsed:          "1",
+		GasUsed:          "21000",
 		Timestamp:        1,
-		SealerList:       [][]byte{[]byte("validator-1")},
+		SealerList:       [][]byte{append([]byte(nil), validatorKey[1:]...)},
 		ConsensusWeights: []int64{1},
 	}
 	rawHeader, err := fiscobcos.MarshalNativeBlockHeaderPreimage(blockFields)
@@ -312,6 +395,14 @@ func attachStructuralRawBCOSEvidence(t *testing.T, proof *model.SingleProof) {
 		t.Fatal(err)
 	}
 	blockHash, err := fiscobcos.HashNativeEvidence(fiscobcos.HashKeccak256, rawHeader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	finalitySignature, err := ethcrypto.Sign(blockHash, validatorPrivate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	contextID, err := fiscobcos.ChainContextID(config)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -332,28 +423,28 @@ func attachStructuralRawBCOSEvidence(t *testing.T, proof *model.SingleProof) {
 		SuccessfulAttemptOrdinal:  1,
 		SuccessfulTransactionHash: txHash,
 		TransactionAttempts: []fiscobcos.TransactionAttempt{{
-			Ordinal: 1, RawCanonicalTransaction: []byte{0x0c},
+			Ordinal: 1, RawCanonicalTransaction: rawTransaction,
 			ChainID: config.ChainID, GroupID: config.GroupID,
 			To: config.Contract.Address, Input: callData,
-			Signature: bytes.Repeat([]byte{0x17}, 65),
-			Sender:    bytes.Repeat([]byte{0x18}, 20), TransactionHash: txHash,
-			BlockLimit: 3, SubmittedAtUnixN: 1,
+			Signature: transactionSignature,
+			Sender:    publisher, TransactionHash: txHash,
+			BlockLimit: 100, SubmittedAtUnixN: 1,
 			Outcome: fiscobcos.AttemptOutcomeReceiptSuccess,
 		}},
 		Receipt: fiscobcos.ReceiptEvidence{
 			Fields: receiptFields, RawCanonicalReceipt: rawReceipt,
 			Status: fiscobcos.ReceiptStatusOK, StatusMessage: "success",
 			CanonicalLogs: logs, ReceiptHash: receiptHash, TransactionHash: txHash,
-			TransactionProof:   [][]byte{bytes.Repeat([]byte{0x19}, 32)},
-			ReceiptProof:       [][]byte{bytes.Repeat([]byte{0x1a}, 32)},
-			DecodedAnchorEvent: []byte{0x01},
+			TransactionProof:   [][]byte{append([]byte(nil), txHash...)},
+			ReceiptProof:       [][]byte{append([]byte(nil), receiptHash...)},
+			DecodedAnchorEvent: decodedEvent,
 		},
 		Block: fiscobcos.BlockEvidence{
 			Fields: blockFields, RawCanonicalHeader: rawHeader,
 			BlockHash: blockHash, BlockNumber: 2,
 		},
 		Finality: fiscobcos.FinalityEvidence{Signatures: []fiscobcos.CommitSignature{{
-			ValidatorNodeID: "validator-1", Signature: []byte{0x01},
+			ValidatorNodeID: validatorNodeID, Signature: finalitySignature,
 		}}},
 	}
 	encodedProof, err := fiscobcos.MarshalProof(bcosProof)
@@ -374,6 +465,7 @@ func attachStructuralRawBCOSEvidence(t *testing.T, proof *model.SingleProof) {
 		Proof:            encodedProof,
 		PublishedAtUnixN: 1,
 	}
+	return config
 }
 
 type offlineE2EFixture struct {

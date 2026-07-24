@@ -28,6 +28,8 @@ const (
 	OfflineStageNotRun     = sproof.OfflineStageNotRun
 
 	OfflineStageBCOSReceiptInclusion = sproof.OfflineStageBCOSReceiptInclusion
+	OfflineStageBCOSPBFTFinality     = sproof.OfflineStageBCOSPBFTFinality
+	OfflineStageBCOSAnchorBinding    = sproof.OfflineStageBCOSAnchorBinding
 )
 
 // OfflineIdentityTrust is verifier-local trust. Public keys or certificates

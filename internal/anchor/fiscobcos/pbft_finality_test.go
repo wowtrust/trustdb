@@ -5,6 +5,7 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"encoding/hex"
+	"math/big"
 	"strings"
 	"testing"
 
@@ -29,6 +30,8 @@ func TestVerifyStaticPBFTFinalityFourValidatorStandardAndGuomi(t *testing.T) {
 		mode  CryptoMode
 		suite cryptosuite.ID
 	}{
+		// Cross the BCOS and TrustDB suites deliberately. PBFT chain mode
+		// must not select the TrustDB Merkle/signature suite.
 		{name: "standard", mode: CryptoModeStandard, suite: cryptosuite.CNSMV1},
 		{name: "guomi", mode: CryptoModeGuomi, suite: cryptosuite.INTLV1},
 	}
@@ -37,8 +40,14 @@ func TestVerifyStaticPBFTFinalityFourValidatorStandardAndGuomi(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			sth, result, trust, _ := validStaticFinalityFixture(t, test.mode, test.suite)
+			if err := VerifyReceiptInclusion(sth, result, trust); err != nil {
+				t.Fatalf("VerifyReceiptInclusion() error = %v", err)
+			}
 			if err := VerifyStaticPBFTFinality(sth, result, trust); err != nil {
 				t.Fatalf("VerifyStaticPBFTFinality() error = %v", err)
+			}
+			if err := VerifyExactAnchorBinding(sth, result, trust); err != nil {
+				t.Fatalf("VerifyExactAnchorBinding() error = %v", err)
 			}
 		})
 	}
@@ -79,6 +88,24 @@ func TestVerifyStaticPBFTFinalityRejectsMutations(t *testing.T) {
 				proof.Finality.Signatures[0].Signature[0] ^= 0xff
 			},
 			match: "PBFT signature",
+		},
+		{
+			name: "invalid recovery id",
+			mutate: func(proof *AnchorProof, _ *TrustConfig) {
+				proof.Finality.Signatures[0].Signature[64] = 4
+			},
+			match: "recovery-id<=3",
+		},
+		{
+			name: "noncanonical high S",
+			mutate: func(proof *AnchorProof, _ *TrustConfig) {
+				signature := proof.Finality.Signatures[0].Signature
+				s := new(big.Int).SetBytes(signature[32:64])
+				highS := new(big.Int).Sub(ethcrypto.S256().Params().N, s)
+				highS.FillBytes(signature[32:64])
+				signature[64] ^= 1
+			},
+			match: "non-canonical R/S",
 		},
 		{
 			name: "membership transition",
@@ -143,6 +170,86 @@ func TestVerifyStaticPBFTFinalityRejectsMutations(t *testing.T) {
 				t.Fatalf("VerifyStaticPBFTFinality() error = %v, want containing %q", err, test.match)
 			}
 		})
+	}
+}
+
+func TestVerifyStaticPBFTFinalityAcceptsStaticTargetAfterCheckpoint(t *testing.T) {
+	t.Parallel()
+
+	sth, result, trust, _ := validStaticFinalityFixture(
+		t,
+		CryptoModeStandard,
+		cryptosuite.INTLV1,
+	)
+	proof := mustFinalityProof(t, result)
+	if proof.Block.BlockNumber <= trust.TrustedCheckpoint.BlockNumber {
+		t.Fatalf(
+			"fixture target %d must be after checkpoint %d",
+			proof.Block.BlockNumber,
+			trust.TrustedCheckpoint.BlockNumber,
+		)
+	}
+	if len(proof.Block.Fields.ParentInfo) != 1 ||
+		uint64(proof.Block.Fields.ParentInfo[0].BlockNumber) ==
+			trust.TrustedCheckpoint.BlockNumber {
+		t.Fatal("fixture unexpectedly carries a direct checkpoint ancestry edge")
+	}
+	if err := VerifyStaticPBFTFinality(sth, result, trust); err != nil {
+		t.Fatalf("VerifyStaticPBFTFinality() error = %v", err)
+	}
+}
+
+func TestBCOSOfflineStagesKeepExactAnchorBindingSeparate(t *testing.T) {
+	t.Parallel()
+
+	sth, result, trust, keys := validStaticFinalityFixture(
+		t,
+		CryptoModeStandard,
+		cryptosuite.INTLV1,
+	)
+	proof := mustFinalityProof(t, result)
+	proof.Receipt.Fields.Logs[0].Data[31] ^= 1
+	event, err := decodeAnchorEventLog(
+		proof.Contract.Address,
+		proof.Receipt.Fields.Logs[0],
+		0,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proof.Receipt.DecodedAnchorEvent, err = MarshalNativeAnchorEvent(event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proof.Receipt.RawCanonicalReceipt, proof.Receipt.CanonicalLogs, err =
+		MarshalNativeReceiptPreimage(proof.Receipt.Fields)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proof.Receipt.ReceiptHash, err = HashNativeEvidence(
+		proof.ChainHashAlgorithm,
+		proof.Receipt.RawCanonicalReceipt,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proof.Receipt.ReceiptProof = [][]byte{
+		append([]byte(nil), proof.Receipt.ReceiptHash...),
+	}
+	proof.Block.Fields.ReceiptsRoot =
+		append([]byte(nil), proof.Receipt.ReceiptHash...)
+	rebuildFinalityBlock(t, &proof, keys)
+	candidate := resultWithFinalityProof(t, result, proof)
+
+	if err := VerifyNativeReceiptInclusion(sth, candidate, trust); err != nil {
+		t.Fatalf("VerifyNativeReceiptInclusion() error = %v", err)
+	}
+	if err := VerifyStaticPBFTFinality(sth, candidate, trust); err != nil {
+		t.Fatalf("VerifyStaticPBFTFinality() error = %v", err)
+	}
+	if err := VerifyExactAnchorBinding(sth, candidate, trust); err == nil ||
+		!strings.Contains(err.Error(), "does not exactly bind") {
+		t.Fatalf("VerifyExactAnchorBinding() error = %v", err)
 	}
 }
 
