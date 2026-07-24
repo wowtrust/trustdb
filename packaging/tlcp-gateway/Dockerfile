@@ -91,6 +91,8 @@ RUN set -eu; \
     go mod verify
 COPY internal/cborx ./internal/cborx
 COPY internal/cryptosuite ./internal/cryptosuite
+COPY internal/model ./internal/model
+COPY internal/trustcrypto ./internal/trustcrypto
 COPY internal/tlcpprofile ./internal/tlcpprofile
 COPY internal/tlcpready ./internal/tlcpready
 COPY cmd/trustdb-tlcp-profile ./cmd/trustdb-tlcp-profile

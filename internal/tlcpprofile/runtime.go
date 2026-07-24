@@ -222,6 +222,9 @@ func writeNginxServer(builder *strings.Builder, profile Profile, grpc bool) {
 	builder.WriteString("        ssl_verify_client on;\n")
 	builder.WriteString("        ssl_verify_depth 8;\n")
 	builder.WriteString("        limit_conn tlcp_clients 32;\n\n")
+	builder.WriteString("        location = /.well-known/trustdb/tlcp-active-identities {\n")
+	builder.WriteString("            return 404;\n")
+	builder.WriteString("        }\n\n")
 	builder.WriteString("        location / {\n")
 	if grpc {
 		builder.WriteString("            grpc_connect_timeout 5s;\n")

@@ -19,14 +19,12 @@ func configureTLCPIdentityBoundary(
 	serverPublicPath string,
 	registryPublicPath string,
 	registryActive bool,
+	activeRegistryPublic trustcrypto.PublicKeyDescriptor,
 	serverSigner trustcrypto.Signer,
 	serverPrivate keydescriptor.Descriptor,
-) error {
-	if profilePath == "" && manifestPath == "" {
-		return nil
-	}
+) (*tlcpprofile.ActiveIdentityChallengeService, error) {
 	if profilePath == "" || manifestPath == "" || serverPublicPath == "" {
-		return usageError(
+		return nil, usageError(
 			"TLCP identity binding requires tlcp-gateway-profile, tlcp-identity-manifest, and server-public-key",
 		)
 	}
@@ -36,19 +34,19 @@ func configureTLCPIdentityBoundary(
 		"server public key":      serverPublicPath,
 	} {
 		if !filepath.IsAbs(path) || filepath.Clean(path) != path {
-			return usageError(name + " must be an absolute clean path")
+			return nil, usageError(name + " must be an absolute clean path")
 		}
 	}
 	profileData, err := readFileLimit(profilePath, tlcpprofile.MaxProfileBytes)
 	if err != nil {
-		return fmt.Errorf("read TLCP gateway profile declaration: %w", err)
+		return nil, fmt.Errorf("read TLCP gateway profile declaration: %w", err)
 	}
 	profile, err := tlcpprofile.Decode(profileData)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if profile.TrustDBIdentityManifestFile != manifestPath {
-		return usageError(
+		return nil, usageError(
 			"TLCP gateway profile and TrustDB must name the exact same active identity manifest",
 		)
 	}
@@ -57,7 +55,7 @@ func configureTLCPIdentityBoundary(
 		serverPublicPath,
 	)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	proofDescriptorData, err := activeProofDescriptorData(
 		ctx,
@@ -67,46 +65,63 @@ func configureTLCPIdentityBoundary(
 		configuredDescriptor,
 	)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	var registryDescriptorData []byte
 	if registryActive {
 		if registryPublicPath == "" {
-			return usageError(
+			return nil, usageError(
 				"TLCP identity binding with a key registry requires registry-public-key",
 			)
 		}
-		_, registryDescriptor, err := readPublicKeyDescriptor(registryPublicPath)
+		configuredRegistryPublic, registryDescriptor, err :=
+			readPublicKeyDescriptor(registryPublicPath)
 		if err != nil {
-			return err
+			return nil, err
+		}
+		if !samePublicKeyDescriptor(
+			activeRegistryPublic,
+			configuredRegistryPublic,
+		) {
+			return nil, usageError(
+				"active TrustDB key registry does not exactly match registry-public-key",
+			)
 		}
 		registryDescriptorData, err = keydescriptor.Marshal(registryDescriptor)
 		if err != nil {
-			return err
+			return nil, err
 		}
 	}
-	if _, err := tlcpprofile.WriteTrustDBIdentityManifest(
+	manifest, err := tlcpprofile.WriteTrustDBIdentityManifest(
 		manifestPath,
 		proofDescriptorData,
 		registryDescriptorData,
-	); err != nil {
-		return err
+	)
+	if err != nil {
+		return nil, err
 	}
 	validated, report, err := tlcpprofile.LoadAndValidate(
 		profilePath,
 		tlcpprofile.Options{},
 	)
 	if err != nil {
-		return fmt.Errorf("authenticate TLCP gateway profile: %w", err)
+		return nil, fmt.Errorf("authenticate TLCP gateway profile: %w", err)
 	}
 	if validated.TrustDBIdentityManifestFile != manifestPath ||
 		len(report.ProofSigningPublicKeySHA256) != 1 {
-		return errors.New(
+		return nil, errors.New(
 			"TLCP gateway profile did not resolve exactly one active TrustDB proof signer",
 		)
 	}
-	return nil
+	service, err := tlcpprofile.NewActiveIdentityChallengeService(
+		manifest,
+		serverSigner,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return service, nil
 }
 
 func activeProofDescriptorData(

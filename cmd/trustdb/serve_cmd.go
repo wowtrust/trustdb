@@ -43,6 +43,7 @@ import (
 	"github.com/wowtrust/trustdb/internal/proofstore"
 	"github.com/wowtrust/trustdb/internal/statusnotify"
 	"github.com/wowtrust/trustdb/internal/submission"
+	"github.com/wowtrust/trustdb/internal/tlcpprofile"
 	"github.com/wowtrust/trustdb/internal/trustcrypto"
 	"github.com/wowtrust/trustdb/internal/trusterr"
 	"github.com/wowtrust/trustdb/internal/wal"
@@ -280,17 +281,46 @@ func newServeCommand(rt *runtimeConfig) *cobra.Command {
 			}
 			registryActive := registryPath != "" &&
 				(cmd.Flags().Changed("key-registry") || clientPubPath == "")
-			if err := configureTLCPIdentityBoundary(
-				cmd.Context(),
-				tlcpProfilePath,
-				tlcpIdentityManifestPath,
-				serverPubPath,
-				registryPubPath,
-				registryActive,
-				serverSigner,
-				serverKey,
-			); err != nil {
-				return err
+			var activeRegistryPublic trustcrypto.PublicKeyDescriptor
+			if registryActive {
+				trustRoot, ok := clientKeys.(interface {
+					RegistryPublicKey() trustcrypto.PublicKeyDescriptor
+				})
+				if !ok {
+					return trusterr.New(
+						trusterr.CodeInternal,
+						"key registry does not expose its validated public trust root",
+					)
+				}
+				activeRegistryPublic = trustRoot.RegistryPublicKey()
+			}
+			transportModeForBoundary := strings.ToLower(
+				strings.TrimSpace(rt.cfg.Server.Transport.Mode),
+			)
+			if transportModeForBoundary == "" {
+				transportModeForBoundary = transporttls.ModePlaintext
+			}
+			requireTLCPBoundary :=
+				trustconfig.NormalizeRunProfile(rt.cfg.RunProfile) ==
+					trustconfig.RunProfileSingleNodeProduction &&
+					transportModeForBoundary == transporttls.ModePlaintext
+			var tlcpIdentityService *tlcpprofile.ActiveIdentityChallengeService
+			if tlcpProfilePath != "" || tlcpIdentityManifestPath != "" ||
+				requireTLCPBoundary {
+				tlcpIdentityService, err = configureTLCPIdentityBoundary(
+					cmd.Context(),
+					tlcpProfilePath,
+					tlcpIdentityManifestPath,
+					serverPubPath,
+					registryPubPath,
+					registryActive,
+					activeRegistryPublic,
+					serverSigner,
+					serverKey,
+				)
+				if err != nil {
+					return err
+				}
 			}
 			cryptoProvider, err := trustcrypto.ProviderForSuite(serverKey.CryptoSuite)
 			if err != nil {
@@ -783,6 +813,9 @@ func newServeCommand(rt *runtimeConfig) *cobra.Command {
 					bp = "/admin"
 				}
 				handler = adminweb.Mount(bp, publicHandler, ah)
+			}
+			if tlcpIdentityService != nil {
+				handler = tlcpIdentityService.Mount(handler)
 			}
 			handler = transporttls.HTTPPeerIdentity(handler)
 			server := &http.Server{

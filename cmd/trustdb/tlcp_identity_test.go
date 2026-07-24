@@ -63,6 +63,24 @@ func TestActiveProofDescriptorUsesTheResolvedTrustDBSigner(t *testing.T) {
 	}
 }
 
+func TestTLCPIdentityBoundaryNeverSilentlyAcceptsEmptyConfiguration(
+	t *testing.T,
+) {
+	if _, err := configureTLCPIdentityBoundary(
+		context.Background(),
+		"",
+		"",
+		"",
+		"",
+		false,
+		trustcrypto.PublicKeyDescriptor{},
+		nil,
+		keydescriptor.Descriptor{},
+	); err == nil {
+		t.Fatal("empty TLCP identity boundary was silently skipped")
+	}
+}
+
 func testProofSignerDescriptor(publicKey ed25519.PublicKey) keydescriptor.Descriptor {
 	return keydescriptor.Descriptor{
 		SchemaVersion: keydescriptor.SchemaV1,
