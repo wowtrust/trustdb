@@ -19,6 +19,7 @@ import {
   ArrowRight,
   ArrowLeft,
   Copy,
+  Download,
   Zap,
   X,
   CircleCheck,
@@ -36,8 +37,8 @@ type StepKey = 'welcome' | 'server' | 'identity' | 'register'
 const steps: { key: StepKey; title: string; subtitle: string }[] = [
   { key: 'welcome',  title: '欢迎使用 TrustDB 存证', subtitle: '三分钟完成首次配置，立即可签、可存、可验' },
   { key: 'server',   title: '连接到 TrustDB 服务',   subtitle: '填入服务地址并粘贴它的公钥，用来校验签名' },
-  { key: 'identity', title: '生成你的签名身份',       subtitle: '一对 Ed25519 密钥对；私钥只会保存在本机' },
-  { key: 'register', title: '让服务器信任这把公钥',   subtitle: '把下面的命令贴到服务器上执行一次即可' },
+  { key: 'identity', title: '生成你的加密签名身份',   subtitle: 'INTL_V1 或 CN_SM_V1；私钥只进入 SM4 加密封装' },
+  { key: 'register', title: '登记 V2 公开描述符',     subtitle: '由管理员把 verifier descriptor 加入 append-only registry' },
 ]
 const stepIdx = ref(0)
 const current = computed(() => steps[stepIdx.value])
@@ -47,6 +48,7 @@ const progress = computed(() => ((stepIdx.value + 1) / steps.length) * 100)
 const serverTransport = ref(settings.settings.server_transport || 'http')
 const serverUrl       = ref(settings.settings.server_url || 'http://127.0.0.1:8080')
 const serverPubKey    = ref(settings.settings.server_public_key_b64 || '')
+const serverSuite     = ref(settings.settings.server_crypto_suite || 'INTL_V1')
 const testingServer   = ref(false)
 const serverChecked   = ref<null | { ok: boolean; message: string }>(null)
 
@@ -73,6 +75,7 @@ async function testServer() {
     await settings.save({
       server_transport: serverTransport.value,
       server_url: serverUrl.value.trim(),
+      server_crypto_suite: serverSuite.value,
       server_public_key_b64: serverPubKey.value.trim(),
     })
     const h = await api.serverHealth()
@@ -91,7 +94,10 @@ async function testServer() {
 // --- Step 3: identity --------------------------------------------
 const tenant    = ref('default')
 const clientID  = ref('desktop-1')
-const keyID     = ref('ed25519-1')
+const keyID     = ref('intl-desktop-1')
+const identitySuite = ref('INTL_V1')
+const passphrase = ref('')
+const passphraseAgain = ref('')
 const generating = ref(false)
 
 const idState = computed(() => identity.identity)
@@ -99,11 +105,23 @@ const idState = computed(() => identity.identity)
 async function generateIdentity() {
   generating.value = true
   try {
-    await identity.generate(tenant.value.trim(), clientID.value.trim(), keyID.value.trim())
-    toasts.success('身份已生成', '私钥只存本机，不会离开你的电脑')
+    if (passphrase.value.length < 12 || passphrase.value !== passphraseAgain.value) {
+      toasts.error('加密口令无效', '至少 12 个字符，且两次输入必须一致')
+      return
+    }
+    await identity.generate({
+      tenant_id: tenant.value.trim(),
+      client_id: clientID.value.trim(),
+      key_id: keyID.value.trim(),
+      crypto_suite: identitySuite.value,
+      passphrase: passphrase.value,
+    })
+    toasts.success('身份已生成', '私钥已写入 SM4 加密封装，不可从界面导出')
   } catch (e: any) {
     toasts.error('生成失败', String(e?.message ?? e))
   } finally {
+    passphrase.value = ''
+    passphraseAgain.value = ''
     generating.value = false
   }
 }
@@ -111,22 +129,21 @@ async function generateIdentity() {
 // --- Step 4: registration command ---------------------------------
 const registerCmd = computed(() => {
   // The command the operator needs to run on the *server* host. We
-  // intentionally keep it copy-paste-friendly: a real, runnable
-  // trustdb invocation with the client's public key inlined, plus a
-  // sensible default registry path that matches the server's
-  // built-in config.
+  // intentionally keep it copy-paste-friendly: a real, runnable trustdb
+  // invocation that points to the exported V2 verifier descriptor.
   if (!idState.value) return ''
   const tenant   = idState.value.tenant_id   || 'default'
   const clientID = idState.value.client_id   || 'desktop-1'
-  const keyID    = idState.value.key_id      || 'ed25519-1'
-  const pub      = idState.value.public_key_b64
+  const keyID    = idState.value.key_id      || 'client-key'
   return [
-    'trustdb key-register \\',
+    '# Copy the exported V2 verifier descriptor to the server, then run:',
+    'trustdb key register \\',
     `  --registry .trustdb/keys.tdkeys \\`,
+    `  --registry-private-key /secure/path/registry.key \\`,
     `  --tenant ${shellQuote(tenant)} \\`,
-    `  --client-id ${shellQuote(clientID)} \\`,
+    `  --client ${shellQuote(clientID)} \\`,
     `  --key-id ${shellQuote(keyID)} \\`,
-    `  --public-key ${shellQuote(pub)}`,
+    `  --public-key /secure/path/client.pub`,
   ].join('\n')
 })
 
@@ -144,8 +161,20 @@ async function copyCmd() {
 
 async function copyPubKey() {
   if (!idState.value) return
-  await copyToClipboard(idState.value.public_key_b64)
+  await copyToClipboard(idState.value.public_key_b64 || '')
   toasts.success('公钥已复制')
+}
+
+async function exportDescriptor() {
+  if (!idState.value) return
+  const path = await api.chooseSavePath('导出 V2 verifier descriptor', `${idState.value.key_id || 'client'}.pub`)
+  if (!path) return
+  try {
+    await api.exportVerifierDescriptor(path)
+    toasts.success('公开 descriptor 已导出', '请安全传输到服务端后登记')
+  } catch (e: any) {
+    toasts.error('导出失败', String(e?.message ?? e))
+  }
 }
 
 // --- Navigation ---------------------------------------------------
@@ -173,6 +202,7 @@ function finish() {
   settings.save({
     server_transport: serverTransport.value,
     server_url: serverUrl.value.trim(),
+    server_crypto_suite: serverSuite.value,
     server_public_key_b64: serverPubKey.value.trim(),
   })
   try { localStorage.setItem('trustdb.onboarded', '1') } catch { /* ignore */ }
@@ -248,7 +278,7 @@ function skip() {
               <div class="surface-tile rounded-[18px] p-4">
                 <KeyRound :size="14" class="text-accent" />
                 <div class="mt-2 font-display text-[15px] font-bold uppercase text-ink-50">生成身份</div>
-                <div class="mt-0.5 text-[11.5px] text-ink-400">Ed25519 密钥，仅存本机</div>
+                <div class="mt-0.5 text-[11.5px] text-ink-400">Ed25519 或 SM2，加密保存</div>
               </div>
               <div class="surface-tile rounded-[18px] p-4">
                 <Zap :size="14" class="text-accent" />
@@ -283,8 +313,14 @@ function skip() {
             <Field :label="serverTransport === 'grpc' ? 'gRPC Target' : '服务地址'" :hint="serverEndpointHint">
               <Input v-model="serverUrl" :placeholder="serverEndpointPlaceholder" />
             </Field>
+            <Field label="服务端密码套件" hint="必须与服务端 V2 namespace 完全一致">
+              <select v-model="serverSuite" class="w-full rounded-xl border border-white/10 bg-black/30 px-3 py-2 text-[12px]">
+                <option value="INTL_V1">INTL_V1 · Ed25519 / SHA-256</option>
+                <option value="CN_SM_V1">CN_SM_V1 · SM2 / SM3</option>
+              </select>
+            </Field>
             <Field label="服务端公钥（base64）" hint="从 server.pub 复制内容，留空也可以先跳过">
-              <Input v-model="serverPubKey" placeholder="Zo46rzMjDyCXRa5-4bSqASte5A0JOLWOJ2mkeKzaCXw" />
+              <Input v-model="serverPubKey" :placeholder="serverSuite === 'CN_SM_V1' ? 'SM2 public key' : 'Ed25519 public key'" />
             </Field>
             <div class="flex items-center gap-3">
               <Button variant="subtle" :loading="testingServer" @click="testServer">测试连接</Button>
@@ -309,15 +345,25 @@ function skip() {
                   <Input v-model="clientID" placeholder="desktop-1" />
                 </Field>
                 <Field label="key_id">
-                  <Input v-model="keyID" placeholder="ed25519-1" />
+                  <Input v-model="keyID" :placeholder="identitySuite === 'CN_SM_V1' ? 'sm2-desktop-1' : 'intl-desktop-1'" />
                 </Field>
+              </div>
+              <Field label="密码套件">
+                <select v-model="identitySuite" class="w-full rounded-xl border border-white/10 bg-black/30 px-3 py-2 text-[12px]">
+                  <option value="INTL_V1">INTL_V1 · Ed25519 / SHA-256</option>
+                  <option value="CN_SM_V1">CN_SM_V1 · SM2 / SM3</option>
+                </select>
+              </Field>
+              <div class="grid grid-cols-2 gap-2.5">
+                <Field label="SM4 封装口令" hint="至少 12 个字符"><Input v-model="passphrase" type="password" /></Field>
+                <Field label="确认口令"><Input v-model="passphraseAgain" type="password" /></Field>
               </div>
               <p class="text-[11.5px] text-ink-400 leading-relaxed">
                 TrustDB 用 <b>(tenant, client_id, key_id)</b> 三元组唯一标识签名者。
                 如果只是试用，保持默认即可；生产环境里建议用有业务含义的名字，方便审计时辨认。
               </p>
               <Button :loading="generating" @click="generateIdentity">
-                <KeyRound :size="14" /> 生成 Ed25519 密钥
+                <KeyRound :size="14" /> 生成加密身份
               </Button>
             </div>
             <div v-else class="surface-tile rounded-[18px] p-4 space-y-2.5">
@@ -330,14 +376,14 @@ function skip() {
               </div>
               <div class="flex items-center gap-1.5">
                 <span class="kicker text-[10px] font-bold">公钥</span>
-                <HashChip :value="idState.public_key_b64" :head="8" :tail="8" />
+                <HashChip :value="idState.public_fingerprint || idState.public_key_b64 || ''" :head="8" :tail="8" />
                 <button class="text-ink-400 hover:text-accent transition" title="复制公钥" @click="copyPubKey">
                   <Copy :size="13" />
                 </button>
               </div>
               <p class="text-[11.5px] text-ink-400">
-                私钥保留在 <code class="text-ink-200">%APPDATA%/TrustDB-Desktop/config.json</code>
-                ，永不外传。
+                {{ idState.crypto_suite }} · {{ idState.algorithm }} · {{ idState.provider }}。
+                配置文件只保存 V2 descriptor 引用；软件私钥位于 SM4 加密封装中，界面不可导出。
               </p>
             </div>
           </div>
@@ -345,18 +391,21 @@ function skip() {
           <!-- 4. Register command -->
           <div v-else-if="current.key === 'register'" class="space-y-3">
             <p class="text-[12.5px] text-ink-300 leading-relaxed">
-              服务器需要把你的公钥加入它的 key registry 才会接受你签的 claim。
-              把下面这条命令<strong class="text-ink-50">复制到服务器</strong>执行一次即可，
+              服务器需要把你的 V2 verifier descriptor 加入 append-only key registry 才会接受 claim。
+              先安全传输公开 descriptor，再按下面模板由<strong class="text-ink-50">管理员</strong>执行，
               之后就可以关闭这个向导开始存证了。
             </p>
             <div class="rounded-[18px] border border-accent/20 bg-black/70 text-ink-100 text-[11.5px] font-mono
                         px-4 py-3 whitespace-pre leading-relaxed overflow-x-auto">{{ registerCmd }}</div>
             <div class="flex items-center gap-2.5">
+              <Button @click="exportDescriptor">
+                <Download :size="13" /> 导出公开 descriptor
+              </Button>
               <Button variant="subtle" @click="copyCmd">
                 <Copy :size="13" /> 复制命令
               </Button>
               <span class="text-[11.5px] text-ink-400">
-                或者把公钥贴给管理员由对方完成 —
+                公钥可用于核对指纹，但不能替代包含 suite、encoding、证书链的 V2 descriptor —
                 <button class="underline decoration-dotted hover:text-accent" @click="copyPubKey">只复制公钥</button>
               </span>
             </div>
@@ -364,8 +413,7 @@ function skip() {
               <div class="flex items-center gap-1.5 text-accent font-medium mb-1">
                 <Sparkles :size="12" /> 小贴士
               </div>
-              如果你用的是单机开发模式、直接在服务器启动时传 <code>--client-public-key</code>，也可以完全跳过这一步 —
-              向导只是帮你生成了正确的注册命令，并不强制必须用 registry。
+              CN_SM_V1 和 INTL_V1 都必须显式登记 suite-aware descriptor。registry、证书 CA 根与 TLS CA 是三类不同信任边界。
             </div>
           </div>
         </div>

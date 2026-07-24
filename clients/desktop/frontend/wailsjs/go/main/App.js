@@ -38,10 +38,6 @@ export function ExportGlobalProof(arg1, arg2) {
   return window['go']['main']['App']['ExportGlobalProof'](arg1, arg2);
 }
 
-export function ExportPrivateKey() {
-  return window['go']['main']['App']['ExportPrivateKey']();
-}
-
 export function ExportProofBundle(arg1, arg2) {
   return window['go']['main']['App']['ExportProofBundle'](arg1, arg2);
 }
@@ -50,12 +46,12 @@ export function ExportSingleProof(arg1, arg2) {
   return window['go']['main']['App']['ExportSingleProof'](arg1, arg2);
 }
 
-export function GenerateIdentity(arg1, arg2, arg3) {
-  return window['go']['main']['App']['GenerateIdentity'](arg1, arg2, arg3);
+export function ExportVerifierDescriptor(arg1) {
+  return window['go']['main']['App']['ExportVerifierDescriptor'](arg1);
 }
 
-export function GetIdentity() {
-  return window['go']['main']['App']['GetIdentity']();
+export function GenerateIdentity(arg1) {
+  return window['go']['main']['App']['GenerateIdentity'](arg1);
 }
 
 export function GetAnchorSystemResource(arg1, arg2, arg3) {
@@ -66,6 +62,10 @@ export function GetAnchorSystemStatus(arg1) {
   return window['go']['main']['App']['GetAnchorSystemStatus'](arg1);
 }
 
+export function GetIdentity() {
+  return window['go']['main']['App']['GetIdentity']();
+}
+
 export function GetProofBundle(arg1) {
   return window['go']['main']['App']['GetProofBundle'](arg1);
 }
@@ -74,24 +74,24 @@ export function GetSettings() {
   return window['go']['main']['App']['GetSettings']();
 }
 
-export function ImportIdentity(arg1, arg2, arg3, arg4) {
-  return window['go']['main']['App']['ImportIdentity'](arg1, arg2, arg3, arg4);
+export function ImportIdentity(arg1) {
+  return window['go']['main']['App']['ImportIdentity'](arg1);
 }
 
 export function LatestRoot() {
   return window['go']['main']['App']['LatestRoot']();
 }
 
-export function ListRecords() {
-  return window['go']['main']['App']['ListRecords']();
+export function ListAnchorSystemResources(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['ListAnchorSystemResources'](arg1, arg2, arg3, arg4);
 }
 
 export function ListAnchorSystems() {
   return window['go']['main']['App']['ListAnchorSystems']();
 }
 
-export function ListAnchorSystemResources(arg1, arg2, arg3, arg4) {
-  return window['go']['main']['App']['ListAnchorSystemResources'](arg1, arg2, arg3, arg4);
+export function ListRecords() {
+  return window['go']['main']['App']['ListRecords']();
 }
 
 export function ListRecordsPage(arg1) {
@@ -104,6 +104,14 @@ export function ListRemoteRecordsPage(arg1) {
 
 export function ListRoots(arg1) {
   return window['go']['main']['App']['ListRoots'](arg1);
+}
+
+export function LockIdentity() {
+  return window['go']['main']['App']['LockIdentity']();
+}
+
+export function ReferenceIdentity(arg1) {
+  return window['go']['main']['App']['ReferenceIdentity'](arg1);
 }
 
 export function RefreshRecord(arg1) {
@@ -136,6 +144,10 @@ export function SubmitBatch(arg1) {
 
 export function SubmitFile(arg1) {
   return window['go']['main']['App']['SubmitFile'](arg1);
+}
+
+export function UnlockIdentity(arg1) {
+  return window['go']['main']['App']['UnlockIdentity'](arg1);
 }
 
 export function UpgradeOtsAnchor(arg1) {

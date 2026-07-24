@@ -1,6 +1,13 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
-import { api, IdentityView } from '@/lib/api'
+import {
+  api,
+  GenerateIdentityRequest,
+  IdentityView,
+  ImportIdentityRequest,
+  ReferenceIdentityRequest,
+  RotateIdentityRequest,
+} from '@/lib/api'
 
 export const useIdentity = defineStore('identity', () => {
   const identity = ref<IdentityView | null>(null)
@@ -15,16 +22,29 @@ export const useIdentity = defineStore('identity', () => {
     }
   }
 
-  async function generate(tenant: string, client: string, keyID: string) {
-    identity.value = await api.generateIdentity(tenant, client, keyID)
+  async function generate(request: GenerateIdentityRequest) {
+    identity.value = await api.generateIdentity(request)
   }
 
-  async function rotate(newKeyID: string) {
-    identity.value = await api.rotateIdentity(newKeyID)
+  async function rotate(request: RotateIdentityRequest) {
+    identity.value = await api.rotateIdentity(request)
   }
 
-  async function importKey(tenant: string, client: string, keyID: string, priv: string) {
-    identity.value = await api.importIdentity(tenant, client, keyID, priv)
+  async function importKey(request: ImportIdentityRequest) {
+    identity.value = await api.importIdentity(request)
+  }
+
+  async function reference(request: ReferenceIdentityRequest) {
+    identity.value = await api.referenceIdentity(request)
+  }
+
+  async function unlock(passphrase: string) {
+    identity.value = await api.unlockIdentity(passphrase)
+  }
+
+  async function lock() {
+    await api.lockIdentity()
+    await load()
   }
 
   async function clear() {
@@ -32,5 +52,5 @@ export const useIdentity = defineStore('identity', () => {
     identity.value = null
   }
 
-  return { identity, loading, load, generate, rotate, importKey, clear }
+  return { identity, loading, load, generate, rotate, importKey, reference, unlock, lock, clear }
 })

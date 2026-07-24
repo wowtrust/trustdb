@@ -10,59 +10,68 @@ import Field from '@/components/Field.vue'
 import LevelBadge from '@/components/LevelBadge.vue'
 import HashChip from '@/components/HashChip.vue'
 import KV from '@/components/KV.vue'
-import {
-  FolderOpen, FileSearch, CheckCircle2, XCircle, Loader2, ShieldCheck, ShieldAlert,
-} from 'lucide-vue-next'
+import { CheckCircle2, CircleDashed, FileSearch, FolderOpen, ShieldAlert, ShieldCheck, XCircle } from 'lucide-vue-next'
 import { bytesToHex, formatTime, humanSize, nanoToDate } from '@/lib/format'
 
 const settings = useSettings()
 const toasts = useToasts()
-
 type Mode = 'local' | 'remote'
+type Picker = 'file' | 'single' | 'proof' | 'global' | 'anchor' | 'clientDesc' | 'serverDesc' | 'registry' | 'clientRoot' | 'serverRoot'
+
 const mode = ref<Mode>('local')
-
-// Shared input
 const filePath = ref('')
-const clientPub = ref('')
-const serverPub = ref('')
 const skipAnchor = ref(false)
-
-// Local-only
 const singleProofPath = ref('')
 const proofPath = ref('')
 const globalProofPath = ref('')
 const anchorPath = ref('')
 const showSplitProofs = ref(false)
-
-// Remote-only
 const recordID = ref('')
 const serverURL = ref('')
-const configuredTransport = computed(() => (settings.settings.server_transport || 'http').toUpperCase())
-
+const clientPub = ref('')
+const serverPub = ref('')
+const clientDescriptors = ref('')
+const serverDescriptors = ref('')
+const registryDescriptor = ref('')
+const clientRoots = ref('')
+const serverRoots = ref('')
+const requireEvidence = ref(false)
+const requireCertificateStatus = ref(false)
+const showTrustOverrides = ref(false)
 const running = ref(false)
 const result = ref<VerifyResponse | null>(null)
+const configuredTransport = computed(() => (settings.settings.server_transport || 'http').toUpperCase())
 
-async function pickFile(target: 'file' | 'single' | 'proof' | 'global' | 'anchor') {
-  const title =
-    target === 'file' ? '选择被存证文件' :
-    target === 'single' ? '选择 .sproof 单文件证明' :
-    target === 'proof' ? '选择 .tdproof' :
-    target === 'global' ? '选择 .tdgproof' :
-    '选择 .tdanchor-result'
-  const p = await api.chooseOpenPath(title)
-  if (!p) return
-  if (target === 'file') filePath.value = p
-  if (target === 'single') singleProofPath.value = p
-  if (target === 'proof') proofPath.value = p
-  if (target === 'global') globalProofPath.value = p
-  if (target === 'anchor') anchorPath.value = p
+async function pick(target: Picker) {
+  const titles: Record<Picker, string> = {
+    file: '选择被存证文件',
+    single: '选择 .sproof V2 文件',
+    proof: '选择 .tdproof',
+    global: '选择 .tdgproof',
+    anchor: '选择 .tdanchor-result',
+    clientDesc: '选择客户端 verifier descriptor',
+    serverDesc: '选择服务器 verifier descriptor',
+    registry: '选择 registry verifier descriptor',
+    clientRoot: '选择客户端本地 CA 根',
+    serverRoot: '选择服务器本地 CA 根',
+  }
+  const path = await api.chooseOpenPath(titles[target])
+  if (!path) return
+  if (target === 'file') filePath.value = path
+  if (target === 'single') singleProofPath.value = path
+  if (target === 'proof') proofPath.value = path
+  if (target === 'global') globalProofPath.value = path
+  if (target === 'anchor') anchorPath.value = path
+  if (target === 'clientDesc') clientDescriptors.value = path
+  if (target === 'serverDesc') serverDescriptors.value = path
+  if (target === 'registry') registryDescriptor.value = path
+  if (target === 'clientRoot') clientRoots.value = path
+  if (target === 'serverRoot') serverRoots.value = path
 }
 
-const canVerify = computed(() => {
-  if (!filePath.value) return false
-  if (mode.value === 'local') return !!singleProofPath.value || !!proofPath.value
-  return !!recordID.value
-})
+const canVerify = computed(() =>
+  !!filePath.value && (mode.value === 'local' ? !!singleProofPath.value || !!proofPath.value : !!recordID.value),
+)
 
 async function verify() {
   if (!canVerify.value) return
@@ -80,12 +89,18 @@ async function verify() {
     skip_anchor: skipAnchor.value,
     client_public_key_b64: clientPub.value || undefined,
     server_public_key_b64: serverPub.value || undefined,
+    client_verifier_descriptors: clientDescriptors.value || undefined,
+    server_verifier_descriptors: serverDescriptors.value || undefined,
+    registry_verifier_descriptor: registryDescriptor.value || undefined,
+    client_certificate_roots: clientRoots.value || undefined,
+    server_certificate_roots: serverRoots.value || undefined,
+    require_identity_evidence: requireEvidence.value,
+    require_certificate_status: requireCertificateStatus.value,
   }
   try {
-    const res = await api.verifyProof(req)
-    result.value = res
-    if (res.valid) toasts.success(`验证通过 · ${res.level}`)
-    else toasts.error('验证未通过', res.error)
+    result.value = await api.verifyProof(req)
+    if (result.value.valid) toasts.success(`验证通过 · ${result.value.crypto_suite} · ${result.value.level}`)
+    else toasts.error('验证未通过', result.value.error)
   } catch (e: any) {
     toasts.error('验证出错', String(e?.message ?? e))
   } finally {
@@ -93,271 +108,160 @@ async function verify() {
   }
 }
 
-// L1→L5 step gate: figures out, from the outcome, which steps we
-// should show as passed, current, or not-yet-reached. Conceptually
-// mirrors the server's ProofLevel ladder.
-type Step = { level: 'L1' | 'L2' | 'L3' | 'L4' | 'L5'; label: string; hint: string }
-const STEPS: Step[] = [
-  { level: 'L1', label: 'L1 本地内容与签名',   hint: '内容哈希匹配、客户端签名合法' },
-  { level: 'L2', label: 'L2 服务端受理收据',   hint: 'AcceptedReceipt 签名有效' },
-  { level: 'L3', label: 'L3 批次承诺',         hint: 'Merkle 审计路径到 BatchRoot' },
-  { level: 'L4', label: 'L4 Global Log',       hint: 'BatchRoot 已进入某个 SignedTreeHead' },
-  { level: 'L5', label: 'L5 外部锚定',         hint: '同一个 STH/global root 已被外部 sink 锚定' },
-]
+const stageLabels: Record<string, string> = {
+  sproof_container: 'V2 .sproof 容器',
+  identity_evidence: '身份、registry 与证书证据',
+  proof_bundle: 'ProofBundle 结构',
+  content: '内容哈希',
+  client_claim: '客户端签名',
+  bundle_bindings: '证据字段绑定',
+  accepted_receipt: 'AcceptedReceipt',
+  committed_receipt: 'CommittedReceipt',
+  batch_merkle: 'Batch Merkle path',
+  global_log: 'Global Log inclusion',
+  anchor: '外部锚定',
+}
 
-function stepState(s: Step): 'pass' | 'current' | 'todo' | 'fail' {
-  const r = result.value
-  if (!r) return 'todo'
-  const order = ['L1', 'L2', 'L3', 'L4', 'L5']
-  const reached = order.indexOf(r.level || '')
-  const mine = order.indexOf(s.level)
-  if (!r.valid && mine === reached + 1) return 'fail'
-  if (mine <= reached && reached >= 0) return 'pass'
-  if (mine === reached + 1) return 'current'
-  return 'todo'
+function stageClass(status: string) {
+  if (status === 'passed') return 'bg-success text-white'
+  if (status === 'failed') return 'bg-danger text-white'
+  if (status === 'skipped') return 'bg-warn/20 text-warn'
+  return 'bg-ink-100 dark:bg-ink-800 text-ink-400'
 }
 </script>
 
 <template>
   <div class="flex flex-col gap-5 max-w-[1100px] mx-auto">
-    <!-- Mode tabs + intro -->
     <Card>
       <template #title>
         <div class="flex items-center gap-2">
           <ShieldCheck :size="16" class="text-accent" />
-          <h3 class="text-[14px] font-semibold tracking-[-0.01em] text-ink-800 dark:text-ink-100">验证存证</h3>
+          <h3 class="text-[14px] font-semibold text-ink-800 dark:text-ink-100">断网可复算验证</h3>
         </div>
       </template>
       <template #actions>
-        <div class="inline-flex items-center gap-1 p-1 rounded-lg hairline border bg-white/50 dark:bg-ink-800/50">
+        <div class="inline-flex items-center gap-1 p-1 rounded-lg hairline border bg-ink-800/50">
           <button
-            v-for="t in [{ v: 'local', l: '本地证据' }, { v: 'remote', l: '远程查询' }]"
-            :key="t.v"
-            class="px-3 h-7 rounded-md text-[12px] transition-all duration-150 ease-ios"
-            :class="mode === t.v
-              ? 'bg-white dark:bg-ink-700 text-ink-800 dark:text-ink-100 shadow-soft-sm'
-              : 'text-ink-500 hover:text-ink-700'"
-            @click="mode = t.v as Mode"
-          >{{ t.l }}</button>
+            v-for="tab in [{ value: 'local', label: '本地 .sproof' }, { value: 'remote', label: '先下载再验证' }]"
+            :key="tab.value"
+            class="px-3 h-7 rounded-md text-[12px]"
+            :class="mode === tab.value ? 'bg-ink-700 text-ink-100' : 'text-ink-500'"
+            @click="mode = tab.value as Mode"
+          >{{ tab.label }}</button>
         </div>
       </template>
 
       <p class="text-[12.5px] text-ink-500 leading-relaxed mb-4">
         <template v-if="mode === 'local'">
-          选择一份文件和它的 <span class="font-mono">.sproof</span> 单文件证明；它会携带当前可用的
-          ProofBundle、GlobalLogProof 和 STHAnchorResult。全程离线即可验证，不需要连回服务器。
-          需要逐级审计时，可以展开下方的分布式证明入口。
+          内容、签名、Merkle path、Global Log、锚定以及身份生命周期全部在本机复算；不会访问服务器、DNS、CA 或 signer provider。
         </template>
         <template v-else>
-          输入 record_id，客户端会按设置里的 <span class="font-mono">{{ configuredTransport }}</span>
-          transport 从 <span class="font-mono">{{ serverURL || settings.settings.server_url || '（未配置）' }}</span>
-          拉取 proof bundle、GlobalLogProof 和 STH anchor 并就地验证。
+          仅通过 {{ configuredTransport }} 下载一次完整 .sproof，随后进入同一离线验证器。远程返回的证书仍然只是证据。
         </template>
-      </p>
-      <p v-if="settings.settings.anchor_plugin_command" class="mb-4 text-[11.5px] text-ink-500">
-        自定义 L5 verifier：<span class="font-mono">{{ settings.settings.anchor_plugin_command }}</span>
       </p>
 
       <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
-        <!-- Common: file -->
-        <Field label="被存证文件" hint="需要被核验内容的本机文件路径">
-          <div class="flex items-center gap-2">
-            <Input v-model="filePath" placeholder="选择或粘贴文件路径" />
-            <Button size="sm" variant="subtle" @click="pickFile('file')">
-              <FolderOpen :size="13" /> 浏览
-            </Button>
-          </div>
-        </Field>
-
+        <Field label="被存证文件"><div class="flex gap-2"><Input v-model="filePath" /><Button size="sm" variant="subtle" @click="pick('file')"><FolderOpen :size="13" /></Button></div></Field>
         <template v-if="mode === 'local'">
-          <Field label=".sproof 单文件证明（推荐）" hint="包含当前可用的 L1-L5 证明路径；日常验证只需要这一份文件">
-            <div class="flex items-center gap-2">
-              <Input v-model="singleProofPath" placeholder="选择 .sproof" />
-              <Button size="sm" variant="subtle" @click="pickFile('single')">
-                <FolderOpen :size="13" /> 浏览
-              </Button>
-            </div>
+          <Field label=".sproof V2（推荐）" hint="包含可携带的完整公开证据">
+            <div class="flex gap-2"><Input v-model="singleProofPath" /><Button size="sm" variant="subtle" @click="pick('single')"><FolderOpen :size="13" /></Button></div>
           </Field>
-
           <div class="md:col-span-2">
-            <button
-              type="button"
-              class="w-full rounded-[18px] hairline border bg-white/40 dark:bg-ink-800/35 px-4 py-3 text-left transition hover:border-accent/35 hover:bg-accent/5"
-              @click="showSplitProofs = !showSplitProofs"
-            >
-              <div class="flex items-center justify-between gap-3">
-                <div>
-                  <div class="font-display text-[11px] font-bold uppercase tracking-[0.14em] text-ink-100">
-                    分布式证明文件
-                  </div>
-                  <p class="mt-1 text-[11.5px] text-ink-500 leading-relaxed">
-                    兼容底层审计：分别选择 <span class="font-mono">.tdproof</span> /
-                    <span class="font-mono">.tdgproof</span> /
-                    <span class="font-mono">.tdanchor-result</span>。如果已选择
-                    <span class="font-mono">.sproof</span>，验证会优先使用单文件证明。
-                  </p>
-                </div>
-                <span class="text-[11px] text-accent font-display uppercase tracking-[0.12em]">
-                  {{ showSplitProofs ? '收起' : '展开' }}
-                </span>
-              </div>
+            <button class="w-full rounded-xl border border-white/10 px-4 py-3 text-left text-[12px] text-ink-400" @click="showSplitProofs = !showSplitProofs">
+              {{ showSplitProofs ? '收起' : '展开' }}底层分文件输入（.tdproof / .tdgproof / .tdanchor-result）
             </button>
           </div>
-
           <template v-if="showSplitProofs">
-            <Field label=".tdproof 证据包" hint="L1-L3 证据（及 claim/receipts）">
-              <div class="flex items-center gap-2">
-                <Input v-model="proofPath" placeholder="选择 .tdproof" />
-                <Button size="sm" variant="subtle" @click="pickFile('proof')">
-                  <FolderOpen :size="13" /> 浏览
-                </Button>
-              </div>
-            </Field>
-            <Field label=".tdgproof（可选）" hint="BatchRoot → SignedTreeHead inclusion proof，用于 L4">
-              <div class="flex items-center gap-2">
-                <Input v-model="globalProofPath" placeholder="选择 .tdgproof" />
-                <Button size="sm" variant="subtle" @click="pickFile('global')">
-                  <FolderOpen :size="13" /> 浏览
-                </Button>
-              </div>
-            </Field>
-            <Field label=".tdanchor-result（可选）" hint="STHAnchorResult；需要同时提供 .tdgproof 才能验证 L5">
-              <div class="flex items-center gap-2">
-                <Input v-model="anchorPath" placeholder="选择 .tdanchor-result" />
-                <Button size="sm" variant="subtle" @click="pickFile('anchor')">
-                  <FolderOpen :size="13" /> 浏览
-                </Button>
-              </div>
-            </Field>
+            <Field label=".tdproof"><div class="flex gap-2"><Input v-model="proofPath" /><Button size="sm" variant="subtle" @click="pick('proof')"><FolderOpen :size="13" /></Button></div></Field>
+            <Field label=".tdgproof"><div class="flex gap-2"><Input v-model="globalProofPath" /><Button size="sm" variant="subtle" @click="pick('global')"><FolderOpen :size="13" /></Button></div></Field>
+            <Field label=".tdanchor-result"><div class="flex gap-2"><Input v-model="anchorPath" /><Button size="sm" variant="subtle" @click="pick('anchor')"><FolderOpen :size="13" /></Button></div></Field>
           </template>
         </template>
-
         <template v-else>
-          <Field label="record_id" hint="服务端返回的 64 位十六进制 ID">
-            <Input v-model="recordID" placeholder="例如 2e9d…" :mono="true" />
-          </Field>
-          <Field label="服务器地址（可选）" :hint="`默认使用设置里的 ${configuredTransport} · ${settings.settings.server_url || 'http://localhost:8081'}`">
-            <Input v-model="serverURL" :placeholder="configuredTransport === 'GRPC' ? '127.0.0.1:9090' : 'http://host:8081'" />
-          </Field>
+          <Field label="record_id"><Input v-model="recordID" :mono="true" /></Field>
+          <Field label="服务器地址（可选）"><Input v-model="serverURL" :placeholder="settings.settings.server_url" /></Field>
         </template>
+      </div>
 
-        <Field label="客户端公钥 base64（可选）" hint="留空则使用当前身份公钥">
-          <Input v-model="clientPub" placeholder="Ed25519 public key (base64)" :mono="true" />
-        </Field>
-        <Field label="服务器公钥 base64（可选）" hint="留空则读取设置里的服务器公钥">
-          <Input v-model="serverPub" placeholder="Ed25519 public key (base64)" :mono="true" />
-        </Field>
+      <button class="mt-4 text-[12px] text-accent" @click="showTrustOverrides = !showTrustOverrides">
+        {{ showTrustOverrides ? '收起' : '展开' }}本次验证的本地信任输入
+      </button>
+      <div v-if="showTrustOverrides" class="mt-3 rounded-xl border border-white/10 bg-black/15 p-4 space-y-3">
+        <p class="text-[11.5px] text-warn">
+          留空使用 Settings 中的 verifier-local trust。下列路径只从本机读取；证据文件自身携带的证书不会填充这些字段。
+        </p>
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+          <Field label="客户端 verifier descriptors"><div class="flex gap-2"><Input v-model="clientDescriptors" multiline :rows="2" /><Button size="sm" variant="subtle" @click="pick('clientDesc')"><FolderOpen :size="13" /></Button></div></Field>
+          <Field label="服务器 verifier descriptors"><div class="flex gap-2"><Input v-model="serverDescriptors" multiline :rows="2" /><Button size="sm" variant="subtle" @click="pick('serverDesc')"><FolderOpen :size="13" /></Button></div></Field>
+          <Field label="Registry verifier descriptor"><div class="flex gap-2"><Input v-model="registryDescriptor" /><Button size="sm" variant="subtle" @click="pick('registry')"><FolderOpen :size="13" /></Button></div></Field>
+          <Field label="客户端 CA 根"><div class="flex gap-2"><Input v-model="clientRoots" multiline :rows="2" /><Button size="sm" variant="subtle" @click="pick('clientRoot')"><FolderOpen :size="13" /></Button></div></Field>
+          <Field label="服务器 CA 根"><div class="flex gap-2"><Input v-model="serverRoots" multiline :rows="2" /><Button size="sm" variant="subtle" @click="pick('serverRoot')"><FolderOpen :size="13" /></Button></div></Field>
+          <Field label="原始客户端公钥（单钥本地信任）"><Input v-model="clientPub" :mono="true" /></Field>
+          <Field label="原始服务器公钥（单钥本地信任）"><Input v-model="serverPub" :mono="true" /></Field>
+        </div>
+        <label class="flex items-center gap-2 text-[12px]"><input v-model="requireEvidence" type="checkbox" class="accent-accent" />要求身份 lifecycle evidence</label>
+        <label class="flex items-center gap-2 text-[12px]"><input v-model="requireCertificateStatus" type="checkbox" class="accent-accent" />要求证书链与 CRL 状态证据</label>
       </div>
 
       <div class="mt-4 flex items-center justify-between">
-        <label class="inline-flex items-center gap-2 text-[12.5px] text-ink-600 dark:text-ink-300 select-none">
-          <input type="checkbox" v-model="skipAnchor" class="accent-accent" />
-          跳过 L5 外部锚定（仍会尽量验证 L4 Global Log）
+        <label class="inline-flex items-center gap-2 text-[12.5px] text-ink-300">
+          <input v-model="skipAnchor" type="checkbox" class="accent-accent" />跳过外部锚定阶段
         </label>
-        <Button :disabled="!canVerify" :loading="running" @click="verify">
-          <FileSearch :size="14" /> 开始验证
-        </Button>
+        <Button :disabled="!canVerify" :loading="running" @click="verify"><FileSearch :size="14" /> 开始验证</Button>
       </div>
     </Card>
 
-    <!-- Result -->
     <Card v-if="result" :title="result.valid ? '验证通过' : '验证未通过'" :subtitle="result.error">
       <template #actions>
+        <span class="font-mono text-[11px] text-accent">{{ result.crypto_suite }} · {{ result.hash_alg }}</span>
         <LevelBadge v-if="result.level" :level="result.level" />
       </template>
 
-      <!-- Level ladder -->
-      <ol class="relative">
-        <li
-          v-for="(s, i) in STEPS"
-          :key="s.level"
-          class="flex gap-3 py-2.5"
-        >
-          <div class="relative flex flex-col items-center">
-            <span
-              class="w-6 h-6 rounded-full flex items-center justify-center transition-colors duration-200 ease-ios"
-              :class="{
-                'bg-success text-white': stepState(s) === 'pass',
-                'bg-accent/15 text-accent ring-2 ring-accent/40': stepState(s) === 'current',
-                'bg-danger text-white': stepState(s) === 'fail',
-                'bg-ink-100 dark:bg-ink-800 text-ink-400': stepState(s) === 'todo',
-              }"
-            >
-              <CheckCircle2 v-if="stepState(s) === 'pass'" :size="13" />
-              <Loader2 v-else-if="stepState(s) === 'current'" :size="13" class="animate-spin" />
-              <XCircle v-else-if="stepState(s) === 'fail'" :size="13" />
-              <span v-else class="text-[10px]">{{ i + 1 }}</span>
-            </span>
-            <span
-              v-if="i < STEPS.length - 1"
-              class="w-px flex-1 mt-1 transition-colors"
-              :class="stepState(s) === 'pass' ? 'bg-success/40' : 'bg-[var(--hairline)]'"
-            />
-          </div>
-          <div class="flex-1 pb-1">
-            <div class="text-[13px] font-medium text-ink-800 dark:text-ink-100">{{ s.label }}</div>
-            <div class="text-[11.5px] text-ink-500">{{ s.hint }}</div>
+      <div class="rounded-xl border border-white/10 bg-black/15 p-3 mb-4">
+        <p class="text-[12px] text-ink-300">{{ result.trust_notice }}</p>
+        <div class="mt-2 flex flex-wrap gap-3 text-[11.5px] text-ink-500">
+          <span>证据证书 {{ result.evidence_certificate_count }}</span>
+          <span>本地信任根 {{ result.local_trust_root_count }}</span>
+          <span>网络访问 {{ result.external_network_access ? '发生' : '0' }}</span>
+          <span>Provider 访问 {{ result.external_provider_access ? '发生' : '0' }}</span>
+        </div>
+      </div>
+
+      <ol class="grid grid-cols-1 md:grid-cols-2 gap-2">
+        <li v-for="stage in result.stages" :key="stage.name" class="rounded-xl border border-white/10 p-3 flex gap-3">
+          <span class="w-6 h-6 rounded-full flex items-center justify-center shrink-0" :class="stageClass(stage.status)">
+            <CheckCircle2 v-if="stage.status === 'passed'" :size="13" />
+            <XCircle v-else-if="stage.status === 'failed'" :size="13" />
+            <CircleDashed v-else :size="13" />
+          </span>
+          <div>
+            <div class="text-[12.5px] text-ink-100">{{ stageLabels[stage.name] || stage.name }}</div>
+            <div class="font-mono text-[10.5px] uppercase text-ink-500">{{ stage.status }}</div>
+            <div v-if="stage.error" class="mt-1 text-[11px] text-danger">{{ stage.error }}</div>
           </div>
         </li>
       </ol>
 
-      <!-- Detail -->
-      <div v-if="result.bundle" class="mt-4 grid grid-cols-1 md:grid-cols-2 gap-3">
-        <div class="rounded-xl hairline border bg-white/50 dark:bg-ink-800/40 p-3 space-y-2">
-          <h4 class="text-[12px] font-semibold text-ink-700 dark:text-ink-100 mb-1">Claim</h4>
-          <KV label="record_id" :inline="true"><HashChip :value="result.record_id" :head="10" :tail="8" /></KV>
-          <KV label="tenant" :inline="true">
-            <span class="font-mono text-[11.5px]">{{ result.bundle.signed_claim.claim.tenant_id }}</span>
-          </KV>
-          <KV label="client" :inline="true">
-            <span class="font-mono text-[11.5px]">{{ result.bundle.signed_claim.claim.client_id }}</span>
-          </KV>
-          <KV label="key_id" :inline="true">
-            <span class="font-mono text-[11.5px]">{{ result.bundle.signed_claim.claim.key_id }}</span>
-          </KV>
-          <KV label="content" :inline="true">
-            <span class="text-[11.5px]">{{ humanSize(result.content_bytes) }} · {{ result.bundle.signed_claim.claim.content.media_type || '—' }}</span>
-          </KV>
-          <KV label="sha256" :inline="true">
-            <HashChip :value="bytesToHex(result.bundle.signed_claim.claim.content.content_hash)" :head="8" :tail="8" />
-          </KV>
+      <div class="mt-4 grid grid-cols-1 md:grid-cols-2 gap-3">
+        <div class="rounded-xl border border-white/10 p-3 space-y-2">
+          <h4 class="text-[12px] font-semibold">身份验证报告</h4>
+          <KV label="evidence" :inline="true">{{ result.identity.evidence_count }}</KV>
+          <KV label="public key bindings" :inline="true">{{ result.identity.public_key_bindings_verified }}</KV>
+          <KV label="lifecycle bindings" :inline="true">{{ result.identity.lifecycle_bindings_verified }}</KV>
+          <KV label="certificate chains" :inline="true">{{ result.identity.certificate_chains_verified }}</KV>
+          <KV label="certificate statuses" :inline="true">{{ result.identity.certificate_statuses_verified }}</KV>
         </div>
-
-        <div class="rounded-xl hairline border bg-white/50 dark:bg-ink-800/40 p-3 space-y-2">
-          <h4 class="text-[12px] font-semibold text-ink-700 dark:text-ink-100 mb-1">Batch & Anchor</h4>
-          <KV label="batch_id" :inline="true">
-            <HashChip :value="result.bundle.committed_receipt?.batch_id" :head="10" :tail="8" />
-          </KV>
-          <KV label="leaf_index" :inline="true">
-            <span class="num">{{ result.bundle.committed_receipt?.leaf_index }}</span>
-          </KV>
-          <KV label="tree_size" :inline="true">
-            <span class="num">{{ result.bundle.batch_proof?.tree_size }}</span>
-          </KV>
-          <KV label="batch_root" :inline="true">
-            <HashChip :value="bytesToHex(result.bundle.committed_receipt?.batch_root)" :head="8" :tail="8" />
-          </KV>
-          <template v-if="result.global_proof">
-            <KV label="sth_tree_size" :inline="true">
-              <span class="num">{{ result.global_proof.sth.tree_size }}</span>
-            </KV>
-            <KV label="global_root" :inline="true">
-              <HashChip :value="bytesToHex(result.global_proof.sth.root_hash)" :head="8" :tail="8" />
-            </KV>
-          </template>
+        <div v-if="result.bundle" class="rounded-xl border border-white/10 p-3 space-y-2">
+          <h4 class="text-[12px] font-semibold">Claim</h4>
+          <KV label="record_id" :inline="true"><HashChip :value="result.record_id" :head="10" :tail="8" /></KV>
+          <KV label="key_id" :inline="true"><span class="font-mono text-[11px]">{{ result.bundle.signed_claim.claim.key_id }}</span></KV>
+          <KV :label="result.hash_alg" :inline="true"><HashChip :value="bytesToHex(result.bundle.signed_claim.claim.content.content_hash)" :head="8" :tail="8" /></KV>
+          <KV label="content" :inline="true">{{ humanSize(result.content_bytes) }} · {{ result.bundle.signed_claim.claim.content.media_type }}</KV>
           <template v-if="result.anchor">
-            <KV label="anchor_tree_size" :inline="true">
-              <span class="num">{{ result.anchor.tree_size }}</span>
-            </KV>
-            <KV label="sink" :inline="true">{{ result.anchor.sink_name }}</KV>
-            <KV label="anchor_id" :inline="true"><HashChip :value="result.anchor.anchor_id" :head="10" :tail="8" /></KV>
-            <KV label="published_at" :inline="true">
-              {{ formatTime(nanoToDate(result.anchor.published_at_unix_nano)) }}
-            </KV>
+            <KV label="anchor" :inline="true">{{ result.anchor.sink_name }} · {{ result.anchor.evidence_stage || 'published' }}</KV>
+            <KV label="published_at" :inline="true">{{ formatTime(nanoToDate(result.anchor.published_at_unix_nano)) }}</KV>
           </template>
-          <div v-else class="flex items-center gap-1.5 text-[11.5px] text-ink-500">
-            <ShieldAlert :size="12" /> 未提供锚定
-          </div>
+          <div v-else class="text-[11.5px] text-ink-500 flex items-center gap-1"><ShieldAlert :size="12" />未携带锚定</div>
         </div>
       </div>
     </Card>

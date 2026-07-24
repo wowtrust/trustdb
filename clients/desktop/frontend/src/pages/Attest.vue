@@ -22,6 +22,8 @@ type Row = {
   path: string
   name: string
   size: number
+  crypto_suite: string
+  hash_alg: string
   content_hash_hex: string
   media_type: string
   status: RowStatus
@@ -70,7 +72,7 @@ const readyCount   = computed(() => rows.value.filter((r) => r.status === 'ready
 // content hash to put into the claim yet, and a partial submit would
 // leak a broken record into the history.
 const canSubmit = computed(
-  () => !!identity.identity && readyCount.value > 0 && hashingCount.value === 0 && !submitting.value,
+  () => !!identity.identity?.unlocked && readyCount.value > 0 && hashingCount.value === 0 && !submitting.value,
 )
 
 // Track the unsubscribe functions Wails hands back so we can detach
@@ -121,6 +123,8 @@ async function enqueue(paths: string[]) {
       path: p,
       name: baseName(p),
       size: 0,
+      crypto_suite: identity.identity?.crypto_suite || '',
+      hash_alg: identity.identity?.crypto_suite === 'CN_SM_V1' ? 'SM3' : 'SHA-256',
       content_hash_hex: '',
       media_type: defaultMedia,
       status: 'hashing',
@@ -170,6 +174,8 @@ function handleFileDone(e: HashEvent) {
   if (!r) return
   r.status = 'ready'
   r.content_hash_hex = e.info.content_hash_hex
+  r.crypto_suite = e.info.crypto_suite
+  r.hash_alg = e.info.hash_alg
   r.size = e.info.size
   r.media_type = e.info.media_type
   if (!r.mediaType) r.mediaType = e.info.media_type
@@ -222,7 +228,11 @@ function baseName(p: string): string {
 
 async function submit() {
   if (!identity.identity) {
-    toasts.error('尚未创建身份', '请先到「身份密钥」生成或导入一个 Ed25519 密钥')
+    toasts.error('尚未创建身份', '请先到「身份密钥」创建或引用一个 V2 signer descriptor')
+    return
+  }
+  if (!identity.identity.unlocked) {
+    toasts.error('身份已锁定', '请先到「身份密钥」解锁签名能力')
     return
   }
   submitting.value = true
@@ -264,7 +274,7 @@ function onDragLeave() { dragActive.value = false }
     <Card v-if="!identity.identity" title="需要身份才能提交">
       <EmptyState
         title="尚未配置签名身份"
-        hint="TrustDB 需要一个 Ed25519 密钥对来签署 claim。请先到「身份密钥」页面生成或导入，一分钟内可完成。"
+        hint="TrustDB 需要一个 INTL_V1 或 CN_SM_V1 签名身份。请先到「身份密钥」创建加密软件身份或引用 provider。"
       >
         <router-link to="/keys">
           <Button>前往设置身份</Button>
@@ -274,7 +284,7 @@ function onDragLeave() { dragActive.value = false }
 
     <Card v-else
       title="新建存证"
-      subtitle="支持拖拽或点击选择，多文件批量提交。大文件会流式计算 sha256 并显示进度。"
+      :subtitle="`当前 ${identity.identity?.crypto_suite}；大文件流式计算 ${identity.identity?.crypto_suite === 'CN_SM_V1' ? 'SM3' : 'SHA-256'} 并显示进度。`"
     >
       <template #actions>
         <Button variant="subtle" @click="pick">选择文件</Button>
@@ -321,7 +331,7 @@ function onDragLeave() { dragActive.value = false }
                   ></div>
                 </div>
                 <div class="mt-1 text-[11px] text-ink-500 flex items-center gap-2">
-                  <span>计算 sha256 ·</span>
+                  <span>计算 {{ r.hash_alg }} ·</span>
                   <span class="num">{{ humanSize(r.bytes_hashed) }} / {{ humanSize(r.bytes_total || r.size) }}</span>
                   <span class="num">· {{ progressPct(r) }}%</span>
                 </div>
@@ -332,7 +342,8 @@ function onDragLeave() { dragActive.value = false }
               </div>
 
               <div v-else class="mt-1 flex items-center gap-1.5">
-                <HashChip :value="r.content_hash_hex" label="sha256" :head="6" :tail="6" />
+                <HashChip :value="r.content_hash_hex" :label="r.hash_alg" :head="6" :tail="6" />
+                <span class="text-[10px] font-mono text-accent">{{ r.crypto_suite }}</span>
                 <span class="text-[11px] text-ink-500 truncate">{{ r.path }}</span>
               </div>
             </div>

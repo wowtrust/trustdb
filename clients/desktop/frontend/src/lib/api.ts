@@ -23,6 +23,10 @@ export function hasNativeBridge(): boolean {
 }
 
 export type IdentityView       = main.IdentityView
+export type GenerateIdentityRequest = main.GenerateIdentityRequest
+export type ImportIdentityRequest = main.ImportIdentityRequest
+export type ReferenceIdentityRequest = main.ReferenceIdentityRequest
+export type RotateIdentityRequest = main.RotateIdentityRequest
 export type Settings           = main.Settings
 export type FileInfo           = main.FileInfo
 export type LocalRecord        = main.LocalRecord
@@ -70,10 +74,13 @@ export const api = {
   version:             () => App.Version(),
   // identity
   getIdentity:         () => App.GetIdentity(),
-  generateIdentity:    (tenant: string, client: string, keyID: string) => App.GenerateIdentity(tenant, client, keyID),
-  rotateIdentity:      (newKeyID: string) => App.RotateIdentity(newKeyID),
-  importIdentity:      (tenant: string, client: string, keyID: string, priv: string) => App.ImportIdentity(tenant, client, keyID, priv),
-  exportPrivateKey:    () => App.ExportPrivateKey(),
+  generateIdentity:    (request: GenerateIdentityRequest) => App.GenerateIdentity(new main.GenerateIdentityRequest(request)),
+  rotateIdentity:      (request: RotateIdentityRequest) => App.RotateIdentity(new main.RotateIdentityRequest(request)),
+  importIdentity:      (request: ImportIdentityRequest) => App.ImportIdentity(new main.ImportIdentityRequest(request)),
+  referenceIdentity:   (request: ReferenceIdentityRequest) => App.ReferenceIdentity(new main.ReferenceIdentityRequest(request)),
+  unlockIdentity:      (passphrase: string) => App.UnlockIdentity(passphrase),
+  lockIdentity:        () => App.LockIdentity(),
+  exportVerifierDescriptor: (path: string) => App.ExportVerifierDescriptor(path),
   clearIdentity:       () => App.ClearIdentity(),
   // settings
   getSettings:         () => App.GetSettings(),

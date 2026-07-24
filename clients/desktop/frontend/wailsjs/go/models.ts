@@ -65,10 +65,43 @@ export namespace anchor {
 
 }
 
+export namespace keydescriptor {
+
+	export class CertificateMetadata {
+	    index: number;
+	    serial_number: string;
+	    subject: string;
+	    issuer: string;
+	    not_before_unix_nano: number;
+	    not_after_unix_nano: number;
+	    is_ca: boolean;
+	    signature_algorithm: string;
+
+	    static createFrom(source: any = {}) {
+	        return new CertificateMetadata(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.index = source["index"];
+	        this.serial_number = source["serial_number"];
+	        this.subject = source["subject"];
+	        this.issuer = source["issuer"];
+	        this.not_before_unix_nano = source["not_before_unix_nano"];
+	        this.not_after_unix_nano = source["not_after_unix_nano"];
+	        this.is_ca = source["is_ca"];
+	        this.signature_algorithm = source["signature_algorithm"];
+	    }
+	}
+
+}
+
 export namespace main {
 	
 	export class LocalRecord {
 	    record_id: string;
+	    crypto_suite: string;
+	    hash_alg: string;
 	    submitted_at: string;
 	    submitted_at_unix_nano: number;
 	    file_path: string;
@@ -103,6 +136,8 @@ export namespace main {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.record_id = source["record_id"];
+	        this.crypto_suite = source["crypto_suite"];
+	        this.hash_alg = source["hash_alg"];
 	        this.submitted_at = source["submitted_at"];
 	        this.submitted_at_unix_nano = source["submitted_at_unix_nano"];
 	        this.file_path = source["file_path"];
@@ -227,6 +262,8 @@ export namespace main {
 	    path: string;
 	    name: string;
 	    size: number;
+	    crypto_suite: string;
+	    hash_alg: string;
 	    content_hash_hex: string;
 	    media_type: string;
 	
@@ -239,8 +276,30 @@ export namespace main {
 	        this.path = source["path"];
 	        this.name = source["name"];
 	        this.size = source["size"];
+	        this.crypto_suite = source["crypto_suite"];
+	        this.hash_alg = source["hash_alg"];
 	        this.content_hash_hex = source["content_hash_hex"];
 	        this.media_type = source["media_type"];
+	    }
+	}
+	export class GenerateIdentityRequest {
+	    tenant_id: string;
+	    client_id: string;
+	    key_id: string;
+	    crypto_suite: string;
+	    passphrase: string;
+
+	    static createFrom(source: any = {}) {
+	        return new GenerateIdentityRequest(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.tenant_id = source["tenant_id"];
+	        this.client_id = source["client_id"];
+	        this.key_id = source["key_id"];
+	        this.crypto_suite = source["crypto_suite"];
+	        this.passphrase = source["passphrase"];
 	    }
 	}
 	export class HealthStatus {
@@ -273,12 +332,45 @@ export namespace main {
 	        this.peer_subject = source["peer_subject"];
 	    }
 	}
+	export class IdentityVerificationView {
+	    evidence_count: number;
+	    public_key_bindings_verified: number;
+	    lifecycle_bindings_verified: number;
+	    certificate_chains_verified: number;
+	    certificate_statuses_verified: number;
+
+	    static createFrom(source: any = {}) {
+	        return new IdentityVerificationView(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.evidence_count = source["evidence_count"];
+	        this.public_key_bindings_verified = source["public_key_bindings_verified"];
+	        this.lifecycle_bindings_verified = source["lifecycle_bindings_verified"];
+	        this.certificate_chains_verified = source["certificate_chains_verified"];
+	        this.certificate_statuses_verified = source["certificate_statuses_verified"];
+	    }
+	}
 	export class IdentityView {
 	    tenant_id: string;
 	    client_id: string;
-	    key_id: string;
-	    public_key_b64: string;
+	    key_id?: string;
+	    crypto_suite?: string;
+	    provider?: string;
+	    algorithm?: string;
+	    public_key_encoding?: string;
+	    public_key_b64?: string;
+	    public_fingerprint?: string;
+	    sm2_user_id?: string;
+	    protection?: string;
+	    certificate_count: number;
+	    certificates?: keydescriptor.CertificateMetadata[];
 	    has_private: boolean;
+	    exportable: boolean;
+	    unlocked: boolean;
+	    state: string;
+	    error?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new IdentityView(source);
@@ -289,8 +381,61 @@ export namespace main {
 	        this.tenant_id = source["tenant_id"];
 	        this.client_id = source["client_id"];
 	        this.key_id = source["key_id"];
+	        this.crypto_suite = source["crypto_suite"];
+	        this.provider = source["provider"];
+	        this.algorithm = source["algorithm"];
+	        this.public_key_encoding = source["public_key_encoding"];
 	        this.public_key_b64 = source["public_key_b64"];
+	        this.public_fingerprint = source["public_fingerprint"];
+	        this.sm2_user_id = source["sm2_user_id"];
+	        this.protection = source["protection"];
+	        this.certificate_count = source["certificate_count"];
+	        this.certificates = this.convertValues(source["certificates"], keydescriptor.CertificateMetadata);
 	        this.has_private = source["has_private"];
+	        this.exportable = source["exportable"];
+	        this.unlocked = source["unlocked"];
+	        this.state = source["state"];
+	        this.error = source["error"];
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class ImportIdentityRequest {
+	    tenant_id: string;
+	    client_id: string;
+	    key_id: string;
+	    crypto_suite: string;
+	    private_key_b64: string;
+	    passphrase: string;
+
+	    static createFrom(source: any = {}) {
+	        return new ImportIdentityRequest(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.tenant_id = source["tenant_id"];
+	        this.client_id = source["client_id"];
+	        this.key_id = source["key_id"];
+	        this.crypto_suite = source["crypto_suite"];
+	        this.private_key_b64 = source["private_key_b64"];
+	        this.passphrase = source["passphrase"];
 	    }
 	}
 	
@@ -388,9 +533,46 @@ export namespace main {
 	        this.client_id = source["client_id"];
 	    }
 	}
+	export class ReferenceIdentityRequest {
+	    tenant_id: string;
+	    client_id: string;
+	    descriptor_path: string;
+	    plugin_command?: string;
+	    plugin_inherit_env?: string[];
+	    passphrase?: string;
+
+	    static createFrom(source: any = {}) {
+	        return new ReferenceIdentityRequest(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.tenant_id = source["tenant_id"];
+	        this.client_id = source["client_id"];
+	        this.descriptor_path = source["descriptor_path"];
+	        this.plugin_command = source["plugin_command"];
+	        this.plugin_inherit_env = source["plugin_inherit_env"];
+	        this.passphrase = source["passphrase"];
+	    }
+	}
+	export class RotateIdentityRequest {
+	    key_id: string;
+	    passphrase: string;
+
+	    static createFrom(source: any = {}) {
+	        return new RotateIdentityRequest(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.key_id = source["key_id"];
+	        this.passphrase = source["passphrase"];
+	    }
+	}
 	export class Settings {
 	    server_url: string;
 	    server_transport: string;
+	    server_crypto_suite: string;
 	    server_ca_file: string;
 	    server_name: string;
 	    server_ca_pins_sha256: string;
@@ -398,6 +580,13 @@ export namespace main {
 	    client_tls_key_file: string;
 	    tls_reload_interval: string;
 	    server_public_key_b64: string;
+	    client_verifier_descriptor: string;
+	    server_verifier_descriptor: string;
+	    registry_verifier_descriptor: string;
+	    client_certificate_roots: string;
+	    server_certificate_roots: string;
+	    require_identity_evidence: boolean;
+	    require_certificate_status: boolean;
 	    anchor_plugin_command: string;
 	    anchor_plugin_args_text: string;
 	    anchor_plugin_start_timeout: string;
@@ -414,6 +603,7 @@ export namespace main {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.server_url = source["server_url"];
 	        this.server_transport = source["server_transport"];
+	        this.server_crypto_suite = source["server_crypto_suite"];
 	        this.server_ca_file = source["server_ca_file"];
 	        this.server_name = source["server_name"];
 	        this.server_ca_pins_sha256 = source["server_ca_pins_sha256"];
@@ -421,6 +611,13 @@ export namespace main {
 	        this.client_tls_key_file = source["client_tls_key_file"];
 	        this.tls_reload_interval = source["tls_reload_interval"];
 	        this.server_public_key_b64 = source["server_public_key_b64"];
+	        this.client_verifier_descriptor = source["client_verifier_descriptor"];
+	        this.server_verifier_descriptor = source["server_verifier_descriptor"];
+	        this.registry_verifier_descriptor = source["registry_verifier_descriptor"];
+	        this.client_certificate_roots = source["client_certificate_roots"];
+	        this.server_certificate_roots = source["server_certificate_roots"];
+	        this.require_identity_evidence = source["require_identity_evidence"];
+	        this.require_certificate_status = source["require_certificate_status"];
 	        this.anchor_plugin_command = source["anchor_plugin_command"];
 	        this.anchor_plugin_args_text = source["anchor_plugin_args_text"];
 	        this.anchor_plugin_start_timeout = source["anchor_plugin_start_timeout"];
@@ -449,6 +646,22 @@ export namespace main {
 	    }
 	}
 	
+	export class VerificationStageView {
+	    name: string;
+	    status: string;
+	    error?: string;
+
+	    static createFrom(source: any = {}) {
+	        return new VerificationStageView(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.status = source["status"];
+	        this.error = source["error"];
+	    }
+	}
 	export class VerifyRequest {
 	    mode: string;
 	    file_path: string;
@@ -461,6 +674,13 @@ export namespace main {
 	    skip_anchor?: boolean;
 	    client_public_key_b64?: string;
 	    server_public_key_b64?: string;
+	    client_verifier_descriptors?: string;
+	    server_verifier_descriptors?: string;
+	    registry_verifier_descriptor?: string;
+	    client_certificate_roots?: string;
+	    server_certificate_roots?: string;
+	    require_identity_evidence?: boolean;
+	    require_certificate_status?: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new VerifyRequest(source);
@@ -479,18 +699,35 @@ export namespace main {
 	        this.skip_anchor = source["skip_anchor"];
 	        this.client_public_key_b64 = source["client_public_key_b64"];
 	        this.server_public_key_b64 = source["server_public_key_b64"];
+	        this.client_verifier_descriptors = source["client_verifier_descriptors"];
+	        this.server_verifier_descriptors = source["server_verifier_descriptors"];
+	        this.registry_verifier_descriptor = source["registry_verifier_descriptor"];
+	        this.client_certificate_roots = source["client_certificate_roots"];
+	        this.server_certificate_roots = source["server_certificate_roots"];
+	        this.require_identity_evidence = source["require_identity_evidence"];
+	        this.require_certificate_status = source["require_certificate_status"];
 	    }
 	}
 	export class VerifyResponse {
 	    valid: boolean;
 	    level: string;
 	    record_id: string;
+	    crypto_suite: string;
+	    hash_alg: string;
 	    anchor_sink?: string;
 	    anchor_id?: string;
 	    bundle?: model.ProofBundle;
 	    global_proof?: model.GlobalLogProof;
 	    anchor?: model.STHAnchorResult;
 	    content_bytes?: number;
+	    stages: VerificationStageView[];
+	    identity: IdentityVerificationView;
+	    evidence_certificate_count: number;
+	    local_trust_root_count: number;
+	    evidence_certificates_trusted: boolean;
+	    external_network_access: boolean;
+	    external_provider_access: boolean;
+	    trust_notice: string;
 	    error?: string;
 	
 	    static createFrom(source: any = {}) {
@@ -502,12 +739,22 @@ export namespace main {
 	        this.valid = source["valid"];
 	        this.level = source["level"];
 	        this.record_id = source["record_id"];
+	        this.crypto_suite = source["crypto_suite"];
+	        this.hash_alg = source["hash_alg"];
 	        this.anchor_sink = source["anchor_sink"];
 	        this.anchor_id = source["anchor_id"];
 	        this.bundle = this.convertValues(source["bundle"], model.ProofBundle);
 	        this.global_proof = this.convertValues(source["global_proof"], model.GlobalLogProof);
 	        this.anchor = this.convertValues(source["anchor"], model.STHAnchorResult);
 	        this.content_bytes = source["content_bytes"];
+	        this.stages = this.convertValues(source["stages"], VerificationStageView);
+	        this.identity = this.convertValues(source["identity"], IdentityVerificationView);
+	        this.evidence_certificate_count = source["evidence_certificate_count"];
+	        this.local_trust_root_count = source["local_trust_root_count"];
+	        this.evidence_certificates_trusted = source["evidence_certificates_trusted"];
+	        this.external_network_access = source["external_network_access"];
+	        this.external_provider_access = source["external_provider_access"];
+	        this.trust_notice = source["trust_notice"];
 	        this.error = source["error"];
 	    }
 	
@@ -533,6 +780,83 @@ export namespace main {
 }
 
 export namespace model {
+
+	export class Signature {
+	    alg: string;
+	    key_id: string;
+	    signature: number[];
+
+	    static createFrom(source: any = {}) {
+	        return new Signature(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.alg = source["alg"];
+	        this.key_id = source["key_id"];
+	        this.signature = source["signature"];
+	    }
+	}
+	export class WALPosition {
+	    segment_id: number;
+	    offset: number;
+	    sequence: number;
+
+	    static createFrom(source: any = {}) {
+	        return new WALPosition(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.segment_id = source["segment_id"];
+	        this.offset = source["offset"];
+	        this.sequence = source["sequence"];
+	    }
+	}
+	export class AcceptedReceipt {
+	    schema_version: string;
+	    crypto_suite: string;
+	    record_id: string;
+	    status: string;
+	    server_id: string;
+	    server_received_at_unix_nano: number;
+	    wal: WALPosition;
+	    server_signature: Signature;
+
+	    static createFrom(source: any = {}) {
+	        return new AcceptedReceipt(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.schema_version = source["schema_version"];
+	        this.crypto_suite = source["crypto_suite"];
+	        this.record_id = source["record_id"];
+	        this.status = source["status"];
+	        this.server_id = source["server_id"];
+	        this.server_received_at_unix_nano = source["server_received_at_unix_nano"];
+	        this.wal = this.convertValues(source["wal"], WALPosition);
+	        this.server_signature = this.convertValues(source["server_signature"], Signature);
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class AnchorAssurance {
 	    independent_time: boolean;
 	    publicly_verifiable: boolean;
@@ -540,7 +864,10 @@ export namespace model {
 	    finality?: string;
 	    custody?: string;
 
-	    static createFrom(source: any = {}) { return new AnchorAssurance(source); }
+	    static createFrom(source: any = {}) {
+	        return new AnchorAssurance(source);
+	    }
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.independent_time = source["independent_time"];
@@ -562,7 +889,10 @@ export namespace model {
 	    assurance: AnchorAssurance;
 	    metadata?: Record<string, string>;
 
-	    static createFrom(source: any = {}) { return new AnchorSystem(source); }
+	    static createFrom(source: any = {}) {
+	        return new AnchorSystem(source);
+	    }
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.schema_version = source["schema_version"];
@@ -573,28 +903,27 @@ export namespace model {
 	        this.network = source["network"];
 	        this.provider = source["provider"];
 	        this.capabilities = source["capabilities"];
-	        this.assurance = new AnchorAssurance(source["assurance"] || {});
+	        this.assurance = this.convertValues(source["assurance"], AnchorAssurance);
 	        this.metadata = source["metadata"];
 	    }
-	}
-	export class AnchorSystemStatus {
-	    schema_version: string;
-	    system_id: string;
-	    state: string;
-	    observed_at_unix_nano: number;
-	    message?: string;
-	    details?: Record<string, string>;
 
-	    static createFrom(source: any = {}) { return new AnchorSystemStatus(source); }
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.schema_version = source["schema_version"];
-	        this.system_id = source["system_id"];
-	        this.state = source["state"];
-	        this.observed_at_unix_nano = source["observed_at_unix_nano"];
-	        this.message = source["message"];
-	        this.details = source["details"];
-	    }
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
 	export class AnchorSystemResource {
 	    schema_version: string;
@@ -609,7 +938,10 @@ export namespace model {
 	    summary?: string;
 	    attributes?: Record<string, string>;
 
-	    static createFrom(source: any = {}) { return new AnchorSystemResource(source); }
+	    static createFrom(source: any = {}) {
+	        return new AnchorSystemResource(source);
+	    }
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.schema_version = source["schema_version"];
@@ -629,70 +961,16 @@ export namespace model {
 	    resources: AnchorSystemResource[];
 	    limit: number;
 	    next_cursor?: string;
-
-	    static createFrom(source: any = {}) { return new AnchorSystemResourcePage(source); }
+	
+	    static createFrom(source: any = {}) {
+	        return new AnchorSystemResourcePage(source);
+	    }
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.resources = (source["resources"] || []).map((item: any) => new AnchorSystemResource(item));
+	        this.resources = this.convertValues(source["resources"], AnchorSystemResource);
 	        this.limit = source["limit"];
 	        this.next_cursor = source["next_cursor"];
-	    }
-	}
-	
-	export class Signature {
-	    alg: string;
-	    key_id: string;
-	    signature: number[];
-	
-	    static createFrom(source: any = {}) {
-	        return new Signature(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.alg = source["alg"];
-	        this.key_id = source["key_id"];
-	        this.signature = source["signature"];
-	    }
-	}
-	export class WALPosition {
-	    segment_id: number;
-	    offset: number;
-	    sequence: number;
-	
-	    static createFrom(source: any = {}) {
-	        return new WALPosition(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.segment_id = source["segment_id"];
-	        this.offset = source["offset"];
-	        this.sequence = source["sequence"];
-	    }
-	}
-	export class AcceptedReceipt {
-	    schema_version: string;
-	    record_id: string;
-	    status: string;
-	    server_id: string;
-	    server_received_at_unix_nano: number;
-	    wal: WALPosition;
-	    server_signature: Signature;
-	
-	    static createFrom(source: any = {}) {
-	        return new AcceptedReceipt(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.schema_version = source["schema_version"];
-	        this.record_id = source["record_id"];
-	        this.status = source["status"];
-	        this.server_id = source["server_id"];
-	        this.server_received_at_unix_nano = source["server_received_at_unix_nano"];
-	        this.wal = this.convertValues(source["wal"], WALPosition);
-	        this.server_signature = this.convertValues(source["server_signature"], Signature);
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -712,6 +990,28 @@ export namespace model {
 		    }
 		    return a;
 		}
+	}
+	export class AnchorSystemStatus {
+	    schema_version: string;
+	    system_id: string;
+	    state: string;
+	    observed_at_unix_nano: number;
+	    message?: string;
+	    details?: Record<string, string>;
+
+	    static createFrom(source: any = {}) {
+	        return new AnchorSystemStatus(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.schema_version = source["schema_version"];
+	        this.system_id = source["system_id"];
+	        this.state = source["state"];
+	        this.observed_at_unix_nano = source["observed_at_unix_nano"];
+	        this.message = source["message"];
+	        this.details = source["details"];
+	    }
 	}
 	export class BatchProof {
 	    tree_alg: string;
@@ -733,6 +1033,7 @@ export namespace model {
 	}
 	export class BatchRoot {
 	    schema_version: string;
+	    crypto_suite: string;
 	    batch_id: string;
 	    node_id?: string;
 	    log_id?: string;
@@ -747,6 +1048,7 @@ export namespace model {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.schema_version = source["schema_version"];
+	        this.crypto_suite = source["crypto_suite"];
 	        this.batch_id = source["batch_id"];
 	        this.node_id = source["node_id"];
 	        this.log_id = source["log_id"];
@@ -811,6 +1113,7 @@ export namespace model {
 	}
 	export class ClientClaim {
 	    schema_version: string;
+	    crypto_suite: string;
 	    tenant_id: string;
 	    client_id: string;
 	    key_id: string;
@@ -828,6 +1131,7 @@ export namespace model {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.schema_version = source["schema_version"];
+	        this.crypto_suite = source["crypto_suite"];
 	        this.tenant_id = source["tenant_id"];
 	        this.client_id = source["client_id"];
 	        this.key_id = source["key_id"];
@@ -859,6 +1163,7 @@ export namespace model {
 	}
 	export class CommittedReceipt {
 	    schema_version: string;
+	    crypto_suite: string;
 	    record_id: string;
 	    status: string;
 	    batch_id: string;
@@ -877,6 +1182,7 @@ export namespace model {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.schema_version = source["schema_version"];
+	        this.crypto_suite = source["crypto_suite"];
 	        this.record_id = source["record_id"];
 	        this.status = source["status"];
 	        this.batch_id = source["batch_id"];
@@ -926,6 +1232,7 @@ export namespace model {
 	}
 	export class SignedTreeHead {
 	    schema_version: string;
+	    crypto_suite: string;
 	    tree_alg: string;
 	    tree_size: number;
 	    root_hash: number[];
@@ -941,6 +1248,7 @@ export namespace model {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.schema_version = source["schema_version"];
+	        this.crypto_suite = source["crypto_suite"];
 	        this.tree_alg = source["tree_alg"];
 	        this.tree_size = source["tree_size"];
 	        this.root_hash = source["root_hash"];
@@ -970,6 +1278,7 @@ export namespace model {
 	}
 	export class GlobalLogProof {
 	    schema_version: string;
+	    crypto_suite: string;
 	    node_id?: string;
 	    log_id?: string;
 	    batch_id: string;
@@ -987,6 +1296,7 @@ export namespace model {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.schema_version = source["schema_version"];
+	        this.crypto_suite = source["crypto_suite"];
 	        this.node_id = source["node_id"];
 	        this.log_id = source["log_id"];
 	        this.batch_id = source["batch_id"];
@@ -1037,6 +1347,7 @@ export namespace model {
 	}
 	export class ServerRecord {
 	    schema_version: string;
+	    crypto_suite: string;
 	    record_id: string;
 	    tenant_id: string;
 	    client_id: string;
@@ -1054,6 +1365,7 @@ export namespace model {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.schema_version = source["schema_version"];
+	        this.crypto_suite = source["crypto_suite"];
 	        this.record_id = source["record_id"];
 	        this.tenant_id = source["tenant_id"];
 	        this.client_id = source["client_id"];
@@ -1085,6 +1397,7 @@ export namespace model {
 	}
 	export class SignedClaim {
 	    schema_version: string;
+	    crypto_suite: string;
 	    claim: ClientClaim;
 	    signature: Signature;
 	
@@ -1095,6 +1408,7 @@ export namespace model {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.schema_version = source["schema_version"];
+	        this.crypto_suite = source["crypto_suite"];
 	        this.claim = this.convertValues(source["claim"], ClientClaim);
 	        this.signature = this.convertValues(source["signature"], Signature);
 	    }
@@ -1119,6 +1433,7 @@ export namespace model {
 	}
 	export class ProofBundle {
 	    schema_version: string;
+	    crypto_suite: string;
 	    record_id: string;
 	    node_id?: string;
 	    log_id?: string;
@@ -1135,6 +1450,7 @@ export namespace model {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.schema_version = source["schema_version"];
+	        this.crypto_suite = source["crypto_suite"];
 	        this.record_id = source["record_id"];
 	        this.node_id = source["node_id"];
 	        this.log_id = source["log_id"];
@@ -1165,6 +1481,7 @@ export namespace model {
 	}
 	export class STHAnchorResult {
 	    schema_version: string;
+	    crypto_suite: string;
 	    node_id?: string;
 	    log_id?: string;
 	    tree_size: number;
@@ -1173,6 +1490,7 @@ export namespace model {
 	    root_hash: number[];
 	    sth: SignedTreeHead;
 	    proof?: number[];
+	    evidence_stage?: string;
 	    published_at_unix_nano: number;
 	
 	    static createFrom(source: any = {}) {
@@ -1182,6 +1500,7 @@ export namespace model {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.schema_version = source["schema_version"];
+	        this.crypto_suite = source["crypto_suite"];
 	        this.node_id = source["node_id"];
 	        this.log_id = source["log_id"];
 	        this.tree_size = source["tree_size"];
@@ -1190,6 +1509,7 @@ export namespace model {
 	        this.root_hash = source["root_hash"];
 	        this.sth = this.convertValues(source["sth"], SignedTreeHead);
 	        this.proof = source["proof"];
+	        this.evidence_stage = source["evidence_stage"];
 	        this.published_at_unix_nano = source["published_at_unix_nano"];
 	    }
 	
