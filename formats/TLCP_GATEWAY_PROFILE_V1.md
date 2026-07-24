@@ -19,7 +19,8 @@ the Tongsuo archive SHA-256 is
 `57c2741750a699bfbdaa1bbe44a5733e9c8fc65d086c210151cfbc2bbd6fc975`.
 Both Tengine stages use the exact Debian manifest-list digest recorded in that
 baseline. The embedded runtime validator/readiness tools use the separately
-pinned Go builder image and deterministic CGO-disabled flags. The
+pinned Go builder image, a minimal checksummed module graph, and deterministic
+CGO-disabled flags. The
 `gateway_image_digest`, `sbom_sha256`, and
 `build_record_sha256` fields identify outputs of a particular reproducible
 build and therefore are not hard-coded global constants.

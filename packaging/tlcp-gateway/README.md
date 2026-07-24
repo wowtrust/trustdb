@@ -10,7 +10,9 @@ The build uses `SOURCE_DATE_EPOCH`, rewrites OCI layer timestamps, disables
 embedded provenance attestations, and compares two complete OCI archives.
 Both passes use `--no-cache`, so the second pass recompiles Tengine, Tongsuo,
 and the embedded Go profile/readiness tools instead of replaying the first
-pass's cached layers.
+pass's cached layers. The embedded tools build from
+`validator-go.mod`/`validator-go.sum`, which contain only their four required
+modules rather than downloading TrustDB's unrelated server dependencies.
 
 Build and independently verify one architecture:
 

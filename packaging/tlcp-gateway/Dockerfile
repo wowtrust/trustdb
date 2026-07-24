@@ -71,7 +71,8 @@ ENV CGO_ENABLED=0 \
     GOTOOLCHAIN=local \
     SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH}
 WORKDIR /src/trustdb
-COPY go.mod go.sum ./
+COPY packaging/tlcp-gateway/validator-go.mod ./go.mod
+COPY packaging/tlcp-gateway/validator-go.sum ./go.sum
 RUN go mod download
 COPY internal/tlcpprofile ./internal/tlcpprofile
 COPY internal/tlcpready ./internal/tlcpready
