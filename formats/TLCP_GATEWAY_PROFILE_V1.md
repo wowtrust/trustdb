@@ -48,12 +48,15 @@ an opaque provider identifier, not a filesystem path or private-key value.
 
 Proof-signing keys remain under TrustDB's existing `keys.*` and
 `crypto.signer_plugins.*` configuration. Every production profile contains a
-non-empty `proof_signing_keys` array with the exact deployment reference and
-canonical public-key SHA-256 for every active proof signer. Production
-validation fails when the array is absent, duplicated, malformed, or overlaps
-either gateway key. Optional `--forbid-*` flags can add rollout-time identities
-but do not replace the mandatory profile entries. Reference aliases cannot
-bypass separation because the public-key fingerprint must also be distinct.
+non-empty `proof_key_descriptor_files` array naming the canonical public
+verifier descriptors selected by the same generation as the active TrustDB
+configuration. The gateway reads those real CBOR descriptors, requires
+`trustdb.key-descriptor.v1`, `kind=verifier`, and `provider=public`, rejects
+every private provider union, and computes normalized SPKI fingerprints itself.
+The runtime manifest binds both canonical descriptor bytes and computed public
+keys. Production validation fails when the array is absent, duplicated,
+malformed, changed, or overlaps either gateway key. Optional `--forbid-*` flags
+can add rollout-time identities but do not replace the mandatory files.
 Gateway certificates, CAs, CRLs, keys, and readiness results never become
 proof trust roots. Proof, WAL, proofstore, backup, and offline verification
 bytes are unchanged.
@@ -156,7 +159,9 @@ public trust material, renders Nginx configuration only from that profile, and
 writes a canonical `trustdb.tlcp-gateway-runtime-manifest.v1` binding the raw
 profile, rendered configuration, deployed image digest, certificate/public-key
 fingerprints, CA fingerprints, proof-key separation, CRL bundle, and expiry
-bounds. Any validation failure exits before Tengine starts.
+bounds. Runtime preparation and `nginx -t` run through the entrypoint's
+`startup` deadline. Any validation failure or timeout exits before Tengine
+starts.
 
 The shipped readiness executable revalidates that manifest and every
 referenced public input on each probe, then performs, within the configured
@@ -172,22 +177,30 @@ the four `TLCP_READINESS_*` variables. Missing credentials, profile/path
 drift, expiry, revocation, an unavailable upstream, or a protocol/cipher
 mismatch keeps the container unhealthy. Kubernetes and similar systems must
 configure `/usr/local/bin/trustdb-tlcp-readiness` as the readiness command
-instead of using a TCP probe.
+instead of using a TCP probe and set the outer `timeoutSeconds` to the
+whole-second ceiling of `timeouts.canary`. The executable enforces the exact
+duration itself. Rotation invokes `tlcp-gateway-prepare-runtime reload`, whose
+outer controller deadline comes from `timeouts.reload`.
 
 The generated runtime sets explicit 10-second header, 30-second body/send and
-upstream bounds, a 16 MiB request ceiling matching TrustDB's largest transport
-request, 15-second/100-request keepalive limits, 64 HTTP/2 streams, 32
-connections per client address, and 2,048 connections per worker. Deployment
-CPU, memory, PID, file-descriptor, and restart limits remain mandatory.
+upstream bounds, a tested 16 MiB request ceiling, 15-second/100-request
+keepalive limits, configured ceilings of 64 HTTP/2 streams and 32 connections
+per client address, and 2,048 connections per worker. The request-body gate
+accepts exactly 16 MiB and rejects the next byte. Effective stream and
+connection admission remains deployment-qualified because it depends on the
+exact Tengine build, client reuse, and L4 topology. Deployment CPU, memory,
+PID, file-descriptor, and restart limits remain mandatory.
 
 ## Rotation
 
 Signing certificate/reference, encryption certificate/reference, server and
-client CA files, every CRL, and the exact gateway CRL bundle form one
+client CA files, readiness signing/encryption identities, authoritative public
+proof descriptors, every CRL, and the exact gateway CRL bundle form one
 generation. Operators stage a complete generation, run profile validation and
 both live canaries in the one admitted candidate, atomically switch the
 generation, invoke the image's `tlcp-gateway-prepare-runtime` helper, and
-request a bounded reload. The helper stages the new manifest/configuration,
+request a bounded reload with `tlcp-gateway-prepare-runtime reload`. The helper
+stages the new manifest/configuration,
 performs Tengine's private-key and configuration check, and promotes both files
 only after that check succeeds. If regeneration, reload, or either post-switch
 canary fails, the controller restores the prior generation, prepares its
