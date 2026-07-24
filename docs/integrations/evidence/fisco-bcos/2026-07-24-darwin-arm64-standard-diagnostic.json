@@ -1,0 +1,103 @@
+{
+  "schema_version": 1,
+  "evidence_class": "diagnostic_partial",
+  "admitted": false,
+  "baseline_id": "fisco-bcos-3.16.3-go-sdk-3.0.2",
+  "date": "2026-07-24",
+  "profile": {
+    "deployment": "air",
+    "crypto": "standard",
+    "platform": "darwin/arm64"
+  },
+  "command": "scripts/fisco-bcos/smoke-air.sh --mode standard --raw-evm-fixture --work-dir /tmp/trustdb-461-full-standard-raw3-20260724 --cache-dir /tmp/trustdb-461-full-standard-20260724-b/cache --p2p-port 32300 --rpc-port 22200",
+  "host": "macOS-26.1-arm64-arm-64bit",
+  "pins": {
+    "node": "v3.16.3@274f864e7725fef5b8ed4c6b7a3363ee5396f104",
+    "go_sdk": "v3.0.2@a9dbab29132d9e6a1cd5919dd993e4186c0703ff",
+    "c_sdk_source": "a278b4749e342d2b111d736045db9ed98a63224d",
+    "c_sdk_native": "v3.6.0@53240138c396c10cb0e1a2b7b4d5c0cdaa0ac539",
+    "solidity": "v0.8.11@415673533ae8ae4e9da5af544822499d04f69a52",
+    "tassl": "V_1.4@fe885b939c13c715633e4c05df8811a1ea7ca079"
+  },
+  "artifacts": {
+    "fisco-bcos-macOS-arm.tar.gz": "b6f60379b7ac208394f03f7d373246adec6cd938df4c1940606c29f6eb2f9ebf",
+    "libbcos-c-sdk-aarch64.dylib": "4b9c16fb91e15317408a83fddd08bab33bd35c6b5d1c3482dc538ccf9fe95afc",
+    "solc-mac-aarch64.tar.gz": "4aafae50de03473bee29df54dd78e81c091b11a6e14b7e585cf4d46036a7ff3c",
+    "tassl-1.1.1b-macOS-aarch64.tar.gz": "38788e78d6d0f26e8d3edcff4d283b973f063b6c0f11e9fd93183d40f4cc1c19"
+  },
+  "node_version": "3.16.3",
+  "node_commit": "274f864e7725fef5b8ed4c6b7a3363ee5396f104",
+  "certificate_verification": "sdk.crt: OK",
+  "sm_crypto": false,
+  "probe_source": "compiler-independent-raw-evm-log0",
+  "compiler_executable": false,
+  "compiler_error": "Library not loaded: /opt/homebrew/opt/z3/lib/libz3.dylib",
+  "repeatability_check": {
+    "command": "GOMODCACHE=$(go env GOMODCACHE) GOCACHE=$(go env GOCACHE) scripts/fisco-bcos/smoke-air.sh --mode standard --raw-evm-fixture --work-dir /tmp/trustdb-461-full-standard-regression-20260724 --cache-dir /tmp/trustdb-461-full-standard-20260724-b/cache --p2p-port 34300 --rpc-port 24200",
+    "client_evidence_written": true,
+    "client_operations_completed": true,
+    "process_result": "SIGSEGV during deferred client teardown",
+    "top_native_frame": "bcos_sdk_destroy",
+    "go_frames": [
+      "github.com/FISCO-BCOS/bcos-c-sdk/bindings/go/csdk.(*CSDK).Close",
+      "github.com/FISCO-BCOS/go-sdk/v3/client.(*Connection).Close",
+      "github.com/FISCO-BCOS/go-sdk/v3/client.(*Client).Close"
+    ]
+  },
+  "ephemeral_key_followup": {
+    "command": "GOMODCACHE=$(go env GOMODCACHE) GOCACHE=$(go env GOCACHE) scripts/fisco-bcos/smoke-air.sh --mode standard --raw-evm-fixture --work-dir /tmp/trustdb-461-final-standard-20260724 --cache-dir /tmp/trustdb-461-full-standard-20260724-b/cache --p2p-port 41300 --rpc-port 31200",
+    "node_readiness_wait_seconds": 10,
+    "event_unsubscribe_drain_seconds": 1,
+    "transaction_key": "ephemeral_in_memory",
+    "raw_event_shape_validated": true,
+    "clean_teardown": true,
+    "client_stderr": []
+  },
+  "results": {
+    "initial_block_number": 0,
+    "final_block_number": 2,
+    "deployment": {
+      "transaction_hash": "0x8c73a491500ed9d20f95fa38df121c8dcb8edf75cf3dd16cd6bdecd6c4878a14",
+      "status": 0,
+      "block_number": 1,
+      "contract_address": "0x6849f21d1e455e9f0712b1e99fa4fcd23758e8f1",
+      "transaction_proof": ["8c73a491500ed9d20f95fa38df121c8dcb8edf75cf3dd16cd6bdecd6c4878a14"],
+      "receipt_proof": ["fcdd3f2938d046ccc8ef67bea4a5813814e89bb4e06c07bdbe4184fe549f7e67"]
+    },
+    "event_transaction": {
+      "transaction_hash": "0xc1dfef6313cc722049e268cfdefc8154ea75b8f01d4ce2c3797c3424f0713be1",
+      "status": 0,
+      "block_number": 2,
+      "event_transaction_match": true,
+      "transaction_proof": ["c1dfef6313cc722049e268cfdefc8154ea75b8f01d4ce2c3797c3424f0713be1"],
+      "receipt_proof": ["247102804f7f46b90615219c7f7d46ad4f37c94541bb5d417948689b6eab0c30"]
+    },
+    "containing_block": {
+      "hash": "0x4b1d8d39dc2f4eed3b6580c0b77b5322aa4bd2f8fb73672a4b397dc7231e1a83",
+      "transactions_root": "0xc1dfef6313cc722049e268cfdefc8154ea75b8f01d4ce2c3797c3424f0713be1",
+      "receipts_root": "0x247102804f7f46b90615219c7f7d46ad4f37c94541bb5d417948689b6eab0c30",
+      "signature_count": 3
+    },
+    "consensus": {
+      "connected_nodes": 4,
+      "sealers": 4,
+      "minimum_required_quorum": 3,
+      "maximum_faulty_quorum": 1,
+      "node_ids": [
+        "422b851f4cdefcb4c74bb8991fd02d0a61fd9d5c8317c38eeebe22bac084b2beb86bd3df9be56645d45f074c7190770f15ce7cf1e4fac799556de1eedc8a31cf",
+        "4ab5e95c1902eefc42028274d232d3f18ff351bb2dcb7d43150a286ced56db305741a42d536f0ce4ec14e5ef058018583951c9571e75313bf27d14bf4745dd55",
+        "6606853a666630aa38fc71fb86a36cd8e6009c388ccc7f634934a2b0a9c0a4bcf2f6e7c7948c2414c296be8b85bd4a83f1432e5f71837c9c7646624c916a79e4",
+        "a3d9c2cb733cc3983d1e3a2bb60f612600c784f52457131a7c5533f0a9993726979bed84b57b3777bd7bf771035ba00a5464ad9073027134edad00768dd5fe1e"
+      ]
+    },
+    "stale_block_limit": 1,
+    "stale_block_limit_rejected": true,
+    "stale_rejection_error": "BlockLimitCheckFail"
+  },
+  "limitations": [
+    "The raw EVM fixture bypasses the pinned Solidity compiler and is only a transport/runtime diagnostic.",
+    "Proof arrays were retrieved but were not independently decoded or verified against the block roots.",
+    "Two immediate-close repeats produced all client evidence but segfaulted in bcos_sdk_destroy; the current bounded-unsubscribe-drain harness subsequently exited cleanly.",
+    "This result does not admit a production compatibility profile."
+  ]
+}

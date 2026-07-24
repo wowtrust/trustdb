@@ -1,0 +1,236 @@
+{
+  "admitted": true,
+  "artifacts": {
+    "fisco-bcos-linux-x86_64.tar.gz": "1d97a6d72a1e384b428fdefac77ff48ffbe36d21eb9b4daeba62cf56bf975ae3",
+    "libbcos-c-sdk.so": "b5a2a1606086245cc73d356d70011b32a112a38cf5e6a10631377a4b4a7dec83",
+    "solc-linux-gm.tar.gz": "cde864ecd0cb1ea4e852bd28c9f550fdf3be215292a2538bc08afe4175b15483",
+    "tassl-1.1.1b-linux-x86_64.tar.gz": "97700126df491b4ae15afae1bad99979390ded5d7d1655632e00b40003a9a9e8"
+  },
+  "baseline_id": "fisco-bcos-3.16.3-go-sdk-3.0.2",
+  "certificate_verification": [
+    "/tmp/trustdb-461.ZgfJWn/run-guomi-converged/nodes-guomi/127.0.0.1/sdk/sm_sdk.crt: OK",
+    "/tmp/trustdb-461.ZgfJWn/run-guomi-converged/nodes-guomi/127.0.0.1/sdk/sm_ensdk.crt: OK"
+  ],
+  "clean_teardown": true,
+  "cleanup": {
+    "generated_keys_or_certificates_committed": false,
+    "host_lock_absent": true,
+    "listeners_absent": true,
+    "node_processes_absent": true
+  },
+  "client_stderr": [],
+  "command": "scripts/fisco-bcos/smoke-air.sh --mode guomi --work-dir /tmp/trustdb-461.ZgfJWn/run-guomi-converged --cache-dir /tmp/trustdb-461.ZgfJWn/cache --p2p-port 26300 --rpc-port 16200",
+  "compiler_executable": true,
+  "date": "2026-07-24",
+  "environment": {
+    "compiler_executable": true,
+    "host_platform": "Linux-6.8.0-90-generic-x86_64-with-glibc2.39",
+    "node_version": "FISCO BCOS Version : 3.16.3\nBuild Time         : 20251129 13:44:14\nBuild Type         : Linux/g++/MinSizeRel\nGit Branch         : HEAD\nGit Commit         : 274f864e7725fef5b8ed4c6b7a3363ee5396f104\n",
+    "platform": "linux/amd64",
+    "python": "3.12.3",
+    "solc_version": "solc, the solidity compiler commandline interface\nGm version: 0.8.11+commit.1c3fd7c1.mod.Linux.g++\n",
+    "tassl_version": "OpenSSL 1.1.1b Tassl 1.4  23 Aug 2020\n"
+  },
+  "evidence_class": "runtime_verified",
+  "harness_validation": {
+    "clean_teardown": true,
+    "four_node_convergence_required_before_sdk": true,
+    "stderr_lines": [],
+    "stdout_is_single_json_document": true
+  },
+  "host": "Linux-6.8.0-90-generic-x86_64-with-glibc2.39",
+  "limitations": [
+    "This run validates the pinned Air node, compiler, C SDK and Go SDK compatibility profile only.",
+    "Transaction and receipt proof arrays were retrieved but are not treated as independently verified TrustDB anchor evidence."
+  ],
+  "node_clean_teardown": true,
+  "node_commit": "274f864e7725fef5b8ed4c6b7a3363ee5396f104",
+  "node_version": "3.16.3",
+  "pins": {
+    "c_sdk_native": "v3.6.0@53240138c396c10cb0e1a2b7b4d5c0cdaa0ac539",
+    "c_sdk_source": "a278b4749e342d2b111d736045db9ed98a63224d",
+    "go_sdk": "v3.0.2@a9dbab29132d9e6a1cd5919dd993e4186c0703ff",
+    "node": "v3.16.3@274f864e7725fef5b8ed4c6b7a3363ee5396f104",
+    "solidity": "v0.8.11@415673533ae8ae4e9da5af544822499d04f69a52",
+    "tassl": "V_1.4@fe885b939c13c715633e4c05df8811a1ea7ca079"
+  },
+  "probe_source": "pinned-solidity-compiler",
+  "profile": {
+    "crypto": "guomi",
+    "deployment": "air",
+    "platform": "linux/amd64"
+  },
+  "raw_client_output": {
+    "clean_teardown": true,
+    "consensus_status": "{\"blockNumber\":2,\"changeCycle\":0,\"connectedNodeList\":4,\"consensusNodeList\":[{\"index\":0,\"nodeID\":\"08e62d08fb369cd11b41fddd53170da67e90b1b7fe53bdac0e047126f55ea01c60e8992ccffe57b8843d915ce5126aafb2e82b20d498bfb20c9c664688e5f03c\",\"termWeight\":0,\"weight\":1},{\"index\":1,\"nodeID\":\"30c6a363ef38612b9b10b99a9ad10a74131a35081a971c455f904e755d545e96c58945fed210002d1039d46c7d8fde0de4deaf78aa9f5a6848ed4fa8c7803f1b\",\"termWeight\":0,\"weight\":1},{\"index\":2,\"nodeID\":\"41e95d07e46e86100ad2aaf643ece958ef42134afeef528d0a5fc85c01f169c2df9e3d16776839ee10e061b88e68333ace6f34a5658331cb43502e15269deadc\",\"termWeight\":0,\"weight\":1},{\"index\":3,\"nodeID\":\"6ea1fe9cbb0f09a67a8d85844128f72d7e1afed84ebaa9f9aeb2a7a80629365acd808a97666ffc3bf4de9d5b3c47557d18049f568064236141d2804c614cc5d0\",\"termWeight\":0,\"weight\":1}],\"consensusNodesNum\":4,\"hash\":\"e2312f4b5ee2d95dada9eeed57852f475424939edd1bac3d24c0ad4e877f981b\",\"index\":0,\"isConsensusNode\":true,\"leaderIndex\":3,\"maxFaultyQuorum\":1,\"minRequiredQuorum\":3,\"nodeID\":\"08e62d08fb369cd11b41fddd53170da67e90b1b7fe53bdac0e047126f55ea01c60e8992ccffe57b8843d915ce5126aafb2e82b20d498bfb20c9c664688e5f03c\",\"timeout\":false,\"view\":4}\n",
+    "containing_block": {
+      "consensusWeights": [
+        1,
+        1,
+        1,
+        1
+      ],
+      "extraData": "0x",
+      "gasLimit": "",
+      "gasUsed": "27575",
+      "hash": "0xe2312f4b5ee2d95dada9eeed57852f475424939edd1bac3d24c0ad4e877f981b",
+      "number": 2,
+      "parentInfo": [
+        {
+          "blockHash": "0xc8dabef467d69ae09ec2b93ba6d9dfa1934ecf46247b1a9b5b67c4b04769b5fc",
+          "blockNumber": 1
+        }
+      ],
+      "receiptsRoot": "0x779c359452dcac31ebde4c74ced0659906284a0216d545b38f5475da00df68e9",
+      "sealer": 2,
+      "sealerList": [
+        "0x08e62d08fb369cd11b41fddd53170da67e90b1b7fe53bdac0e047126f55ea01c60e8992ccffe57b8843d915ce5126aafb2e82b20d498bfb20c9c664688e5f03c",
+        "0x30c6a363ef38612b9b10b99a9ad10a74131a35081a971c455f904e755d545e96c58945fed210002d1039d46c7d8fde0de4deaf78aa9f5a6848ed4fa8c7803f1b",
+        "0x41e95d07e46e86100ad2aaf643ece958ef42134afeef528d0a5fc85c01f169c2df9e3d16776839ee10e061b88e68333ace6f34a5658331cb43502e15269deadc",
+        "0x6ea1fe9cbb0f09a67a8d85844128f72d7e1afed84ebaa9f9aeb2a7a80629365acd808a97666ffc3bf4de9d5b3c47557d18049f568064236141d2804c614cc5d0"
+      ],
+      "signatureList": [
+        {
+          "sealerIndex": 0,
+          "signature": "0x3e7b6870c30e07664850127fd55b0e1545b678fbfbecc80beb0f594ef62e168da9dd4f681b8b06bc92f50a17876983352c5760d11dc99d0ae8285cf98ba0effd"
+        },
+        {
+          "sealerIndex": 1,
+          "signature": "0x4e659e140f75f7b7a54b2df9042c0a20a2cffacf11a10b417298765f393d0a00f6e4f47878654a82d52ca54f8bb5515fd1a5841451b1d5a81a3f21dc6c75a2be"
+        },
+        {
+          "sealerIndex": 2,
+          "signature": "0x805f6477dd58e08f59e32294dc4cd1e5a39fc77a25cf81394f2e06d72125f8d65cd450c86b174ff4e6f96a112ae7c129d9c0358d4df19fa5cfb2febcc63ce33d"
+        },
+        {
+          "sealerIndex": 3,
+          "signature": "0x8479a2c7826432aa4464e613f87492cc1da27b121a9f58df4266944f44a7adeafe491ed7cf482b9b7377d78cebfcc43c4276a506b884067a5ba764ab6e8d0f1b"
+        }
+      ],
+      "stateRoot": "0x5a7411443f266aed722622e07da4e9954e66e1ea3780331d72eba3a7ca4ac72f",
+      "timestamp": 1784865740150,
+      "transactions": [
+        "0x914cc3e3bc62976f5db50e93fbb2c91251d2dd84aff0ee2f736ed520faa00012"
+      ],
+      "txsRoot": "0x914cc3e3bc62976f5db50e93fbb2c91251d2dd84aff0ee2f736ed520faa00012",
+      "version": 51380992
+    },
+    "deployment": {
+      "block_number": 1,
+      "contract_address": "0xc0523dbdd94ba27e14b0336d799489340ca24cdf",
+      "hash": "0x3dbca56c250f77fcd570a2412d2545f578d9079a313b7094470f2ea8147b9fcf",
+      "receipt_proof": [
+        "53e6c89c0bba2d6c9de6bc77e8002881d8824d2c0d490e55eb931e260f15f5b8"
+      ],
+      "receipt_proof_field_present": true,
+      "status": 0,
+      "transaction_proof": [
+        "3dbca56c250f77fcd570a2412d2545f578d9079a313b7094470f2ea8147b9fcf"
+      ],
+      "transaction_proof_field_present": true
+    },
+    "event": {
+      "address": "0xc0523dbdd94ba27e14b0336d799489340ca24cdf",
+      "blockNumber": 2,
+      "data": "",
+      "logIndex": 0,
+      "topics": [
+        "0xd680524b80601d5e4f194eb1f8d6d277b3424ebbd46607734ee532ce9487b5e5",
+        "0x747275737464622d666973636f2d636f6d7061746962696c6974792d70726f62"
+      ],
+      "transactionHash": "0x914cc3e3bc62976f5db50e93fbb2c91251d2dd84aff0ee2f736ed520faa00012",
+      "transactionIndex": 0
+    },
+    "event_transaction": {
+      "block_number": 2,
+      "hash": "0x914cc3e3bc62976f5db50e93fbb2c91251d2dd84aff0ee2f736ed520faa00012",
+      "receipt_proof": [
+        "779c359452dcac31ebde4c74ced0659906284a0216d545b38f5475da00df68e9"
+      ],
+      "receipt_proof_field_present": true,
+      "status": 0,
+      "transaction_proof": [
+        "914cc3e3bc62976f5db50e93fbb2c91251d2dd84aff0ee2f736ed520faa00012"
+      ],
+      "transaction_proof_field_present": true
+    },
+    "final_block_number": 2,
+    "initial_block_number": 0,
+    "mode": "guomi",
+    "probe_source": "pinned-solidity-compiler",
+    "schema_version": 1,
+    "sealers": [
+      {
+        "nodeID": "08e62d08fb369cd11b41fddd53170da67e90b1b7fe53bdac0e047126f55ea01c60e8992ccffe57b8843d915ce5126aafb2e82b20d498bfb20c9c664688e5f03c",
+        "weight": 1
+      },
+      {
+        "nodeID": "30c6a363ef38612b9b10b99a9ad10a74131a35081a971c455f904e755d545e96c58945fed210002d1039d46c7d8fde0de4deaf78aa9f5a6848ed4fa8c7803f1b",
+        "weight": 1
+      },
+      {
+        "nodeID": "41e95d07e46e86100ad2aaf643ece958ef42134afeef528d0a5fc85c01f169c2df9e3d16776839ee10e061b88e68333ace6f34a5658331cb43502e15269deadc",
+        "weight": 1
+      },
+      {
+        "nodeID": "6ea1fe9cbb0f09a67a8d85844128f72d7e1afed84ebaa9f9aeb2a7a80629365acd808a97666ffc3bf4de9d5b3c47557d18049f568064236141d2804c614cc5d0",
+        "weight": 1
+      }
+    ],
+    "sm_crypto": true,
+    "stale_block_limit": 1,
+    "stale_block_limit_rejected": true,
+    "stale_rejection_error": "BlockLimitCheckFail"
+  },
+  "results": {
+    "consensus": {
+      "connected_nodes": 4,
+      "maximum_faulty_quorum": 1,
+      "minimum_required_quorum": 3,
+      "node_ids": [
+        "08e62d08fb369cd11b41fddd53170da67e90b1b7fe53bdac0e047126f55ea01c60e8992ccffe57b8843d915ce5126aafb2e82b20d498bfb20c9c664688e5f03c",
+        "30c6a363ef38612b9b10b99a9ad10a74131a35081a971c455f904e755d545e96c58945fed210002d1039d46c7d8fde0de4deaf78aa9f5a6848ed4fa8c7803f1b",
+        "41e95d07e46e86100ad2aaf643ece958ef42134afeef528d0a5fc85c01f169c2df9e3d16776839ee10e061b88e68333ace6f34a5658331cb43502e15269deadc",
+        "6ea1fe9cbb0f09a67a8d85844128f72d7e1afed84ebaa9f9aeb2a7a80629365acd808a97666ffc3bf4de9d5b3c47557d18049f568064236141d2804c614cc5d0"
+      ],
+      "sealers": 4
+    },
+    "containing_block": {
+      "hash": "0xe2312f4b5ee2d95dada9eeed57852f475424939edd1bac3d24c0ad4e877f981b",
+      "receipts_root": "0x779c359452dcac31ebde4c74ced0659906284a0216d545b38f5475da00df68e9",
+      "signature_count": 4,
+      "transactions_root": "0x914cc3e3bc62976f5db50e93fbb2c91251d2dd84aff0ee2f736ed520faa00012"
+    },
+    "deployment": {
+      "block_number": 1,
+      "contract_address": "0xc0523dbdd94ba27e14b0336d799489340ca24cdf",
+      "receipt_proof": [
+        "53e6c89c0bba2d6c9de6bc77e8002881d8824d2c0d490e55eb931e260f15f5b8"
+      ],
+      "status": 0,
+      "transaction_hash": "0x3dbca56c250f77fcd570a2412d2545f578d9079a313b7094470f2ea8147b9fcf",
+      "transaction_proof": [
+        "3dbca56c250f77fcd570a2412d2545f578d9079a313b7094470f2ea8147b9fcf"
+      ]
+    },
+    "event_transaction": {
+      "block_number": 2,
+      "event_transaction_match": true,
+      "receipt_proof": [
+        "779c359452dcac31ebde4c74ced0659906284a0216d545b38f5475da00df68e9"
+      ],
+      "status": 0,
+      "transaction_hash": "0x914cc3e3bc62976f5db50e93fbb2c91251d2dd84aff0ee2f736ed520faa00012",
+      "transaction_proof": [
+        "914cc3e3bc62976f5db50e93fbb2c91251d2dd84aff0ee2f736ed520faa00012"
+      ]
+    },
+    "final_block_number": 2,
+    "initial_block_number": 0,
+    "stale_block_limit": 1,
+    "stale_block_limit_rejected": true,
+    "stale_rejection_error": "BlockLimitCheckFail"
+  },
+  "schema_version": 1,
+  "sm_crypto": true
+}

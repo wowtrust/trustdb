@@ -1,0 +1,94 @@
+{
+  "schema_version": 1,
+  "evidence_class": "diagnostic_partial",
+  "admitted": false,
+  "baseline_id": "fisco-bcos-3.16.3-go-sdk-3.0.2",
+  "date": "2026-07-24",
+  "profile": {
+    "deployment": "air",
+    "crypto": "guomi",
+    "platform": "darwin/arm64"
+  },
+  "command": "scripts/fisco-bcos/smoke-air.sh --mode guomi --raw-evm-fixture --work-dir /tmp/trustdb-461-full-guomi-raw-20260724 --cache-dir /tmp/trustdb-461-full-standard-20260724-b/cache --p2p-port 33300 --rpc-port 23200",
+  "host": "macOS-26.1-arm64-arm-64bit",
+  "pins": {
+    "node": "v3.16.3@274f864e7725fef5b8ed4c6b7a3363ee5396f104",
+    "go_sdk": "v3.0.2@a9dbab29132d9e6a1cd5919dd993e4186c0703ff",
+    "c_sdk_source": "a278b4749e342d2b111d736045db9ed98a63224d",
+    "c_sdk_native": "v3.6.0@53240138c396c10cb0e1a2b7b4d5c0cdaa0ac539",
+    "solidity": "v0.8.11@415673533ae8ae4e9da5af544822499d04f69a52",
+    "tassl": "V_1.4@fe885b939c13c715633e4c05df8811a1ea7ca079"
+  },
+  "artifacts": {
+    "fisco-bcos-macOS-arm.tar.gz": "b6f60379b7ac208394f03f7d373246adec6cd938df4c1940606c29f6eb2f9ebf",
+    "libbcos-c-sdk-aarch64.dylib": "4b9c16fb91e15317408a83fddd08bab33bd35c6b5d1c3482dc538ccf9fe95afc",
+    "solc-mac-aarch64-gm.tar.gz": "e8e3328a801b01f96a6f00aa95118b09fa222c62b081d25bff23888949514b9d",
+    "tassl-1.1.1b-macOS-aarch64.tar.gz": "38788e78d6d0f26e8d3edcff4d283b973f063b6c0f11e9fd93183d40f4cc1c19"
+  },
+  "node_version": "3.16.3",
+  "node_commit": "274f864e7725fef5b8ed4c6b7a3363ee5396f104",
+  "certificate_verification": ["sm_sdk.crt: OK", "sm_ensdk.crt: OK"],
+  "sm_crypto": true,
+  "probe_source": "compiler-independent-raw-evm-log0",
+  "compiler_executable": false,
+  "compiler_error": "Library not loaded: /opt/homebrew/opt/z3/lib/libz3.dylib",
+  "current_harness_validation": {
+    "command": "GOMODCACHE=$(go env GOMODCACHE) GOCACHE=$(go env GOCACHE) scripts/fisco-bcos/smoke-air.sh --mode guomi --raw-evm-fixture --work-dir /tmp/trustdb-461-pollution-guard-guomi-20260724 --cache-dir /tmp/trustdb-461-full-standard-20260724-b/cache --p2p-port 44300 --rpc-port 34200",
+    "node_readiness_wait_seconds": 10,
+    "event_unsubscribe_drain_seconds": 1,
+    "transaction_key": "ephemeral_in_memory",
+    "raw_event_shape_validated": true,
+    "repository_root_tassl_files_created": false,
+    "clean_teardown": true,
+    "client_stderr": []
+  },
+  "results": {
+    "initial_block_number": 0,
+    "final_block_number": 2,
+    "deployment": {
+      "transaction_hash": "0x2363b9ed7f7da74dc6d958ce01c732bb747c75cd213093b7462387c5c12e94ca",
+      "status": 0,
+      "block_number": 1,
+      "contract_address": "0xc0523dbdd94ba27e14b0336d799489340ca24cdf",
+      "transaction_proof": ["2363b9ed7f7da74dc6d958ce01c732bb747c75cd213093b7462387c5c12e94ca"],
+      "receipt_proof": ["29d4491a174f9cb1a6290d74c2b7c84b92697ec78d0e5a297e5cad76632d4d7d"]
+    },
+    "event_transaction": {
+      "transaction_hash": "0x448792efc3dc58b94dbd92f6a7bc75d89ce33c9320230ce6a73b459bd138383e",
+      "status": 0,
+      "block_number": 2,
+      "event_transaction_match": true,
+      "transaction_proof": ["448792efc3dc58b94dbd92f6a7bc75d89ce33c9320230ce6a73b459bd138383e"],
+      "receipt_proof": ["cc905f1c03c523986906f94930c99eabe7185e412b0df52ebe8ecc0d03bdbe76"]
+    },
+    "containing_block": {
+      "hash": "0x8dc26207db8cdde9a666a527092f363491c15d1212ad52e1c4f94776c5453083",
+      "transactions_root": "0x448792efc3dc58b94dbd92f6a7bc75d89ce33c9320230ce6a73b459bd138383e",
+      "receipts_root": "0xcc905f1c03c523986906f94930c99eabe7185e412b0df52ebe8ecc0d03bdbe76",
+      "signature_count": 3
+    },
+    "consensus": {
+      "connected_nodes": 4,
+      "sealers": 4,
+      "minimum_required_quorum": 3,
+      "maximum_faulty_quorum": 1,
+      "node_ids": [
+        "265d4e042c836654434d51202a9996e4a14408a505359913454bb61e11dfac328ebe04580dccbf5b3affaed1379c4876b8b9d7dd3684188abe0a2c40893d62c0",
+        "3dae39c58de6d814bf14ec8549151d6c2a0bd0ccf2605f6d114cb1a4f92898ea0d3cbbe582d41c60088162ce747d41d11f3606b3b1d22f670d5dd0904977e950",
+        "4bd96dec14f6b0ee34822e12034c65afa3dcc91aa354651b94625a5788488306ad5ac018a056ea69707235a44e5af082714714072fefb4e40d0d7e8f52ab084e",
+        "da0eebc1b9cf80a74aff5552380181825785955597d1580d6fe76411e3345067ff409e904ef2526e3b7566d33b81b7a51cdb7cbb9502637eea50f4b7a00390d1"
+      ]
+    },
+    "stale_block_limit": 1,
+    "stale_block_limit_rejected": true,
+    "stale_rejection_error": "BlockLimitCheckFail"
+  },
+  "limitations": [
+    "The raw EVM fixture bypasses the pinned GM Solidity compiler and is only a transport/runtime diagnostic.",
+    "Proof arrays were retrieved but were not independently decoded or verified against the block roots.",
+    "A five-second startup attempt encountered a websocket handshake timeout; the current ten-second readiness window then completed with clean teardown.",
+    "A Guomi run started concurrently with a standard network reported sm_crypto=false and was rejected before transactions; the runner now fail-closes concurrent same-platform smoke processes.",
+    "The shared Go/C SDK pair uses a bounded event-unsubscribe drain after standard-mode immediate-close crashes.",
+    "This result does not admit a production compatibility profile."
+  ]
+}

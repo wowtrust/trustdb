@@ -1,0 +1,261 @@
+{
+  "admitted": true,
+  "artifacts": {
+    "fisco-bcos-macOS-arm.tar.gz": "b6f60379b7ac208394f03f7d373246adec6cd938df4c1940606c29f6eb2f9ebf",
+    "libbcos-c-sdk-aarch64.dylib": "4b9c16fb91e15317408a83fddd08bab33bd35c6b5d1c3482dc538ccf9fe95afc",
+    "solc-mac-aarch64.tar.gz": "4aafae50de03473bee29df54dd78e81c091b11a6e14b7e585cf4d46036a7ff3c",
+    "tassl-1.1.1b-macOS-aarch64.tar.gz": "38788e78d6d0f26e8d3edcff4d283b973f063b6c0f11e9fd93183d40f4cc1c19"
+  },
+  "baseline_id": "fisco-bcos-3.16.3-go-sdk-3.0.2",
+  "certificate_verification": "sdk.crt: OK",
+  "cleanup": {
+    "generated_keys_or_certificates_committed": false,
+    "host_lock_absent": true,
+    "listeners_absent": true,
+    "node_processes_absent": true
+  },
+  "command": "GOMODCACHE=$(go env GOMODCACHE) GOCACHE=$(go env GOCACHE) scripts/fisco-bcos/smoke-air.sh --mode standard --work-dir /tmp/trustdb-461-macos-standard-final-20260724 --cache-dir /tmp/trustdb-461-macos-cache --p2p-port 48300 --rpc-port 38200",
+  "compiler_executable": true,
+  "date": "2026-07-24",
+  "dependency_audit": {
+    "c_sdk": {
+      "architecture": "arm64",
+      "dependencies": [
+        "/System/Library/Frameworks/Security.framework/Versions/A/Security",
+        "/System/Library/Frameworks/Foundation.framework/Versions/C/Foundation",
+        "/usr/lib/libc++.1.dylib",
+        "/usr/lib/libSystem.B.dylib"
+      ]
+    },
+    "solc": {
+      "architecture": "arm64",
+      "archive": "solc-mac-aarch64.tar.gz",
+      "dependencies": [
+        "/opt/homebrew/opt/z3/lib/libz3.dylib",
+        "/usr/lib/libc++.1.dylib",
+        "/usr/lib/libSystem.B.dylib"
+      ],
+      "sha256": "4a65a559e5bd58d97b2293f27c301ea67d60055ef8c1c20c4f059f262dc77eba",
+      "version": "Version: 0.8.11+commit.0bbcc642.Darwin.appleclang"
+    },
+    "z3": {
+      "architecture": "arm64",
+      "dependencies": [
+        "/usr/lib/libc++.1.dylib",
+        "/usr/lib/libSystem.B.dylib"
+      ],
+      "install_name": "/opt/homebrew/opt/z3/lib/libz3.dylib",
+      "sha256": "ff9f9462f03e4f2b8871b59ef50da0ddd0bd19f5ebc85f6c2812e47bd5051834",
+      "source": "Homebrew",
+      "version": "4.16.0"
+    }
+  },
+  "evidence_class": "runtime_verified",
+  "harness_validation": {
+    "clean_teardown": true,
+    "four_node_convergence_required_before_sdk": true,
+    "stderr_lines": [],
+    "stdout_bytes": 7415,
+    "stdout_is_single_json_document": true
+  },
+  "host": "macOS-26.1-arm64-arm-64bit",
+  "limitations": [
+    "Transaction and receipt proof arrays were retrieved and bound to the containing block roots, but were not independently decoded and cryptographically recomputed.",
+    "This verifies native four-node Air on this macOS/arm64 host only; Pro, Max, containers, and other platforms remain governed by their own matrix rows.",
+    "The upstream compiler requires the absolute Homebrew Z3 install name; Z3 4.16.0 was installed as a host development dependency for this run."
+  ],
+  "node_commit": "274f864e7725fef5b8ed4c6b7a3363ee5396f104",
+  "node_version": "3.16.3",
+  "pins": {
+    "c_sdk_native": "v3.6.0@53240138c396c10cb0e1a2b7b4d5c0cdaa0ac539",
+    "c_sdk_source": "a278b4749e342d2b111d736045db9ed98a63224d",
+    "go_sdk": "v3.0.2@a9dbab29132d9e6a1cd5919dd993e4186c0703ff",
+    "node": "v3.16.3@274f864e7725fef5b8ed4c6b7a3363ee5396f104",
+    "solidity": "v0.8.11@415673533ae8ae4e9da5af544822499d04f69a52",
+    "tassl": "V_1.4@fe885b939c13c715633e4c05df8811a1ea7ca079"
+  },
+  "probe_source": "pinned-solidity-compiler",
+  "profile": {
+    "crypto": "standard",
+    "deployment": "air",
+    "platform": "darwin/arm64"
+  },
+  "raw_client_output": {
+    "clean_teardown": true,
+    "consensus_status": "{\"blockNumber\":2,\"changeCycle\":0,\"connectedNodeList\":4,\"consensusNodeList\":[{\"index\":0,\"nodeID\":\"2f3535b0acd52e613745ec0b95d49c57363dfec6430d8a491e39be7b210cfb32fafcf1bf5fe43690058957b525ad9ba306264738d764ebc6a4e680697d701667\",\"termWeight\":0,\"weight\":1},{\"index\":1,\"nodeID\":\"3c87aa9ca622f85a2759f73057527d17456aea62b715d66bcace3265640fe8846c17860f828cae14c33253759d931ab8fcfc2f90b4ef080f86d96fa341585865\",\"termWeight\":0,\"weight\":1},{\"index\":2,\"nodeID\":\"5d41ab29f135d8849b8400f96b9e9b15e7994d16eda9284b7e648b2fcaafc2074375b38fea1e9c51019537c41b425561bf531fccb220c86a6fc2f5aa3fd4b21f\",\"termWeight\":0,\"weight\":1},{\"index\":3,\"nodeID\":\"a45503e7c1d440b163223aa532a7f053d23a3899603ba7b3f8776db74df84b4ceaa3cace064a27e88ceb6e426a28beec48ca978a204580b15f019507f1b30274\",\"termWeight\":0,\"weight\":1}],\"consensusNodesNum\":4,\"hash\":\"54e177064158a47d59b3c0979db9ef997503e75f30b1ee0857b124ca2df0b299\",\"index\":0,\"isConsensusNode\":true,\"leaderIndex\":2,\"maxFaultyQuorum\":1,\"minRequiredQuorum\":3,\"nodeID\":\"2f3535b0acd52e613745ec0b95d49c57363dfec6430d8a491e39be7b210cfb32fafcf1bf5fe43690058957b525ad9ba306264738d764ebc6a4e680697d701667\",\"timeout\":false,\"view\":3}\n",
+    "containing_block": {
+      "consensusWeights": [
+        1,
+        1,
+        1,
+        1
+      ],
+      "extraData": "0x",
+      "gasLimit": "",
+      "gasUsed": "27553",
+      "hash": "0x54e177064158a47d59b3c0979db9ef997503e75f30b1ee0857b124ca2df0b299",
+      "number": 2,
+      "parentInfo": [
+        {
+          "blockHash": "0x5119f8d85560b728a1a51f9336e8998314bd83b4a70f3824552a1e0b4873d344",
+          "blockNumber": 1
+        }
+      ],
+      "receiptsRoot": "0x87a10924e80ed1019f597c4792f6c16a6fc96398939d8144e747b9179c9c24f6",
+      "sealer": 1,
+      "sealerList": [
+        "0x2f3535b0acd52e613745ec0b95d49c57363dfec6430d8a491e39be7b210cfb32fafcf1bf5fe43690058957b525ad9ba306264738d764ebc6a4e680697d701667",
+        "0x3c87aa9ca622f85a2759f73057527d17456aea62b715d66bcace3265640fe8846c17860f828cae14c33253759d931ab8fcfc2f90b4ef080f86d96fa341585865",
+        "0x5d41ab29f135d8849b8400f96b9e9b15e7994d16eda9284b7e648b2fcaafc2074375b38fea1e9c51019537c41b425561bf531fccb220c86a6fc2f5aa3fd4b21f",
+        "0xa45503e7c1d440b163223aa532a7f053d23a3899603ba7b3f8776db74df84b4ceaa3cace064a27e88ceb6e426a28beec48ca978a204580b15f019507f1b30274"
+      ],
+      "signatureList": [
+        {
+          "sealerIndex": 0,
+          "signature": "0x1dc2e39092ff89f9b2fd41d53acae9f00e7ae91cb5158d8ea8ddc3998f935f434d5e72d6a02b787e6be62317f122809257deae39ab366380e37a185668cc91b901"
+        },
+        {
+          "sealerIndex": 2,
+          "signature": "0x378faf130f488dbd5296debb611250828ecc25576601bafc3d372894906e87341c090721a3c6d4c2d3af7cf48961a148a6a46de1f9b8a55fb2e36a2f5609bb6d01"
+        },
+        {
+          "sealerIndex": 3,
+          "signature": "0x273ad346fba7daa669853818aceb79e3f824e019d01053bbf7360d2b0b2c437a24cefeea0facae562979e8e65f30597ede93dbb078b336bf4d0ba516ae69ae0401"
+        }
+      ],
+      "stateRoot": "0xc51be91fe1f197fd3604d991e0a775926493bcf527f2a2deb8d0d37ce28ce67f",
+      "timestamp": 1784865117173,
+      "transactions": [
+        "0x7e220a3c9bd6351735a39e2cc141a566cd1a29329b5af1fac5672256f08dc54c"
+      ],
+      "txsRoot": "0x7e220a3c9bd6351735a39e2cc141a566cd1a29329b5af1fac5672256f08dc54c",
+      "version": 51380992
+    },
+    "deployment": {
+      "block_number": 1,
+      "contract_address": "0x6849f21d1e455e9f0712b1e99fa4fcd23758e8f1",
+      "hash": "0xba1e0cdbe65b1cbf582d676a53b469707e9a09e7401bf5524e2460cdc72b492a",
+      "receipt_proof": [
+        "fb760912ed564218a74ac57ae6b9d66d04d9bb77bbda19cf6187ee25b7fed0d1"
+      ],
+      "receipt_proof_field_present": true,
+      "status": 0,
+      "transaction_proof": [
+        "ba1e0cdbe65b1cbf582d676a53b469707e9a09e7401bf5524e2460cdc72b492a"
+      ],
+      "transaction_proof_field_present": true
+    },
+    "event": {
+      "address": "0x6849f21d1e455e9f0712b1e99fa4fcd23758e8f1",
+      "blockNumber": 2,
+      "data": "",
+      "logIndex": 0,
+      "topics": [
+        "0xc8f7565859107929ba4b285bfb17dfba069f69ab64447f49d6fecb70f6bd552b",
+        "0x747275737464622d666973636f2d636f6d7061746962696c6974792d70726f62"
+      ],
+      "transactionHash": "0x7e220a3c9bd6351735a39e2cc141a566cd1a29329b5af1fac5672256f08dc54c",
+      "transactionIndex": 0
+    },
+    "event_transaction": {
+      "block_number": 2,
+      "hash": "0x7e220a3c9bd6351735a39e2cc141a566cd1a29329b5af1fac5672256f08dc54c",
+      "receipt_proof": [
+        "87a10924e80ed1019f597c4792f6c16a6fc96398939d8144e747b9179c9c24f6"
+      ],
+      "receipt_proof_field_present": true,
+      "status": 0,
+      "transaction_proof": [
+        "7e220a3c9bd6351735a39e2cc141a566cd1a29329b5af1fac5672256f08dc54c"
+      ],
+      "transaction_proof_field_present": true
+    },
+    "final_block_number": 2,
+    "initial_block_number": 0,
+    "mode": "standard",
+    "probe_source": "pinned-solidity-compiler",
+    "schema_version": 1,
+    "sealers": [
+      {
+        "nodeID": "2f3535b0acd52e613745ec0b95d49c57363dfec6430d8a491e39be7b210cfb32fafcf1bf5fe43690058957b525ad9ba306264738d764ebc6a4e680697d701667",
+        "weight": 1
+      },
+      {
+        "nodeID": "3c87aa9ca622f85a2759f73057527d17456aea62b715d66bcace3265640fe8846c17860f828cae14c33253759d931ab8fcfc2f90b4ef080f86d96fa341585865",
+        "weight": 1
+      },
+      {
+        "nodeID": "5d41ab29f135d8849b8400f96b9e9b15e7994d16eda9284b7e648b2fcaafc2074375b38fea1e9c51019537c41b425561bf531fccb220c86a6fc2f5aa3fd4b21f",
+        "weight": 1
+      },
+      {
+        "nodeID": "a45503e7c1d440b163223aa532a7f053d23a3899603ba7b3f8776db74df84b4ceaa3cace064a27e88ceb6e426a28beec48ca978a204580b15f019507f1b30274",
+        "weight": 1
+      }
+    ],
+    "sm_crypto": false,
+    "stale_block_limit": 1,
+    "stale_block_limit_rejected": true,
+    "stale_rejection_error": "BlockLimitCheckFail"
+  },
+  "results": {
+    "consensus": {
+      "connected_nodes": 4,
+      "maximum_faulty_quorum": 1,
+      "minimum_required_quorum": 3,
+      "node_ids": [
+        "2f3535b0acd52e613745ec0b95d49c57363dfec6430d8a491e39be7b210cfb32fafcf1bf5fe43690058957b525ad9ba306264738d764ebc6a4e680697d701667",
+        "3c87aa9ca622f85a2759f73057527d17456aea62b715d66bcace3265640fe8846c17860f828cae14c33253759d931ab8fcfc2f90b4ef080f86d96fa341585865",
+        "5d41ab29f135d8849b8400f96b9e9b15e7994d16eda9284b7e648b2fcaafc2074375b38fea1e9c51019537c41b425561bf531fccb220c86a6fc2f5aa3fd4b21f",
+        "a45503e7c1d440b163223aa532a7f053d23a3899603ba7b3f8776db74df84b4ceaa3cace064a27e88ceb6e426a28beec48ca978a204580b15f019507f1b30274"
+      ],
+      "sealers": 4
+    },
+    "containing_block": {
+      "hash": "0x54e177064158a47d59b3c0979db9ef997503e75f30b1ee0857b124ca2df0b299",
+      "receipts_root": "0x87a10924e80ed1019f597c4792f6c16a6fc96398939d8144e747b9179c9c24f6",
+      "signature_count": 3,
+      "transactions_root": "0x7e220a3c9bd6351735a39e2cc141a566cd1a29329b5af1fac5672256f08dc54c"
+    },
+    "deployment": {
+      "block_number": 1,
+      "contract_address": "0x6849f21d1e455e9f0712b1e99fa4fcd23758e8f1",
+      "receipt_proof": [
+        "fb760912ed564218a74ac57ae6b9d66d04d9bb77bbda19cf6187ee25b7fed0d1"
+      ],
+      "status": 0,
+      "transaction_hash": "0xba1e0cdbe65b1cbf582d676a53b469707e9a09e7401bf5524e2460cdc72b492a",
+      "transaction_proof": [
+        "ba1e0cdbe65b1cbf582d676a53b469707e9a09e7401bf5524e2460cdc72b492a"
+      ]
+    },
+    "event": {
+      "address": "0x6849f21d1e455e9f0712b1e99fa4fcd23758e8f1",
+      "block_number": 2,
+      "topics": [
+        "0xc8f7565859107929ba4b285bfb17dfba069f69ab64447f49d6fecb70f6bd552b",
+        "0x747275737464622d666973636f2d636f6d7061746962696c6974792d70726f62"
+      ],
+      "transaction_hash": "0x7e220a3c9bd6351735a39e2cc141a566cd1a29329b5af1fac5672256f08dc54c"
+    },
+    "event_transaction": {
+      "block_number": 2,
+      "event_transaction_match": true,
+      "receipt_proof": [
+        "87a10924e80ed1019f597c4792f6c16a6fc96398939d8144e747b9179c9c24f6"
+      ],
+      "status": 0,
+      "transaction_hash": "0x7e220a3c9bd6351735a39e2cc141a566cd1a29329b5af1fac5672256f08dc54c",
+      "transaction_proof": [
+        "7e220a3c9bd6351735a39e2cc141a566cd1a29329b5af1fac5672256f08dc54c"
+      ]
+    },
+    "final_block_number": 2,
+    "initial_block_number": 0,
+    "stale_block_limit": 1,
+    "stale_block_limit_rejected": true,
+    "stale_rejection_error": "BlockLimitCheckFail"
+  },
+  "schema_version": 1,
+  "sm_crypto": false
+}

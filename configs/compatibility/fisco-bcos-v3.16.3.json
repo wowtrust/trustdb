@@ -1,0 +1,477 @@
+{
+  "schema_version": 1,
+  "baseline_id": "fisco-bcos-3.16.3-go-sdk-3.0.2",
+  "verified_at": "2026-07-24",
+  "policy": {
+    "default_admission_level": "runtime",
+    "levels": [
+      "documented",
+      "artifact",
+      "runtime"
+    ],
+    "fail_closed": true,
+    "notes": "A documented or artifact-verified candidate is not runtime-compatible. Only a matrix row with runtime_status=verified is admitted by the default check."
+  },
+  "components": {
+    "node": {
+      "repository": "https://github.com/FISCO-BCOS/FISCO-BCOS",
+      "release": "https://github.com/FISCO-BCOS/FISCO-BCOS/releases/tag/v3.16.3",
+      "tag": "v3.16.3",
+      "commit": "274f864e7725fef5b8ed4c6b7a3363ee5396f104",
+      "release_class": "latest_non_prerelease",
+      "newer_prerelease_excluded": "v3.16.4",
+      "build_chain": {
+        "url": "https://raw.githubusercontent.com/FISCO-BCOS/FISCO-BCOS/274f864e7725fef5b8ed4c6b7a3363ee5396f104/tools/BcosAirBuilder/build_chain.sh",
+        "sha256": "7656ca5c72c45accd0d2754ed2ecee96f46d03b4d21da979e9c38b40e16cc4b9"
+      },
+      "artifacts": [
+        {
+          "platform": "linux/amd64",
+          "name": "fisco-bcos-linux-x86_64.tar.gz",
+          "url": "https://github.com/FISCO-BCOS/FISCO-BCOS/releases/download/v3.16.3/fisco-bcos-linux-x86_64.tar.gz",
+          "size": 24050787,
+          "sha256": "1d97a6d72a1e384b428fdefac77ff48ffbe36d21eb9b4daeba62cf56bf975ae3",
+          "digest_provenance": "github_release_asset"
+        },
+        {
+          "platform": "linux/arm64",
+          "name": "fisco-bcos-linux-aarch64.tar.gz",
+          "url": "https://github.com/FISCO-BCOS/FISCO-BCOS/releases/download/v3.16.3/fisco-bcos-linux-aarch64.tar.gz",
+          "size": 22431184,
+          "sha256": "d85ed1320557809671a89b39d19efbbb1ac525fa05d293c85b183aecaeb1a28a",
+          "digest_provenance": "github_release_asset"
+        },
+        {
+          "platform": "darwin/amd64",
+          "name": "fisco-bcos-macOS-x86_64.tar.gz",
+          "url": "https://github.com/FISCO-BCOS/FISCO-BCOS/releases/download/v3.16.3/fisco-bcos-macOS-x86_64.tar.gz",
+          "size": 20531496,
+          "sha256": "ea2fd45e6916cee74fb7bbb1ce241c78a517514adde50ceb688b167338eddf36",
+          "digest_provenance": "github_release_asset"
+        },
+        {
+          "platform": "darwin/arm64",
+          "name": "fisco-bcos-macOS-arm.tar.gz",
+          "url": "https://github.com/FISCO-BCOS/FISCO-BCOS/releases/download/v3.16.3/fisco-bcos-macOS-arm.tar.gz",
+          "size": 18876391,
+          "sha256": "b6f60379b7ac208394f03f7d373246adec6cd938df4c1940606c29f6eb2f9ebf",
+          "digest_provenance": "github_release_asset"
+        }
+      ],
+      "container": {
+        "reference": "docker.io/fiscoorg/fiscobcos:v3.16.3",
+        "status": "unavailable",
+        "digest": null,
+        "observed_at": "2026-07-24",
+        "evidence": [
+          "https://github.com/FISCO-BCOS/FISCO-BCOS/actions/runs/19784679576",
+          "https://github.com/FISCO-BCOS/FISCO-BCOS/actions/runs/19784679615"
+        ],
+        "reason": "Both tag/release image workflows were cancelled and the registry returned manifest unknown. Container admission is disabled rather than falling back to another tag."
+      }
+    },
+    "go_sdk": {
+      "repository": "https://github.com/FISCO-BCOS/go-sdk",
+      "release": "https://github.com/FISCO-BCOS/go-sdk/releases/tag/v3.0.2",
+      "tag": "v3.0.2",
+      "commit": "a9dbab29132d9e6a1cd5919dd993e4186c0703ff",
+      "module": "github.com/FISCO-BCOS/go-sdk/v3",
+      "minimum_go": "1.21.5",
+      "documented_minimum_node": "3.2.0",
+      "cgo_required": true,
+      "c_sdk_module": {
+        "module": "github.com/FISCO-BCOS/bcos-c-sdk",
+        "version": "v0.0.0-20240726021820-a278b4749e34",
+        "commit": "a278b4749e342d2b111d736045db9ed98a63224d",
+        "source": "https://github.com/FISCO-BCOS/go-sdk/blob/a9dbab29132d9e6a1cd5919dd993e4186c0703ff/v3/go.mod"
+      }
+    },
+    "c_sdk": {
+      "repository": "https://github.com/FISCO-BCOS/bcos-c-sdk",
+      "release": "https://github.com/FISCO-BCOS/bcos-c-sdk/releases/tag/v3.6.0",
+      "tag": "v3.6.0",
+      "commit": "53240138c396c10cb0e1a2b7b4d5c0cdaa0ac539",
+      "relationship_to_go_sdk": "The Go SDK source module is pinned to a278b4749e34, while its installation documentation points to the v3.6.0 native library release. Both pins are required and are not assumed equivalent.",
+      "artifacts": [
+        {
+          "platform": "linux/amd64",
+          "name": "libbcos-c-sdk.so",
+          "url": "https://github.com/FISCO-BCOS/bcos-c-sdk/releases/download/v3.6.0/libbcos-c-sdk.so",
+          "size": 18160440,
+          "sha256": "b5a2a1606086245cc73d356d70011b32a112a38cf5e6a10631377a4b4a7dec83",
+          "digest_provenance": "trustdb_downloaded_and_hashed"
+        },
+        {
+          "platform": "linux/arm64",
+          "name": "libbcos-c-sdk-aarch64.so",
+          "url": "https://github.com/FISCO-BCOS/bcos-c-sdk/releases/download/v3.6.0/libbcos-c-sdk-aarch64.so",
+          "size": 16632368,
+          "sha256": "8e4e75b64353ac50e0571b7f776cf297fcb7ea3b7e4871d13e29d0b0b29f4a30",
+          "digest_provenance": "trustdb_downloaded_and_hashed"
+        },
+        {
+          "platform": "darwin/amd64",
+          "name": "libbcos-c-sdk.dylib",
+          "url": "https://github.com/FISCO-BCOS/bcos-c-sdk/releases/download/v3.6.0/libbcos-c-sdk.dylib",
+          "size": 22073856,
+          "sha256": "3d4c51b31709c8814a58c8c6b8c8dbb8174140337590e86b30e8104cd264fc74",
+          "digest_provenance": "trustdb_downloaded_and_hashed"
+        },
+        {
+          "platform": "darwin/arm64",
+          "name": "libbcos-c-sdk-aarch64.dylib",
+          "url": "https://github.com/FISCO-BCOS/bcos-c-sdk/releases/download/v3.6.0/libbcos-c-sdk-aarch64.dylib",
+          "size": 18097480,
+          "sha256": "4b9c16fb91e15317408a83fddd08bab33bd35c6b5d1c3482dc538ccf9fe95afc",
+          "digest_provenance": "trustdb_downloaded_and_hashed"
+        },
+        {
+          "platform": "windows/amd64",
+          "name": "bcos-c-sdk.dll",
+          "url": "https://github.com/FISCO-BCOS/bcos-c-sdk/releases/download/v3.6.0/bcos-c-sdk.dll",
+          "size": 14499328,
+          "sha256": "2e805fa3cb79e441059e69e981a3d23f1613e7006594d929aa83bec1a0f3a751",
+          "digest_provenance": "trustdb_downloaded_and_hashed"
+        },
+        {
+          "platform": "windows/amd64",
+          "name": "bcos-c-sdk.lib",
+          "url": "https://github.com/FISCO-BCOS/bcos-c-sdk/releases/download/v3.6.0/bcos-c-sdk.lib",
+          "size": 771100,
+          "sha256": "55b9d024dbfd68d5a9685cdf154dba0d67c78ce39092eabb046b82313f788aab",
+          "digest_provenance": "trustdb_downloaded_and_hashed"
+        }
+      ]
+    },
+    "solidity": {
+      "repository": "https://github.com/FISCO-BCOS/solidity",
+      "release": "https://github.com/FISCO-BCOS/solidity/releases/tag/v0.8.11",
+      "tag": "v0.8.11",
+      "commit": "415673533ae8ae4e9da5af544822499d04f69a52",
+      "version": "0.8.11",
+      "artifacts": [
+        {
+          "platform": "linux/amd64",
+          "crypto": "standard",
+          "name": "solc-linux.tar.gz",
+          "url": "https://github.com/FISCO-BCOS/solidity/releases/download/v0.8.11/solc-linux.tar.gz",
+          "size": 5118568,
+          "sha256": "cd65442d14f23ccdc09ee8a27f49d2fa8da9f51fa2c82be6ff118b509fb7d0cb",
+          "digest_provenance": "trustdb_downloaded_and_hashed"
+        },
+        {
+          "platform": "linux/amd64",
+          "crypto": "guomi",
+          "name": "solc-linux-gm.tar.gz",
+          "url": "https://github.com/FISCO-BCOS/solidity/releases/download/v0.8.11/solc-linux-gm.tar.gz",
+          "size": 4580727,
+          "sha256": "cde864ecd0cb1ea4e852bd28c9f550fdf3be215292a2538bc08afe4175b15483",
+          "digest_provenance": "trustdb_downloaded_and_hashed"
+        },
+        {
+          "platform": "linux/arm64",
+          "crypto": "standard",
+          "name": "solc-linux-aarch64.tar.gz",
+          "url": "https://github.com/FISCO-BCOS/solidity/releases/download/v0.8.11/solc-linux-aarch64.tar.gz",
+          "size": 4413543,
+          "sha256": "aedd1d87da52fe2cc9496eb6c64f1db0a30b3d3b1d9e7a6b37adf281fac067ce",
+          "digest_provenance": "trustdb_downloaded_and_hashed"
+        },
+        {
+          "platform": "linux/arm64",
+          "crypto": "guomi",
+          "name": "solc-linux-aarch64-gm.tar.gz",
+          "url": "https://github.com/FISCO-BCOS/solidity/releases/download/v0.8.11/solc-linux-aarch64-gm.tar.gz",
+          "size": 4413472,
+          "sha256": "80a4ec578c958f2cafba8fa6b566f94bf04f9e849595c6aac6ef2eb940e64e00",
+          "digest_provenance": "trustdb_downloaded_and_hashed"
+        },
+        {
+          "platform": "darwin/amd64",
+          "crypto": "standard",
+          "name": "solc-mac.tar.gz",
+          "url": "https://github.com/FISCO-BCOS/solidity/releases/download/v0.8.11/solc-mac.tar.gz",
+          "size": 4087546,
+          "sha256": "aa0d61a2344da6e4ff43e9be4275e7100d34b6f87e52ab4087c115d963931316",
+          "digest_provenance": "trustdb_downloaded_and_hashed"
+        },
+        {
+          "platform": "darwin/amd64",
+          "crypto": "guomi",
+          "name": "solc-mac-gm.tar.gz",
+          "url": "https://github.com/FISCO-BCOS/solidity/releases/download/v0.8.11/solc-mac-gm.tar.gz",
+          "size": 4087558,
+          "sha256": "58a6d7d20e755d0afe826bd161e82feed92a3bbad4e0f7641a5e208d0599be49",
+          "digest_provenance": "trustdb_downloaded_and_hashed"
+        },
+        {
+          "platform": "darwin/arm64",
+          "crypto": "standard",
+          "name": "solc-mac-aarch64.tar.gz",
+          "url": "https://github.com/FISCO-BCOS/solidity/releases/download/v0.8.11/solc-mac-aarch64.tar.gz",
+          "size": 4336535,
+          "sha256": "4aafae50de03473bee29df54dd78e81c091b11a6e14b7e585cf4d46036a7ff3c",
+          "digest_provenance": "trustdb_downloaded_and_hashed"
+        },
+        {
+          "platform": "darwin/arm64",
+          "crypto": "guomi",
+          "name": "solc-mac-aarch64-gm.tar.gz",
+          "url": "https://github.com/FISCO-BCOS/solidity/releases/download/v0.8.11/solc-mac-aarch64-gm.tar.gz",
+          "size": 3855603,
+          "sha256": "e8e3328a801b01f96a6f00aa95118b09fa222c62b081d25bff23888949514b9d",
+          "digest_provenance": "trustdb_downloaded_and_hashed"
+        },
+        {
+          "platform": "windows/amd64",
+          "crypto": "standard",
+          "name": "solc-win.tar.gz",
+          "url": "https://github.com/FISCO-BCOS/solidity/releases/download/v0.8.11/solc-win.tar.gz",
+          "size": 3373925,
+          "sha256": "072260a1c4e3f0e1c69ab6bdcff8fa5caaf28d3deec15b5df23384df7595c227",
+          "digest_provenance": "trustdb_downloaded_and_hashed"
+        },
+        {
+          "platform": "windows/amd64",
+          "crypto": "guomi",
+          "name": "solc-win-gm.tar.gz",
+          "url": "https://github.com/FISCO-BCOS/solidity/releases/download/v0.8.11/solc-win-gm.tar.gz",
+          "size": 3131234,
+          "sha256": "dcaec2555136365b8b4055d2181845e7d1f89da0013a63f18af64c55596e8c86",
+          "digest_provenance": "trustdb_downloaded_and_hashed"
+        }
+      ]
+    },
+    "tassl": {
+      "repository": "https://github.com/FISCO-BCOS/TASSL",
+      "release": "https://github.com/FISCO-BCOS/TASSL/releases/tag/V_1.4",
+      "tag": "V_1.4",
+      "commit": "fe885b939c13c715633e4c05df8811a1ea7ca079",
+      "version": "1.1.1b",
+      "purpose": "Certificate and key generation invoked by the pinned build_chain.sh",
+      "artifacts": [
+        {
+          "platform": "linux/amd64",
+          "name": "tassl-1.1.1b-linux-x86_64.tar.gz",
+          "url": "https://github.com/FISCO-BCOS/TASSL/releases/download/V_1.4/tassl-1.1.1b-linux-x86_64.tar.gz",
+          "size": 1780655,
+          "sha256": "97700126df491b4ae15afae1bad99979390ded5d7d1655632e00b40003a9a9e8",
+          "digest_provenance": "trustdb_downloaded_and_hashed"
+        },
+        {
+          "platform": "linux/arm64",
+          "name": "tassl-1.1.1b-linux-aarch64.tar.gz",
+          "url": "https://github.com/FISCO-BCOS/TASSL/releases/download/V_1.4/tassl-1.1.1b-linux-aarch64.tar.gz",
+          "size": 1695083,
+          "sha256": "3df28d8e54ade5ac4da1f2d78ae7d6cb65dac303993302bc505131485fd5ec9b",
+          "digest_provenance": "trustdb_downloaded_and_hashed"
+        },
+        {
+          "platform": "darwin/amd64",
+          "name": "tassl-1.1.1b-macOS-x86_64.tar.gz",
+          "url": "https://github.com/FISCO-BCOS/TASSL/releases/download/V_1.4/tassl-1.1.1b-macOS-x86_64.tar.gz",
+          "size": 1622870,
+          "sha256": "9ca03845941973fe6875a7cf27ec42375f1df6775f04ec863cd1fad1ad9f0819",
+          "digest_provenance": "trustdb_downloaded_and_hashed"
+        },
+        {
+          "platform": "darwin/arm64",
+          "name": "tassl-1.1.1b-macOS-aarch64.tar.gz",
+          "url": "https://github.com/FISCO-BCOS/TASSL/releases/download/V_1.4/tassl-1.1.1b-macOS-aarch64.tar.gz",
+          "size": 1504139,
+          "sha256": "38788e78d6d0f26e8d3edcff4d283b973f063b6c0f11e9fd93183d40f4cc1c19",
+          "digest_provenance": "trustdb_downloaded_and_hashed"
+        },
+        {
+          "platform": "windows/amd64",
+          "name": "tassl-1.1.1b-win-x86_64.tar.gz",
+          "url": "https://github.com/FISCO-BCOS/TASSL/releases/download/V_1.4/tassl-1.1.1b-win-x86_64.tar.gz",
+          "size": 1351325,
+          "sha256": "45855c6670fe4036be7b526124b725fcc3799f86262a62e075b67ae0361c29c2",
+          "digest_provenance": "trustdb_downloaded_and_hashed"
+        }
+      ]
+    },
+    "documentation": {
+      "repository": "https://github.com/FISCO-BCOS/FISCO-BCOS-DOC",
+      "branch": "release-3",
+      "commit": "3e6b003778e076d0cdd5c5a99497299aebf0c89d"
+    }
+  },
+  "required_capabilities": [
+    "transaction_submission",
+    "transaction_receipt_with_proof",
+    "transaction_with_proof",
+    "block_by_number",
+    "pbft_consensus_metadata",
+    "event_subscription",
+    "mutual_tls_certificates",
+    "block_limit_rejection"
+  ],
+  "go_sdk_capabilities": [
+    {
+      "capability": "transaction_submission",
+      "status": "api_present",
+      "symbol": "client.Client.SendEncodedTransaction"
+    },
+    {
+      "capability": "transaction_receipt_with_proof",
+      "status": "api_present_unverified",
+      "symbol": "client.Client.GetTransactionReceipt(withProof=true)"
+    },
+    {
+      "capability": "transaction_with_proof",
+      "status": "api_present_unverified",
+      "symbol": "client.Client.GetTransactionByHash(withProof=true)"
+    },
+    {
+      "capability": "block_by_number",
+      "status": "api_present_unverified",
+      "symbol": "client.Client.GetBlockByNumber"
+    },
+    {
+      "capability": "pbft_consensus_metadata",
+      "status": "api_present_partial_runtime",
+      "symbol": "client.Client.GetConsensusStatus/GetPBFTView/GetSealerList"
+    },
+    {
+      "capability": "event_subscription",
+      "status": "api_present_unverified",
+      "symbol": "client.Client.SubscribeEventLogs"
+    },
+    {
+      "capability": "mutual_tls_certificates",
+      "status": "api_present_partial_runtime",
+      "symbol": "client.Config TLSCaFile/TLSKeyFile/TLSCertFile/TLSSmEnKeyFile/TLSSmEnCertFile"
+    },
+    {
+      "capability": "block_limit_rejection",
+      "status": "api_present_unverified",
+      "symbol": "client.Client.CreateEncodedTransactionDataV1 and types.BlockLimitCheckFail"
+    },
+    {
+      "capability": "offline_proof_verification",
+      "status": "missing",
+      "symbol": null,
+      "decision": "TrustDB must verify transaction/receipt proof paths itself against the exact finalized block roots. Neither the Go SDK nor C SDK is an acceptable trust oracle."
+    }
+  ],
+  "matrix": [
+    {
+      "deployment": "air",
+      "crypto": "standard",
+      "platform": "linux/amd64",
+      "artifact_status": "verified",
+      "runtime_status": "verified",
+      "reason": "A native four-node Air run on Ubuntu 24.04 amd64 completed pinned compiler deployment, mTLS, transaction and receipt proof retrieval, ABI-bound event delivery, PBFT block metadata, stale blockLimit rejection, and clean SDK/node teardown on 2026-07-24.",
+      "evidence": "docs/integrations/evidence/fisco-bcos/2026-07-24-linux-amd64-standard-runtime.json"
+    },
+    {
+      "deployment": "air",
+      "crypto": "guomi",
+      "platform": "linux/amd64",
+      "artifact_status": "verified",
+      "runtime_status": "verified",
+      "reason": "A native four-node Guomi Air run on Ubuntu 24.04 amd64 completed the pinned GM compiler workflow, GM TLS, transaction and receipt proof retrieval, ABI-bound event delivery, PBFT block metadata, stale blockLimit rejection, and clean SDK/node teardown on 2026-07-24.",
+      "evidence": "docs/integrations/evidence/fisco-bcos/2026-07-24-linux-amd64-guomi-runtime.json"
+    },
+    {
+      "deployment": "air",
+      "crypto": "standard",
+      "platform": "linux/arm64",
+      "artifact_status": "verified",
+      "runtime_status": "unverified",
+      "reason": "Pinned native arm64 artifacts exist; execution on Linux arm64 has not been performed."
+    },
+    {
+      "deployment": "air",
+      "crypto": "guomi",
+      "platform": "linux/arm64",
+      "artifact_status": "verified",
+      "runtime_status": "unverified",
+      "reason": "Pinned native arm64 artifacts exist; Guomi execution on Linux arm64 has not been performed."
+    },
+    {
+      "deployment": "air",
+      "crypto": "standard",
+      "platform": "darwin/arm64",
+      "artifact_status": "verified",
+      "runtime_status": "verified",
+      "reason": "The pinned standard compiler and native arm64 stack completed the compiler-backed four-node Air smoke on macOS 26.1 arm64 on 2026-07-24, including mTLS, transaction and receipt proofs, ABI event binding, PBFT block metadata, stale blockLimit rejection, pure JSON output and clean teardown.",
+      "evidence": "docs/integrations/evidence/fisco-bcos/2026-07-24-darwin-arm64-standard-runtime.json"
+    },
+    {
+      "deployment": "air",
+      "crypto": "guomi",
+      "platform": "darwin/arm64",
+      "artifact_status": "verified",
+      "runtime_status": "verified",
+      "reason": "The pinned GM compiler and native arm64 stack completed the compiler-backed four-node Guomi Air smoke on macOS 26.1 arm64 on 2026-07-24, including GM TLS, transaction and receipt proofs, ABI event binding, PBFT block metadata, stale blockLimit rejection, pure JSON output and clean teardown.",
+      "evidence": "docs/integrations/evidence/fisco-bcos/2026-07-24-darwin-arm64-guomi-runtime.json"
+    },
+    {
+      "deployment": "pro",
+      "crypto": "standard",
+      "platform": "linux/amd64",
+      "artifact_status": "unavailable",
+      "runtime_status": "unsupported",
+      "reason": "The v3.16.3 release does not publish the BcosRpcService, BcosGatewayService and BcosNodeService artifacts referenced by BcosBuilder."
+    },
+    {
+      "deployment": "pro",
+      "crypto": "guomi",
+      "platform": "linux/amd64",
+      "artifact_status": "unavailable",
+      "runtime_status": "unsupported",
+      "reason": "The exact v3.16.3 Pro service artifacts are unavailable; no downgrade or CDN substitution is allowed."
+    },
+    {
+      "deployment": "pro",
+      "crypto": "standard",
+      "platform": "linux/arm64",
+      "artifact_status": "unavailable",
+      "runtime_status": "unsupported",
+      "reason": "The exact v3.16.3 Pro aarch64 service artifacts are unavailable."
+    },
+    {
+      "deployment": "pro",
+      "crypto": "guomi",
+      "platform": "linux/arm64",
+      "artifact_status": "unavailable",
+      "runtime_status": "unsupported",
+      "reason": "The exact v3.16.3 Pro aarch64 service artifacts are unavailable."
+    },
+    {
+      "deployment": "max",
+      "crypto": "standard",
+      "platform": "linux/amd64",
+      "artifact_status": "unavailable",
+      "runtime_status": "unsupported",
+      "reason": "The v3.16.3 release does not publish the Max node/executor service set; TiKV/Tars topology was not validated."
+    },
+    {
+      "deployment": "max",
+      "crypto": "guomi",
+      "platform": "linux/amd64",
+      "artifact_status": "unavailable",
+      "runtime_status": "unsupported",
+      "reason": "The exact v3.16.3 Max service set is unavailable and Guomi runtime validation was not performed."
+    },
+    {
+      "deployment": "max",
+      "crypto": "standard",
+      "platform": "linux/arm64",
+      "artifact_status": "unavailable",
+      "runtime_status": "unsupported",
+      "reason": "The exact v3.16.3 Max aarch64 service set is unavailable."
+    },
+    {
+      "deployment": "max",
+      "crypto": "guomi",
+      "platform": "linux/arm64",
+      "artifact_status": "unavailable",
+      "runtime_status": "unsupported",
+      "reason": "The exact v3.16.3 Max aarch64 service set is unavailable."
+    }
+  ]
+}
