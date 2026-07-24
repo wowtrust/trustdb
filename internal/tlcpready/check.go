@@ -1,6 +1,7 @@
 package tlcpready
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/binary"
@@ -9,6 +10,7 @@ import (
 	"io"
 	"net/netip"
 	"os/exec"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -16,6 +18,13 @@ import (
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/hpack"
 )
+
+const (
+	maxReadinessOutputBytes = 64 << 10
+	maxHTTPStatusLineBytes  = 4096
+)
+
+var errReadinessOutputLimit = errors.New("readiness command output exceeds limit")
 
 type Config struct {
 	OpenSSLPath               string
@@ -95,9 +104,9 @@ func checkHTTP(ctx context.Context, config Config) error {
 		config.OpenSSLPath,
 		opensslArgs(config, config.HTTPAddress, "http/1.1")...,
 	)
-	var output synchronizedBuffer
-	command.Stdout = &output
-	command.Stderr = &output
+	var output boundedCommandOutput
+	command.Stdout = output.writer(&output.stdout)
+	command.Stderr = output.writer(&output.stderr)
 	stdin, err := command.StdinPipe()
 	if err != nil {
 		return err
@@ -115,14 +124,50 @@ func checkHTTP(ctx context.Context, config Config) error {
 		return err
 	}
 	err = command.Wait()
-	result := []byte(output.String())
+	stdout, stderr, exceeded := output.snapshot()
+	if exceeded {
+		return fmt.Errorf("%w (%d bytes)", errReadinessOutputLimit, maxReadinessOutputBytes)
+	}
 	if err != nil {
-		return fmt.Errorf("request failed: %w: %s", err, boundedDiagnostics(result))
+		return fmt.Errorf(
+			"request failed: %w: %s",
+			err,
+			boundedDiagnostics(append(append([]byte(nil), stdout...), stderr...)),
+		)
 	}
-	if !bytes.Contains(result, []byte("HTTP/1.1 200 OK")) {
-		return fmt.Errorf("health endpoint did not return HTTP 200: %s", boundedDiagnostics(result))
+	if err := requireHTTP200(stdout); err != nil {
+		return fmt.Errorf(
+			"health endpoint did not return HTTP 200: %w: %s",
+			err,
+			boundedDiagnostics(stdout),
+		)
 	}
-	return requireTLCPDiagnostics(string(result))
+	return requireTLCPDiagnostics(string(stderr))
+}
+
+func requireHTTP200(response []byte) error {
+	reader := bufio.NewReaderSize(bytes.NewReader(response), maxHTTPStatusLineBytes)
+	line, err := reader.ReadString('\n')
+	if err != nil && !errors.Is(err, io.EOF) {
+		return fmt.Errorf("read first HTTP status line: %w", err)
+	}
+	if len(line) > maxHTTPStatusLineBytes {
+		return errors.New("first HTTP status line exceeds limit")
+	}
+	line = strings.TrimSuffix(line, "\n")
+	line = strings.TrimSuffix(line, "\r")
+	parts := strings.SplitN(line, " ", 3)
+	if len(parts) < 2 || parts[0] != "HTTP/1.1" || len(parts[1]) != 3 {
+		return fmt.Errorf("invalid first HTTP status line %q", line)
+	}
+	status, err := strconv.Atoi(parts[1])
+	if err != nil {
+		return fmt.Errorf("invalid first HTTP status code %q", parts[1])
+	}
+	if status != 200 {
+		return fmt.Errorf("first HTTP status is %d", status)
+	}
+	return nil
 }
 
 func checkGRPC(ctx context.Context, config Config) error {
@@ -265,6 +310,50 @@ func boundedDiagnostics(value []byte) string {
 type synchronizedBuffer struct {
 	mutex  sync.Mutex
 	buffer bytes.Buffer
+}
+
+type boundedCommandOutput struct {
+	mutex    sync.Mutex
+	stdout   bytes.Buffer
+	stderr   bytes.Buffer
+	total    int
+	exceeded bool
+}
+
+type boundedCommandOutputWriter struct {
+	output *boundedCommandOutput
+	target *bytes.Buffer
+}
+
+func (output *boundedCommandOutput) writer(target *bytes.Buffer) io.Writer {
+	return boundedCommandOutputWriter{output: output, target: target}
+}
+
+func (writer boundedCommandOutputWriter) Write(data []byte) (int, error) {
+	writer.output.mutex.Lock()
+	defer writer.output.mutex.Unlock()
+	remaining := maxReadinessOutputBytes - writer.output.total
+	if remaining <= 0 {
+		writer.output.exceeded = true
+		return 0, errReadinessOutputLimit
+	}
+	if len(data) > remaining {
+		_, _ = writer.target.Write(data[:remaining])
+		writer.output.total += remaining
+		writer.output.exceeded = true
+		return remaining, errReadinessOutputLimit
+	}
+	written, err := writer.target.Write(data)
+	writer.output.total += written
+	return written, err
+}
+
+func (output *boundedCommandOutput) snapshot() (stdout, stderr []byte, exceeded bool) {
+	output.mutex.Lock()
+	defer output.mutex.Unlock()
+	return append([]byte(nil), output.stdout.Bytes()...),
+		append([]byte(nil), output.stderr.Bytes()...),
+		output.exceeded
 }
 
 func (buffer *synchronizedBuffer) Write(data []byte) (int, error) {
