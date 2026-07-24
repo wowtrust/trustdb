@@ -43,9 +43,9 @@ jobs:
       - name: Keep local draft docs out of git
         shell: bash
         run: |
-          tracked_docs="$(git ls-files 'doc/**' 'docs/**' | grep -Ev '^docs/(performance|compliance)/' || true)"
+          tracked_docs="$(git ls-files 'doc/**' 'docs/**' | grep -Ev '^docs/(performance|compliance|integrations)/' || true)"
           if [ -n "$tracked_docs" ]; then
-            echo "::error::doc/ and docs/ are local draft directories and must not be committed, except docs/performance/ and docs/compliance/."
+            echo "::error::doc/ and docs/ are local draft directories and must not be committed, except docs/performance/, docs/compliance/, and docs/integrations/."
             echo "$tracked_docs"
             exit 1
           fi

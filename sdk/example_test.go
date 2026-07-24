@@ -4,9 +4,12 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
+	"errors"
 	"fmt"
 	"testing"
+	"time"
 
+	"github.com/nats-io/nats.go"
 	"github.com/wowtrust/trustdb/sdk"
 )
 
@@ -68,4 +71,81 @@ func ExampleBuildSignedJSONLogClaim() {
 	}
 	fmt.Println(signed.Claim.Metadata.EventType)
 	// Output: log.record
+}
+
+func ExampleNATSIngressClient_SubmitSignedClaim() {
+	// The server must already trust the public half of the application's
+	// signing identity. This deterministic key is used only to keep the checked
+	// documentation example self-contained.
+	_, privateKey, _ := ed25519.GenerateKey(bytes.NewReader(bytes.Repeat([]byte{4}, 64)))
+	signed, err := sdk.BuildSignedFileClaim(bytes.NewReader([]byte("hello")), sdk.Identity{
+		TenantID:   "tenant",
+		ClientID:   "client",
+		KeyID:      "client-key",
+		PrivateKey: privateKey,
+	}, sdk.FileClaimOptions{})
+	if err != nil {
+		panic(err)
+	}
+
+	cfg := sdk.DefaultNATSIngressConfig()
+	cfg.URLs = []string{"tls://nats.internal.example:4222"}
+	cfg.ConnectionOptions = []nats.Option{
+		nats.UserCredentials("/run/secrets/trustdb-nats.creds"),
+		nats.RootCAs("/etc/trust/nats-ca.pem"),
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	client, err := sdk.NewNATSIngressClient(ctx, cfg)
+	if err != nil {
+		return
+	}
+	defer client.Close()
+
+	result, err := client.SubmitSignedClaim(ctx, signed)
+	if err != nil {
+		var serverError *sdk.Error
+		if errors.As(err, &serverError) {
+			_ = serverError.Code
+		}
+		return
+	}
+	_ = result.RecordID
+}
+
+func ExampleNATSIngressClient_PublishSignedClaim() {
+	// PublishSignedClaim and WaitResult may be separated by caller-controlled
+	// work or a process restart. Persist both fields of NATSSubmission together.
+	_, privateKey, _ := ed25519.GenerateKey(bytes.NewReader(bytes.Repeat([]byte{5}, 64)))
+	signed, err := sdk.BuildSignedFileClaim(bytes.NewReader([]byte("hello")), sdk.Identity{
+		TenantID:   "tenant",
+		ClientID:   "client",
+		KeyID:      "client-key",
+		PrivateKey: privateKey,
+	}, sdk.FileClaimOptions{})
+	if err != nil {
+		panic(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	client, err := sdk.NewNATSIngressClient(ctx, sdk.DefaultNATSIngressConfig())
+	if err != nil {
+		return
+	}
+	defer client.Close()
+
+	submission, err := client.PublishSignedClaim(ctx, signed)
+	if err != nil {
+		return
+	}
+	_ = submission.MessageID
+	_ = submission.SignedClaim
+
+	result, err := client.WaitResult(ctx, submission)
+	if err != nil {
+		return
+	}
+	_ = result.RecordID
 }

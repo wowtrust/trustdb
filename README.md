@@ -88,6 +88,7 @@ Desktop packages carry a release-specific self-signed certificate and its public
 - Deterministic CBOR models for claims, receipts, proof bundles, global-log proofs, STHs, anchor results, backups, and `.sproof` files.
 - Ed25519 signing for client, server, and key-registry workflows.
 - WAL-backed ingest with bounded queues, configurable fsync policy, replay, checkpoints, and graceful shutdown.
+- Optional NATS JetStream ingress for durable fan-in, bounded broker backpressure, immutable acceptance results, and restart-safe result recovery.
 - Batch Merkle proofs, persisted record indexes, and paginated record/root APIs.
 - Global Transparency Log with persisted STHs, inclusion proofs, consistency proofs, and history tiles.
 - L5 STH/global-root anchoring through `off`, `noop`, file, OpenTimestamps, and supervised external gRPC plugin sinks.
@@ -124,6 +125,7 @@ Core paths:
 
 - Client path: CLI, SDK, or desktop computes a file hash, signs a claim, and submits it locally or to the server.
 - Ingest path: the server validates signatures and key state, appends acceptance to WAL, and returns an accepted receipt.
+- Optional NATS path: JetStream durably buffers signed claims, then the same submission service stores an immutable result before acknowledging each broker delivery.
 - Batch path: accepted records are grouped into Merkle batches and stored as proof bundles plus indexes.
 - Global log path: committed batch roots are appended into the global transparency log, producing persisted STHs and global proofs.
 - Anchor path: STH/global roots are coalesced into one durable Pending target and one immutable InFlight attempt per log and sink, then published by the configured anchor worker.
@@ -205,7 +207,7 @@ Verify the original file by recomputing its digest, signatures, receipt, and Mer
   --client-public-key .trustdb-dev/client.pub
 ```
 
-Successful output contains `"valid":true` and `"proof_level":"L3"`. This local `commit` does not send the claim to a running server. Continue with the checked [Go SDK example](examples/sdk-onboarding) for server submission, asynchronous L4, `.sproof` export, and offline verification. Production deployment and stopped-service logical backup are covered by the [operations guide](https://www.trustdb.ryan-wong.cn/docs/server).
+Successful output contains `"valid":true` and `"proof_level":"L3"`. This local `commit` does not send the claim to a running server. Continue with the checked [Go SDK example](examples/sdk-onboarding) for server submission, asynchronous L4, `.sproof` export, and offline verification. For durable fan-in and broker-backed flow distribution, see the [optional NATS / JetStream ingress guide](docs/integrations/NATS_INGRESS.md). Production deployment and stopped-service logical backup are covered by the [operations guide](https://www.trustdb.ryan-wong.cn/docs/server).
 
 ## HTTP And gRPC
 
@@ -251,6 +253,7 @@ Configuration examples live in [configs](configs):
 
 See [configs/README.md](configs/README.md) for `run_profile` semantics and startup notes.
 Custom provider development and deployment are documented in [L5 external anchor plugins](formats/ANCHOR_PLUGIN_V1.md).
+Optional JetStream topology, security, flow-control, recovery, and Go SDK usage are documented in the [NATS ingress guide](docs/integrations/NATS_INGRESS.md).
 
 ## Admin Web And Desktop
 
@@ -267,6 +270,7 @@ The screenshot below is rendered directly from the current desktop client code:
 ## Project Documents
 
 - [ARCHITECTURE.zh-CN.md](ARCHITECTURE.zh-CN.md): detailed TrustDB server, persistence, Global Log, anchoring, SDK, backup, and offline-verification architecture (Chinese).
+- [docs/integrations/NATS_INGRESS.md](docs/integrations/NATS_INGRESS.md): optional JetStream ingress topology, configuration, security, backpressure, result recovery, and Go SDK workflow.
 - [docs/compliance/NATIONAL_CRYPTOGRAPHY_THREAT_MODEL_AND_EVIDENCE_MAP.zh-CN.md](docs/compliance/NATIONAL_CRYPTOGRAPHY_THREAT_MODEL_AND_EVIDENCE_MAP.zh-CN.md): China-cryptography threat model, prohibited trust shortcuts, tabletop scenarios, residual risks, and compliance evidence map (Chinese).
 - [docs/compliance/ADR-0004-PROVIDER-NEUTRAL-CRYPTO-CONTRACTS.zh-CN.md](docs/compliance/ADR-0004-PROVIDER-NEUTRAL-CRYPTO-CONTRACTS.zh-CN.md): suite-aware hashing, non-exportable key handles, signer/verifier contracts, and fail-closed provider rules (Chinese).
 - [docs/compliance/ADR-0005-IMMUTABLE-PROOFSTORE-SUITE-MARKERS.zh-CN.md](docs/compliance/ADR-0005-IMMUTABLE-PROOFSTORE-SUITE-MARKERS.zh-CN.md): immutable suite markers, atomic backend initialization, and backup/migration binding rules (Chinese).
