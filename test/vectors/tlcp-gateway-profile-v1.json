@@ -1,0 +1,78 @@
+{
+  "schema_version": "trustdb.tlcp-gateway-profile.v1",
+  "profile_id": "test-tongsuo-gateway",
+  "environment": "test",
+  "mode": "tlcp_mtls",
+  "crypto_mode": "guomi",
+  "server_name": "trustdb.example",
+  "cipher_suites": [
+    "ECDHE-SM2-SM4-GCM-SM3"
+  ],
+  "alpn_protocols": [
+    "h2",
+    "http/1.1"
+  ],
+  "implementation": {
+    "name": "tengine-tongsuo",
+    "tengine_version": "2.3.4",
+    "tengine_commit": "698e1798e8d691c55b5405ca1526c3dca4759d47",
+    "tengine_source_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+    "tongsuo_version": "8.4.0",
+    "tongsuo_commit": "a8ae0925d26de3b449f7a21767910cd41291bcd8",
+    "tongsuo_source_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+    "builder_image": "docker.io/library/debian:bookworm-slim@sha256:3333333333333333333333333333333333333333333333333333333333333333",
+    "runtime_image": "docker.io/library/debian:bookworm-slim@sha256:4444444444444444444444444444444444444444444444444444444444444444",
+    "gateway_image_digest": "sha256:5555555555555555555555555555555555555555555555555555555555555555",
+    "build_parameters": [
+      "--add-module=modules/ngx_openssl_ntls",
+      "--with-http_ssl_module",
+      "--with-http_v2_module",
+      "--with-openssl=/src/tongsuo",
+      "--with-openssl-opt=enable-ntls",
+      "--with-stream",
+      "--with-stream_ssl_module",
+      "--with-stream_ssl_preread_module"
+    ],
+    "sbom_sha256": "6666666666666666666666666666666666666666666666666666666666666666",
+    "build_record_sha256": "7777777777777777777777777777777777777777777777777777777777777777"
+  },
+  "network": {
+    "shared_network_namespace": true,
+    "host_network": false,
+    "allowed_containers": [
+      "trustdb",
+      "tlcp-gateway"
+    ],
+    "trustdb_http_upstream": "127.0.0.1:8080",
+    "trustdb_grpc_upstream": "127.0.0.1:9090",
+    "gateway_http_bind": "0.0.0.0:8443",
+    "gateway_grpc_bind": "0.0.0.0:9443"
+  },
+  "certificates": {
+    "server_signing_chain_file": "${FIXTURE_DIR}/server-signing.pem",
+    "server_encryption_chain_file": "${FIXTURE_DIR}/server-encryption.pem",
+    "server_ca_file": "${FIXTURE_DIR}/server-ca.pem",
+    "client_ca_file": "${FIXTURE_DIR}/client-ca.pem",
+    "signing_key": {
+      "provider": "file",
+      "reference": "${FIXTURE_DIR}/server-signing.key"
+    },
+    "encryption_key": {
+      "provider": "file",
+      "reference": "${FIXTURE_DIR}/server-encryption.key"
+    }
+  },
+  "revocation": {
+    "mode": "crl",
+    "crl_files": [
+      "${FIXTURE_DIR}/server-ca.crl",
+      "${FIXTURE_DIR}/client-ca.crl"
+    ],
+    "max_staleness": "24h"
+  },
+  "timeouts": {
+    "startup": "30s",
+    "reload": "30s",
+    "canary": "10s"
+  }
+}
