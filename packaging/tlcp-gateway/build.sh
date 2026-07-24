@@ -29,7 +29,7 @@ if [ "$actual_buildx_version" != "$buildx_version" ]; then
 fi
 builder_details=$(docker buildx inspect --bootstrap)
 case "$builder_details" in
-  *"Driver: docker-container"*) ;;
+  *"Driver:"*"docker-container"*) ;;
   *)
     printf 'TLCP gateway requires the docker-container Buildx driver\n' >&2
     exit 1

@@ -19,6 +19,8 @@ type buildBaseline struct {
 	RuntimeImage          string         `json:"runtime_image"`
 	ValidatorBuilderImage string         `json:"validator_builder_image"`
 	FrontendImage         string         `json:"dockerfile_frontend_image"`
+	BuildxVersion         string         `json:"buildx_version"`
+	BuildKitImage         string         `json:"buildkit_image"`
 	DebianSnapshot        string         `json:"debian_snapshot"`
 	BuilderPackages       []string       `json:"builder_packages"`
 	RuntimePackages       []string       `json:"runtime_packages"`
@@ -70,6 +72,8 @@ func TestProductionBuildBaselineMatchesProfileContract(t *testing.T) {
 		"tongsuo license":     baseline.Tongsuo.LicenseSHA256,
 		"Debian snapshot":     baseline.DebianSnapshot,
 		"Dockerfile frontend": baseline.FrontendImage,
+		"Buildx version":      baseline.BuildxVersion,
+		"BuildKit image":      baseline.BuildKitImage,
 		"Syft image":          baseline.SyftImage,
 	} {
 		if strings.TrimSpace(value) == "" {
