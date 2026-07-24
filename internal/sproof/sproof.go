@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/wowtrust/trustdb/internal/anchor/fiscobcos"
 	"github.com/wowtrust/trustdb/internal/cborx"
 	"github.com/wowtrust/trustdb/internal/model"
 	"github.com/wowtrust/trustdb/internal/prooflevel"
@@ -118,6 +119,11 @@ func Validate(proof model.SingleProof) error {
 		}
 		if err := verify.AnchorContainerConsistency(*proof.GlobalProof, *proof.AnchorResult); err != nil {
 			return fmt.Errorf("sproof: anchor_result: %w", err)
+		}
+		if proof.AnchorResult.SinkName == fiscobcos.SinkName {
+			if err := fiscobcos.ValidateProofContainer(proof.GlobalProof.STH, *proof.AnchorResult); err != nil {
+				return fmt.Errorf("sproof: FISCO BCOS anchor_result: %w", err)
+			}
 		}
 	}
 	return nil

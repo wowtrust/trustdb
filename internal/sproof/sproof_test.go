@@ -8,6 +8,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/wowtrust/trustdb/internal/anchor/fiscobcos"
+	"github.com/wowtrust/trustdb/internal/cryptosuite"
+	"github.com/wowtrust/trustdb/internal/globallog"
 	"github.com/wowtrust/trustdb/internal/model"
 )
 
@@ -56,6 +59,46 @@ func TestValidateRejectsDriftedEnvelopeMetadata(t *testing.T) {
 	proof.ProofLevel = "L5"
 	if err := Validate(proof); err == nil || !strings.Contains(err.Error(), "proof_level") {
 		t.Fatalf("Validate() error = %v, want proof_level mismatch", err)
+	}
+}
+
+func TestValidateStrictlyDecodesFISCOBCOSProviderProof(t *testing.T) {
+	t.Parallel()
+
+	proof := vectorProof()
+	proof.ProofLevel = "L5"
+	proof.NodeID = "node-1"
+	proof.LogID = "log-1"
+	proof.ProofBundle.NodeID = proof.NodeID
+	proof.ProofBundle.LogID = proof.LogID
+	proof.ProofBundle.CommittedReceipt = model.CommittedReceipt{
+		BatchID: "batch-1", BatchRoot: make([]byte, 32), ClosedAtUnixN: 7,
+	}
+	proof.ProofBundle.BatchProof = model.BatchProof{TreeSize: 1}
+	leaf := model.GlobalLogLeaf{
+		SchemaVersion: model.SchemaGlobalLogLeaf, NodeID: proof.NodeID, LogID: proof.LogID,
+		BatchID: "batch-1", BatchRoot: make([]byte, 32), BatchTreeSize: 1, BatchClosedAtUnixN: 7,
+	}
+	leafHash, err := globallog.HashLeaf(leaf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sth := model.SignedTreeHead{
+		SchemaVersion: model.SchemaSignedTreeHead, TreeAlg: cryptosuite.MerkleRFC6962SHA256,
+		TreeSize: 1, RootHash: leafHash, TimestampUnixN: 8, NodeID: proof.NodeID, LogID: proof.LogID,
+		Signature: model.Signature{Alg: cryptosuite.SignatureEd25519, KeyID: "server", Signature: []byte{1}},
+	}
+	proof.GlobalProof = &model.GlobalLogProof{
+		SchemaVersion: model.SchemaGlobalLogProof, NodeID: proof.NodeID, LogID: proof.LogID,
+		BatchID: "batch-1", LeafIndex: 0, LeafHash: leafHash, TreeSize: 1, STH: sth,
+	}
+	proof.AnchorResult = &model.STHAnchorResult{
+		SchemaVersion: model.SchemaSTHAnchorResult, NodeID: proof.NodeID, LogID: proof.LogID,
+		TreeSize: 1, SinkName: fiscobcos.SinkName, AnchorID: strings.Repeat("0", 64),
+		RootHash: leafHash, STH: sth, Proof: []byte{0xa1, 0x61, 0x78, 0x01}, PublishedAtUnixN: 9,
+	}
+	if err := Validate(proof); err == nil || !strings.Contains(err.Error(), "FISCO BCOS") {
+		t.Fatalf("Validate() error = %v, want strict FISCO BCOS proof decoding failure", err)
 	}
 }
 
