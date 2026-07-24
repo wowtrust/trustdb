@@ -28,6 +28,10 @@ type certificateSet struct {
 }
 
 func validatePublicTrust(profile Profile, now time.Time) (Report, error) {
+	proofKeys, err := loadProofKeyInventory(profile.ProofKeyDescriptorFiles)
+	if err != nil {
+		return Report{}, fmt.Errorf("validate TrustDB proof-key descriptors: %w", err)
+	}
 	serverRoots, err := loadCABundle(profile.Certificates.ServerCAFile, now)
 	if err != nil {
 		return Report{}, fmt.Errorf("validate TLCP server CA: %w", err)
@@ -86,14 +90,32 @@ func validatePublicTrust(profile Profile, now time.Time) (Report, error) {
 		EncryptionPublicKeySHA256:   publicKeyFingerprint(set.encryptionLeaf),
 		ServerCASHA256:              certificateFingerprints(serverRoots),
 		ClientCASHA256:              certificateFingerprints(clientRoots),
-		ProofSigningPublicKeySHA256: proofSigningKeyFingerprints(profile.ProofSigningKeys),
 	}
+	for _, proofKey := range proofKeys {
+		report.ProofKeyDescriptorSHA256 = append(
+			report.ProofKeyDescriptorSHA256,
+			proofKey.descriptorSHA256,
+		)
+		report.ProofSigningPublicKeySHA256 = append(
+			report.ProofSigningPublicKeySHA256,
+			proofKey.publicKeySHA256,
+		)
+	}
+	sort.Strings(report.ProofKeyDescriptorSHA256)
 	sort.Strings(report.ProofSigningPublicKeySHA256)
 	if report.SigningPublicKeySHA256 != profile.Certificates.SigningKey.PublicKeySHA256 {
 		return Report{}, errors.New("TLCP signing key fingerprint does not match the signing certificate")
 	}
 	if report.EncryptionPublicKeySHA256 != profile.Certificates.EncryptionKey.PublicKeySHA256 {
 		return Report{}, errors.New("TLCP encryption key fingerprint does not match the encryption certificate")
+	}
+	for _, fingerprint := range report.ProofSigningPublicKeySHA256 {
+		if fingerprint == report.SigningPublicKeySHA256 ||
+			fingerprint == report.EncryptionPublicKeySHA256 {
+			return Report{}, errors.New(
+				"TLCP transport key overlaps an authoritative TrustDB proof-signing public key",
+			)
+		}
 	}
 	for _, certificate := range set.all {
 		if report.EarliestCertificateExpiration.IsZero() ||

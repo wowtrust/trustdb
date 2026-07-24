@@ -3,6 +3,7 @@ package tlcpprofile
 import (
 	"bytes"
 	"crypto/ecdsa"
+	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/rand"
 	cryptox509 "crypto/x509"
@@ -20,6 +21,8 @@ import (
 
 	"github.com/emmansun/gmsm/sm2"
 	"github.com/emmansun/gmsm/smx509"
+	"github.com/wowtrust/trustdb/internal/cryptosuite"
+	"github.com/wowtrust/trustdb/internal/keydescriptor"
 )
 
 var fixtureNow = time.Date(2026, 7, 24, 8, 0, 0, 0, time.UTC)
@@ -259,6 +262,58 @@ func TestProfileRejectsDeclaredPublicKeyFingerprintDrift(t *testing.T) {
 	}
 }
 
+func TestProfileReadsAuthoritativeProofKeyDescriptors(t *testing.T) {
+	fixture := newTrustFixture(t)
+	report, err := Validate(fixture.profile, Options{Now: fixtureNow})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.ProofKeyDescriptorSHA256) != 1 ||
+		len(report.ProofSigningPublicKeySHA256) != 1 {
+		t.Fatalf("unexpected proof-key inventory: %+v", report)
+	}
+
+	path := fixture.profile.ProofKeyDescriptorFiles[0]
+	signer := proofVerifierDescriptor(t, bytes.Repeat([]byte{7}, ed25519.PublicKeySize))
+	signer.Kind = keydescriptor.KindSigner
+	signer.Provider = keydescriptor.ProviderSoftware
+	signer.Software = &keydescriptor.SoftwareKeyReference{
+		MaterialPath: "proof.key",
+		Encoding:     cryptosuite.Ed25519PrivateKeyEncoding,
+		Protection:   keydescriptor.SoftwareProtectionPlaintextDev,
+	}
+	writeProofDescriptor(t, path, signer)
+	if _, err := Validate(fixture.profile, Options{Now: fixtureNow}); err == nil ||
+		!strings.Contains(err.Error(), "public verifier") {
+		t.Fatalf("private signer descriptor error = %v", err)
+	}
+}
+
+func TestProfileRejectsTransportKeyMatchingAuthoritativeProofDescriptor(t *testing.T) {
+	fixture := newTrustFixture(t)
+	publicKey, ok := fixture.signingCertificate.PublicKey.(*ecdsa.PublicKey)
+	if !ok {
+		t.Fatalf("signing public key type = %T", fixture.signingCertificate.PublicKey)
+	}
+	writeProofDescriptor(t, fixture.profile.ProofKeyDescriptorFiles[0], keydescriptor.Descriptor{
+		SchemaVersion: keydescriptor.SchemaV1,
+		Kind:          keydescriptor.KindVerifier,
+		Provider:      keydescriptor.ProviderPublic,
+		CryptoSuite:   cryptosuite.CNSMV1,
+		KeyID:         "active-proof-signer",
+		Algorithm:     cryptosuite.SignatureSM2SM3,
+		SM2UserID:     cryptosuite.SM2DefaultUserID,
+		PublicKey: keydescriptor.PublicKeyMaterial{
+			Encoding: cryptosuite.SM2PublicKeyEncoding,
+			Bytes:    elliptic.Marshal(sm2.P256(), publicKey.X, publicKey.Y),
+		},
+	})
+	if _, err := Validate(fixture.profile, Options{Now: fixtureNow}); err == nil ||
+		!strings.Contains(err.Error(), "overlaps an authoritative") {
+		t.Fatalf("transport/proof overlap error = %v", err)
+	}
+}
+
 func TestProfileRejectsMissingOrUnsafePublicMaterial(t *testing.T) {
 	fixture := newTrustFixture(t)
 	missing := cloneProfile(t, fixture.profile)
@@ -476,6 +531,11 @@ func newTrustFixture(t *testing.T) trustFixture {
 		fixtureNow.Add(-time.Hour), fixtureNow.Add(12*time.Hour), nil)
 	writeCRL(t, filepath.Join(dir, "client-ca.crl"), clientCA, clientCAKey,
 		fixtureNow.Add(-time.Hour), fixtureNow.Add(12*time.Hour), nil)
+	writeProofDescriptor(
+		t,
+		filepath.Join(dir, "proof-server.pub"),
+		proofVerifierDescriptor(t, bytes.Repeat([]byte{7}, ed25519.PublicKeySize)),
+	)
 	goldenPath := filepath.Join("..", "..", "test", "vectors", "tlcp-gateway-profile-v1.json")
 	golden, err := os.ReadFile(goldenPath)
 	if err != nil {
@@ -493,6 +553,37 @@ func newTrustFixture(t *testing.T) trustFixture {
 		serverCA: serverCA, serverCAKey: serverCAKey,
 		clientCA: clientCA, clientCAKey: clientCAKey,
 		signingCertificate: signing, encryptionCertificate: encryption,
+	}
+}
+
+func proofVerifierDescriptor(t *testing.T, publicKey []byte) keydescriptor.Descriptor {
+	t.Helper()
+	descriptor := keydescriptor.Descriptor{
+		SchemaVersion: keydescriptor.SchemaV1,
+		Kind:          keydescriptor.KindVerifier,
+		Provider:      keydescriptor.ProviderPublic,
+		CryptoSuite:   cryptosuite.INTLV1,
+		KeyID:         "active-proof-signer",
+		Algorithm:     cryptosuite.SignatureEd25519,
+		PublicKey: keydescriptor.PublicKeyMaterial{
+			Encoding: cryptosuite.Ed25519PublicKeyEncoding,
+			Bytes:    append([]byte(nil), publicKey...),
+		},
+	}
+	if err := descriptor.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	return descriptor
+}
+
+func writeProofDescriptor(t *testing.T, path string, descriptor keydescriptor.Descriptor) {
+	t.Helper()
+	data, err := keydescriptor.Marshal(descriptor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
 	}
 }
 

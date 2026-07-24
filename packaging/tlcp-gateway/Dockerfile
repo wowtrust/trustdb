@@ -76,6 +76,8 @@ COPY packaging/tlcp-gateway/validator-go.sum ./go.sum
 RUN set -eu; \
     for module in \
       github.com/emmansun/gmsm@v0.44.0 \
+      github.com/fxamacker/cbor/v2@v2.9.1 \
+      github.com/x448/float16@v0.8.4 \
       golang.org/x/crypto@v0.53.0 \
       golang.org/x/net@v0.56.0 \
       golang.org/x/text@v0.38.0; do \
@@ -87,6 +89,8 @@ RUN set -eu; \
       done; \
     done; \
     go mod verify
+COPY internal/cborx ./internal/cborx
+COPY internal/cryptosuite ./internal/cryptosuite
 COPY internal/tlcpprofile ./internal/tlcpprofile
 COPY internal/tlcpready ./internal/tlcpready
 COPY cmd/trustdb-tlcp-profile ./cmd/trustdb-tlcp-profile

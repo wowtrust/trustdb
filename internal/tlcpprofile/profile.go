@@ -52,24 +52,24 @@ const (
 	MaxCRLCount            = 8
 	MaxStringBytes         = 4096
 	MaxBuildParameterCount = 32
-	MaxProofSigningKeys    = 32
+	MaxProofKeyDescriptors = 32
 )
 
 type Profile struct {
-	SchemaVersion    string            `json:"schema_version"`
-	ProfileID        string            `json:"profile_id"`
-	Environment      string            `json:"environment"`
-	Mode             string            `json:"mode"`
-	CryptoMode       string            `json:"crypto_mode"`
-	ServerName       string            `json:"server_name"`
-	CipherSuites     []string          `json:"cipher_suites"`
-	ALPNProtocols    []string          `json:"alpn_protocols"`
-	Implementation   Implementation    `json:"implementation"`
-	Network          Network           `json:"network"`
-	Certificates     Certificates      `json:"certificates"`
-	ProofSigningKeys []ProofSigningKey `json:"proof_signing_keys"`
-	Revocation       Revocation        `json:"revocation"`
-	Timeouts         Timeouts          `json:"timeouts"`
+	SchemaVersion           string         `json:"schema_version"`
+	ProfileID               string         `json:"profile_id"`
+	Environment             string         `json:"environment"`
+	Mode                    string         `json:"mode"`
+	CryptoMode              string         `json:"crypto_mode"`
+	ServerName              string         `json:"server_name"`
+	CipherSuites            []string       `json:"cipher_suites"`
+	ALPNProtocols           []string       `json:"alpn_protocols"`
+	Implementation          Implementation `json:"implementation"`
+	Network                 Network        `json:"network"`
+	Certificates            Certificates   `json:"certificates"`
+	ProofKeyDescriptorFiles []string       `json:"proof_key_descriptor_files"`
+	Revocation              Revocation     `json:"revocation"`
+	Timeouts                Timeouts       `json:"timeouts"`
 }
 
 type Implementation struct {
@@ -114,14 +114,6 @@ type KeyReference struct {
 	PublicKeySHA256 string `json:"public_key_sha256"`
 }
 
-// ProofSigningKey contains only public identity material. It binds the
-// gateway profile to every TrustDB proof-signing key that must remain outside
-// the transport trust boundary.
-type ProofSigningKey struct {
-	Reference       string `json:"reference"`
-	PublicKeySHA256 string `json:"public_key_sha256"`
-}
-
 type Revocation struct {
 	Mode                 string   `json:"mode"`
 	CRLFiles             []string `json:"crl_files"`
@@ -151,6 +143,7 @@ type Report struct {
 	EncryptionPublicKeySHA256     string    `json:"encryption_public_key_sha256"`
 	ServerCASHA256                []string  `json:"server_ca_sha256"`
 	ClientCASHA256                []string  `json:"client_ca_sha256"`
+	ProofKeyDescriptorSHA256      []string  `json:"proof_key_descriptor_sha256"`
 	ProofSigningPublicKeySHA256   []string  `json:"proof_signing_public_key_sha256"`
 	CRLIssuers                    []string  `json:"crl_issuers"`
 	EarliestCertificateExpiration time.Time `json:"earliest_certificate_expiration"`
@@ -232,12 +225,15 @@ func validateProfileFields(profile Profile, options Options) error {
 	if err := validateCertificatesConfig(
 		profile.Certificates,
 		profile.Environment,
-		append(proofSigningKeyReferences(profile.ProofSigningKeys), options.ForbiddenKeyReferences...),
-		append(proofSigningKeyFingerprints(profile.ProofSigningKeys), options.ForbiddenPublicKeySHA256s...),
+		options.ForbiddenKeyReferences,
+		options.ForbiddenPublicKeySHA256s,
 	); err != nil {
 		return err
 	}
-	if err := validateProofSigningKeys(profile.ProofSigningKeys, profile.Environment); err != nil {
+	if err := validateProofKeyDescriptorFiles(
+		profile.ProofKeyDescriptorFiles,
+		profile.Environment,
+	); err != nil {
 		return err
 	}
 	if err := validateRevocationConfig(profile.Revocation); err != nil {
@@ -283,54 +279,30 @@ func validateImplementation(value Implementation) error {
 	return nil
 }
 
-func validateProofSigningKeys(values []ProofSigningKey, environment string) error {
+func validateProofKeyDescriptorFiles(values []string, environment string) error {
 	if environment == EnvironmentProduction && len(values) == 0 {
-		return errors.New("production TLCP gateway profile requires proof_signing_keys")
+		return errors.New("production TLCP gateway profile requires proof_key_descriptor_files")
 	}
-	if len(values) > MaxProofSigningKeys {
-		return fmt.Errorf("TLCP gateway profile proof_signing_keys exceeds %d entries", MaxProofSigningKeys)
+	if len(values) > MaxProofKeyDescriptors {
+		return fmt.Errorf(
+			"TLCP gateway profile proof_key_descriptor_files exceeds %d entries",
+			MaxProofKeyDescriptors,
+		)
 	}
-	references := make(map[string]struct{}, len(values))
-	publicKeys := make(map[string]struct{}, len(values))
-	for index, value := range values {
-		if err := validateString(
-			fmt.Sprintf("proof_signing_keys[%d].reference", index),
-			value.Reference,
+	paths := make(map[string]struct{}, len(values))
+	for index, path := range values {
+		if err := validateAbsoluteCleanPath(
+			fmt.Sprintf("proof_key_descriptor_files[%d]", index),
+			path,
 		); err != nil {
 			return err
 		}
-		if err := validateCanonicalSHA256(
-			fmt.Sprintf("proof_signing_keys[%d].public_key_sha256", index),
-			value.PublicKeySHA256,
-		); err != nil {
-			return err
+		if _, duplicate := paths[path]; duplicate {
+			return errors.New("TLCP gateway profile contains a duplicate proof-key descriptor path")
 		}
-		if _, duplicate := references[value.Reference]; duplicate {
-			return errors.New("TLCP gateway profile contains a duplicate proof-signing key reference")
-		}
-		if _, duplicate := publicKeys[value.PublicKeySHA256]; duplicate {
-			return errors.New("TLCP gateway profile contains a duplicate proof-signing public key")
-		}
-		references[value.Reference] = struct{}{}
-		publicKeys[value.PublicKeySHA256] = struct{}{}
+		paths[path] = struct{}{}
 	}
 	return nil
-}
-
-func proofSigningKeyReferences(values []ProofSigningKey) []string {
-	result := make([]string, 0, len(values))
-	for _, value := range values {
-		result = append(result, value.Reference)
-	}
-	return result
-}
-
-func proofSigningKeyFingerprints(values []ProofSigningKey) []string {
-	result := make([]string, 0, len(values))
-	for _, value := range values {
-		result = append(result, value.PublicKeySHA256)
-	}
-	return result
 }
 
 func requiredBuildParameters() []string {

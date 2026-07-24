@@ -5,6 +5,7 @@ package tlcpe2e
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/x509/pkix"
@@ -29,6 +30,8 @@ import (
 
 	"github.com/emmansun/gmsm/sm2"
 	"github.com/emmansun/gmsm/smx509"
+	"github.com/wowtrust/trustdb/internal/cryptosuite"
+	"github.com/wowtrust/trustdb/internal/keydescriptor"
 	"github.com/wowtrust/trustdb/internal/tlcpprofile"
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/hpack"
@@ -1169,6 +1172,7 @@ func newCertificateFixture(t *testing.T) certificateFixture {
 		filepath.Join(dir, "crl-bundle.pem"),
 		append(append([]byte(nil), serverCRLPEM...), clientCRLPEM...),
 	)
+	writeE2EProofDescriptor(t, filepath.Join(dir, "proof-server.pub"))
 	fixture := certificateFixture{
 		dir:                    dir,
 		serverSigningSHA256:    publicKeySHA256(t, serverSigning),
@@ -1260,6 +1264,7 @@ func prepareServerGenerations(
 		"server-ca.crl",
 		"client-ca.crl",
 		"crl-bundle.pem",
+		"proof-server.pub",
 	} {
 		copyTestFile(t, filepath.Join(fixture.dir, name), filepath.Join(firstDir, name))
 	}
@@ -1297,6 +1302,11 @@ func prepareServerGenerations(
 	for _, name := range []string{"server-ca.pem", "client-ca.pem"} {
 		copyTestFile(t, filepath.Join(fixture.dir, name), filepath.Join(secondDir, name))
 	}
+	copyTestFile(
+		t,
+		filepath.Join(fixture.dir, "proof-server.pub"),
+		filepath.Join(secondDir, "proof-server.pub"),
+	)
 	secondServerCRL := createCRL(t, fixture.serverCAObject, fixture.serverCAKey, now.Add(time.Minute), nil)
 	secondClientCRL := createCRL(t, fixture.clientCAObject, fixture.clientCAKey, now.Add(time.Minute), nil)
 	secondServerPEM := pem.EncodeToMemory(&pem.Block{Type: "X509 CRL", Bytes: secondServerCRL})
@@ -1357,6 +1367,7 @@ func prepareExpiredServerGeneration(
 		"server-ca.crl",
 		"client-ca.crl",
 		"crl-bundle.pem",
+		"proof-server.pub",
 	} {
 		copyTestFile(t, filepath.Join(fixture.dir, name), filepath.Join(dir, name))
 	}
@@ -1646,6 +1657,29 @@ func appendCertificate(t *testing.T, path string, certificate *smx509.Certificat
 
 func writePEMFile(t *testing.T, path string, data []byte) {
 	t.Helper()
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func writeE2EProofDescriptor(t *testing.T, path string) {
+	t.Helper()
+	descriptor := keydescriptor.Descriptor{
+		SchemaVersion: keydescriptor.SchemaV1,
+		Kind:          keydescriptor.KindVerifier,
+		Provider:      keydescriptor.ProviderPublic,
+		CryptoSuite:   cryptosuite.INTLV1,
+		KeyID:         "e2e-proof-signer",
+		Algorithm:     cryptosuite.SignatureEd25519,
+		PublicKey: keydescriptor.PublicKeyMaterial{
+			Encoding: cryptosuite.Ed25519PublicKeyEncoding,
+			Bytes:    bytes.Repeat([]byte{7}, ed25519.PublicKeySize),
+		},
+	}
+	data, err := keydescriptor.Marshal(descriptor)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(path, data, 0o644); err != nil {
 		t.Fatal(err)
 	}

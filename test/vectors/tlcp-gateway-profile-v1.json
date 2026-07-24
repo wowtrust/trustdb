@@ -81,11 +81,8 @@
       "public_key_sha256": "9999999999999999999999999999999999999999999999999999999999999999"
     }
   },
-  "proof_signing_keys": [
-    {
-      "reference": "/etc/trustdb/keys/server.json",
-      "public_key_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-    }
+  "proof_key_descriptor_files": [
+    "${FIXTURE_DIR}/proof-server.pub"
   ],
   "revocation": {
     "mode": "crl",
