@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"hash"
 	"strings"
+	"sync"
 
 	"github.com/emmansun/gmsm/sm3"
 
@@ -21,6 +22,7 @@ var (
 	ErrUnsupportedCapability = errors.New("unsupported provider capability")
 	ErrInvalidKeyDescriptor  = errors.New("invalid public-key descriptor")
 	ErrInvalidKeyHandle      = errors.New("invalid non-exportable key handle")
+	ErrSignerDestroyed       = errors.New("signer capability destroyed")
 )
 
 // Capability describes an operation that a key provider explicitly exposes.
@@ -78,6 +80,22 @@ type Signer interface {
 	Capabilities() CapabilitySet
 	PublicKey(context.Context) (PublicKeyDescriptor, error)
 	Sign(context.Context, []byte) (model.Signature, error)
+}
+
+// DestroyableSigner is implemented by software signers that can actively
+// erase their in-memory private-key representation after all admitted calls
+// complete. External providers retain their own close/session semantics.
+type DestroyableSigner interface {
+	Signer
+	Destroy()
+}
+
+// DestroySigner erases software signer material where the implementation
+// supports it. It is intentionally idempotent.
+func DestroySigner(signer Signer) {
+	if destroyable, ok := signer.(DestroyableSigner); ok {
+		destroyable.Destroy()
+	}
 }
 
 type Verifier interface {
@@ -413,9 +431,11 @@ func (ed25519Verifier) Verify(ctx context.Context, descriptor PublicKeyDescripto
 }
 
 type softwareEd25519Signer struct {
+	mu         sync.RWMutex
 	handle     KeyHandle
 	privateKey ed25519.PrivateKey
 	publicKey  ed25519.PublicKey
+	destroyed  bool
 }
 
 func NewEd25519Signer(keyID string, privateKey ed25519.PrivateKey) (Signer, error) {
@@ -478,6 +498,11 @@ func (s *softwareEd25519Signer) PublicKey(ctx context.Context) (PublicKeyDescrip
 	if err := ctx.Err(); err != nil {
 		return PublicKeyDescriptor{}, err
 	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.destroyed {
+		return PublicKeyDescriptor{}, ErrSignerDestroyed
+	}
 	return NewEd25519PublicKey(s.handle.KeyID, s.publicKey)
 }
 
@@ -485,9 +510,27 @@ func (s *softwareEd25519Signer) Sign(ctx context.Context, message []byte) (model
 	if err := ctx.Err(); err != nil {
 		return model.Signature{}, err
 	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.destroyed {
+		return model.Signature{}, ErrSignerDestroyed
+	}
 	return model.Signature{
 		Alg:       cryptosuite.SignatureEd25519,
 		KeyID:     s.handle.KeyID,
 		Signature: ed25519.Sign(s.privateKey, message),
 	}, nil
+}
+
+func (s *softwareEd25519Signer) Destroy() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.destroyed {
+		return
+	}
+	clear(s.privateKey)
+	clear(s.publicKey)
+	s.privateKey = nil
+	s.publicKey = nil
+	s.destroyed = true
 }

@@ -124,6 +124,37 @@ func TestSignerProviderContract(t *testing.T) {
 	}
 }
 
+func TestDestroySignerRevokesSoftwarePrivateKeys(t *testing.T) {
+	t.Parallel()
+	_, edPrivate, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	edSigner, err := NewEd25519Signer("ed-destroy", edPrivate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, smPrivate, err := GenerateSM2Key()
+	if err != nil {
+		t.Fatal(err)
+	}
+	smSigner, err := NewSM2Signer("sm-destroy", smPrivate)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, signer := range []Signer{edSigner, smSigner} {
+		DestroySigner(signer)
+		DestroySigner(signer)
+		if _, err := signer.Sign(context.Background(), []byte("must fail")); !errors.Is(err, ErrSignerDestroyed) {
+			t.Fatalf("%s Sign error = %v, want destroyed", signer.Handle().KeyID, err)
+		}
+		if _, err := signer.PublicKey(context.Background()); !errors.Is(err, ErrSignerDestroyed) {
+			t.Fatalf("%s PublicKey error = %v, want destroyed", signer.Handle().KeyID, err)
+		}
+	}
+}
+
 func TestProviderContractsFailClosed(t *testing.T) {
 	t.Parallel()
 

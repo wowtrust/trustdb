@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"math/big"
 	"strings"
+	"sync"
 
 	"github.com/emmansun/gmsm/sm2"
 
@@ -121,14 +122,16 @@ func (sm2Verifier) Verify(ctx context.Context, descriptor PublicKeyDescriptor, m
 }
 
 type softwareSM2Signer struct {
+	mu         sync.RWMutex
 	handle     KeyHandle
 	privateKey *sm2.PrivateKey
 	publicKey  []byte
+	destroyed  bool
 }
 
 // NewSM2Signer creates the development/reference software signer. Production
-// CN_SM_V1 deployments must use an approved external key provider; core code
-// still cannot select CN_SM_V1 while the suite remains reserved.
+// deployments can keep CN_SM_V1 private keys behind an approved SDF, HSM, or
+// remote provider while using the same Signer boundary.
 func NewSM2Signer(keyID string, privateKey []byte) (Signer, error) {
 	if strings.TrimSpace(keyID) == "" {
 		return nil, fmt.Errorf("%w: key_id is required", ErrInvalidKeyHandle)
@@ -178,12 +181,22 @@ func (s *softwareSM2Signer) PublicKey(ctx context.Context) (PublicKeyDescriptor,
 	if err := ctx.Err(); err != nil {
 		return PublicKeyDescriptor{}, err
 	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.destroyed {
+		return PublicKeyDescriptor{}, ErrSignerDestroyed
+	}
 	return NewSM2PublicKey(s.handle.KeyID, s.publicKey)
 }
 
 func (s *softwareSM2Signer) Sign(ctx context.Context, message []byte) (model.Signature, error) {
 	if err := ctx.Err(); err != nil {
 		return model.Signature{}, err
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.destroyed {
+		return model.Signature{}, ErrSignerDestroyed
 	}
 	signature, err := s.privateKey.SignWithSM2(rand.Reader, []byte(canonicalSM2UserID), message)
 	if err != nil {
@@ -197,4 +210,23 @@ func (s *softwareSM2Signer) Sign(ctx context.Context, message []byte) (model.Sig
 		KeyID:     s.handle.KeyID,
 		Signature: append([]byte(nil), signature...),
 	}, nil
+}
+
+func (s *softwareSM2Signer) Destroy() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.destroyed {
+		return
+	}
+	if s.privateKey != nil && s.privateKey.D != nil {
+		words := s.privateKey.D.Bits()
+		for index := range words {
+			words[index] = 0
+		}
+		s.privateKey.D.SetInt64(0)
+	}
+	s.privateKey = nil
+	clear(s.publicKey)
+	s.publicKey = nil
+	s.destroyed = true
 }

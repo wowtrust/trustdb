@@ -4,14 +4,18 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/wowtrust/trustdb/internal/cryptosuite"
 	"github.com/wowtrust/trustdb/internal/keydescriptor"
 	"github.com/wowtrust/trustdb/internal/keyenvelope"
+	"github.com/wowtrust/trustdb/internal/model"
 	"github.com/wowtrust/trustdb/internal/trustcrypto"
 	"github.com/wowtrust/trustdb/sdk"
 )
@@ -196,4 +200,124 @@ func TestManagedIdentityCleanupCannotEscapeManagedDirectory(t *testing.T) {
 	if _, err := os.Stat(outside); err != nil {
 		t.Fatalf("managed identity cleanup escaped its directory: %v", err)
 	}
+}
+
+func TestLockIdentityRevokesCopiedAndInFlightSigningCapabilities(t *testing.T) {
+	t.Parallel()
+	publicKey, privateKey, err := trustcrypto.GenerateEd25519Key()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clear(privateKey)
+	software, err := trustcrypto.NewEd25519Signer("desktop-key", privateKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	blocking := &blockingDesktopSigner{
+		Signer:   software,
+		started:  make(chan struct{}),
+		release:  make(chan struct{}),
+		finished: make(chan struct{}),
+	}
+	descriptor, err := sdk.NewINTLV1PublicKey("desktop-key", publicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	descriptor.Provider = keydescriptor.ProviderSoftware
+	resolved, err := newResolvedDesktopIdentity(
+		Identity{TenantID: "tenant-a", ClientID: "desktop-a"},
+		descriptor,
+		blocking,
+		&releaseDesktopSigner{release: blocking.release},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := NewApp()
+	app.setUnlockedIdentity(resolved)
+	copied, err := app.unlockedSDKIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	signDone := make(chan error, 1)
+	go func() {
+		_, signErr := sdk.BuildSignedFileClaim(
+			strings.NewReader("already admitted"),
+			copied,
+			sdk.FileClaimOptions{MediaType: "text/plain"},
+		)
+		signDone <- signErr
+	}()
+	select {
+	case <-blocking.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("in-flight signing did not reach the provider")
+	}
+
+	lockDone := make(chan struct{})
+	go func() {
+		app.LockIdentity()
+		close(lockDone)
+	}()
+	select {
+	case <-lockDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("LockIdentity did not synchronously drain the in-flight signer")
+	}
+	if err := <-signDone; err != nil {
+		t.Fatalf("admitted signing failed while LockIdentity drained it: %v", err)
+	}
+	select {
+	case <-blocking.finished:
+	default:
+		t.Fatal("LockIdentity returned before the provider call finished")
+	}
+
+	_, err = sdk.BuildSignedFileClaim(
+		strings.NewReader("must be rejected"),
+		copied,
+		sdk.FileClaimOptions{MediaType: "text/plain"},
+	)
+	if !errors.Is(err, errDesktopSigningRevoked) {
+		t.Fatalf("copied identity signed after LockIdentity: %v", err)
+	}
+	if _, err := software.Sign(context.Background(), []byte("destroyed")); !errors.Is(err, trustcrypto.ErrSignerDestroyed) {
+		t.Fatalf("software signer survived LockIdentity: %v", err)
+	}
+}
+
+type blockingDesktopSigner struct {
+	trustcrypto.Signer
+	started      chan struct{}
+	release      chan struct{}
+	finished     chan struct{}
+	startOnce    sync.Once
+	finishedOnce sync.Once
+}
+
+func (s *blockingDesktopSigner) Sign(ctx context.Context, message []byte) (model.Signature, error) {
+	s.startOnce.Do(func() { close(s.started) })
+	select {
+	case <-ctx.Done():
+		return model.Signature{}, ctx.Err()
+	case <-s.release:
+	}
+	signature, err := s.Signer.Sign(ctx, message)
+	s.finishedOnce.Do(func() { close(s.finished) })
+	return signature, err
+}
+
+func (s *blockingDesktopSigner) Destroy() {
+	trustcrypto.DestroySigner(s.Signer)
+}
+
+type releaseDesktopSigner struct {
+	release chan struct{}
+	once    sync.Once
+}
+
+func (c *releaseDesktopSigner) Close() error {
+	c.once.Do(func() { close(c.release) })
+	return nil
 }

@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/wowtrust/trustdb/internal/cryptosuite"
@@ -20,6 +21,8 @@ import (
 )
 
 const desktopIdentitySchemaV2 = "trustdb.desktop-identity.v2"
+
+var errDesktopSigningRevoked = errors.New("desktop signing capability is locked or revoked")
 
 // decodeKeyField is intentionally limited to public material and one-shot
 // private-key imports before those bytes enter an encrypted envelope. Callers
@@ -79,13 +82,76 @@ type RotateIdentityRequest struct {
 type resolvedDesktopIdentity struct {
 	identity sdk.Identity
 	closer   io.Closer
+	signer   trustcrypto.Signer
+	gate     *desktopSigningGate
+
+	closeOnce sync.Once
+	closeErr  error
 }
 
 func (r *resolvedDesktopIdentity) close() error {
-	if r == nil || r.closer == nil {
+	if r == nil {
 		return nil
 	}
-	return r.closer.Close()
+	r.closeOnce.Do(func() {
+		if r.gate != nil {
+			r.gate.revoke()
+		}
+		if r.closer != nil {
+			r.closeErr = r.closer.Close()
+		}
+		if r.gate != nil {
+			r.gate.wait()
+		}
+		trustcrypto.DestroySigner(r.signer)
+	})
+	return r.closeErr
+}
+
+type desktopSigningGate struct {
+	mu      sync.Mutex
+	cond    *sync.Cond
+	revoked bool
+	active  int
+}
+
+func newDesktopSigningGate() *desktopSigningGate {
+	gate := &desktopSigningGate{}
+	gate.cond = sync.NewCond(&gate.mu)
+	return gate
+}
+
+func (g *desktopSigningGate) enter() error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.revoked {
+		return errDesktopSigningRevoked
+	}
+	g.active++
+	return nil
+}
+
+func (g *desktopSigningGate) leave() {
+	g.mu.Lock()
+	g.active--
+	if g.active == 0 {
+		g.cond.Broadcast()
+	}
+	g.mu.Unlock()
+}
+
+func (g *desktopSigningGate) revoke() {
+	g.mu.Lock()
+	g.revoked = true
+	g.mu.Unlock()
+}
+
+func (g *desktopSigningGate) wait() {
+	g.mu.Lock()
+	for g.active != 0 {
+		g.cond.Wait()
+	}
+	g.mu.Unlock()
 }
 
 func validateIdentityRequest(tenantID, clientID string) error {
@@ -226,7 +292,7 @@ func persistSoftwareIdentity(
 	cleanup := true
 	defer func() {
 		if cleanup {
-			_ = os.Remove(materialPath)
+			_ = keyenvelope.RemoveFile(context.Background(), materialPath)
 			_ = os.Remove(descriptorPath)
 		}
 	}()
@@ -376,7 +442,27 @@ func resolveDesktopIdentity(ctx context.Context, id Identity, passphrase string)
 		SM2UserID:         descriptor.SM2UserID,
 		CertificateChain:  cloneByteSlices(descriptor.CertificateChain),
 	}
-	callback, err := sdk.NewCallbackSigner(sdkDescriptor, func(ctx context.Context, message []byte) ([]byte, error) {
+	resolved, err := newResolvedDesktopIdentity(id, sdkDescriptor, signer, resolver)
+	if err != nil {
+		_ = resolver.Close()
+		trustcrypto.DestroySigner(signer)
+		return nil, err
+	}
+	return resolved, nil
+}
+
+func newResolvedDesktopIdentity(
+	id Identity,
+	descriptor sdk.KeyDescriptor,
+	signer trustcrypto.Signer,
+	closer io.Closer,
+) (*resolvedDesktopIdentity, error) {
+	gate := newDesktopSigningGate()
+	callback, err := sdk.NewCallbackSigner(descriptor, func(ctx context.Context, message []byte) ([]byte, error) {
+		if gateErr := gate.enter(); gateErr != nil {
+			return nil, gateErr
+		}
+		defer gate.leave()
 		signature, signErr := signer.Sign(ctx, message)
 		if signErr != nil {
 			return nil, signErr
@@ -384,15 +470,18 @@ func resolveDesktopIdentity(ctx context.Context, id Identity, passphrase string)
 		return append([]byte(nil), signature.Signature...), nil
 	})
 	if err != nil {
-		_ = resolver.Close()
 		return nil, err
 	}
 	identity, err := sdk.NewIdentity(id.TenantID, id.ClientID, callback)
 	if err != nil {
-		_ = resolver.Close()
 		return nil, err
 	}
-	return &resolvedDesktopIdentity{identity: identity, closer: resolver}, nil
+	return &resolvedDesktopIdentity{
+		identity: identity,
+		closer:   closer,
+		signer:   signer,
+		gate:     gate,
+	}, nil
 }
 
 func requireDesktopSuite(value string) (cryptosuite.Suite, error) {

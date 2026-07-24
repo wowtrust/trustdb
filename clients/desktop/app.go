@@ -15,6 +15,7 @@ import (
 	"github.com/wowtrust/trustdb/internal/cborx"
 	"github.com/wowtrust/trustdb/internal/cryptosuite"
 	"github.com/wowtrust/trustdb/internal/keydescriptor"
+	"github.com/wowtrust/trustdb/internal/keyenvelope"
 	"github.com/wowtrust/trustdb/internal/model"
 	"github.com/wowtrust/trustdb/internal/trustcrypto"
 	"github.com/wowtrust/trustdb/internal/verify"
@@ -940,7 +941,7 @@ func removeManagedIdentityMaterial(managedDir string, id Identity) {
 	if err == nil && descriptor.Software != nil {
 		materialPath := filepath.Join(filepath.Dir(descriptorPath), filepath.FromSlash(descriptor.Software.MaterialPath))
 		if materialPath, withinManagedDir := pathWithinDirectory(managedDir, materialPath); withinManagedDir {
-			_ = os.Remove(materialPath)
+			_ = keyenvelope.RemoveFile(context.Background(), materialPath)
 		}
 	}
 	_ = os.Remove(descriptorPath)
