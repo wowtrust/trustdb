@@ -5,6 +5,7 @@ SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 REPO_ROOT=$(cd -- "${SCRIPT_DIR}/../.." && pwd)
 BASELINE="${REPO_ROOT}/configs/compatibility/fisco-bcos-v3.16.3.json"
 COMPAT="${SCRIPT_DIR}/compatibility.py"
+WAIT_AIR_READY="${SCRIPT_DIR}/wait_air_ready.py"
 MODE=""
 WORK_DIR=""
 CACHE_DIR_ARG=""
@@ -262,8 +263,10 @@ stop_nodes() {
 
 cleanup() {
     stop_nodes >/dev/null 2>&1 || true
-    rm -f "${SMOKE_LOCK}/pid"
-    rmdir "${SMOKE_LOCK}" 2>/dev/null || true
+    if [[ -n ${SMOKE_LOCK:-} ]]; then
+        rm -f "${SMOKE_LOCK}/pid"
+        rmdir "${SMOKE_LOCK}" 2>/dev/null || true
+    fi
 }
 SMOKE_LOCK="${TMPDIR:-/tmp}/trustdb-fisco-bcos-smoke-${PLATFORM//\//-}.lock"
 if ! mkdir "${SMOKE_LOCK}" 2>/dev/null; then
@@ -310,14 +313,22 @@ for index in 0 1 2 3; do
     sleep 2
 done
 
-# The node process can be alive before its RPC service completes initialization.
-# A fixed, bounded readiness window avoids retrying DialContext, whose upstream
-# error path does not expose a native SDK handle that callers can destroy.
-sleep 10
-
 for index in 0 1 2 3; do
     if ! kill -0 "${NODE_PIDS[index]}" 2>/dev/null; then
         echo "node${index} is not running" >&2
+        exit 1
+    fi
+done
+
+# A live RPC listener is insufficient: the native SDK waits for usable group
+# membership after the websocket handshake. Avoid entering that opaque timeout
+# path until every node has observed all four members.
+python3 "${WAIT_AIR_READY}" \
+    --node-parent "${NODE_PARENT}" --node-count 4 --timeout-seconds 30
+
+for index in 0 1 2 3; do
+    if ! kill -0 "${NODE_PIDS[index]}" 2>/dev/null; then
+        echo "node${index} exited during the four-node convergence check" >&2
         exit 1
     fi
 done
@@ -347,6 +358,22 @@ if ! stop_nodes; then
     exit 1
 fi
 NODE_PIDS=()
+
+python3 - "${P2P_PORT}" "${RPC_PORT}" <<'PY'
+import socket
+import sys
+
+for base in (int(sys.argv[1]), int(sys.argv[2])):
+    for port in range(base, base + 4):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.settimeout(0.2)
+            if sock.connect_ex(("127.0.0.1", port)) == 0:
+                raise SystemExit(f"FISCO BCOS listener still accepts connections on port {port}")
+PY
+
+rm -f "${SMOKE_LOCK}/pid"
+rmdir "${SMOKE_LOCK}"
+SMOKE_LOCK=""
 
 if [[ ${ROOT_SM_CERT_WAS_PRESENT} == false && -e ${REPO_ROOT}/sm_cert.cnf ]] || \
    [[ ${ROOT_SM_PARAM_WAS_PRESENT} == false && -e ${REPO_ROOT}/sm_sm2.param ]]; then
@@ -451,6 +478,7 @@ if raw_fixture:
     command.append("--raw-evm-fixture")
 
 block = client["containing_block"]
+client_stderr = (work / "client-stderr.log").read_text(encoding="utf-8").splitlines()
 evidence = {
     "schema_version": 1,
     "evidence_class": "diagnostic_partial" if raw_fixture else "runtime_verified",
@@ -475,6 +503,19 @@ evidence = {
     "clean_teardown": client["clean_teardown"],
     "node_clean_teardown": True,
     "environment": environment,
+    "harness_validation": {
+        "four_node_convergence_required_before_sdk": True,
+        "stdout_is_single_json_document": True,
+        "stderr_lines": client_stderr,
+        "clean_teardown": client["clean_teardown"],
+    },
+    "cleanup": {
+        "node_processes_absent": True,
+        "listeners_absent": True,
+        "host_lock_absent": True,
+        "generated_keys_or_certificates_committed": False,
+    },
+    "raw_client_output": client,
     "results": {
         "initial_block_number": client["initial_block_number"],
         "final_block_number": client["final_block_number"],
@@ -497,7 +538,7 @@ evidence = {
         "stale_block_limit_rejected": client["stale_block_limit_rejected"],
         "stale_rejection_error": client.get("stale_rejection_error", ""),
     },
-    "client_stderr": (work / "client-stderr.log").read_text(encoding="utf-8").splitlines(),
+    "client_stderr": client_stderr,
     "limitations": [
         "This run validates the pinned Air node, compiler, C SDK and Go SDK compatibility profile only.",
         "Transaction and receipt proof arrays were retrieved but are not treated as independently verified TrustDB anchor evidence.",

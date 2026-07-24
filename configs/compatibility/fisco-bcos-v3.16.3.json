@@ -396,18 +396,18 @@
       "crypto": "standard",
       "platform": "darwin/arm64",
       "artifact_status": "verified",
-      "runtime_status": "partial",
-      "reason": "Raw-EVM diagnostics completed mTLS, transaction, proof retrieval, event, block metadata, four-sealer PBFT and stale blockLimit checks on 2026-07-24. The pinned compiler cannot execute without its absolute Z3 dependency; two immediate teardown repeats crashed in bcos_sdk_destroy, while the bounded-unsubscribe-drain harness exited cleanly.",
-      "evidence": "docs/integrations/evidence/fisco-bcos/2026-07-24-darwin-arm64-standard-diagnostic.json"
+      "runtime_status": "verified",
+      "reason": "The pinned standard compiler and native arm64 stack completed the compiler-backed four-node Air smoke on macOS 26.1 arm64 on 2026-07-24, including mTLS, transaction and receipt proofs, ABI event binding, PBFT block metadata, stale blockLimit rejection, pure JSON output and clean teardown.",
+      "evidence": "docs/integrations/evidence/fisco-bcos/2026-07-24-darwin-arm64-standard-runtime.json"
     },
     {
       "deployment": "air",
       "crypto": "guomi",
       "platform": "darwin/arm64",
       "artifact_status": "verified",
-      "runtime_status": "partial",
-      "reason": "Raw-EVM diagnostics completed GM TLS, transaction, proof retrieval, event, block metadata, four-sealer PBFT and stale blockLimit checks on 2026-07-24. The pinned GM compiler cannot execute without its absolute Z3 dependency; the current bounded-readiness and bounded-unsubscribe-drain harness exited cleanly.",
-      "evidence": "docs/integrations/evidence/fisco-bcos/2026-07-24-darwin-arm64-guomi-diagnostic.json"
+      "runtime_status": "verified",
+      "reason": "The pinned GM compiler and native arm64 stack completed the compiler-backed four-node Guomi Air smoke on macOS 26.1 arm64 on 2026-07-24, including GM TLS, transaction and receipt proofs, ABI event binding, PBFT block metadata, stale blockLimit rejection, pure JSON output and clean teardown.",
+      "evidence": "docs/integrations/evidence/fisco-bcos/2026-07-24-darwin-arm64-guomi-runtime.json"
     },
     {
       "deployment": "pro",

@@ -72,6 +72,10 @@ class CompatibilityBaselineTest(unittest.TestCase):
             and item["platform"] == "darwin/arm64"
         )
         row["runtime_status"] = "verified"
+        row["evidence"] = (
+            "docs/integrations/evidence/fisco-bcos/"
+            "2026-07-24-darwin-arm64-standard-diagnostic.json"
+        )
         with self.assertRaisesRegex(compatibility.BaselineError, "raw-EVM diagnostic"):
             compatibility.validate_baseline(invalid)
 
@@ -94,16 +98,42 @@ class CompatibilityBaselineTest(unittest.TestCase):
         row = next(item for item in invalid["matrix"] if item["runtime_status"] == "verified")
         evidence_path = compatibility.REPO_ROOT / row["evidence"]
         original = compatibility.load_baseline(evidence_path)
-        for field, message in (
-            ("clean_teardown", "clean SDK teardown"),
-            ("node_clean_teardown", "clean node teardown"),
+        for section, field, message in (
+            ("harness_validation", "clean_teardown", "clean structured harness output"),
+            ("cleanup", "node_processes_absent", "clean host teardown"),
+            ("raw_client_output", "clean_teardown", "clean raw client output"),
         ):
             evidence = copy.deepcopy(original)
-            evidence[field] = False
-            with self.subTest(field=field):
+            evidence[section][field] = False
+            with self.subTest(section=section, field=field):
                 with mock.patch.object(compatibility, "load_baseline", return_value=evidence):
                     with self.assertRaisesRegex(compatibility.BaselineError, message):
                         compatibility.validate_baseline(invalid)
+
+    def test_verified_runtime_requires_pinned_compiler_source(self) -> None:
+        invalid = copy.deepcopy(self.baseline)
+        row = next(
+            item
+            for item in invalid["matrix"]
+            if item["deployment"] == "air"
+            and item["crypto"] == "standard"
+            and item["platform"] == "darwin/arm64"
+        )
+        evidence_path = compatibility.REPO_ROOT / row["evidence"]
+        evidence = compatibility.load_baseline(evidence_path)
+        evidence["probe_source"] = "untracked-compiler"
+        original_loader = compatibility.load_baseline
+
+        def load(path: Path) -> dict:
+            if path == evidence_path:
+                return evidence
+            return original_loader(path)
+
+        with mock.patch.object(compatibility, "load_baseline", side_effect=load):
+            with self.assertRaisesRegex(
+                compatibility.BaselineError, "requires the pinned compiler source"
+            ):
+                compatibility.validate_baseline(invalid)
 
     def test_evidence_must_match_exact_artifact_digest_set(self) -> None:
         invalid = copy.deepcopy(self.baseline)

@@ -8,11 +8,17 @@
   },
   "baseline_id": "fisco-bcos-3.16.3-go-sdk-3.0.2",
   "certificate_verification": [
-    "/tmp/trustdb-461.ZgfJWn/run-standard-final/nodes-standard/127.0.0.1/sdk/sdk.crt: OK"
+    "/tmp/trustdb-461.ZgfJWn/run-standard-converged/nodes-standard/127.0.0.1/sdk/sdk.crt: OK"
   ],
   "clean_teardown": true,
+  "cleanup": {
+    "generated_keys_or_certificates_committed": false,
+    "host_lock_absent": true,
+    "listeners_absent": true,
+    "node_processes_absent": true
+  },
   "client_stderr": [],
-  "command": "scripts/fisco-bcos/smoke-air.sh --mode standard --work-dir /tmp/trustdb-461.ZgfJWn/run-standard-final --cache-dir /tmp/trustdb-461.ZgfJWn/cache --p2p-port 29300 --rpc-port 19200",
+  "command": "scripts/fisco-bcos/smoke-air.sh --mode standard --work-dir /tmp/trustdb-461.ZgfJWn/run-standard-converged --cache-dir /tmp/trustdb-461.ZgfJWn/cache --p2p-port 27300 --rpc-port 17200",
   "compiler_executable": true,
   "date": "2026-07-24",
   "environment": {
@@ -25,6 +31,12 @@
     "tassl_version": "OpenSSL 1.1.1b Tassl 1.4  23 Aug 2020\n"
   },
   "evidence_class": "runtime_verified",
+  "harness_validation": {
+    "clean_teardown": true,
+    "four_node_convergence_required_before_sdk": true,
+    "stderr_lines": [],
+    "stdout_is_single_json_document": true
+  },
   "host": "Linux-6.8.0-90-generic-x86_64-with-glibc2.39",
   "limitations": [
     "This run validates the pinned Air node, compiler, C SDK and Go SDK compatibility profile only.",
@@ -47,24 +59,142 @@
     "deployment": "air",
     "platform": "linux/amd64"
   },
+  "raw_client_output": {
+    "clean_teardown": true,
+    "consensus_status": "{\"blockNumber\":2,\"changeCycle\":0,\"connectedNodeList\":4,\"consensusNodeList\":[{\"index\":0,\"nodeID\":\"176776289dc6fd4145c49ae1fe5543eb71598ffa3e22ab4f0f5a0e3dfaa6cd166290695790c433b5d0680f4f6a8a227367f5c04f083d21406ac28bc20f73f4b5\",\"termWeight\":0,\"weight\":1},{\"index\":1,\"nodeID\":\"4ec50688532215c70710008123df0f38c1b3a49a02e64cfc2f5d547a9882ab1e6baa70311fa88dcf8e066f23e5726bdb6fefc0d4d51c655b4450d0fbe5362571\",\"termWeight\":0,\"weight\":1},{\"index\":2,\"nodeID\":\"72e0cf996578b7195d7618db8ee832e2a9f76b284591c60e94f66f8aef941637564105eb2f69662a1016b1e0c35e8b9f9ed31f07859a2581d756c667d7a94833\",\"termWeight\":0,\"weight\":1},{\"index\":3,\"nodeID\":\"fac3805109e58b85efc381f9815b4bcd58df11b4bf84b7d1dbef131dba7d26b9c521669c10dc929238ac92ff63ce177d408a8f162638e7a308d10ce790029c13\",\"termWeight\":0,\"weight\":1}],\"consensusNodesNum\":4,\"hash\":\"be9caaa8f61d8c675e64d360c18fce09dcf3245d69ed28b7efe6e304f6ef94b7\",\"index\":2,\"isConsensusNode\":true,\"leaderIndex\":3,\"maxFaultyQuorum\":1,\"minRequiredQuorum\":3,\"nodeID\":\"72e0cf996578b7195d7618db8ee832e2a9f76b284591c60e94f66f8aef941637564105eb2f69662a1016b1e0c35e8b9f9ed31f07859a2581d756c667d7a94833\",\"timeout\":false,\"view\":4}\n",
+    "containing_block": {
+      "consensusWeights": [
+        1,
+        1,
+        1,
+        1
+      ],
+      "extraData": "0x",
+      "gasLimit": "",
+      "gasUsed": "27553",
+      "hash": "0xbe9caaa8f61d8c675e64d360c18fce09dcf3245d69ed28b7efe6e304f6ef94b7",
+      "number": 2,
+      "parentInfo": [
+        {
+          "blockHash": "0x2945a737ff552dca62857a97356a09cbada9270c31d30585d42a2356c2375fad",
+          "blockNumber": 1
+        }
+      ],
+      "receiptsRoot": "0x87a10924e80ed1019f597c4792f6c16a6fc96398939d8144e747b9179c9c24f6",
+      "sealer": 2,
+      "sealerList": [
+        "0x176776289dc6fd4145c49ae1fe5543eb71598ffa3e22ab4f0f5a0e3dfaa6cd166290695790c433b5d0680f4f6a8a227367f5c04f083d21406ac28bc20f73f4b5",
+        "0x4ec50688532215c70710008123df0f38c1b3a49a02e64cfc2f5d547a9882ab1e6baa70311fa88dcf8e066f23e5726bdb6fefc0d4d51c655b4450d0fbe5362571",
+        "0x72e0cf996578b7195d7618db8ee832e2a9f76b284591c60e94f66f8aef941637564105eb2f69662a1016b1e0c35e8b9f9ed31f07859a2581d756c667d7a94833",
+        "0xfac3805109e58b85efc381f9815b4bcd58df11b4bf84b7d1dbef131dba7d26b9c521669c10dc929238ac92ff63ce177d408a8f162638e7a308d10ce790029c13"
+      ],
+      "signatureList": [
+        {
+          "sealerIndex": 1,
+          "signature": "0xfd8b41c038503ada0270a2f1b0a94ca240d0d1d01b6a59a8ba890ec795c22b9c3c217a8601ff9b4bc2d651464b47b2ede468a567d2eb617b560816608ab63d2e00"
+        },
+        {
+          "sealerIndex": 2,
+          "signature": "0x8a989825e4be2dfe6b72c910df6e0889100aec1c9a406a3800bdc1ddac045458712013537b4b53175a278f47b5452c84b21b8e07e1e7b8597c0122c717664cf101"
+        },
+        {
+          "sealerIndex": 3,
+          "signature": "0x419744e7f4163d5cf3ec3ae628f2b352756684e603ce15780f919b363c711b51044e33fec15a978f24e6f72ebc575912d84bc404419733aa7b233abbe2031c0d01"
+        }
+      ],
+      "stateRoot": "0xc51be91fe1f197fd3604d991e0a775926493bcf527f2a2deb8d0d37ce28ce67f",
+      "timestamp": 1784865722305,
+      "transactions": [
+        "0x538e18a0533ed61e28a666ae7de75627d63b2d30a41bdb607865888944e8904c"
+      ],
+      "txsRoot": "0x538e18a0533ed61e28a666ae7de75627d63b2d30a41bdb607865888944e8904c",
+      "version": 51380992
+    },
+    "deployment": {
+      "block_number": 1,
+      "contract_address": "0x6849f21d1e455e9f0712b1e99fa4fcd23758e8f1",
+      "hash": "0x1a41cacb2a06fe732508808977437bee37f4d56f5124cae699b2b01686f65acd",
+      "receipt_proof": [
+        "fb760912ed564218a74ac57ae6b9d66d04d9bb77bbda19cf6187ee25b7fed0d1"
+      ],
+      "receipt_proof_field_present": true,
+      "status": 0,
+      "transaction_proof": [
+        "1a41cacb2a06fe732508808977437bee37f4d56f5124cae699b2b01686f65acd"
+      ],
+      "transaction_proof_field_present": true
+    },
+    "event": {
+      "address": "0x6849f21d1e455e9f0712b1e99fa4fcd23758e8f1",
+      "blockNumber": 2,
+      "data": "",
+      "logIndex": 0,
+      "topics": [
+        "0xc8f7565859107929ba4b285bfb17dfba069f69ab64447f49d6fecb70f6bd552b",
+        "0x747275737464622d666973636f2d636f6d7061746962696c6974792d70726f62"
+      ],
+      "transactionHash": "0x538e18a0533ed61e28a666ae7de75627d63b2d30a41bdb607865888944e8904c",
+      "transactionIndex": 0
+    },
+    "event_transaction": {
+      "block_number": 2,
+      "hash": "0x538e18a0533ed61e28a666ae7de75627d63b2d30a41bdb607865888944e8904c",
+      "receipt_proof": [
+        "87a10924e80ed1019f597c4792f6c16a6fc96398939d8144e747b9179c9c24f6"
+      ],
+      "receipt_proof_field_present": true,
+      "status": 0,
+      "transaction_proof": [
+        "538e18a0533ed61e28a666ae7de75627d63b2d30a41bdb607865888944e8904c"
+      ],
+      "transaction_proof_field_present": true
+    },
+    "final_block_number": 2,
+    "initial_block_number": 0,
+    "mode": "standard",
+    "probe_source": "pinned-solidity-compiler",
+    "schema_version": 1,
+    "sealers": [
+      {
+        "nodeID": "176776289dc6fd4145c49ae1fe5543eb71598ffa3e22ab4f0f5a0e3dfaa6cd166290695790c433b5d0680f4f6a8a227367f5c04f083d21406ac28bc20f73f4b5",
+        "weight": 1
+      },
+      {
+        "nodeID": "4ec50688532215c70710008123df0f38c1b3a49a02e64cfc2f5d547a9882ab1e6baa70311fa88dcf8e066f23e5726bdb6fefc0d4d51c655b4450d0fbe5362571",
+        "weight": 1
+      },
+      {
+        "nodeID": "72e0cf996578b7195d7618db8ee832e2a9f76b284591c60e94f66f8aef941637564105eb2f69662a1016b1e0c35e8b9f9ed31f07859a2581d756c667d7a94833",
+        "weight": 1
+      },
+      {
+        "nodeID": "fac3805109e58b85efc381f9815b4bcd58df11b4bf84b7d1dbef131dba7d26b9c521669c10dc929238ac92ff63ce177d408a8f162638e7a308d10ce790029c13",
+        "weight": 1
+      }
+    ],
+    "sm_crypto": false,
+    "stale_block_limit": 1,
+    "stale_block_limit_rejected": true,
+    "stale_rejection_error": "BlockLimitCheckFail"
+  },
   "results": {
     "consensus": {
       "connected_nodes": 4,
       "maximum_faulty_quorum": 1,
       "minimum_required_quorum": 3,
       "node_ids": [
-        "2079008571157626b2439632cd661b7688b0652873733f4b8c5c1c814785d5baacd5584d740716f37a4510997258d17adf1b017d2773c404043331c0e9434368",
-        "400de49397bb3609fa86b9b298a4a95f60b6ee1853ede224e71b4e8af0964422d448343b45b4c070112617ccb211194a6e9751faed3547552ac7546164670dbe",
-        "6f7e4b97fd0cc82abe642add5d4f2e25a44120545d51ca7b5a61c0a1ce6a31ddb0d970313d0f8fcb79faf6c2044dfc8ab73b0cd3fa697d9ad409997b74da8e45",
-        "853f20bfe47d2b30abc60ef7ac567be76cdafc4e4a6be72b843b17c0eac983fe14ebf61503cb95f30767b4d8f4f3847f3b16ca71dedfa6229598031c05fbd11e"
+        "176776289dc6fd4145c49ae1fe5543eb71598ffa3e22ab4f0f5a0e3dfaa6cd166290695790c433b5d0680f4f6a8a227367f5c04f083d21406ac28bc20f73f4b5",
+        "4ec50688532215c70710008123df0f38c1b3a49a02e64cfc2f5d547a9882ab1e6baa70311fa88dcf8e066f23e5726bdb6fefc0d4d51c655b4450d0fbe5362571",
+        "72e0cf996578b7195d7618db8ee832e2a9f76b284591c60e94f66f8aef941637564105eb2f69662a1016b1e0c35e8b9f9ed31f07859a2581d756c667d7a94833",
+        "fac3805109e58b85efc381f9815b4bcd58df11b4bf84b7d1dbef131dba7d26b9c521669c10dc929238ac92ff63ce177d408a8f162638e7a308d10ce790029c13"
       ],
       "sealers": 4
     },
     "containing_block": {
-      "hash": "0x827959b081bc7bd9a38e9681afc6cc336ef775b442839526f1568444a409ddf3",
+      "hash": "0xbe9caaa8f61d8c675e64d360c18fce09dcf3245d69ed28b7efe6e304f6ef94b7",
       "receipts_root": "0x87a10924e80ed1019f597c4792f6c16a6fc96398939d8144e747b9179c9c24f6",
       "signature_count": 3,
-      "transactions_root": "0xf6ef00f358cce85124f04f72c6017af9ce10cc47383f9f06d7bd23b340a9da78"
+      "transactions_root": "0x538e18a0533ed61e28a666ae7de75627d63b2d30a41bdb607865888944e8904c"
     },
     "deployment": {
       "block_number": 1,
@@ -73,9 +203,9 @@
         "fb760912ed564218a74ac57ae6b9d66d04d9bb77bbda19cf6187ee25b7fed0d1"
       ],
       "status": 0,
-      "transaction_hash": "0x91d941f5897238ebb3cc6ae5b08e5d4f5a45d21881a5bb33dd720a8f2c569d40",
+      "transaction_hash": "0x1a41cacb2a06fe732508808977437bee37f4d56f5124cae699b2b01686f65acd",
       "transaction_proof": [
-        "91d941f5897238ebb3cc6ae5b08e5d4f5a45d21881a5bb33dd720a8f2c569d40"
+        "1a41cacb2a06fe732508808977437bee37f4d56f5124cae699b2b01686f65acd"
       ]
     },
     "event_transaction": {
@@ -85,9 +215,9 @@
         "87a10924e80ed1019f597c4792f6c16a6fc96398939d8144e747b9179c9c24f6"
       ],
       "status": 0,
-      "transaction_hash": "0xf6ef00f358cce85124f04f72c6017af9ce10cc47383f9f06d7bd23b340a9da78",
+      "transaction_hash": "0x538e18a0533ed61e28a666ae7de75627d63b2d30a41bdb607865888944e8904c",
       "transaction_proof": [
-        "f6ef00f358cce85124f04f72c6017af9ce10cc47383f9f06d7bd23b340a9da78"
+        "538e18a0533ed61e28a666ae7de75627d63b2d30a41bdb607865888944e8904c"
       ]
     },
     "final_block_number": 2,

@@ -220,12 +220,36 @@ def validate_evidence(
             f"verified runtime row {key} requires the pinned compiler",
         )
         require(
-            evidence.get("clean_teardown") is True,
-            f"verified runtime row {key} requires clean SDK teardown",
+            evidence.get("probe_source") == "pinned-solidity-compiler",
+            f"verified runtime row {key} requires the pinned compiler source",
         )
         require(
-            evidence.get("node_clean_teardown") is True,
-            f"verified runtime row {key} requires clean node teardown",
+            bool(evidence.get("certificate_verification")),
+            f"verified runtime row {key} requires certificate verification",
+        )
+        harness_validation = evidence.get("harness_validation")
+        require(
+            isinstance(harness_validation, dict)
+            and harness_validation.get("four_node_convergence_required_before_sdk") is True
+            and harness_validation.get("stdout_is_single_json_document") is True
+            and harness_validation.get("stderr_lines") == []
+            and harness_validation.get("clean_teardown") is True,
+            f"verified runtime row {key} requires clean structured harness output",
+        )
+        cleanup = evidence.get("cleanup")
+        require(
+            isinstance(cleanup, dict)
+            and cleanup.get("node_processes_absent") is True
+            and cleanup.get("listeners_absent") is True
+            and cleanup.get("host_lock_absent") is True
+            and cleanup.get("generated_keys_or_certificates_committed") is False,
+            f"verified runtime row {key} requires clean host teardown",
+        )
+        raw_client_output = evidence.get("raw_client_output")
+        require(
+            isinstance(raw_client_output, dict)
+            and raw_client_output.get("clean_teardown") is True,
+            f"verified runtime row {key} requires clean raw client output",
         )
     require(
         admitted == (row["runtime_status"] == "verified"),
