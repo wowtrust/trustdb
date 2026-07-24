@@ -35,7 +35,7 @@ const demoResources: Record<string, AnchorSystemResource[]> = {
 
 const selected = computed(() => systems.value.find((item) => item.system_id === selectedID.value) ?? null)
 const kindLabel: Record<string, string> = {
-  timestamp_evidence: '近存证锚点',
+  timestamp_evidence: '仅存证锚点',
   evidence_blockchain: '存证区块链',
   full_blockchain: '完整区块链',
 }
