@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/wowtrust/trustdb/internal/tlcpprofile"
 	"github.com/wowtrust/trustdb/internal/tlcpready"
@@ -24,6 +25,23 @@ func main() {
 }
 
 func run() error {
+	return runReadiness(readinessDependencies{
+		now:             time.Now,
+		verifyRuntime:   tlcpprofile.VerifyRuntime,
+		loadAndValidate: tlcpprofile.LoadAndValidate,
+		check:           tlcpready.Check,
+	})
+}
+
+type readinessDependencies struct {
+	now             func() time.Time
+	verifyRuntime   func(string, tlcpprofile.RuntimeOptions) (tlcpprofile.RuntimeManifest, error)
+	loadAndValidate func(string, tlcpprofile.Options) (tlcpprofile.Profile, tlcpprofile.Report, error)
+	check           func(context.Context, tlcpready.Config) error
+}
+
+func runReadiness(dependencies readinessDependencies) error {
+	started := dependencies.now()
 	profilePath := requiredEnvironment("TLCP_PROFILE_FILE")
 	imageDigest := requiredEnvironment("TLCP_EXPECTED_GATEWAY_IMAGE_DIGEST")
 	if profilePath == "" || imageDigest == "" {
@@ -34,10 +52,13 @@ func run() error {
 		ConfigurationPath:          configurationPath,
 		ManifestPath:               manifestPath,
 	}
-	if _, err := tlcpprofile.VerifyRuntime(profilePath, options); err != nil {
+	if _, err := dependencies.verifyRuntime(profilePath, options); err != nil {
 		return fmt.Errorf("verify strict runtime manifest: %w", err)
 	}
-	profile, _, err := tlcpprofile.LoadAndValidate(profilePath, tlcpprofile.Options{})
+	profile, _, err := dependencies.loadAndValidate(
+		profilePath,
+		tlcpprofile.Options{},
+	)
 	if err != nil {
 		return err
 	}
@@ -53,6 +74,12 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	deadline := started.Add(timeout)
+	if !dependencies.now().Before(deadline) {
+		return errors.New(
+			"TLCP canary deadline expired during runtime and profile validation",
+		)
+	}
 	readinessSigningChain := requiredEnvironment(
 		"TLCP_READINESS_SIGNING_CHAIN_FILE",
 	)
@@ -65,9 +92,9 @@ func run() error {
 			"TLCP readiness certificate paths do not exactly match the authenticated profile identities",
 		)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	ctx, cancel := context.WithDeadline(context.Background(), deadline)
 	defer cancel()
-	return tlcpready.Check(ctx, tlcpready.Config{
+	return dependencies.check(ctx, tlcpready.Config{
 		OpenSSLPath:               "/opt/tongsuo/bin/openssl",
 		ServerName:                profile.ServerName,
 		ServerCAFile:              profile.Certificates.ServerCAFile,
