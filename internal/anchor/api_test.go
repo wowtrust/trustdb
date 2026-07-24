@@ -36,6 +36,7 @@ func TestAPIAnchorsCompositeCursorRetainsSameTreeSinks(t *testing.T) {
 		result := model.STHAnchorResult{
 			SchemaVersion:    model.SchemaSTHAnchorResult,
 			CryptoSuite:      cryptosuite.INTLV1,
+			EvidenceStage:    model.AnchorEvidenceStageOfflineVerified,
 			NodeID:           sth.NodeID,
 			LogID:            sth.LogID,
 			TreeSize:         sth.TreeSize,

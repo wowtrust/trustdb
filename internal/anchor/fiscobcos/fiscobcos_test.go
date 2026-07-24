@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -422,8 +423,8 @@ func testTrustConfig(t *testing.T, mode CryptoMode) TrustConfig {
 	config.TrustedCheckpoint = BlockCheckpoint{BlockNumber: 4096, BlockHash: sequenceBytes(0x21, 32)}
 	config.Contract = ContractBinding{
 		Address: sequenceBytes(0x41, 20), CodeHash: sequenceBytes(0x61, 32),
-		ProtocolVersion: "trustdb-anchor-v1",
-		EventSignature:  "AnchorPublished(bytes32,bytes32,uint64,bytes32,bytes32,address,uint16)",
+		ProtocolVersion: TrustDBAnchorV1ProtocolVersion,
+		EventSignature:  TrustDBAnchorV1EventSignature,
 	}
 	config.Endpoints = []string{"127.0.0.1:20201", "127.0.0.1:20200", "https://bcos.example.test:20202"}
 	config.ReadQuorum = 2
@@ -450,6 +451,41 @@ func testTrustConfig(t *testing.T, mode CryptoMode) TrustConfig {
 		})
 	}
 	return config
+}
+
+func TestPinnedReceiptStatusClassification(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		status      int
+		disposition ReceiptStatusDisposition
+		failure     FailureClass
+	}{
+		{status: 0, disposition: ReceiptStatusSucceeded, failure: FailureAmbiguous},
+		{status: 16, disposition: ReceiptStatusPermanent, failure: FailurePermanent},
+		{status: 18, disposition: ReceiptStatusPermanent, failure: FailurePermanent},
+		{status: 10001, disposition: ReceiptStatusBlockLimit, failure: FailureTransient},
+		{status: 10002, disposition: ReceiptStatusRetryable, failure: FailureTransient},
+		{status: 10000, disposition: ReceiptStatusDuplicate, failure: FailureAmbiguous},
+		{status: 10004, disposition: ReceiptStatusDuplicate, failure: FailureAmbiguous},
+		{status: 10005, disposition: ReceiptStatusDuplicate, failure: FailureAmbiguous},
+		{status: 10006, disposition: ReceiptStatusPermanent, failure: FailurePermanent},
+		{status: 10007, disposition: ReceiptStatusPermanent, failure: FailurePermanent},
+		{status: 10008, disposition: ReceiptStatusPermanent, failure: FailurePermanent},
+		{status: 10010, disposition: ReceiptStatusAmbiguous, failure: FailureAmbiguous},
+		{status: 10011, disposition: ReceiptStatusDuplicate, failure: FailureAmbiguous},
+		{status: -1, disposition: ReceiptStatusAmbiguous, failure: FailureAmbiguous},
+		{status: 99999, disposition: ReceiptStatusAmbiguous, failure: FailureAmbiguous},
+	}
+	for _, test := range tests {
+		statusErr := NewReceiptStatusError(test.status)
+		if statusErr.Disposition != test.disposition || statusErr.FailureClass() != test.failure {
+			t.Errorf("status %d classified as %s/%s, want %s/%s",
+				test.status, statusErr.Disposition, statusErr.FailureClass(), test.disposition, test.failure)
+		}
+		if !errors.Is(statusErr, ErrInvalidReceiptStatus) {
+			t.Errorf("status %d error does not wrap ErrInvalidReceiptStatus", test.status)
+		}
+	}
 }
 
 func testProof(t *testing.T, config TrustConfig, payload []byte, _ model.SignedTreeHead) AnchorProof {
@@ -497,7 +533,8 @@ func testResult(t *testing.T, proof AnchorProof, sth model.SignedTreeHead) model
 		t.Fatal(err)
 	}
 	return model.STHAnchorResult{
-		SchemaVersion: model.SchemaSTHAnchorResult, NodeID: sth.NodeID, LogID: sth.LogID,
+		SchemaVersion: model.SchemaSTHAnchorResult, EvidenceStage: model.AnchorEvidenceStageOfflineVerified,
+		NodeID: sth.NodeID, LogID: sth.LogID,
 		TreeSize: sth.TreeSize, SinkName: SinkName, AnchorID: AnchorIDString(payload), RootHash: append([]byte(nil), sth.RootHash...),
 		STH: sth, Proof: proofBytes, PublishedAtUnixN: 3,
 	}

@@ -97,3 +97,32 @@ func TestResponseEncodingValidation(t *testing.T) {
 		t.Fatal("short Ed25519 signature was accepted")
 	}
 }
+
+func TestFISCOBCOSStandardSignerProfileIsExact(t *testing.T) {
+	binding := Binding{
+		ProtocolVersion:   ProtocolVersion,
+		PluginID:          "bcos-signer",
+		ProviderKind:      ProviderRemote,
+		CryptoSuite:       SuiteFISCOBCOSStandard,
+		Algorithm:         AlgorithmSecp256k1,
+		PublicKeyEncoding: Secp256k1PublicKeyEncoding,
+		SignatureEncoding: Secp256k1SignatureEncoding,
+		KeyID:             "publisher",
+	}
+	if err := ValidateBinding(binding); err != nil {
+		t.Fatalf("valid FISCO BCOS binding rejected: %v", err)
+	}
+	publicKey := append([]byte{0x04}, bytes.Repeat([]byte{0x11}, 64)...)
+	if err := validatePublicKey(binding, publicKey); err != nil {
+		t.Fatalf("valid secp256k1 public key rejected: %v", err)
+	}
+	signature := bytes.Repeat([]byte{0x22}, 65)
+	signature[64] = 1
+	if err := validateSignature(binding, signature); err != nil {
+		t.Fatalf("valid recoverable signature rejected: %v", err)
+	}
+	signature[64] = 2
+	if err := validateSignature(binding, signature); err == nil {
+		t.Fatal("out-of-range recovery id was accepted")
+	}
+}

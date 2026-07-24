@@ -424,6 +424,14 @@ func (s *Service) Evidence(ctx context.Context, batchID string) (model.GlobalLog
 			return model.GlobalLogEvidence{}, err
 		}
 		if found {
+			if !model.ValidAnchorEvidenceStage(result.EvidenceStage) {
+				return model.GlobalLogEvidence{}, trusterr.New(trusterr.CodeDataLoss, "latest STH anchor result has an unknown evidence stage")
+			}
+			if !model.AnchorResultProvidesOfflineL5(result) {
+				found = false
+			}
+		}
+		if found {
 			if result.TreeSize == 0 {
 				return model.GlobalLogEvidence{}, trusterr.New(trusterr.CodeDataLoss, "latest STH anchor result has an empty tree size")
 			}

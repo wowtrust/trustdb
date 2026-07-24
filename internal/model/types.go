@@ -63,7 +63,16 @@ const (
 	// incremented attempt counter so the worker can retry them).
 	AnchorStatePending   = "pending"
 	AnchorStatePublished = "published"
+	AnchorStateObserved  = "observed"
+	AnchorStateLocalOnly = "local_only"
 	AnchorStateFailed    = "failed"
+
+	// AnchorEvidenceStageOfflineVerified is the sole stage allowed to promote
+	// records to L5. AnchorEvidenceStageRaw records a durable external-chain
+	// observation that has not passed TrustDB's offline verification gates.
+	AnchorEvidenceStageOfflineVerified = "offline_verified"
+	AnchorEvidenceStageRaw             = "external_observation"
+	AnchorEvidenceStageLocalOnly       = "local_only"
 
 	RecordStatusAccepted     = "accepted"
 	RecordStatusProcessing   = "processing"
@@ -730,7 +739,28 @@ type STHAnchorResult struct {
 	RootHash         []byte         `cbor:"root_hash" json:"root_hash"`
 	STH              SignedTreeHead `cbor:"sth" json:"sth"`
 	Proof            []byte         `cbor:"proof,omitempty" json:"proof,omitempty"`
+	EvidenceStage    string         `cbor:"evidence_stage,omitempty" json:"evidence_stage,omitempty"`
 	PublishedAtUnixN int64          `cbor:"published_at_unix_nano" json:"published_at_unix_nano"`
+}
+
+// AnchorResultProvidesOfflineL5 is the only allowed bridge from an immutable
+// external result to TrustDB's L5 projection. This is intentionally an
+// allowlist: empty, unknown, and raw observation stages must all fail closed.
+func AnchorResultProvidesOfflineL5(result STHAnchorResult) bool {
+	// These stable wire sink names are local test/development backends, not
+	// independent witnesses. Reject them even if a corrupt store or plugin
+	// forges evidence_stage=offline_verified.
+	switch result.SinkName {
+	case "file", "noop":
+		return false
+	}
+	return result.EvidenceStage == AnchorEvidenceStageOfflineVerified
+}
+
+func ValidAnchorEvidenceStage(stage string) bool {
+	return stage == AnchorEvidenceStageOfflineVerified ||
+		stage == AnchorEvidenceStageRaw ||
+		stage == AnchorEvidenceStageLocalOnly
 }
 
 // STHAnchorResultKey is the immutable storage identity of one sink-specific

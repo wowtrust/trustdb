@@ -141,6 +141,25 @@ func TestProjectPageWithoutAnchorLeavesL4(t *testing.T) {
 	}
 }
 
+func TestProjectPageDoesNotPromoteLocalOnlyResult(t *testing.T) {
+	t.Parallel()
+	key := projectorKey()
+	store := newProjectorStore(key, 1)
+	store.result = projectorResult(key, 1)
+	store.result.EvidenceStage = model.AnchorEvidenceStageLocalOnly
+	service, err := New(Config{Store: store, Key: key})
+	if err != nil {
+		t.Fatal(err)
+	}
+	progressed, err := service.ProjectPage(context.Background())
+	if err != nil || progressed {
+		t.Fatalf("ProjectPage() progressed=%v error=%v, want no local-only projection", progressed, err)
+	}
+	if got := store.level("batch-0"); got != "L4" {
+		t.Fatalf("batch level=%q, want L4", got)
+	}
+}
+
 func TestStopCancelsProjectionWithoutForcingCheckpoint(t *testing.T) {
 	key := projectorKey()
 	base := newProjectorStore(key, 1)
@@ -275,7 +294,7 @@ func (s *projectorStore) level(batchID string) string {
 }
 
 func projectorKey() model.STHAnchorScheduleKey {
-	return model.STHAnchorScheduleKey{NodeID: "node-1", LogID: "log-1", SinkName: "file"}
+	return model.STHAnchorScheduleKey{NodeID: "node-1", LogID: "log-1", SinkName: "independent-test-anchor"}
 }
 
 func projectorResult(key model.STHAnchorScheduleKey, treeSize uint64) model.STHAnchorResult {
@@ -285,7 +304,7 @@ func projectorResult(key model.STHAnchorScheduleKey, treeSize uint64) model.STHA
 		Signature: model.Signature{Alg: model.DefaultSignatureAlg, KeyID: "server-key", Signature: bytes.Repeat([]byte{byte(treeSize)}, 64)},
 	}
 	return model.STHAnchorResult{
-		SchemaVersion: model.SchemaSTHAnchorResult, CryptoSuite: cryptosuite.INTLV1, NodeID: key.NodeID, LogID: key.LogID, TreeSize: treeSize,
+		SchemaVersion: model.SchemaSTHAnchorResult, CryptoSuite: cryptosuite.INTLV1, EvidenceStage: model.AnchorEvidenceStageOfflineVerified, NodeID: key.NodeID, LogID: key.LogID, TreeSize: treeSize,
 		SinkName: key.SinkName, AnchorID: fmt.Sprintf("anchor-%d", treeSize), RootHash: append([]byte(nil), sth.RootHash...), STH: sth,
 		PublishedAtUnixN: int64(treeSize),
 	}

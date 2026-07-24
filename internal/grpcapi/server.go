@@ -432,7 +432,11 @@ func (s *Server) GetAnchor(ctx context.Context, req *GetAnchorRequest) (*GetAnch
 	if !ok {
 		return nil, toStatusError(trusterr.New(trusterr.CodeNotFound, "anchor not found for STH"))
 	}
-	return anchorEnvelopeResponse(result), nil
+	response, err := anchorEnvelopeResponse(result)
+	if err != nil {
+		return nil, toStatusError(err)
+	}
+	return response, nil
 }
 
 func (s *Server) ListAnchors(ctx context.Context, req *ListAnchorsRequest) (*ListAnchorsResponse, error) {
@@ -464,7 +468,11 @@ func (s *Server) ListAnchors(ctx context.Context, req *ListAnchorsRequest) (*Lis
 	}
 	anchors := make([]GetAnchorResponse, 0, len(items))
 	for _, result := range items {
-		anchors = append(anchors, *anchorEnvelopeResponse(result))
+		response, err := anchorEnvelopeResponse(result)
+		if err != nil {
+			return nil, toStatusError(err)
+		}
+		anchors = append(anchors, *response)
 	}
 	next := ""
 	if len(items) == opts.Limit {
@@ -758,11 +766,26 @@ func parseDirection(raw string) (string, error) {
 	}
 }
 
-func anchorEnvelopeResponse(result model.STHAnchorResult) *GetAnchorResponse {
+func anchorEnvelopeResponse(result model.STHAnchorResult) (*GetAnchorResponse, error) {
+	if !model.ValidAnchorEvidenceStage(result.EvidenceStage) {
+		return nil, trusterr.New(trusterr.CodeDataLoss, "anchor result has an unknown evidence stage")
+	}
+	if result.EvidenceStage == model.AnchorEvidenceStageLocalOnly {
+		return &GetAnchorResponse{
+			TreeSize: result.TreeSize, Status: model.AnchorStateLocalOnly,
+			ProofLevel: prooflevel.L4.String(), Result: &result,
+		}, nil
+	}
+	if !model.AnchorResultProvidesOfflineL5(result) {
+		return &GetAnchorResponse{
+			TreeSize: result.TreeSize, Status: model.AnchorStateObserved,
+			ProofLevel: prooflevel.L4.String(), Result: &result,
+		}, nil
+	}
 	return &GetAnchorResponse{
 		TreeSize: result.TreeSize, Status: model.AnchorStatePublished,
 		ProofLevel: prooflevel.L5.String(), Result: &result,
-	}
+	}, nil
 }
 
 func toStatusError(err error) error {

@@ -87,12 +87,12 @@ func TestHTTPAndGRPCTransportsShareProofSemantics(t *testing.T) {
 				t.Fatalf("submit result = %+v", res)
 			}
 
-			artifacts := waitForProofArtifactsLevel(t, tt.proofWith, res.RecordID, sdk.ProofLevelL5)
+			artifacts := waitForProofArtifactsLevel(t, tt.proofWith, res.RecordID, sdk.ProofLevelL4)
 			if artifacts.GlobalProof == nil {
 				t.Fatalf("proof artifacts missing global proof: %+v", artifacts)
 			}
-			if artifacts.AnchorResult == nil || artifacts.AnchorResult.SinkName != anchor.NoopSinkName {
-				t.Fatalf("proof artifacts anchor = %+v", artifacts.AnchorResult)
+			if artifacts.AnchorResult != nil {
+				t.Fatalf("local-only sink unexpectedly produced offline anchor evidence: %+v", artifacts.AnchorResult)
 			}
 			if artifacts.GlobalProof.BatchID != artifacts.Bundle.CommittedReceipt.BatchID {
 				t.Fatalf("global proof batch_id = %q, bundle batch_id = %q",
@@ -108,7 +108,7 @@ func TestHTTPAndGRPCTransportsShareProofSemantics(t *testing.T) {
 			if err != nil {
 				t.Fatalf("VerifyArtifacts: %v", err)
 			}
-			if !verified.Valid || verified.ProofLevel != sdk.ProofLevelL5 || verified.RecordID != res.RecordID {
+			if !verified.Valid || verified.ProofLevel != sdk.ProofLevelL4 || verified.RecordID != res.RecordID {
 				t.Fatalf("verify result = %+v", verified)
 			}
 

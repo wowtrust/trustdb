@@ -84,6 +84,8 @@ anchor:
   max_delay: "5m"
   sink: "ots"
   path: "/var/lib/trustdb/anchors/sth-anchors.jsonl"
+  fisco_bcos:
+    trust_config_file: ""
   plugin:
     command: ""
     args: []

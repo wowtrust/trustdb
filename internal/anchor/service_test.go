@@ -63,6 +63,9 @@ func (f *fakeSink) Publish(ctx context.Context, sth model.SignedTreeHead) (model
 	out.RootHash = append([]byte(nil), sth.RootHash...)
 	out.STH = sth
 	out.SinkName = f.name
+	if out.EvidenceStage == "" {
+		out.EvidenceStage = model.AnchorEvidenceStageOfflineVerified
+	}
 	return out, nil
 }
 
@@ -566,7 +569,7 @@ func (s *blockingSink) Publish(ctx context.Context, _ model.SignedTreeHead) (mod
 	s.once.Do(func() { close(s.started) })
 	select {
 	case <-s.release:
-		return model.STHAnchorResult{AnchorID: "blocking-anchor"}, nil
+		return model.STHAnchorResult{AnchorID: "blocking-anchor", EvidenceStage: model.AnchorEvidenceStageOfflineVerified}, nil
 	case <-ctx.Done():
 		return model.STHAnchorResult{}, ctx.Err()
 	}

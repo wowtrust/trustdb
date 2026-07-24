@@ -182,8 +182,9 @@ Only success at every stage may produce L5. Transaction existence, receipt exist
 ## Compatibility and follow-up boundaries
 
 - #463 implements the immutable `TrustDBAnchorV1` contract and event from this payload.
-- #464 implements the standard-mode driver and sink without changing anchor scheduler semantics.
+- #464 implements the standard-mode driver and sink without changing anchor scheduler semantics. Its raw observation keeps only signatures bound to the requested historical block; the latest-only `getPbftView` value is never relabeled as that block's view or round. An exact record already visible through every configured endpoint prevents an immediate duplicate submission, but #464 does not claim recovery when the original transaction is still pending or temporarily invisible.
 - #465 persists byte-identical transaction, receipt, Merkle, block, and finality material plus every block-limit retry.
+- #470 adds deterministic lookup/rebroadcast, block-limit refresh, duplicate handling, and bounded stale-endpoint/read-quorum retry policy before a replacement transaction may be created.
 - #466 independently verifies transaction/receipt inclusion.
 - #467 independently verifies static-validator PBFT finality.
 - #468 adds Guomi-native account, dual-certificate, hash, receipt, block, proof, and finality handling without changing the chain-neutral TrustDB payload.

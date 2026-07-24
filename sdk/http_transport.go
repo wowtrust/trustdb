@@ -727,7 +727,13 @@ type anchorEnvelope struct {
 }
 
 func validatePublishedAnchorEnvelope(op, endpoint string, env anchorEnvelope) error {
-	if env.Status != model.AnchorStatePublished || env.ProofLevel != ProofLevelL5 || env.Result == nil {
+	validPublished := env.Status == model.AnchorStatePublished && env.ProofLevel == ProofLevelL5 &&
+		env.Result != nil && env.Result.EvidenceStage == model.AnchorEvidenceStageOfflineVerified
+	validObserved := env.Status == model.AnchorStateObserved && env.ProofLevel == ProofLevelL4 &&
+		env.Result != nil && env.Result.EvidenceStage == model.AnchorEvidenceStageRaw
+	validLocalOnly := env.Status == model.AnchorStateLocalOnly && env.ProofLevel == ProofLevelL4 &&
+		env.Result != nil && env.Result.EvidenceStage == model.AnchorEvidenceStageLocalOnly
+	if (!validPublished && !validObserved && !validLocalOnly) || env.Result == nil {
 		return &Error{Op: op, URL: endpoint, Message: "server returned a non-published or incomplete anchor result"}
 	}
 	if env.TreeSize == 0 || env.Result.TreeSize != env.TreeSize || env.Result.SchemaVersion != model.SchemaSTHAnchorResult || env.Result.AnchorID == "" {

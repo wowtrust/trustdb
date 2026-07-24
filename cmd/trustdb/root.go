@@ -230,6 +230,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("anchor.plugin.args", defaults.Anchor.Plugin.Args)
 	v.SetDefault("anchor.plugin.start_timeout", defaults.Anchor.Plugin.StartTimeout)
 	v.SetDefault("anchor.plugin.rpc_timeout", defaults.Anchor.Plugin.RPCTimeout)
+	v.SetDefault("anchor.fisco_bcos.trust_config_file", defaults.Anchor.FISCOBCOS.TrustConfigFile)
 	for provider, plugin := range map[string]trustconfig.SignerPlugin{
 		"remote": defaults.Crypto.SignerPlugins.Remote,
 		"pkcs11": defaults.Crypto.SignerPlugins.PKCS11,
@@ -372,6 +373,7 @@ func setDefaults(v *viper.Viper) {
 	bindEnv(v, "anchor.plugin.args", "TRUSTDB_ANCHOR_PLUGIN_ARGS")
 	bindEnv(v, "anchor.plugin.start_timeout", "TRUSTDB_ANCHOR_PLUGIN_START_TIMEOUT")
 	bindEnv(v, "anchor.plugin.rpc_timeout", "TRUSTDB_ANCHOR_PLUGIN_RPC_TIMEOUT")
+	bindEnv(v, "anchor.fisco_bcos.trust_config_file", "TRUSTDB_ANCHOR_FISCO_BCOS_TRUST_CONFIG_FILE")
 	for _, provider := range []string{"remote", "pkcs11", "sdf"} {
 		prefix := "crypto.signer_plugins." + provider + "."
 		envPrefix := "TRUSTDB_CRYPTO_SIGNER_PLUGINS_" + strings.ToUpper(provider) + "_"
@@ -621,6 +623,8 @@ func configString(cfg trustconfig.Config, key string) string {
 		return cfg.Anchor.Plugin.StartTimeout
 	case "anchor.plugin.rpc_timeout":
 		return cfg.Anchor.Plugin.RPCTimeout
+	case "anchor.fisco_bcos.trust_config_file":
+		return cfg.Anchor.FISCOBCOS.TrustConfigFile
 	case "batch.proof_mode":
 		return cfg.Batch.ProofMode
 	case "proofstore.artifact_sync_mode":

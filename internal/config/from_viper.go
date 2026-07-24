@@ -148,6 +148,9 @@ func FromViper(v *viper.Viper) Config {
 				StartTimeout: anchorPluginStartTimeout,
 				RPCTimeout:   anchorPluginRPCTimeout,
 			},
+			FISCOBCOS: AnchorFISCOBCOS{
+				TrustConfigFile: v.GetString("anchor.fisco_bcos.trust_config_file"),
+			},
 		},
 		Crypto: Crypto{SignerPlugins: SignerPlugins{
 			Remote: remoteSignerPlugin,

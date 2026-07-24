@@ -282,6 +282,7 @@ func TestUpgradeAnchorResult_WrapsProofBytes(t *testing.T) {
 	sth := newTestSTH(proof.TreeSize, digest)
 	ar := model.STHAnchorResult{
 		SchemaVersion:    model.SchemaSTHAnchorResult,
+		EvidenceStage:    model.AnchorEvidenceStageOfflineVerified,
 		TreeSize:         proof.TreeSize,
 		SinkName:         OtsSinkName,
 		AnchorID:         "ots-test",

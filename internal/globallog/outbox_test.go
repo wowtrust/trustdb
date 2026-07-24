@@ -358,6 +358,7 @@ func TestOutboxWorkerNonMonotonicCoveredRetryUsesHighestNewSTH(t *testing.T) {
 	}
 	if err := writer.PutSTHAnchorResult(ctx, model.STHAnchorResult{CryptoSuite: cryptosuite.INTLV1,
 		SchemaVersion:    model.SchemaSTHAnchorResult,
+		EvidenceStage:    model.AnchorEvidenceStageOfflineVerified,
 		NodeID:           key.NodeID,
 		LogID:            key.LogID,
 		TreeSize:         oldSTH.TreeSize,

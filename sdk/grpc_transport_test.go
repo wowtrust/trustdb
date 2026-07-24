@@ -360,6 +360,7 @@ func (grpcTestAnchors) AnchorResult(_ context.Context, treeSize uint64) (model.S
 	return model.STHAnchorResult{
 		SchemaVersion: model.SchemaSTHAnchorResult,
 		CryptoSuite:   cryptosuite.INTLV1,
+		EvidenceStage: model.AnchorEvidenceStageOfflineVerified,
 		TreeSize:      4,
 		SinkName:      "ots",
 		AnchorID:      "anchor-4",
@@ -371,6 +372,7 @@ func (grpcTestAnchors) Anchors(context.Context, model.AnchorListOptions) ([]mode
 	return []model.STHAnchorResult{{
 		SchemaVersion: model.SchemaSTHAnchorResult,
 		CryptoSuite:   cryptosuite.INTLV1,
+		EvidenceStage: model.AnchorEvidenceStageOfflineVerified,
 		TreeSize:      4,
 		SinkName:      "ots",
 		AnchorID:      "anchor-4",

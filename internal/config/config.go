@@ -137,6 +137,10 @@ anchor:
   scope: "global"
   max_delay: "5m"
   poll_interval: "2s"
+  # Set sink to fisco-bcos-standard and provision this strict canonical-CBOR
+  # file to enable the pinned standard-crypto client.
+  fisco_bcos:
+    trust_config_file: ""
   plugin:
     command: ""
     args: []
@@ -377,12 +381,13 @@ type GlobalLog struct {
 }
 
 type Anchor struct {
-	Scope        string       `mapstructure:"scope" json:"scope"`
-	MaxDelay     string       `mapstructure:"max_delay" json:"max_delay"`
-	PollInterval string       `mapstructure:"poll_interval" json:"poll_interval"`
-	Sink         string       `mapstructure:"sink" json:"sink"`
-	Path         string       `mapstructure:"path" json:"path"`
-	Plugin       AnchorPlugin `mapstructure:"plugin" json:"plugin"`
+	Scope        string          `mapstructure:"scope" json:"scope"`
+	MaxDelay     string          `mapstructure:"max_delay" json:"max_delay"`
+	PollInterval string          `mapstructure:"poll_interval" json:"poll_interval"`
+	Sink         string          `mapstructure:"sink" json:"sink"`
+	Path         string          `mapstructure:"path" json:"path"`
+	Plugin       AnchorPlugin    `mapstructure:"plugin" json:"plugin"`
+	FISCOBCOS    AnchorFISCOBCOS `mapstructure:"fisco_bcos" json:"fisco_bcos"`
 }
 
 type AnchorPlugin struct {
@@ -390,6 +395,14 @@ type AnchorPlugin struct {
 	Args         []string `mapstructure:"args" json:"args"`
 	StartTimeout string   `mapstructure:"start_timeout" json:"start_timeout"`
 	RPCTimeout   string   `mapstructure:"rpc_timeout" json:"rpc_timeout"`
+}
+
+// AnchorFISCOBCOS points at a canonical, locally provisioned TrustConfig.
+// Chain trust roots, endpoints, certificate references, and signer-provider
+// references live in that file; private key bytes must never be placed in the
+// central server configuration.
+type AnchorFISCOBCOS struct {
+	TrustConfigFile string `mapstructure:"trust_config_file" json:"trust_config_file"`
 }
 
 // Crypto configures optional external private-key custody adapters. These
@@ -731,6 +744,12 @@ func (c Config) Validate() error {
 	}
 	if strings.EqualFold(strings.TrimSpace(c.Anchor.Sink), "plugin") && strings.TrimSpace(c.Anchor.Plugin.Command) == "" {
 		return fmt.Errorf("anchor.plugin.command is required when anchor.sink is plugin")
+	}
+	switch strings.ToLower(strings.TrimSpace(c.Anchor.Sink)) {
+	case "fisco-bcos", "fisco-bcos-standard":
+		if strings.TrimSpace(c.Anchor.FISCOBCOS.TrustConfigFile) == "" {
+			return fmt.Errorf("anchor.fisco_bcos.trust_config_file is required when anchor.sink is fisco-bcos-standard")
+		}
 	}
 	for _, tc := range []struct {
 		name   string

@@ -99,6 +99,7 @@ func TestBackupCreateVerifyRestoreRoundTrip(t *testing.T) {
 	if err := resultWriter.PutSTHAnchorResult(ctx, model.STHAnchorResult{
 		SchemaVersion:    model.SchemaSTHAnchorResult,
 		CryptoSuite:      cryptosuite.INTLV1,
+		EvidenceStage:    model.AnchorEvidenceStageLocalOnly,
 		NodeID:           sth.NodeID,
 		LogID:            sth.LogID,
 		TreeSize:         sth.TreeSize,
@@ -846,6 +847,7 @@ func backupScheduleResult(key model.STHAnchorScheduleKey, sth model.SignedTreeHe
 	return model.STHAnchorResult{
 		SchemaVersion:    model.SchemaSTHAnchorResult,
 		CryptoSuite:      cryptosuite.INTLV1,
+		EvidenceStage:    model.AnchorEvidenceStageOfflineVerified,
 		NodeID:           key.NodeID,
 		LogID:            key.LogID,
 		TreeSize:         sth.TreeSize,

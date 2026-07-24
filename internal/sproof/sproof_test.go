@@ -159,7 +159,9 @@ func TestValidateStrictlyDecodesFISCOBCOSProviderProof(t *testing.T) {
 		BatchID: "batch-1", LeafIndex: 0, LeafHash: leafHash, TreeSize: 1, STH: sth,
 	}
 	proof.AnchorResult = &model.STHAnchorResult{
-		SchemaVersion: model.SchemaSTHAnchorResult, CryptoSuite: cryptosuite.INTLV1, NodeID: proof.NodeID, LogID: proof.LogID,
+		SchemaVersion: model.SchemaSTHAnchorResult, CryptoSuite: cryptosuite.INTLV1,
+		EvidenceStage: model.AnchorEvidenceStageOfflineVerified,
+		NodeID:        proof.NodeID, LogID: proof.LogID,
 		TreeSize: 1, SinkName: fiscobcos.SinkName, AnchorID: strings.Repeat("0", 64),
 		RootHash: leafHash, STH: sth, Proof: []byte{0xa1, 0x61, 0x78, 0x01}, PublishedAtUnixN: 9,
 	}

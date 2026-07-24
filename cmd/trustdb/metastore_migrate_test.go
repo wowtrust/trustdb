@@ -189,6 +189,7 @@ func seedFileStore(t *testing.T, dir string) seedCounts {
 	result := model.STHAnchorResult{
 		CryptoSuite:      cryptosuite.INTLV1,
 		SchemaVersion:    model.SchemaSTHAnchorResult,
+		EvidenceStage:    model.AnchorEvidenceStageOfflineVerified,
 		NodeID:           anchorKey.NodeID,
 		LogID:            anchorKey.LogID,
 		TreeSize:         1,

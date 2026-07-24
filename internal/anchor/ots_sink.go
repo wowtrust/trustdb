@@ -295,6 +295,7 @@ func (s *OtsSink) Publish(ctx context.Context, sth model.SignedTreeHead) (model.
 		RootHash:         sth.RootHash,
 		STH:              sth,
 		Proof:            proofBytes,
+		EvidenceStage:    model.AnchorEvidenceStageOfflineVerified,
 		PublishedAtUnixN: now.UnixNano(),
 	}, nil
 }

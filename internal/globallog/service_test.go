@@ -177,11 +177,12 @@ func TestEvidenceUsesLatestCoveringAnchoredSTH(t *testing.T) {
 	anchored := sths[len(sths)-1]
 	result := model.STHAnchorResult{CryptoSuite: cryptosuite.INTLV1,
 		SchemaVersion:    model.SchemaSTHAnchorResult,
+		EvidenceStage:    model.AnchorEvidenceStageOfflineVerified,
 		NodeID:           anchored.NodeID,
 		LogID:            anchored.LogID,
 		TreeSize:         anchored.TreeSize,
-		SinkName:         anchor.NoopSinkName,
-		AnchorID:         anchor.DeterministicNoopAnchorID(anchored),
+		SinkName:         "independent-test-anchor",
+		AnchorID:         "independent-anchor-3",
 		RootHash:         append([]byte(nil), anchored.RootHash...),
 		STH:              anchored,
 		PublishedAtUnixN: time.Unix(101, 0).UnixNano(),
@@ -221,7 +222,7 @@ func TestEvidenceUsesLatestCoveringAnchoredSTH(t *testing.T) {
 	}
 }
 
-func TestEvidenceUsesConfiguredAnchorSinkStream(t *testing.T) {
+func TestEvidenceDoesNotTreatConfiguredNoopStreamAsL5(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	store := newBoundTestLocalStore(t, t.TempDir())
@@ -246,22 +247,31 @@ func TestEvidenceUsesConfiguredAnchorSinkStream(t *testing.T) {
 	writer := any(store).(proofstore.STHAnchorResultWriter)
 	putResult := func(sth model.SignedTreeHead, sink string) {
 		t.Helper()
-		if err := writer.PutSTHAnchorResult(ctx, model.STHAnchorResult{CryptoSuite: cryptosuite.INTLV1,
-			SchemaVersion: model.SchemaSTHAnchorResult, NodeID: sth.NodeID, LogID: sth.LogID, TreeSize: sth.TreeSize,
+		if err := writer.PutSTHAnchorResult(ctx, model.STHAnchorResult{
+			SchemaVersion: model.SchemaSTHAnchorResult, CryptoSuite: cryptosuite.INTLV1,
+			EvidenceStage: model.AnchorEvidenceStageLocalOnly, NodeID: sth.NodeID, LogID: sth.LogID, TreeSize: sth.TreeSize,
 			SinkName: sink, AnchorID: sink + "-anchor", RootHash: append([]byte(nil), sth.RootHash...), STH: sth, PublishedAtUnixN: int64(sth.TreeSize),
 		}); err != nil {
 			t.Fatalf("PutSTHAnchorResult %s: %v", sink, err)
 		}
 	}
 	putResult(sths[1], anchor.NoopSinkName)
-	putResult(sths[2], anchor.FileSinkName)
+	if err := writer.PutSTHAnchorResult(ctx, model.STHAnchorResult{
+		SchemaVersion: model.SchemaSTHAnchorResult, CryptoSuite: cryptosuite.INTLV1,
+		EvidenceStage: model.AnchorEvidenceStageLocalOnly,
+		NodeID:        sths[2].NodeID, LogID: sths[2].LogID, TreeSize: sths[2].TreeSize,
+		SinkName: anchor.FileSinkName, AnchorID: "file-anchor", RootHash: append([]byte(nil), sths[2].RootHash...),
+		STH: sths[2], PublishedAtUnixN: int64(sths[2].TreeSize),
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	evidence, err := svc.Evidence(ctx, "b1")
 	if err != nil {
 		t.Fatalf("Evidence(b1): %v", err)
 	}
-	if evidence.AnchorResult == nil || evidence.AnchorResult.SinkName != anchor.NoopSinkName || evidence.GlobalProof.TreeSize != 2 {
-		t.Fatalf("configured-sink evidence = %+v", evidence)
+	if evidence.AnchorResult != nil || evidence.GlobalProof.TreeSize != 3 {
+		t.Fatalf("configured noop stream was treated as L5 evidence = %+v", evidence)
 	}
 	evidence, err = svc.Evidence(ctx, "b3")
 	if err != nil {

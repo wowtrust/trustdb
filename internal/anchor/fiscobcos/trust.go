@@ -237,6 +237,15 @@ func validateTrustConfig(config TrustConfig) error {
 			return err
 		}
 	}
+	if config.Contract.ProtocolVersion != TrustDBAnchorV1ProtocolVersion ||
+		config.Contract.EventSignature != TrustDBAnchorV1EventSignature {
+		return fmt.Errorf(
+			"%w: contract must use exact %s protocol and %s event",
+			ErrInvalidTrustConfig,
+			TrustDBAnchorV1ProtocolVersion,
+			TrustDBAnchorV1EventSignature,
+		)
+	}
 	if len(config.GenesisHash) != identifierBytes || len(config.TrustedCheckpoint.BlockHash) != identifierBytes {
 		return fmt.Errorf("%w: genesis_hash and trusted checkpoint hash must be %d bytes", ErrInvalidTrustConfig, identifierBytes)
 	}

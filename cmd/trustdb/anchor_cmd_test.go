@@ -65,6 +65,7 @@ func seedOtsAnchor(t *testing.T, dir string, calendarURL string) model.STHAnchor
 	ar := model.STHAnchorResult{
 		CryptoSuite:      cryptosuite.INTLV1,
 		SchemaVersion:    model.SchemaSTHAnchorResult,
+		EvidenceStage:    model.AnchorEvidenceStageOfflineVerified,
 		TreeSize:         sth.TreeSize,
 		SinkName:         anchor.OtsSinkName,
 		AnchorID:         anchor.DeterministicOtsAnchorID(sth),
@@ -269,6 +270,7 @@ func TestAnchorUpgradeCommand_RejectsNonOtsSTH(t *testing.T) {
 	ar := model.STHAnchorResult{
 		CryptoSuite:      cryptosuite.INTLV1,
 		SchemaVersion:    model.SchemaSTHAnchorResult,
+		EvidenceStage:    model.AnchorEvidenceStageOfflineVerified,
 		TreeSize:         sth.TreeSize,
 		SinkName:         "file",
 		AnchorID:         "file-test",
@@ -322,6 +324,7 @@ func TestAnchorExportCommand_ExportsCBORForOfflineVerify(t *testing.T) {
 	result := model.STHAnchorResult{
 		CryptoSuite:      cryptosuite.INTLV1,
 		SchemaVersion:    model.SchemaSTHAnchorResult,
+		EvidenceStage:    model.AnchorEvidenceStageOfflineVerified,
 		TreeSize:         sth.TreeSize,
 		SinkName:         "file",
 		AnchorID:         anchor.DeterministicFileAnchorID(sth),

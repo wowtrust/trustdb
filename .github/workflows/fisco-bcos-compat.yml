@@ -9,6 +9,15 @@ on:
       - "docs/integrations/evidence/fisco-bcos/**"
       - "contracts/fisco-bcos/**"
       - "scripts/fisco-bcos/**"
+      - "internal/anchor/fiscobcos/**"
+      - "internal/anchor/fiscobcos_sink*.go"
+      - "third_party/fisco-bcos/**"
+      - "internal/config/**"
+      - "internal/observability/metrics.go"
+      - "cmd/trustdb/**"
+      - "go.mod"
+      - "go.sum"
+      - "go.work.sum"
   push:
     branches:
       - main
@@ -19,6 +28,15 @@ on:
       - "docs/integrations/evidence/fisco-bcos/**"
       - "contracts/fisco-bcos/**"
       - "scripts/fisco-bcos/**"
+      - "internal/anchor/fiscobcos/**"
+      - "internal/anchor/fiscobcos_sink*.go"
+      - "third_party/fisco-bcos/**"
+      - "internal/config/**"
+      - "internal/observability/metrics.go"
+      - "cmd/trustdb/**"
+      - "go.mod"
+      - "go.sum"
+      - "go.work.sum"
 
 permissions:
   contents: read
@@ -68,6 +86,40 @@ jobs:
           -fuzz '^FuzzExactDuplicateIsIdempotent$'
           -fuzztime 10s ./...
 
+      - name: Download and verify pinned Linux C SDK
+        run: |
+          python3 scripts/fisco-bcos/compatibility.py verify-artifacts \
+            --platform linux/amd64 \
+            --crypto standard \
+            --cache-dir "${RUNNER_TEMP}/fisco-cache"
+
+      - name: Compile and test the native standard anchor driver
+        env:
+          CGO_ENABLED: "1"
+          CGO_LDFLAGS: -L${{ runner.temp }}/fisco-cache/c_sdk
+          LD_LIBRARY_PATH: ${{ runner.temp }}/fisco-cache/c_sdk
+        run: |
+          (
+            cd third_party/fisco-bcos/bcos-c-sdk-a278b4749e34
+            GOWORK=off go test -race -count=1 -mod=readonly \
+              -run '^TestTrustDB' ./bindings/go/csdk
+          )
+          (
+            cd third_party/fisco-bcos/go-sdk-v3.0.2
+            GOWORK=off go test -race -count=1 -mod=readonly \
+              -run '^TestTrustDB' ./client
+          )
+          go test -count=1 -mod=readonly -tags=fiscobcos_sdk \
+            ./internal/anchor/fiscobcos/... \
+            ./internal/anchor
+          go test -count=1 -mod=readonly -run '^$' -tags=fiscobcos_sdk \
+            ./cmd/trustdb
+
+      - name: Scan the native standard anchor dependency graph
+        run: >
+          go run golang.org/x/vuln/cmd/govulncheck@v1.6.0
+          -tags=fiscobcos_sdk ./...
+
   macos-air:
     name: macOS arm64 Air runtime
     runs-on: macos-15
@@ -113,6 +165,29 @@ jobs:
             --work-dir "${RUNNER_TEMP}/fisco-standard" \
             --cache-dir "${RUNNER_TEMP}/fisco-cache" \
             >"${RUNNER_TEMP}/fisco-standard-evidence.json"
+
+      - name: Compile and test the native standard anchor driver
+        shell: bash
+        env:
+          CGO_ENABLED: "1"
+          CGO_LDFLAGS: -L${{ runner.temp }}/fisco-cache/c_sdk -Wl,-rpath,${{ runner.temp }}/fisco-cache/c_sdk
+          DYLD_LIBRARY_PATH: ${{ runner.temp }}/fisco-cache/c_sdk
+        run: |
+          (
+            cd third_party/fisco-bcos/bcos-c-sdk-a278b4749e34
+            GOWORK=off go test -race -count=1 -mod=readonly \
+              -run '^TestTrustDB' ./bindings/go/csdk
+          )
+          (
+            cd third_party/fisco-bcos/go-sdk-v3.0.2
+            GOWORK=off go test -race -count=1 -mod=readonly \
+              -run '^TestTrustDB' ./client
+          )
+          go test -count=1 -mod=readonly -tags=fiscobcos_sdk \
+            ./internal/anchor/fiscobcos/... \
+            ./internal/anchor
+          go test -count=1 -mod=readonly -run '^$' -tags=fiscobcos_sdk \
+            ./cmd/trustdb
 
       - name: Run Guomi Air smoke
         shell: bash
@@ -234,6 +309,32 @@ jobs:
           $env:GOWORK = "off"
           go test -count=1 -mod=readonly ./...
           if ($LASTEXITCODE -ne 0) { throw "Windows Go SDK/C SDK link test failed" }
+
+      - name: Compile and test the native standard anchor driver
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $cache = Join-Path $env:RUNNER_TEMP "fisco-cache/c_sdk"
+          $env:PATH = "$cache;$env:PATH"
+          $env:CGO_ENABLED = "1"
+          $env:CGO_LDFLAGS = "-L$cache"
+          Push-Location third_party/fisco-bcos/bcos-c-sdk-a278b4749e34
+          $env:GOWORK = "off"
+          go test -race -count=1 -mod=readonly -run '^TestTrustDB' ./bindings/go/csdk
+          if ($LASTEXITCODE -ne 0) { throw "Windows C SDK boundary conformance tests failed" }
+          Pop-Location
+          Push-Location third_party/fisco-bcos/go-sdk-v3.0.2
+          go test -race -count=1 -mod=readonly -run '^TestTrustDB' ./client
+          if ($LASTEXITCODE -ne 0) { throw "Windows Go SDK context conformance tests failed" }
+          Pop-Location
+          $env:GOWORK = ""
+          go test -count=1 -mod=readonly -tags=fiscobcos_sdk `
+            ./internal/anchor/fiscobcos/... `
+            ./internal/anchor
+          if ($LASTEXITCODE -ne 0) { throw "Windows native standard anchor driver tests failed" }
+          go test -count=1 -mod=readonly -run '^$' -tags=fiscobcos_sdk `
+            ./cmd/trustdb
+          if ($LASTEXITCODE -ne 0) { throw "Windows native TrustDB server compilation failed" }
 
       - name: Compile TrustDB and run platform-safe tests
         shell: pwsh

@@ -256,14 +256,14 @@ func TestServeAnchorEndToEnd(t *testing.T) {
 		t.Fatalf("decode anchor response: %v", err)
 	}
 	resp.Body.Close()
-	if payload.Status != model.AnchorStatePublished {
-		t.Fatalf("/v2/anchors/sth/%d status = %q, want published", treeSize, payload.Status)
+	if payload.Status != model.AnchorStateLocalOnly {
+		t.Fatalf("/v2/anchors/sth/%d status = %q, want local_only", treeSize, payload.Status)
 	}
 	if payload.TreeSize != treeSize {
 		t.Fatalf("tree_size = %d, want %d", payload.TreeSize, treeSize)
 	}
-	if payload.ProofLevel != "L5" {
-		t.Fatalf("proof_level = %q, want L5", payload.ProofLevel)
+	if payload.ProofLevel != "L4" {
+		t.Fatalf("proof_level = %q, want L4", payload.ProofLevel)
 	}
 	if payload.Result == nil || payload.Result.SinkName != anchor.FileSinkName {
 		t.Fatalf("result = %+v", payload.Result)

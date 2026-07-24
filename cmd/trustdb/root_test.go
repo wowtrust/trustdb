@@ -166,11 +166,15 @@ func TestConfigStringIncludesAnchorSinkAndPath(t *testing.T) {
 	cfg := trustconfig.Default()
 	cfg.Anchor.Sink = "ots"
 	cfg.Anchor.Path = "/tmp/anchors.jsonl"
+	cfg.Anchor.FISCOBCOS.TrustConfigFile = "/etc/trustdb/fisco-bcos-trust.cbor"
 	if got := configString(cfg, "anchor.sink"); got != "ots" {
 		t.Fatalf("configString(anchor.sink) = %q, want ots", got)
 	}
 	if got := configString(cfg, "anchor.path"); got != "/tmp/anchors.jsonl" {
 		t.Fatalf("configString(anchor.path) = %q", got)
+	}
+	if got := configString(cfg, "anchor.fisco_bcos.trust_config_file"); got != cfg.Anchor.FISCOBCOS.TrustConfigFile {
+		t.Fatalf("configString(anchor.fisco_bcos.trust_config_file) = %q", got)
 	}
 }
 

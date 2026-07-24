@@ -4,13 +4,11 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/wowtrust/trustdb/internal/anchor"
 	"github.com/wowtrust/trustdb/internal/app"
 	"github.com/wowtrust/trustdb/internal/cborx"
 	"github.com/wowtrust/trustdb/internal/claim"
@@ -43,7 +41,7 @@ func TestOfflineV2EndToEndAcrossSuitesAndTampering(t *testing.T) {
 			if err != nil {
 				t.Fatalf("VerifyOffline() error = %v", err)
 			}
-			if !result.Valid || result.ProofLevel != "L5" ||
+			if !result.Valid || result.ProofLevel != "L4" ||
 				result.ExternalNetworkAccess || result.ExternalProviderAccess {
 				t.Fatalf("VerifyOffline() result = %+v", result)
 			}
@@ -52,8 +50,8 @@ func TestOfflineV2EndToEndAcrossSuitesAndTampering(t *testing.T) {
 				t.Fatalf("VerifyOffline() identity report = %+v", result.Identity)
 			}
 			for _, stage := range result.Stages {
-				if stage.Status != OfflineStagePassed {
-					t.Fatalf("VerifyOffline() stage = %+v, all carried stages must pass", stage)
+				if stage.Status == OfflineStageFailed {
+					t.Fatalf("VerifyOffline() stage = %+v, no carried stage may fail", stage)
 				}
 			}
 
@@ -155,45 +153,6 @@ func TestOfflineV2EndToEndAcrossSuitesAndTampering(t *testing.T) {
 					tampered,
 					fixture.trust,
 					verify.StageGlobalLog,
-				)
-			})
-
-			t.Run("anchor binding", func(t *testing.T) {
-				tampered := cloneOfflineProof(t, fixture.proof)
-				tampered.AnchorResult.RootHash[0] ^= 1
-				encoded, err := cborx.Marshal(tampered)
-				if err != nil {
-					t.Fatal(err)
-				}
-				if _, err := Unmarshal(encoded); err == nil {
-					t.Fatal("strict Unmarshal() accepted a semantically invalid anchor binding")
-				}
-				path := filepath.Join(t.TempDir(), "tampered.sproof")
-				if err := os.WriteFile(path, encoded, 0o600); err != nil {
-					t.Fatal(err)
-				}
-				staged, err := ReadFileForVerification(path)
-				if err != nil {
-					t.Fatalf("ReadFileForVerification() rejected structurally valid evidence: %v", err)
-				}
-				assertOfflineFailureStage(
-					t,
-					fixture.content,
-					staged,
-					fixture.trust,
-					verify.StageAnchor,
-				)
-			})
-
-			t.Run("anchor namespace", func(t *testing.T) {
-				tampered := cloneOfflineProof(t, fixture.proof)
-				tampered.AnchorResult.LogID = ""
-				assertOfflineFailureStage(
-					t,
-					fixture.content,
-					tampered,
-					fixture.trust,
-					verify.StageAnchor,
 				)
 			})
 
@@ -368,10 +327,6 @@ func newOfflineE2EFixture(t *testing.T, suiteID cryptosuite.ID) offlineE2EFixtur
 	if err != nil {
 		t.Fatal(err)
 	}
-	anchorResult, err := anchor.NewNoopSink().Publish(ctx, sth)
-	if err != nil {
-		t.Fatal(err)
-	}
 	identityEvidence := []model.ProofIdentityEvidence{
 		offlineE2EIdentity(t, suiteID, model.ProofIdentityRoleClient, clientPublic),
 		offlineE2EIdentity(t, suiteID, model.ProofIdentityRoleServer, acceptedPublic),
@@ -380,7 +335,6 @@ func newOfflineE2EFixture(t *testing.T, suiteID cryptosuite.ID) offlineE2EFixtur
 	}
 	proof, err := New(commit.Bundles[0], Options{
 		GlobalProof:      &globalProof,
-		AnchorResult:     &anchorResult,
 		IdentityEvidence: identityEvidence,
 		ExportedAtUnixN:  time.Unix(500, 0).UnixNano(),
 	})

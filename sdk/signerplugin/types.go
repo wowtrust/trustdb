@@ -48,15 +48,23 @@ const (
 const (
 	SuiteINTLV1 = "INTL_V1"
 	SuiteCNSMV1 = "CN_SM_V1"
+	// SuiteFISCOBCOSStandard is a fixed transaction-signing profile, not a
+	// TrustDB evidence suite. It lets the same supervised, non-exportable
+	// signer boundary sign the 32-byte transaction digest produced by the
+	// pinned FISCO BCOS standard-crypto SDK.
+	SuiteFISCOBCOSStandard = "FISCO_BCOS_STANDARD_V1"
 
-	AlgorithmEd25519 = "ed25519"
-	AlgorithmSM2SM3  = "sm2-sm3"
+	AlgorithmEd25519   = "ed25519"
+	AlgorithmSM2SM3    = "sm2-sm3"
+	AlgorithmSecp256k1 = "secp256k1"
 
-	Ed25519PublicKeyEncoding = "raw-32-byte-rfc8032"
-	Ed25519SignatureEncoding = "raw-64-byte-rfc8032"
-	SM2PublicKeyEncoding     = "sec1-uncompressed-65-byte-sm2p256v1"
-	SM2SignatureEncoding     = "asn1-der-sequence-r-s"
-	SM2DefaultUserID         = "1234567812345678"
+	Ed25519PublicKeyEncoding   = "raw-32-byte-rfc8032"
+	Ed25519SignatureEncoding   = "raw-64-byte-rfc8032"
+	SM2PublicKeyEncoding       = "sec1-uncompressed-65-byte-sm2p256v1"
+	SM2SignatureEncoding       = "asn1-der-sequence-r-s"
+	Secp256k1PublicKeyEncoding = "sec1-uncompressed-65-byte-secp256k1"
+	Secp256k1SignatureEncoding = "raw-65-byte-r-s-recovery-id"
+	SM2DefaultUserID           = "1234567812345678"
 )
 
 const (
@@ -381,6 +389,13 @@ func validateAlgorithmCapability(capability AlgorithmCapability) error {
 			capability.SM2UserID != SM2DefaultUserID {
 			return errors.New("signer plugin CN_SM_V1 capability does not match the immutable suite profile")
 		}
+	case SuiteFISCOBCOSStandard:
+		if capability.Algorithm != AlgorithmSecp256k1 ||
+			capability.PublicKeyEncoding != Secp256k1PublicKeyEncoding ||
+			capability.SignatureEncoding != Secp256k1SignatureEncoding ||
+			capability.SM2UserID != "" {
+			return errors.New("signer plugin FISCO_BCOS_STANDARD_V1 capability does not match the immutable transaction profile")
+		}
 	default:
 		return fmt.Errorf("signer plugin crypto_suite %q is unsupported by protocol v1", capability.CryptoSuite)
 	}
@@ -521,6 +536,10 @@ func validatePublicKey(binding Binding, publicKey []byte) error {
 		if len(publicKey) != 65 || publicKey[0] != 0x04 {
 			return errors.New("signer plugin returned a malformed SM2 uncompressed public key")
 		}
+	case SuiteFISCOBCOSStandard:
+		if len(publicKey) != 65 || publicKey[0] != 0x04 {
+			return errors.New("signer plugin returned a malformed secp256k1 uncompressed public key")
+		}
 	default:
 		return fmt.Errorf("signer plugin crypto_suite %q is unsupported", binding.CryptoSuite)
 	}
@@ -536,6 +555,10 @@ func validateSignature(binding Binding, signature []byte) error {
 	case SuiteCNSMV1:
 		if err := validateCanonicalDERSignature(signature); err != nil {
 			return err
+		}
+	case SuiteFISCOBCOSStandard:
+		if len(signature) != 65 || signature[64] > 1 {
+			return errors.New("signer plugin returned a malformed recoverable secp256k1 signature")
 		}
 	default:
 		return fmt.Errorf("signer plugin crypto_suite %q is unsupported", binding.CryptoSuite)

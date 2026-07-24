@@ -52,6 +52,9 @@ func TestFileSinkPublishAppendsJSONL(t *testing.T) {
 	if result.AnchorID == "" {
 		t.Fatalf("result.AnchorID is empty")
 	}
+	if result.EvidenceStage != model.AnchorEvidenceStageLocalOnly {
+		t.Fatalf("result.EvidenceStage = %q, want local_only", result.EvidenceStage)
+	}
 
 	f, err := os.Open(path)
 	if err != nil {

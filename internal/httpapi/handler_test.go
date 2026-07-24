@@ -708,9 +708,9 @@ func TestGlobalAndAnchorListEndpoints(t *testing.T) {
 		},
 	}, fakeAnchorService{
 		results: []model.STHAnchorResult{
-			{SchemaVersion: model.SchemaSTHAnchorResult, TreeSize: 2, AnchorID: "anchor-2", SinkName: "ots"},
-			{SchemaVersion: model.SchemaSTHAnchorResult, TreeSize: 2, AnchorID: "anchor-2-file", SinkName: "file"},
-			{SchemaVersion: model.SchemaSTHAnchorResult, TreeSize: 1, AnchorID: "anchor-1", SinkName: "ots"},
+			{SchemaVersion: model.SchemaSTHAnchorResult, EvidenceStage: model.AnchorEvidenceStageOfflineVerified, TreeSize: 2, AnchorID: "anchor-2", SinkName: "ots"},
+			{SchemaVersion: model.SchemaSTHAnchorResult, EvidenceStage: model.AnchorEvidenceStageLocalOnly, TreeSize: 2, AnchorID: "anchor-2-file", SinkName: "file"},
+			{SchemaVersion: model.SchemaSTHAnchorResult, EvidenceStage: model.AnchorEvidenceStageOfflineVerified, TreeSize: 1, AnchorID: "anchor-1", SinkName: "ots"},
 		},
 	})
 
@@ -759,8 +759,15 @@ func TestGlobalAndAnchorListEndpoints(t *testing.T) {
 		t.Fatalf("anchor page = %+v", anchorsPage)
 	}
 	for _, item := range anchorsPage.Anchors {
-		if item.Status != model.AnchorStatePublished || item.ProofLevel != "L5" || item.Result == nil {
+		if item.Result == nil {
 			t.Fatalf("anchor list item is not immutable publication evidence: %+v", item)
+		}
+		if item.Result.SinkName == "file" {
+			if item.Status != model.AnchorStateLocalOnly || item.ProofLevel != "L4" {
+				t.Fatalf("file anchor list item = %+v, want local-only L4", item)
+			}
+		} else if item.Status != model.AnchorStatePublished || item.ProofLevel != "L5" {
+			t.Fatalf("independent anchor list item = %+v, want published L5", item)
 		}
 	}
 	req = httptest.NewRequest(http.MethodGet, "/v2/anchors/sth?limit=2&cursor="+anchorsPage.NextCursor, nil)
@@ -964,7 +971,7 @@ func TestGlobalEvidenceEndpoint(t *testing.T) {
 	t.Parallel()
 	want := model.GlobalLogEvidence{
 		GlobalProof:  model.GlobalLogProof{SchemaVersion: model.SchemaGlobalLogProof, BatchID: "batch-1", TreeSize: 3},
-		AnchorResult: &model.STHAnchorResult{SchemaVersion: model.SchemaSTHAnchorResult, TreeSize: 3, AnchorID: "anchor-3"},
+		AnchorResult: &model.STHAnchorResult{SchemaVersion: model.SchemaSTHAnchorResult, EvidenceStage: model.AnchorEvidenceStageOfflineVerified, TreeSize: 3, AnchorID: "anchor-3"},
 	}
 	handler := NewWithGlobalAndAnchors(nil, nil, &fakeBatchService{}, fakeGlobalService{evidence: want}, nil)
 	req := httptest.NewRequest(http.MethodGet, "/v2/global-log/evidence/batch-1", nil)
@@ -1473,4 +1480,21 @@ func (f fakeAnchorService) Anchors(_ context.Context, opts model.AnchorListOptio
 		}
 	}
 	return out, nil
+}
+
+func TestBuildAnchorResponseKeepsLocalOnlyEvidenceAtL4(t *testing.T) {
+	t.Parallel()
+	response, err := buildAnchorResponse(model.STHAnchorResult{
+		SchemaVersion: model.SchemaSTHAnchorResult,
+		EvidenceStage: model.AnchorEvidenceStageLocalOnly,
+		TreeSize:      2,
+		SinkName:      "noop",
+		AnchorID:      "noop-sth-2",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.Status != model.AnchorStateLocalOnly || response.ProofLevel != "L4" {
+		t.Fatalf("response=%+v, want local_only/L4", response)
+	}
 }

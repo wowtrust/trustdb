@@ -161,6 +161,7 @@ func TestPebbleSTHAnchorScheduleSurvivesRestartAndPreservesResult(t *testing.T) 
 	}
 	result := model.STHAnchorResult{CryptoSuite: "INTL_V1",
 		SchemaVersion:    model.SchemaSTHAnchorResult,
+		EvidenceStage:    model.AnchorEvidenceStageOfflineVerified,
 		NodeID:           key.NodeID,
 		LogID:            key.LogID,
 		TreeSize:         attempt.Target.TreeSize,
@@ -268,6 +269,7 @@ func TestPebbleClaimReconcilesResultBeforeSubmittingPendingWork(t *testing.T) {
 	}
 	result := model.STHAnchorResult{CryptoSuite: "INTL_V1",
 		SchemaVersion:    model.SchemaSTHAnchorResult,
+		EvidenceStage:    model.AnchorEvidenceStageOfflineVerified,
 		NodeID:           key.NodeID,
 		LogID:            key.LogID,
 		TreeSize:         sth3.TreeSize,

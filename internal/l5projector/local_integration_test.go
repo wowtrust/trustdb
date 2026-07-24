@@ -25,7 +25,7 @@ func TestLocalProjectorMaterializesOlderBatchesWithoutBlockingEvidence(t *testin
 	const (
 		nodeID   = "node-1"
 		logID    = "log-1"
-		sinkName = "file"
+		sinkName = "independent-test-anchor"
 	)
 	global, err := globallog.New(globallog.Options{
 		Store: store, NodeID: nodeID, LogID: logID, Signer: trustcrypto.MustNewEd25519Signer("server-key", privateKey),
@@ -54,7 +54,7 @@ func TestLocalProjectorMaterializesOlderBatchesWithoutBlockingEvidence(t *testin
 	}
 	anchored := sths[len(sths)-1]
 	result := model.STHAnchorResult{
-		SchemaVersion: model.SchemaSTHAnchorResult, CryptoSuite: cryptosuite.INTLV1, NodeID: nodeID, LogID: logID, TreeSize: anchored.TreeSize,
+		SchemaVersion: model.SchemaSTHAnchorResult, CryptoSuite: cryptosuite.INTLV1, EvidenceStage: model.AnchorEvidenceStageOfflineVerified, NodeID: nodeID, LogID: logID, TreeSize: anchored.TreeSize,
 		SinkName: sinkName, AnchorID: "anchor-5", RootHash: append([]byte(nil), anchored.RootHash...), STH: anchored, PublishedAtUnixN: 500,
 	}
 	if err := store.PutSTHAnchorResult(ctx, result); err != nil {

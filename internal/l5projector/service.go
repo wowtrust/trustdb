@@ -89,6 +89,9 @@ func (s *Service) ProjectPage(ctx context.Context) (bool, error) {
 	if err := anchorschedule.ValidateResult(s.cfg.Key, result); err != nil {
 		return false, trusterr.Wrap(trusterr.CodeDataLoss, "latest L5 anchor result is invalid", err)
 	}
+	if !model.AnchorResultProvidesOfflineL5(result) {
+		return false, nil
+	}
 	checkpoint, checkpointFound, err := s.cfg.Store.GetL5CoverageCheckpoint(ctx, s.cfg.Key)
 	if err != nil {
 		return false, err

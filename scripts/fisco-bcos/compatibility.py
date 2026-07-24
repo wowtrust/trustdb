@@ -7,7 +7,9 @@ import argparse
 import hashlib
 import json
 import re
+import socket
 import sys
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -25,6 +27,9 @@ CRYPTO_MODES = {"standard", "guomi"}
 DEPLOYMENTS = {"air", "pro", "max"}
 ARTIFACT_STATES = {"verified", "unavailable"}
 RUNTIME_STATES = {"verified", "partial", "unverified", "unsupported"}
+DOWNLOAD_ATTEMPTS = 4
+DOWNLOAD_TIMEOUT_SECONDS = 30
+DOWNLOAD_RETRY_BASE_SECONDS = 1
 
 
 class BaselineError(Exception):
@@ -408,18 +413,41 @@ def verify_file(path: Path, artifact: dict[str, Any]) -> None:
         )
 
 
+def is_transient_download_error(exc: BaseException) -> bool:
+    if isinstance(exc, urllib.error.HTTPError):
+        return exc.code == 429 or 500 <= exc.code <= 599
+    if isinstance(exc, (TimeoutError, socket.timeout)):
+        return True
+    return isinstance(exc, urllib.error.URLError) and isinstance(
+        exc.reason, (TimeoutError, socket.timeout)
+    )
+
+
 def download(url: str, destination: Path) -> None:
     destination.parent.mkdir(parents=True, exist_ok=True)
     temporary = destination.with_suffix(destination.suffix + ".part")
     request = urllib.request.Request(url, headers={"User-Agent": "trustdb-fisco-compat/1"})
-    try:
-        with urllib.request.urlopen(request) as response, temporary.open("wb") as output:
-            while chunk := response.read(1024 * 1024):
-                output.write(chunk)
-        temporary.replace(destination)
-    except Exception:
-        temporary.unlink(missing_ok=True)
-        raise
+    for attempt in range(1, DOWNLOAD_ATTEMPTS + 1):
+        try:
+            with urllib.request.urlopen(
+                request, timeout=DOWNLOAD_TIMEOUT_SECONDS
+            ) as response, temporary.open("wb") as output:
+                while chunk := response.read(1024 * 1024):
+                    output.write(chunk)
+            temporary.replace(destination)
+            return
+        except Exception as exc:
+            temporary.unlink(missing_ok=True)
+            if attempt == DOWNLOAD_ATTEMPTS or not is_transient_download_error(exc):
+                raise
+            delay = DOWNLOAD_RETRY_BASE_SECONDS * (2 ** (attempt - 1))
+            print(
+                f"transient download failure for {url} "
+                f"(attempt {attempt}/{DOWNLOAD_ATTEMPTS}): {exc}; "
+                f"retrying in {delay}s",
+                file=sys.stderr,
+            )
+            time.sleep(delay)
 
 
 def verify_artifacts(

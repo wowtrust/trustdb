@@ -24,10 +24,10 @@ import (
 const FileSinkName = "file"
 
 // FileSink is a development/on-prem Sink that appends each published
-// SignedTreeHead to a local JSONL log and fsyncs the file. It is not a
-// trust anchor on its own (any operator with write access to the
-// file can tamper with it) but it exercises the end-to-end L5 flow
-// and gives tests a deterministic sink backend.
+// SignedTreeHead to a local JSONL log and fsyncs the file. It is not an
+// independent trust anchor: an operator with write access can rewrite both
+// the TrustDB state and this file. Results are therefore always local_only
+// and must never grant L5.
 //
 // The writer mutex also keeps direct and test callers serialized.
 type FileSink struct {
@@ -146,6 +146,7 @@ func (s *FileSink) Publish(ctx context.Context, sth model.SignedTreeHead) (model
 		RootHash:         sth.RootHash,
 		STH:              sth,
 		Proof:            line, // JSONL line is the "proof" a verifier compares
+		EvidenceStage:    model.AnchorEvidenceStageLocalOnly,
 		PublishedAtUnixN: now,
 	}, nil
 }

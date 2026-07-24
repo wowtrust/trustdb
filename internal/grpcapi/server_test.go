@@ -109,9 +109,9 @@ func TestAnchorEndpointsExposePublishedResultsOnly(t *testing.T) {
 	t.Parallel()
 
 	anchors := resultAnchorService{results: []model.STHAnchorResult{
-		{SchemaVersion: model.SchemaSTHAnchorResult, TreeSize: 4, SinkName: "ots", AnchorID: "anchor-4"},
-		{SchemaVersion: model.SchemaSTHAnchorResult, TreeSize: 4, SinkName: "file", AnchorID: "anchor-4-file"},
-		{SchemaVersion: model.SchemaSTHAnchorResult, TreeSize: 2, SinkName: "ots", AnchorID: "anchor-2"},
+		{SchemaVersion: model.SchemaSTHAnchorResult, EvidenceStage: model.AnchorEvidenceStageOfflineVerified, TreeSize: 4, SinkName: "ots", AnchorID: "anchor-4"},
+		{SchemaVersion: model.SchemaSTHAnchorResult, EvidenceStage: model.AnchorEvidenceStageOfflineVerified, TreeSize: 4, SinkName: "file", AnchorID: "anchor-4-file"},
+		{SchemaVersion: model.SchemaSTHAnchorResult, EvidenceStage: model.AnchorEvidenceStageOfflineVerified, TreeSize: 2, SinkName: "ots", AnchorID: "anchor-2"},
 	}}
 	server := NewServer(nil, nil, nil, anchors, nil)
 

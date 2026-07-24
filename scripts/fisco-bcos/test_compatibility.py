@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import io
 import importlib.util
 import tempfile
 import unittest
+import urllib.error
 from pathlib import Path
 from unittest import mock
 
@@ -183,6 +185,115 @@ class CompatibilityBaselineTest(unittest.TestCase):
                 )
             self.assertEqual(cached.read_bytes(), expected)
             self.assertEqual(result[0]["status"], "verified")
+
+    def test_transient_download_failures_retry_until_success(self) -> None:
+        url = "https://example.invalid/artifact.bin"
+        payload = b"pinned artifact bytes"
+        failures = [
+            urllib.error.HTTPError(url, 429, "Too Many Requests", {}, None),
+            urllib.error.HTTPError(url, 504, "Gateway Timeout", {}, None),
+            urllib.error.URLError(TimeoutError("timed out")),
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            destination = Path(directory) / "artifact.bin"
+            with (
+                mock.patch.object(
+                    compatibility.urllib.request,
+                    "urlopen",
+                    side_effect=[*failures, io.BytesIO(payload)],
+                ) as urlopen,
+                mock.patch.object(compatibility.time, "sleep") as sleep,
+            ):
+                compatibility.download(url, destination)
+
+            self.assertEqual(destination.read_bytes(), payload)
+            self.assertEqual(urlopen.call_count, compatibility.DOWNLOAD_ATTEMPTS)
+            self.assertEqual(
+                [call.kwargs["timeout"] for call in urlopen.call_args_list],
+                [compatibility.DOWNLOAD_TIMEOUT_SECONDS] * compatibility.DOWNLOAD_ATTEMPTS,
+            )
+            self.assertEqual(
+                [call.args[0] for call in sleep.call_args_list],
+                [1, 2, 4],
+            )
+
+    def test_transient_download_failure_exhausts_bounded_attempts(self) -> None:
+        url = "https://example.invalid/artifact.bin"
+        failures = [
+            urllib.error.HTTPError(url, 504, "Gateway Timeout", {}, None)
+            for _ in range(compatibility.DOWNLOAD_ATTEMPTS)
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            destination = Path(directory) / "artifact.bin"
+            with (
+                mock.patch.object(
+                    compatibility.urllib.request, "urlopen", side_effect=failures
+                ) as urlopen,
+                mock.patch.object(compatibility.time, "sleep") as sleep,
+                self.assertRaisesRegex(urllib.error.HTTPError, "Gateway Timeout"),
+            ):
+                compatibility.download(url, destination)
+
+            self.assertFalse(destination.exists())
+            self.assertFalse(destination.with_suffix(".bin.part").exists())
+            self.assertEqual(urlopen.call_count, compatibility.DOWNLOAD_ATTEMPTS)
+            self.assertEqual(sleep.call_count, compatibility.DOWNLOAD_ATTEMPTS - 1)
+
+    def test_non_transient_http_error_is_not_retried(self) -> None:
+        url = "https://example.invalid/artifact.bin"
+        failure = urllib.error.HTTPError(url, 404, "Not Found", {}, None)
+        with tempfile.TemporaryDirectory() as directory:
+            destination = Path(directory) / "artifact.bin"
+            with (
+                mock.patch.object(
+                    compatibility.urllib.request, "urlopen", side_effect=failure
+                ) as urlopen,
+                mock.patch.object(compatibility.time, "sleep") as sleep,
+                self.assertRaisesRegex(urllib.error.HTTPError, "Not Found"),
+            ):
+                compatibility.download(url, destination)
+
+            urlopen.assert_called_once()
+            sleep.assert_not_called()
+
+    def test_downloaded_checksum_mismatch_fails_without_retry(self) -> None:
+        expected = b"expected"
+        corrupt = b"corrupt!"
+        artifact = {
+            "platform": "linux/amd64",
+            "name": "artifact.bin",
+            "url": "https://example.invalid/artifact.bin",
+            "size": len(expected),
+            "sha256": hashlib.sha256(expected).hexdigest(),
+        }
+        baseline = {
+            "components": {
+                "node": {"artifacts": [artifact]},
+                "c_sdk": {"artifacts": []},
+                "solidity": {"artifacts": []},
+                "tassl": {"artifacts": []},
+            }
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            with (
+                mock.patch.object(
+                    compatibility.urllib.request,
+                    "urlopen",
+                    return_value=io.BytesIO(corrupt),
+                ) as urlopen,
+                mock.patch.object(compatibility.time, "sleep") as sleep,
+                self.assertRaisesRegex(compatibility.BaselineError, "sha256 mismatch"),
+            ):
+                compatibility.verify_artifacts(
+                    baseline,
+                    Path(directory),
+                    "linux/amd64",
+                    None,
+                    no_download=False,
+                )
+
+            urlopen.assert_called_once()
+            sleep.assert_not_called()
 
 
 if __name__ == "__main__":

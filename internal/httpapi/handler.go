@@ -1707,15 +1707,35 @@ func (h Handler) getAnchor(w http.ResponseWriter, r *http.Request) {
 		writeError(w, trusterr.New(trusterr.CodeNotFound, "anchor not found for STH"))
 		return
 	}
-	writeJSON(w, http.StatusOK, buildAnchorResponse(result))
+	response, err := buildAnchorResponse(result)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, response)
 }
 
-func buildAnchorResponse(result model.STHAnchorResult) anchorResponse {
+func buildAnchorResponse(result model.STHAnchorResult) (anchorResponse, error) {
+	if !model.ValidAnchorEvidenceStage(result.EvidenceStage) {
+		return anchorResponse{}, trusterr.New(trusterr.CodeDataLoss, "anchor result has an unknown evidence stage")
+	}
 	r := result
+	if result.EvidenceStage == model.AnchorEvidenceStageLocalOnly {
+		return anchorResponse{
+			TreeSize: result.TreeSize, Status: model.AnchorStateLocalOnly,
+			ProofLevel: prooflevel.L4.String(), Result: &r,
+		}, nil
+	}
+	if !model.AnchorResultProvidesOfflineL5(result) {
+		return anchorResponse{
+			TreeSize: result.TreeSize, Status: model.AnchorStateObserved,
+			ProofLevel: prooflevel.L4.String(), Result: &r,
+		}, nil
+	}
 	return anchorResponse{
 		TreeSize: result.TreeSize, Status: model.AnchorStatePublished,
 		ProofLevel: prooflevel.L5.String(), Result: &r,
-	}
+	}, nil
 }
 
 func (h Handler) listAnchors(w http.ResponseWriter, r *http.Request) {
@@ -1735,7 +1755,12 @@ func (h Handler) listAnchors(w http.ResponseWriter, r *http.Request) {
 	}
 	anchors := make([]anchorResponse, 0, len(items))
 	for _, result := range items {
-		anchors = append(anchors, buildAnchorResponse(result))
+		response, err := buildAnchorResponse(result)
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		anchors = append(anchors, response)
 	}
 	next := ""
 	if len(items) == opts.Limit {

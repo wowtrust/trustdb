@@ -496,10 +496,9 @@ func fetchGlobalProof(ctx context.Context, client *http.Client, serverURL, batch
 }
 
 // fetchAnchorResult retrieves /v2/anchors/sth/{tree_size} and returns the
-// embedded STHAnchorResult when present. A 404 or a present-but-pending
-// entry is reported as (nil, nil) because the caller then falls back
-// to L4 verification, which is a legitimate state for a freshly
-// committed batch whose STH anchor worker has not yet published.
+// embedded independently verifiable STHAnchorResult when present. A 404,
+// present-but-pending entry, or local-only result is reported as (nil, nil)
+// because the caller then falls back to L4 verification.
 func fetchAnchorResult(ctx context.Context, client *http.Client, serverURL string, treeSize uint64) (*model.STHAnchorResult, error) {
 	if treeSize == 0 {
 		return nil, nil
@@ -535,6 +534,9 @@ func fetchAnchorResult(ctx context.Context, client *http.Client, serverURL strin
 		return nil, fmt.Errorf("decode anchor response: %w", err)
 	}
 	if env.Result == nil {
+		return nil, nil
+	}
+	if !model.AnchorResultProvidesOfflineL5(*env.Result) {
 		return nil, nil
 	}
 	return env.Result, nil

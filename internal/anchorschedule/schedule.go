@@ -528,6 +528,9 @@ func ValidateResult(key model.STHAnchorScheduleKey, result model.STHAnchorResult
 	if result.SchemaVersion != model.SchemaSTHAnchorResult || result.TreeSize == 0 || len(result.RootHash) != suite.AnchorDigest.DigestBytes || result.AnchorID == "" || result.PublishedAtUnixN <= 0 {
 		return trusterr.New(trusterr.CodeInvalidArgument, "valid STH anchor result is required")
 	}
+	if !model.ValidAnchorEvidenceStage(result.EvidenceStage) {
+		return trusterr.New(trusterr.CodeInvalidArgument, "known anchor evidence stage is required")
+	}
 	if result.NodeID != key.NodeID || result.LogID != key.LogID || result.SinkName != key.SinkName {
 		return trusterr.New(trusterr.CodeInvalidArgument, "anchor result identity does not match schedule key")
 	}

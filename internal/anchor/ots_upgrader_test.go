@@ -73,6 +73,7 @@ func seedPublishedOtsSTH(
 	}
 	ar := model.STHAnchorResult{CryptoSuite: cryptosuite.INTLV1,
 		SchemaVersion:    model.SchemaSTHAnchorResult,
+		EvidenceStage:    model.AnchorEvidenceStageOfflineVerified,
 		TreeSize:         treeSize,
 		SinkName:         OtsSinkName,
 		AnchorID:         DeterministicOtsAnchorID(sth),
@@ -228,6 +229,7 @@ func TestOtsUpgrader_IgnoresNonOtsSTHs(t *testing.T) {
 	}
 	if err := store.PutSTHAnchorResult(ctx, model.STHAnchorResult{CryptoSuite: cryptosuite.INTLV1,
 		SchemaVersion:    model.SchemaSTHAnchorResult,
+		EvidenceStage:    model.AnchorEvidenceStageOfflineVerified,
 		TreeSize:         sth.TreeSize,
 		SinkName:         "file",
 		AnchorID:         "file-id",
@@ -305,7 +307,7 @@ func TestOtsUpgraderPrioritizesNewestOtsAfterNonOtsHistory(t *testing.T) {
 			Signature: model.Signature{Alg: model.DefaultSignatureAlg, KeyID: "file-key", Signature: []byte{1}},
 		}
 		if err := writer.PutSTHAnchorResult(context.Background(), model.STHAnchorResult{CryptoSuite: cryptosuite.INTLV1,
-			SchemaVersion: model.SchemaSTHAnchorResult, TreeSize: treeSize, SinkName: "file",
+			SchemaVersion: model.SchemaSTHAnchorResult, EvidenceStage: model.AnchorEvidenceStageOfflineVerified, TreeSize: treeSize, SinkName: "file",
 			AnchorID: "file-anchor-" + time.Unix(int64(treeSize), 0).Format("150405"), RootHash: root,
 			STH: sth, Proof: []byte("opaque"), PublishedAtUnixN: int64(treeSize),
 		}); err != nil {

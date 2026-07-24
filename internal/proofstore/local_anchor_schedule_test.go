@@ -303,6 +303,7 @@ func localScheduleSTH(key model.STHAnchorScheduleKey, treeSize uint64, seed byte
 func localScheduleResult(key model.STHAnchorScheduleKey, sth model.SignedTreeHead, anchorID string, publishedAt int64, proof []byte) model.STHAnchorResult {
 	return model.STHAnchorResult{CryptoSuite: "INTL_V1",
 		SchemaVersion:    model.SchemaSTHAnchorResult,
+		EvidenceStage:    model.AnchorEvidenceStageOfflineVerified,
 		NodeID:           key.NodeID,
 		LogID:            key.LogID,
 		TreeSize:         sth.TreeSize,

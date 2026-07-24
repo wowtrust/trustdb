@@ -122,13 +122,10 @@ func TestReadVerifyCertificateRootsAcceptsStrictDERAndPEM(t *testing.T) {
 	}
 }
 
-// TestVerifyCmdRemoteAnchor spins up an in-process serve backed by a
-// FileSink, submits a single claim, waits for the L5 anchor to be
-// published, then invokes `trustdb verify --server=... --record=...`
-// and asserts the command reports ProofLevel=L5. This catches every
-// seam the verify CLI relies on in a single run 鈥?HTTP decoding of
-// the proof envelope, optional anchor fetch, AnchorConsistency 鈥?// without mocking anything inside the verify package itself.
-func TestVerifyCmdRemoteAnchor(t *testing.T) {
+// TestVerifyCmdRemoteLocalAnchorFallsBackToL4 spins up an in-process serve
+// backed by a FileSink. The CLI must ignore that local-only result and verify
+// the independently checkable global-log evidence at L4.
+func TestVerifyCmdRemoteLocalAnchorFallsBackToL4(t *testing.T) {
 	ctx := context.Background()
 
 	server, clientPriv, clientPub, serverPub, contentPath, recordID := runServeForVerify(t, ctx)
@@ -161,14 +158,14 @@ func TestVerifyCmdRemoteAnchor(t *testing.T) {
 	if err := json.Unmarshal(outBuf.Bytes(), &result); err != nil {
 		t.Fatalf("decode output: %v (raw=%q)", err, outBuf.String())
 	}
-	if !result.Valid || result.ProofLevel != "L5" {
-		t.Fatalf("verify result = %+v, want L5 valid", result)
+	if !result.Valid || result.ProofLevel != "L4" {
+		t.Fatalf("verify result = %+v, want L4 valid", result)
 	}
-	if result.AnchorSink != anchor.FileSinkName {
-		t.Fatalf("anchor_sink = %q, want %q", result.AnchorSink, anchor.FileSinkName)
+	if result.AnchorSink != "" {
+		t.Fatalf("anchor_sink = %q, want empty for local-only FileSink", result.AnchorSink)
 	}
-	if result.AnchorID == "" {
-		t.Fatalf("anchor_id empty, want non-empty")
+	if result.AnchorID != "" {
+		t.Fatalf("anchor_id = %q, want empty for local-only FileSink", result.AnchorID)
 	}
 	if result.RecordID != recordID {
 		t.Fatalf("record_id = %q, want %q", result.RecordID, recordID)
@@ -503,9 +500,6 @@ func fetchSingleProofInputs(
 	anchorResult, err := fetchAnchorResult(ctx, client, server.URL, global.STH.TreeSize)
 	if err != nil {
 		t.Fatalf("fetchAnchorResult: %v", err)
-	}
-	if anchorResult == nil {
-		t.Fatalf("fetchAnchorResult returned nil, want published anchor")
 	}
 	return bundle, global, anchorResult
 }

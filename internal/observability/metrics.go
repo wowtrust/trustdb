@@ -40,6 +40,10 @@ type Metrics struct {
 	// convenience counter for rate alerting and is redundant with
 	// AnchorAttempts{outcome="success"} but cheaper to query.
 	AnchorPublished *prometheus.CounterVec
+	// AnchorProviderEndpointHealthy and AnchorProviderEndpointHeight expose
+	// bounded per-endpoint readiness without using endpoint URLs as labels.
+	AnchorProviderEndpointHealthy *prometheus.GaugeVec
+	AnchorProviderEndpointHeight  *prometheus.GaugeVec
 	// OtsUpgradeRuns counts every upgrader sweep (one per tick).
 	// Used to confirm the worker is alive and to compare against
 	// the configured interval.
@@ -221,6 +225,14 @@ func NewMetrics() *Metrics {
 			Name: "trustdb_anchor_published_total",
 			Help: "Anchor publish successes by sink.",
 		}, []string{"sink"}),
+		AnchorProviderEndpointHealthy: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "trustdb_anchor_provider_endpoint_healthy",
+			Help: "Whether a configured anchor provider endpoint passed the latest full identity probe.",
+		}, []string{"sink", "endpoint_index"}),
+		AnchorProviderEndpointHeight: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "trustdb_anchor_provider_endpoint_height",
+			Help: "Latest observed anchor provider endpoint height by bounded configuration index.",
+		}, []string{"sink", "endpoint_index"}),
 		OtsUpgradeRuns: prometheus.NewCounter(prometheus.CounterOpts{
 			Name: "trustdb_anchor_ots_upgrade_runs_total",
 			Help: "Number of OTS upgrader sweeps that have run.",
@@ -310,6 +322,8 @@ func (m *Metrics) Collectors() []prometheus.Collector {
 		m.AnchorLatency,
 		m.AnchorAttempts,
 		m.AnchorPublished,
+		m.AnchorProviderEndpointHealthy,
+		m.AnchorProviderEndpointHeight,
 		m.OtsUpgradeRuns,
 		m.OtsUpgradeBatches,
 		m.OtsUpgradeCalendarHits,

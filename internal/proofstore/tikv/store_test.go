@@ -207,6 +207,7 @@ func TestTiKVLatestAnchorCachedReferenceValidatesResultEnvelope(t *testing.T) {
 	ctx := context.Background()
 	result := model.STHAnchorResult{CryptoSuite: "INTL_V1",
 		SchemaVersion: model.SchemaSTHAnchorResult,
+		EvidenceStage: model.AnchorEvidenceStageOfflineVerified,
 		NodeID:        "node-1",
 		LogID:         "log-1",
 		TreeSize:      7,

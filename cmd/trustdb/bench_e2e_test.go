@@ -109,7 +109,7 @@ func TestBenchIngestCollectsPebbleMetricsOverHTTPAndGRPC(t *testing.T) {
 				PayloadBytes:  512,
 				ProgressEvery: 0,
 				Samples:       2,
-				ProofLevel:    sdk.ProofLevelL5,
+				ProofLevel:    sdk.ProofLevelL4,
 				ProofTimeout:  10 * time.Second,
 				Settle:        250 * time.Millisecond,
 				EventType:     "bench.e2e",
@@ -166,7 +166,7 @@ func TestBenchMatrixCommandWritesCaseReports(t *testing.T) {
 	if err := os.WriteFile(matrixPath, []byte(`{
   "schema_version": "`+benchMatrixConfigSchema+`",
   "defaults": {
-    "proof_level": "L5",
+    "proof_level": "L4",
     "proof_timeout": "10s",
     "settle": "250ms",
     "event_type": "bench.matrix.e2e",
@@ -252,7 +252,7 @@ func TestBenchCIArtifactFlow(t *testing.T) {
 	if err := os.WriteFile(matrixPath, []byte(`{
   "schema_version": "`+benchMatrixConfigSchema+`",
   "defaults": {
-    "proof_level": "L5",
+    "proof_level": "L4",
     "proof_timeout": "10s",
     "settle": "250ms",
     "event_type": "bench.ci.matrix",
@@ -278,7 +278,7 @@ func TestBenchCIArtifactFlow(t *testing.T) {
 		"--concurrency", "2",
 		"--payload-bytes", "256",
 		"--samples", "1",
-		"--proof-level", "L5",
+		"--proof-level", "L4",
 		"--proof-timeout", "10s",
 		"--settle", "250ms",
 		"--event-type", "bench.ci.baseline",
@@ -301,7 +301,7 @@ func TestBenchCIArtifactFlow(t *testing.T) {
 		"--concurrency", "2",
 		"--payload-bytes", "256",
 		"--samples", "1",
-		"--proof-level", "L5",
+		"--proof-level", "L4",
 		"--proof-timeout", "10s",
 		"--settle", "250ms",
 		"--event-type", "bench.ci.candidate",

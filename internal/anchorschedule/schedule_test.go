@@ -88,6 +88,7 @@ func TestMergeCandidateInitializesValidEmptyScheduleWhenAlreadyCovered(t *testin
 	sth := testSTH(3, 3)
 	latest := model.STHAnchorResult{CryptoSuite: cryptosuite.INTLV1,
 		SchemaVersion:    model.SchemaSTHAnchorResult,
+		EvidenceStage:    model.AnchorEvidenceStageOfflineVerified,
 		NodeID:           "node-1",
 		LogID:            "log-1",
 		TreeSize:         sth.TreeSize,
@@ -137,11 +138,11 @@ func TestRetryAndCompleteRequireLeaseAndExactTarget(t *testing.T) {
 		t.Fatalf("retry deadline = %d, want actual late claim time 350", attempt.NextAttemptUnixN)
 	}
 	badSTH := testSTH(2, 9)
-	bad := model.STHAnchorResult{CryptoSuite: cryptosuite.INTLV1, SchemaVersion: model.SchemaSTHAnchorResult, TreeSize: 2, RootHash: badSTH.RootHash, NodeID: "node-1", LogID: "log-1", SinkName: "file", AnchorID: "bad", STH: badSTH, PublishedAtUnixN: 101}
+	bad := model.STHAnchorResult{CryptoSuite: cryptosuite.INTLV1, SchemaVersion: model.SchemaSTHAnchorResult, EvidenceStage: model.AnchorEvidenceStageOfflineVerified, TreeSize: 2, RootHash: badSTH.RootHash, NodeID: "node-1", LogID: "log-1", SinkName: "file", AnchorID: "bad", STH: badSTH, PublishedAtUnixN: 101}
 	if _, err := Complete(schedule, attempt.Generation, "lease-2", bad); trusterr.CodeOf(err) != trusterr.CodeFailedPrecondition {
 		t.Fatalf("Complete bad result error=%v", err)
 	}
-	good := model.STHAnchorResult{CryptoSuite: cryptosuite.INTLV1, SchemaVersion: model.SchemaSTHAnchorResult, TreeSize: 2, RootHash: bytes.Repeat([]byte{2}, 32), NodeID: "node-1", LogID: "log-1", SinkName: "file", AnchorID: "good", STH: testSTH(2, 2), PublishedAtUnixN: 102}
+	good := model.STHAnchorResult{CryptoSuite: cryptosuite.INTLV1, SchemaVersion: model.SchemaSTHAnchorResult, EvidenceStage: model.AnchorEvidenceStageOfflineVerified, TreeSize: 2, RootHash: bytes.Repeat([]byte{2}, 32), NodeID: "node-1", LogID: "log-1", SinkName: "file", AnchorID: "good", STH: testSTH(2, 2), PublishedAtUnixN: 102}
 	schedule, err = Complete(schedule, attempt.Generation, "lease-2", good)
 	if err != nil {
 		t.Fatal(err)
@@ -174,7 +175,7 @@ func TestValidateCandidateAgainstExactResultRejectsHistoricalSplitView(t *testin
 	t.Parallel()
 	sth := testSTH(13, 0x13)
 	result := model.STHAnchorResult{CryptoSuite: cryptosuite.INTLV1,
-		SchemaVersion: model.SchemaSTHAnchorResult, NodeID: sth.NodeID, LogID: sth.LogID, TreeSize: sth.TreeSize,
+		SchemaVersion: model.SchemaSTHAnchorResult, EvidenceStage: model.AnchorEvidenceStageOfflineVerified, NodeID: sth.NodeID, LogID: sth.LogID, TreeSize: sth.TreeSize,
 		SinkName: "file", AnchorID: "anchor-13", RootHash: sth.RootHash, STH: sth, PublishedAtUnixN: 130,
 	}
 	conflict := candidate(13, 0x99, 200, 300)
@@ -277,7 +278,7 @@ func TestReconcileCompletedClearsOnlyMatchingInFlight(t *testing.T) {
 		t.Fatalf("Claim claimed=%v err=%v", claimed, err)
 	}
 	result := model.STHAnchorResult{CryptoSuite: cryptosuite.INTLV1,
-		SchemaVersion: model.SchemaSTHAnchorResult, NodeID: "node-1", LogID: "log-1", TreeSize: 2,
+		SchemaVersion: model.SchemaSTHAnchorResult, EvidenceStage: model.AnchorEvidenceStageOfflineVerified, NodeID: "node-1", LogID: "log-1", TreeSize: 2,
 		SinkName: "file", AnchorID: "anchor-2", RootHash: attempt.Target.RootHash, STH: attempt.Target, PublishedAtUnixN: 150,
 	}
 	reconciled, changed, err := ReconcileCompleted(schedule, result)
@@ -302,7 +303,7 @@ func TestSameResultBindingIncludesExternalAnchorIdentity(t *testing.T) {
 	t.Parallel()
 	sth := testSTH(2, 2)
 	left := model.STHAnchorResult{CryptoSuite: cryptosuite.INTLV1,
-		SchemaVersion: model.SchemaSTHAnchorResult, NodeID: "node-1", LogID: "log-1", TreeSize: 2,
+		SchemaVersion: model.SchemaSTHAnchorResult, EvidenceStage: model.AnchorEvidenceStageOfflineVerified, NodeID: "node-1", LogID: "log-1", TreeSize: 2,
 		SinkName: "file", AnchorID: "anchor-a", RootHash: sth.RootHash, STH: sth, PublishedAtUnixN: 100,
 	}
 	right := left

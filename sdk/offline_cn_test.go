@@ -8,7 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wowtrust/trustdb/internal/anchor"
 	"github.com/wowtrust/trustdb/internal/app"
 	"github.com/wowtrust/trustdb/internal/cryptosuite"
 	"github.com/wowtrust/trustdb/internal/globallog"
@@ -142,13 +141,8 @@ func TestVerifySingleProofOfflineCNSMV1(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	anchorResult, err := anchor.NewNoopSink().Publish(ctx, sth)
-	if err != nil {
-		t.Fatal(err)
-	}
 	proof, err := sproof.New(commit.Bundles[0], sproof.Options{
 		GlobalProof:     &globalProof,
-		AnchorResult:    &anchorResult,
 		ExportedAtUnixN: time.Unix(500, 0).UnixNano(),
 	})
 	if err != nil {
@@ -164,12 +158,12 @@ func TestVerifySingleProofOfflineCNSMV1(t *testing.T) {
 	if err != nil {
 		t.Fatalf("VerifySingleProofOffline: %v", err)
 	}
-	if !result.Valid || result.ProofLevel != ProofLevelL5 ||
+	if !result.Valid || result.ProofLevel != ProofLevelL4 ||
 		result.ExternalNetworkAccess || result.ExternalProviderAccess {
 		t.Fatalf("offline result = %+v", result)
 	}
 	for _, stage := range result.Stages {
-		if stage.Status == OfflineStageFailed || stage.Status == OfflineStageNotRun {
+		if stage.Status == OfflineStageFailed {
 			t.Fatalf("offline stage = %+v", stage)
 		}
 	}
@@ -183,7 +177,7 @@ func TestVerifySingleProofOfflineCNSMV1(t *testing.T) {
 		t.Fatal(err)
 	}
 	result, err = VerifySingleProofOffline(bytes.NewReader(contents[0]), loaded, trust, OfflineVerifyOptions{})
-	if err != nil || !result.Valid || result.ProofLevel != ProofLevelL5 {
+	if err != nil || !result.Valid || result.ProofLevel != ProofLevelL4 {
 		t.Fatalf("VerifySingleProofOffline(round trip) result=%+v error=%v", result, err)
 	}
 }
