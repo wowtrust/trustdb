@@ -454,7 +454,15 @@ func newServeCommand(rt *runtimeConfig) *cobra.Command {
 				},
 			}
 			var statusHub *statusnotify.Hub
-			if routes, ok := clientKeys.(statusnotify.RouteResolver); ok {
+			if clientKeys != nil {
+				routeStore, err := statusnotify.OpenRouteStore(statusnotify.RouteStorePath(registryPath))
+				if err != nil {
+					return trusterr.Wrap(trusterr.CodeDataLoss, "open status notification routes", err)
+				}
+				routes, err := statusnotify.NewStoredRouteResolver(clientKeys, routeStore)
+				if err != nil {
+					return trusterr.Wrap(trusterr.CodeInternal, "build status notification route resolver", err)
+				}
 				suiteID, err := proofstore.BoundCryptoSuite(proofStore)
 				if err != nil {
 					return err

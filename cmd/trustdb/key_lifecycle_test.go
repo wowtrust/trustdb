@@ -10,6 +10,8 @@ import (
 
 	"github.com/wowtrust/trustdb/internal/cryptosuite"
 	"github.com/wowtrust/trustdb/internal/keydescriptor"
+	"github.com/wowtrust/trustdb/internal/model"
+	"github.com/wowtrust/trustdb/internal/statusnotify"
 )
 
 func TestKeyGenerateSM2ProducesLifecycleResolvableDescriptors(t *testing.T) {
@@ -63,8 +65,23 @@ func TestKeyLifecycleCLIImportRotateCompromiseAndList(t *testing.T) {
 		"--key-id", "old-key",
 		"--public-key", filepath.Join(dir, "old.pub"),
 		"--valid-from-unix", "100",
+		"--status-webhook-url", "https://upstream.example/trustdb/status-refresh",
+		"--status-nats-subject", "trustdb.status.client-a",
+		"--status-nats-queue-group", "trustdb-status-client-a",
 	)
 	executeKeyCommand(t, importArgs)
+	routeStore, err := statusnotify.OpenRouteStore(statusnotify.RouteStorePath(registryPath))
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantRoute := model.UpstreamNotificationRoute{
+		WebhookURL:     "https://upstream.example/trustdb/status-refresh",
+		NATSSubject:    "trustdb.status.client-a",
+		NATSQueueGroup: "trustdb-status-client-a",
+	}
+	if route, found := routeStore.Lookup("tenant-a", "client-a"); !found || route != wantRoute {
+		t.Fatalf("registered notification route = %+v, %v", route, found)
+	}
 
 	rotateArgs := append([]string{"key", "rotate"}, common...)
 	rotateArgs = append(rotateArgs,
@@ -74,6 +91,13 @@ func TestKeyLifecycleCLIImportRotateCompromiseAndList(t *testing.T) {
 		"--rotated-at-unix", "200",
 	)
 	executeKeyCommand(t, rotateArgs)
+	routeStore, err = statusnotify.OpenRouteStore(statusnotify.RouteStorePath(registryPath))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if route, found := routeStore.Lookup("tenant-a", "client-a"); !found || route != wantRoute {
+		t.Fatalf("notification route after rotation = %+v, %v", route, found)
+	}
 
 	compromiseArgs := append([]string{"key", "compromise"}, common...)
 	compromiseArgs = append(compromiseArgs,

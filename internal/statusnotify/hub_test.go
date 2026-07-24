@@ -135,6 +135,21 @@ func TestHubCoalescesWebhookRefreshes(t *testing.T) {
 	}
 }
 
+func TestHubAllowsSSEOnlySubscriptionWithoutOutboundRoute(t *testing.T) {
+	t.Parallel()
+	signer, _ := testSigner(t)
+	resolver, request := testResolverAndRequest(t, model.UpstreamNotificationRoute{}, []string{"tr1sse"}, Channels{})
+	resolver.routes = map[string]model.UpstreamNotificationRoute{}
+	hub, err := New(Config{Routes: resolver, Signer: signer, CryptoSuite: cryptosuite.INTLV1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer hub.Close()
+	if _, err := hub.Create(context.Background(), request); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+}
+
 func TestHubSSEWatchAndNATSPublish(t *testing.T) {
 	t.Parallel()
 

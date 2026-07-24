@@ -256,9 +256,10 @@ type RecordStatus struct {
 	FailureCode    string `cbor:"failure_code,omitempty" json:"failure_code,omitempty"`
 }
 
-// UpstreamNotificationRoute is immutable metadata registered together with
-// an upstream client key. Public subscription APIs may select a channel but
-// can never inject or replace its delivery destination.
+// UpstreamNotificationRoute is administrator-controlled metadata associated
+// with an upstream identity. It is stored separately from signed key-registry
+// evidence; public subscription APIs may select a channel but can never inject
+// or replace its delivery destination.
 type UpstreamNotificationRoute struct {
 	WebhookURL     string `cbor:"webhook_url,omitempty" json:"webhook_url,omitempty"`
 	NATSSubject    string `cbor:"nats_subject,omitempty" json:"nats_subject,omitempty"`

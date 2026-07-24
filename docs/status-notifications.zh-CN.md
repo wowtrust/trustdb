@@ -28,9 +28,9 @@ Content-Type: application/json
 
 ## 预配置上游路由
 
-Webhook URL、NATS subject 和 queue group 只能由管理员在注册上游密钥时配置。
-订阅请求不能提供或覆盖这些值。同一 `tenant_id/client_id` 的轮换密钥必须使用
-相同路由和消费组。
+Webhook URL、NATS subject 和 queue group 只能由管理员在注册或轮换上游密钥时
+配置。订阅请求不能提供或覆盖这些值。同一 `tenant_id/client_id` 只有一套路由；
+轮换后的所有密钥继续使用相同 subject 和 queue group。
 
 ```bash
 trustdb key key-register \
@@ -44,8 +44,11 @@ trustdb key key-register \
   --status-nats-queue-group trustdb-status-upstream-a
 ```
 
-路由是签名密钥注册事件的一部分。Webhook 通知本身也由 TrustDB server key
-签名；NATS 使用同一个签名 CBOR 消息。
+路由写入 `<key-registry>.status-routes.json` 管理员侧文件（权限 `0600`），不改变
+严格的 Key Registry V2 签名证据格式。重复配置相同路由是幂等的，尝试在密钥
+轮换时改成另一目标会被拒绝；需要变更路由时应走独立的受控迁移流程。配置完成后
+重启 TrustDB 使服务加载新路由。Webhook 通知由 TrustDB server key 签名；NATS
+使用同一个签名 CBOR 消息。
 
 ## 创建选择性订阅
 
@@ -112,8 +115,8 @@ DELETE /v1/status-subscriptions/{subscription_id}
 独立有界 worker；失败采用指数退避并重新标记 dirty，不进入存证提交主链路。
 SSE 慢消费者最多保留一个未读提示。
 
-NATS 通知是可合并的唤醒提示，使用既有 TrustDB NATS 连接发布到密钥注册表中的
-具体 subject。同一后端服务的多个实例加入预配置的同一个 queue group，一条提示
+NATS 通知是可合并的唤醒提示，使用既有 TrustDB NATS 连接发布到管理员预配置的
+具体 subject。同一后端服务的多个实例加入该上游固定的同一个 queue group，一条提示
 只交给其中一个实例处理；不同 queue group 会各收到一份。消费者重连后应立即调用
 状态拉取接口，不应把 Core NATS 提示当作持久化事件日志。
 

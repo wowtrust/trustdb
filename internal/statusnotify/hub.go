@@ -215,10 +215,7 @@ func (h *Hub) ValidateCreateRequest(request CreateRequest) error {
 	if _, err := normalizeRecordIDs(request.RecordIDs); err != nil {
 		return err
 	}
-	route, found := h.cfg.Routes.LookupNotificationRoute(request.TenantID, request.ClientID, request.KeyID)
-	if !found {
-		return trusterr.New(trusterr.CodeNotFound, "upstream key is not registered")
-	}
+	route, _ := h.cfg.Routes.LookupNotificationRoute(request.TenantID, request.ClientID, request.KeyID)
 	if request.Channels.Webhook && route.WebhookURL == "" {
 		return trusterr.New(trusterr.CodeFailedPrecondition, "upstream key has no configured webhook route")
 	}
@@ -263,10 +260,7 @@ func (h *Hub) Create(_ context.Context, request CreateRequest) (Subscription, er
 	if err != nil {
 		return Subscription{}, err
 	}
-	route, found := h.cfg.Routes.LookupNotificationRoute(request.TenantID, request.ClientID, request.KeyID)
-	if !found {
-		return Subscription{}, trusterr.New(trusterr.CodeNotFound, "upstream key is not registered")
-	}
+	route, _ := h.cfg.Routes.LookupNotificationRoute(request.TenantID, request.ClientID, request.KeyID)
 	if request.Channels.Webhook && route.WebhookURL == "" {
 		return Subscription{}, trusterr.New(trusterr.CodeFailedPrecondition, "upstream key has no configured webhook route")
 	}
@@ -454,12 +448,7 @@ func (h *Hub) flush() {
 		item.dirty = false
 		delete(h.dirty, id)
 		item.subscription.Version = uint64(nowUnixN)
-		route, found := h.cfg.Routes.LookupNotificationRoute(item.subscription.TenantID, item.subscription.ClientID, item.subscription.KeyID)
-		if !found {
-			h.removeLocked(id)
-			removed = true
-			continue
-		}
+		route, _ := h.cfg.Routes.LookupNotificationRoute(item.subscription.TenantID, item.subscription.ClientID, item.subscription.KeyID)
 		jobs = append(jobs, deliveryJob{subscription: cloneSubscription(item.subscription), route: route})
 	}
 	if removed {
