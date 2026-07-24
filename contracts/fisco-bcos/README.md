@@ -75,7 +75,54 @@ and validator checkpoint in its local `TrustConfig`.
 
 Guomi mode is a complete chain-mode binding, not a different encoding of a
 standard-chain transaction. Deploy the contract from `artifacts/guomi`, then
-create a canonical `trustdb.fisco-bcos-trust-config.v1` CBOR file with:
+copy
+[`configs/fisco-bcos-guomi-trust-config.example.json`](../../configs/fisco-bcos-guomi-trust-config.example.json)
+to an operator-controlled directory and replace every deployment-specific
+value. The example is structurally valid but its chain, checkpoint, contract,
+CA hash, certificate paths, and account reference are not production trust
+roots.
+
+Collect the values from at least two mutually trusted endpoints:
+
+1. Read `chain_id`, `group_id`, the genesis hash, a finalized checkpoint block,
+   and the checkpoint block hash. The checkpoint must be distributed through
+   the operator's trust process, not learned from the evidence being verified.
+2. Read the checkpoint validator list. For every Guomi validator, set
+   `public_key_hex` to `0x04 || node_id` and retain the exact `0x`-prefixed
+   64-byte node ID.
+3. Deploy the independently pinned Guomi artifact, record its address, fetch
+   its runtime bytes, and require their SM3 digest to equal
+   `artifacts/manifest.json:modes.guomi.runtime_code_hash`.
+4. Hash the exact CA file bytes and place the result in
+   `trusted_ca_certificate_hashes_hex`:
+
+   ```bash
+   openssl dgst -sm3 /etc/trustdb/fisco/sm_ca.crt
+   ```
+
+5. Set independent signing and encryption certificate/key paths. Configure the
+   account provider reference for a plugin that advertises
+   `FISCO_BCOS_GUOMI_V1`; the example uses SDF key index 7.
+
+Create the canonical `trustdb.fisco-bcos-trust-config.v1` CBOR file and record
+both derived trust identities:
+
+```bash
+trustdb anchor fisco-bcos trust-config create \
+  --input /etc/trustdb/fisco/trust-config.guomi.json \
+  --out /etc/trustdb/fisco/trust-config.guomi.cbor
+
+trustdb anchor fisco-bcos trust-config inspect \
+  --input /etc/trustdb/fisco/trust-config.guomi.cbor
+```
+
+The create command derives every algorithm, encoding, transport, and fixed SM2
+user-ID field from `crypto_mode`; unknown JSON fields, malformed hex, invalid
+curve points, node-ID/public-key mismatch, wrong endpoint schemes, and mixed
+standard/Guomi values fail before the CBOR file is written. The output is
+written atomically with mode `0600`.
+
+The resulting config contains:
 
 - `crypto_mode=guomi`, protocol and chain hashes set to SM3, account and
   validator signatures set to SM2-with-SM3, and the fixed TrustDB SM2 user ID;
