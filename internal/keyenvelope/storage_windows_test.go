@@ -173,3 +173,84 @@ func TestWindowsEnvelopeLockHonorsContextAndRecovers(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestWindowsFullAccessMaskAcceptsMappedFileRights(t *testing.T) {
+	const fileAllAccess = windows.STANDARD_RIGHTS_REQUIRED | windows.SYNCHRONIZE | 0x1ff
+	if !grantsFullFileAccess(windows.GENERIC_ALL) {
+		t.Fatal("GENERIC_ALL was not accepted")
+	}
+	if !grantsFullFileAccess(fileAllAccess) {
+		t.Fatal("mapped FILE_ALL_ACCESS was not accepted")
+	}
+	if grantsFullFileAccess(windows.FILE_GENERIC_READ | windows.FILE_GENERIC_WRITE) {
+		t.Fatal("read and write without ownership rights were accepted as full access")
+	}
+}
+
+func TestWindowsEnvelopeLockDoesNotTakeOverForeignOwner(t *testing.T) {
+	lockPath := filepath.Join(t.TempDir(), "client.material.lock")
+	if err := os.WriteFile(lockPath, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	currentUser, err := currentProcessUserSID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	acl, err := windows.ACLFromEntries([]windows.EXPLICIT_ACCESS{{
+		AccessPermissions: windows.GENERIC_ALL,
+		AccessMode:        windows.SET_ACCESS,
+		Inheritance:       windows.NO_INHERITANCE,
+		Trustee: windows.TRUSTEE{
+			TrusteeForm:  windows.TRUSTEE_IS_SID,
+			TrusteeType:  windows.TRUSTEE_IS_USER,
+			TrusteeValue: windows.TrusteeValueFromSID(currentUser),
+		},
+	}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	foreignOwner, err := windows.CreateWellKnownSid(windows.WinBuiltinAdministratorsSid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if foreignOwner.Equals(currentUser) {
+		t.Skip("current user is the built-in administrators SID")
+	}
+	err = windows.SetNamedSecurityInfo(
+		lockPath,
+		windows.SE_FILE_OBJECT,
+		windows.OWNER_SECURITY_INFORMATION|
+			windows.DACL_SECURITY_INFORMATION|
+			windows.PROTECTED_DACL_SECURITY_INFORMATION,
+		foreignOwner,
+		nil,
+		acl,
+		nil,
+	)
+	if errors.Is(err, windows.ERROR_ACCESS_DENIED) || errors.Is(err, windows.ERROR_INVALID_OWNER) {
+		t.Skipf("test token cannot assign a foreign owner: %v", err)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if release, err := acquireEnvelopeLock(context.Background(), lockPath[:len(lockPath)-len(".lock")]); err == nil {
+		_ = release()
+		t.Fatal("acquired a pre-existing lock owned by another principal")
+	}
+	descriptor, err := windows.GetNamedSecurityInfo(
+		lockPath,
+		windows.SE_FILE_OBJECT,
+		windows.OWNER_SECURITY_INFORMATION,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	actualOwner, _, err := descriptor.Owner()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if actualOwner == nil || !actualOwner.Equals(foreignOwner) {
+		t.Fatal("foreign-owned lock was taken over")
+	}
+}

@@ -43,7 +43,7 @@ func validateEnvelopeFile(file *os.File, info fs.FileInfo) error {
 		return fmt.Errorf("%w: envelope is a reparse point or directory", ErrUnsafeEnvelopeStorage)
 	}
 	if err := validateOwnerOnlyACL(handle); err != nil {
-		return fmt.Errorf("%w: envelope owner ACL is invalid", ErrUnsafeEnvelopeStorage)
+		return fmt.Errorf("%w: envelope owner ACL is invalid: %v", ErrUnsafeEnvelopeStorage, err)
 	}
 	return nil
 }
@@ -82,6 +82,9 @@ func acquireEnvelopeLock(ctx context.Context, path string) (func() error, error)
 	defer func() {
 		if closeOnError {
 			_ = windows.CloseHandle(handle)
+			if created {
+				_ = os.Remove(lockPath)
+			}
 		}
 	}()
 	var info windows.ByHandleFileInformation
@@ -95,7 +98,7 @@ func acquireEnvelopeLock(ctx context.Context, path string) (func() error, error)
 		return nil, secretSafePathError("protect software key envelope lock", err)
 	}
 	if err := validateOwnerOnlyACL(handle); err != nil {
-		return nil, fmt.Errorf("%w: lock file owner ACL is invalid", ErrUnsafeEnvelopeStorage)
+		return nil, fmt.Errorf("%w: lock file owner ACL is invalid: %v", ErrUnsafeEnvelopeStorage, err)
 	}
 
 	overlapped := new(windows.Overlapped)
@@ -300,10 +303,22 @@ func validateOwnerOnlyACL(handle windows.Handle) error {
 		return errors.New("envelope owner entry is invalid")
 	}
 	aceSID := (*windows.SID)(unsafe.Pointer(&ace.SidStart))
-	if !expectedOwner.Equals(aceSID) || ace.Mask&windows.GENERIC_ALL == 0 {
+	if !expectedOwner.Equals(aceSID) {
 		return errors.New("envelope DACL grants an unexpected principal")
 	}
+	if !grantsFullFileAccess(ace.Mask) {
+		return errors.New("envelope owner entry does not grant full file access")
+	}
 	return nil
+}
+
+func grantsFullFileAccess(mask windows.ACCESS_MASK) bool {
+	// SetSecurityInfo maps GENERIC_ALL to the concrete file access mask. Some
+	// filesystems preserve the generic bit, while NTFS normally stores
+	// FILE_ALL_ACCESS (STANDARD_RIGHTS_REQUIRED | SYNCHRONIZE | 0x1ff).
+	const fileAllAccess = windows.STANDARD_RIGHTS_REQUIRED | windows.SYNCHRONIZE | 0x1ff
+	return mask&windows.GENERIC_ALL != 0 ||
+		mask&fileAllAccess == fileAllAccess
 }
 
 func currentProcessUserSID() (*windows.SID, error) {
