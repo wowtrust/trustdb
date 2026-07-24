@@ -63,7 +63,8 @@ type FISCOBCOSStandardSinkConfig struct {
 	Clock       func() time.Time
 }
 
-// FISCOBCOSStandardSink owns quorum reads and exact payload/result binding.
+// FISCOBCOSStandardSink owns quorum reads and exact payload/result binding for
+// both explicitly configured FISCO BCOS cryptographic modes.
 // Drivers own network and SDK details. A successful Publish always includes
 // transaction and receipt proof fields, an exact contract readback, the
 // containing header, and a consensus snapshot; submission alone is never
@@ -88,11 +89,8 @@ func NewFISCOBCOSStandardSink(config FISCOBCOSStandardSinkConfig) (*FISCOBCOSSta
 	if err != nil {
 		return nil, err
 	}
-	if trust.CryptoMode != fiscobcos.CryptoModeStandard {
-		return nil, fmt.Errorf("%w: standard sink requires crypto_mode=standard", fiscobcos.ErrWrongNetwork)
-	}
 	if len(config.Drivers) < minimumFISCOBCOSEndpoints || trust.ReadQuorum < minimumFISCOBCOSEndpoints {
-		return nil, fmt.Errorf("%w: standard sink requires at least two endpoints and read_quorum >= 2", fiscobcos.ErrDriverInvalid)
+		return nil, fmt.Errorf("%w: FISCO BCOS sink requires at least two endpoints and read_quorum >= 2", fiscobcos.ErrDriverInvalid)
 	}
 	if int(trust.ReadQuorum) > len(config.Drivers) {
 		return nil, fmt.Errorf("%w: read_quorum exceeds driver count", fiscobcos.ErrDriverInvalid)
@@ -135,7 +133,7 @@ func (*FISCOBCOSStandardSink) Name() string { return fiscobcos.SinkName }
 // quorum, while any responding trust-identity mismatch remains fail-closed.
 func (s *FISCOBCOSStandardSink) Probe(ctx context.Context) ([]fiscobcos.ChainProbe, error) {
 	if s == nil {
-		return nil, fmt.Errorf("%w: nil standard sink", fiscobcos.ErrDriverInvalid)
+		return nil, fmt.Errorf("%w: nil FISCO BCOS sink", fiscobcos.ErrDriverInvalid)
 	}
 	route, err := s.probeQuorum(ctx)
 	if err != nil {
@@ -388,9 +386,9 @@ func (s *FISCOBCOSStandardSink) System(context.Context) (model.AnchorSystem, err
 	}
 	return model.AnchorSystem{
 		SchemaVersion: model.SchemaAnchorSystem,
-		SystemID:      "fisco-bcos-standard",
+		SystemID:      s.systemID(),
 		SinkName:      fiscobcos.SinkName,
-		DisplayName:   "FISCO BCOS standard-crypto anchor",
+		DisplayName:   "FISCO BCOS " + string(s.trust.CryptoMode) + "-crypto anchor",
 		Kind:          model.AnchorSystemKindEvidenceBlockchain,
 		Network:       s.trust.ChainID,
 		Provider:      "FISCO BCOS",
@@ -401,7 +399,7 @@ func (s *FISCOBCOSStandardSink) System(context.Context) (model.AnchorSystem, err
 		},
 		Assurance: model.AnchorAssurance{
 			Decentralized: true,
-			Finality:      "PBFT observation; offline proof verification pending",
+			Finality:      "PBFT commit evidence; offline verification uses the local static validator checkpoint",
 			Custody:       s.trust.AccountProvider.Provider,
 		},
 		Metadata: map[string]string{
@@ -417,7 +415,7 @@ func (s *FISCOBCOSStandardSink) System(context.Context) (model.AnchorSystem, err
 func (s *FISCOBCOSStandardSink) Status(ctx context.Context) (model.AnchorSystemStatus, error) {
 	status := model.AnchorSystemStatus{
 		SchemaVersion:   model.SchemaAnchorSystemStatus,
-		SystemID:        "fisco-bcos-standard",
+		SystemID:        s.systemID(),
 		State:           model.AnchorSystemStateUnavailable,
 		ObservedAtUnixN: s.clock().UTC().UnixNano(),
 		Message:         "provider identity probe failed",
@@ -447,6 +445,10 @@ func (s *FISCOBCOSStandardSink) Status(ctx context.Context) (model.AnchorSystemS
 		"healthy_count":  strconv.Itoa(route.healthyCount),
 	}
 	return status, nil
+}
+
+func (s *FISCOBCOSStandardSink) systemID() string {
+	return "fisco-bcos-" + string(s.trust.CryptoMode)
 }
 
 func (*FISCOBCOSStandardSink) ListResources(context.Context, model.AnchorResourceListOptions) (model.AnchorSystemResourcePage, error) {
@@ -554,11 +556,15 @@ func payloadForSTH(sth model.SignedTreeHead) (fiscobcos.AnchorPayload, error) {
 }
 
 func validateTransactionAttempt(attempt fiscobcos.TransactionSubmission, trust fiscobcos.TrustConfig, payload fiscobcos.AnchorPayload) error {
-	callData, err := fiscobcos.PublishCallData(payload)
+	callData, err := fiscobcos.PublishCallDataForMode(trust.CryptoMode, payload)
 	if err != nil {
 		return err
 	}
-	if len(attempt.EncodedTransaction) == 0 || len(attempt.Signature) != 65 ||
+	signatureBytes, err := fiscobcos.NativeTransactionSignatureBytes(trust.CryptoMode)
+	if err != nil {
+		return err
+	}
+	if len(attempt.EncodedTransaction) == 0 || len(attempt.Signature) != signatureBytes ||
 		attempt.ChainID != trust.ChainID ||
 		attempt.GroupID != trust.GroupID ||
 		!bytes.Equal(attempt.To, trust.Contract.Address) ||
@@ -655,7 +661,7 @@ func validateProbeForSink(probe fiscobcos.ChainProbe, trust fiscobcos.TrustConfi
 	if probe.SDKVersion != fiscobcos.StandardSDKVersion {
 		return permanentDriverFailure("probe", probe.Endpoint, fiscobcos.ErrUnsupportedSDK)
 	}
-	if probe.CryptoMode != fiscobcos.CryptoModeStandard ||
+	if probe.CryptoMode != trust.CryptoMode ||
 		probe.ChainID != trust.ChainID || probe.GroupID != trust.GroupID ||
 		!bytes.Equal(probe.GenesisHash, trust.GenesisHash) ||
 		!bytes.Equal(probe.CheckpointHash, trust.TrustedCheckpoint.BlockHash) {

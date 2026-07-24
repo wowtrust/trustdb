@@ -943,9 +943,9 @@ func newServeCommand(rt *runtimeConfig) *cobra.Command {
 	cmd.Flags().StringVar(&proofstoreArtifactSyncMode, "proofstore-artifact-sync-mode", "", "proof artifact durability mode: chunk (default) or batch")
 	cmd.Flags().StringVar(&proofstoreRecordIndexMode, "proofstore-record-index-mode", "", "record secondary index mode: full (default), no_storage_tokens, or time_only")
 	cmd.Flags().BoolVar(&proofstoreIndexStorageTokens, "proofstore-index-storage-tokens", true, "write StorageURI/FileName token secondary indexes in the proofstore; disable for high-write ingest profiles")
-	cmd.Flags().StringVar(&anchorSinkKind, "anchor-sink", "", "external anchor sink: off (default; no L5 proofs), file, noop, ots (OpenTimestamps), plugin, or fisco-bcos-standard")
+	cmd.Flags().StringVar(&anchorSinkKind, "anchor-sink", "", "external anchor sink: off (default; no L5 proofs), file, noop, ots (OpenTimestamps), plugin, or fisco-bcos")
 	cmd.Flags().StringVar(&anchorPath, "anchor-path", "", "file anchor sink output path (JSONL). Defaults to <proof-dir>/anchors.jsonl when --anchor-sink=file and this flag is empty")
-	cmd.Flags().StringVar(&anchorFISCOBCOSTrustConfigFile, "anchor-fisco-bcos-trust-config", "", "canonical FISCO BCOS TrustConfig CBOR file (required when --anchor-sink=fisco-bcos-standard)")
+	cmd.Flags().StringVar(&anchorFISCOBCOSTrustConfigFile, "anchor-fisco-bcos-trust-config", "", "canonical mode-bound FISCO BCOS TrustConfig CBOR file (required when --anchor-sink=fisco-bcos)")
 	cmd.Flags().StringVar(&anchorPluginCommand, "anchor-plugin-command", "", "external anchor plugin executable (required when --anchor-sink=plugin)")
 	cmd.Flags().StringArrayVar(&anchorPluginArgs, "anchor-plugin-arg", nil, "argument passed to the external anchor plugin; may be repeated")
 	cmd.Flags().StringVar(&anchorPluginStartTimeoutText, "anchor-plugin-start-timeout", "", "maximum time to start and handshake with an external anchor plugin (default 10s)")
@@ -1044,17 +1044,14 @@ type fiscoBCOSSinkParams struct {
 func newFISCOBCOSStandardSinkFromParams(ctx context.Context, metrics *observability.Metrics, logger zerolog.Logger, params fiscoBCOSSinkParams) (*anchor.FISCOBCOSStandardSink, io.Closer, error) {
 	path := strings.TrimSpace(params.TrustConfigFile)
 	if path == "" {
-		return nil, nil, trusterr.New(trusterr.CodeInvalidArgument, "--anchor-fisco-bcos-trust-config is required when --anchor-sink=fisco-bcos-standard")
+		return nil, nil, trusterr.New(trusterr.CodeInvalidArgument, "--anchor-fisco-bcos-trust-config is required when --anchor-sink=fisco-bcos")
 	}
 	if params.Factory == nil {
-		return nil, nil, trusterr.New(trusterr.CodeFailedPrecondition, "FISCO BCOS standard SDK driver factory is not configured")
+		return nil, nil, trusterr.New(trusterr.CodeFailedPrecondition, "FISCO BCOS SDK driver factory is not configured")
 	}
 	trust, err := loadCanonicalFISCOBCOSTrustConfig(path)
 	if err != nil {
 		return nil, nil, err
-	}
-	if trust.CryptoMode != fiscobcos.CryptoModeStandard {
-		return nil, nil, trusterr.New(trusterr.CodeInvalidArgument, "fisco-bcos-standard requires crypto_mode=standard")
 	}
 	accountSigner := params.AccountSigner
 	var signerCloser io.Closer
@@ -1073,7 +1070,7 @@ func newFISCOBCOSStandardSinkFromParams(ctx context.Context, metrics *observabil
 	if err != nil {
 		closeFISCOBCOSDrivers(drivers)
 		closeFISCOBCOSSigner(signerCloser)
-		return nil, nil, trusterr.Wrap(trusterr.CodeFailedPrecondition, "initialize FISCO BCOS standard SDK drivers", err)
+		return nil, nil, trusterr.Wrap(trusterr.CodeFailedPrecondition, "initialize FISCO BCOS SDK drivers", err)
 	}
 	sink, err := anchor.NewFISCOBCOSStandardSink(anchor.FISCOBCOSStandardSinkConfig{
 		TrustConfig: trust,
@@ -1084,7 +1081,7 @@ func newFISCOBCOSStandardSinkFromParams(ctx context.Context, metrics *observabil
 	if err != nil {
 		closeFISCOBCOSDrivers(drivers)
 		closeFISCOBCOSSigner(signerCloser)
-		return nil, nil, trusterr.Wrap(trusterr.CodeInvalidArgument, "build FISCO BCOS standard anchor sink", err)
+		return nil, nil, trusterr.Wrap(trusterr.CodeInvalidArgument, "build FISCO BCOS anchor sink", err)
 	}
 	return sink, signerCloser, nil
 }
@@ -1177,7 +1174,7 @@ func newPluginSinkFromParams(ctx context.Context, plugin pluginSinkParams) (*anc
 // worker Service and a read-only API suitable for the HTTP layer. The
 // shutdown closure is always non-nil so `defer anchorShutdown()` is
 // safe even when anchoring is off. Legal sink kinds: "" / "off" (L5
-// disabled), "file", "noop", "ots", "plugin", and "fisco-bcos-standard".
+// disabled), "file", "noop", "ots", "plugin", and "fisco-bcos".
 func buildAnchorService(rt *runtimeConfig, store proofstore.Store, metrics *observability.Metrics, nodeID, logID, sinkKind, anchorPath, proofDir string, pollInterval time.Duration, plugin pluginSinkParams, ots otsSinkParams, fiscoBCOS fiscoBCOSSinkParams) (*anchor.Service, httpapi.AnchorService, func(), error) {
 	kind := strings.ToLower(strings.TrimSpace(sinkKind))
 	switch kind {
@@ -1226,18 +1223,18 @@ func buildAnchorService(rt *runtimeConfig, store proofstore.Store, metrics *obse
 				rt.logger.Warn().Err(err).Msg("anchor: close external plugin")
 			}
 		}
-	case "fisco-bcos", "fisco-bcos-standard":
+	case "fisco-bcos":
 		bcosSink, signerCloser, err := newFISCOBCOSStandardSinkFromParams(context.Background(), metrics, rt.logger, fiscoBCOS)
 		if err != nil {
 			return nil, nil, nil, err
 		}
 		rt.logger.Info().
 			Str("sink", bcosSink.Name()).
-			Msg("anchor sink enabled (FISCO BCOS standard crypto)")
+			Msg("anchor sink enabled (FISCO BCOS mode-bound crypto)")
 		sink = bcosSink
 		sinkShutdown = func() {
 			if err := bcosSink.Close(); err != nil {
-				rt.logger.Warn().Err(err).Msg("anchor: close FISCO BCOS standard SDK drivers")
+				rt.logger.Warn().Err(err).Msg("anchor: close FISCO BCOS SDK drivers")
 			}
 			if signerCloser != nil {
 				if err := signerCloser.Close(); err != nil {

@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"io"
 	"os"
 	"path/filepath"
@@ -11,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	ethcrypto "github.com/ethereum/go-ethereum/crypto"
 	"github.com/rs/zerolog"
 	"github.com/wowtrust/trustdb/internal/anchor"
 	"github.com/wowtrust/trustdb/internal/anchor/fiscobcos"
@@ -180,7 +182,7 @@ func testFISCOBCOSTrust(t *testing.T) fiscobcos.TrustConfig {
 		ProtocolVersion: fiscobcos.TrustDBAnchorV1ProtocolVersion,
 		EventSignature:  fiscobcos.TrustDBAnchorV1EventSignature,
 	}
-	trust.Endpoints = []string{"127.0.0.1:20200", "127.0.0.1:20201"}
+	trust.Endpoints = []string{"tls://127.0.0.1:20200", "tls://127.0.0.1:20201"}
 	trust.ReadQuorum = 2
 	trust.AccountProvider = fiscobcos.AccountProviderConfig{
 		Provider: "software", KeyID: "publisher", KeyReference: "/run/trustdb/publisher.key",
@@ -193,11 +195,18 @@ func testFISCOBCOSTrust(t *testing.T) fiscobcos.TrustConfig {
 		ClientSigningCertificateRef: "/etc/trustdb/sdk.crt",
 		ClientSigningKeyRef:         "/run/trustdb/sdk.key",
 	}
-	for _, id := range []string{"validator-a", "validator-b", "validator-c", "validator-d"} {
+	for index := 1; index <= 4; index++ {
+		privateKey := make([]byte, 32)
+		privateKey[31] = byte(index)
+		private, err := ethcrypto.ToECDSA(privateKey)
+		if err != nil {
+			t.Fatal(err)
+		}
+		publicKey := ethcrypto.FromECDSAPub(&private.PublicKey)
 		trust.Validators = append(trust.Validators, fiscobcos.ValidatorDescriptor{
-			NodeID: id, Algorithm: fiscobcos.StandardAccountAlg,
+			NodeID: "0x" + hex.EncodeToString(publicKey[1:]), Algorithm: fiscobcos.StandardAccountAlg,
 			PublicKeyEncoding: fiscobcos.StandardKeyEncoding,
-			PublicKey:         append([]byte{0x04}, bytes.Repeat([]byte{byte(len(id))}, 64)...),
+			PublicKey:         publicKey,
 		})
 	}
 	return trust
@@ -336,6 +345,48 @@ func TestFISCOBCOSPluginKeyBindsProviderAndCanonicalReference(t *testing.T) {
 	account.KeyReference = `{"handle":"bcos-publisher","endpoint":"https://signer.example/v1","credential_ref":"vault://bcos-token"}`
 	if _, err := fiscoBCOSPluginKey(account, info); err == nil {
 		t.Fatal("non-canonical provider reference was accepted")
+	}
+}
+
+func TestFISCOBCOSPluginKeySelectsIndependentGuomiProfile(t *testing.T) {
+	t.Parallel()
+
+	info := signerplugin.GetInfoResponse{
+		ProtocolVersion: signerplugin.ProtocolVersion,
+		PluginID:        "remote-bcos-guomi-signer",
+		ProviderKind:    signerplugin.ProviderRemote,
+		Capabilities: []string{
+			signerplugin.CapabilityHealth,
+			signerplugin.CapabilityPublicKey,
+			signerplugin.CapabilitySign,
+		},
+		Algorithms: []signerplugin.AlgorithmCapability{{
+			CryptoSuite:       signerplugin.SuiteFISCOBCOSGuomi,
+			Algorithm:         signerplugin.AlgorithmSM2SM3,
+			PublicKeyEncoding: signerplugin.SM2PublicKeyEncoding,
+			SignatureEncoding: signerplugin.SM2SignatureEncoding,
+			SM2UserID:         signerplugin.SM2DefaultUserID,
+		}},
+		MaxConcurrentSigns: 1,
+	}
+	account := fiscobcos.AccountProviderConfig{
+		Provider:     signerplugin.ProviderRemote,
+		KeyID:        "publisher",
+		KeyReference: `{"endpoint":"https://signer.example/v1","handle":"bcos-guomi-publisher","credential_ref":"vault://bcos-token"}`,
+		Algorithm:    fiscobcos.GuomiAccountAlg,
+	}
+	key, err := fiscoBCOSPluginKey(account, info)
+	if err != nil {
+		t.Fatalf("Guomi plugin key rejected: %v", err)
+	}
+	if key.Binding.CryptoSuite != signerplugin.SuiteFISCOBCOSGuomi ||
+		key.Binding.CryptoSuite == signerplugin.SuiteCNSMV1 {
+		t.Fatalf("Guomi account used evidence-suite profile: %+v", key.Binding)
+	}
+
+	info.Algorithms[0].CryptoSuite = signerplugin.SuiteCNSMV1
+	if _, err := fiscoBCOSPluginKey(account, info); err == nil {
+		t.Fatal("Guomi account accepted a CN_SM_V1-only plugin")
 	}
 }
 

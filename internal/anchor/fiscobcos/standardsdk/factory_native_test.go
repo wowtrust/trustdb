@@ -4,6 +4,8 @@ package standardsdk
 
 import (
 	"bytes"
+	"crypto/elliptic"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"os"
@@ -11,12 +13,16 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/FISCO-BCOS/go-sdk/v3/types"
+	"github.com/emmansun/gmsm/sm2"
+	"github.com/emmansun/gmsm/sm3"
 	"github.com/ethereum/go-ethereum/common"
 	ethcrypto "github.com/ethereum/go-ethereum/crypto"
 
 	"github.com/wowtrust/trustdb/internal/anchor/fiscobcos"
+	"github.com/wowtrust/trustdb/internal/cryptosuite"
 )
 
 func TestValidateSignerSignatureRequiresConfiguredPublicKey(t *testing.T) {
@@ -31,15 +37,139 @@ func TestValidateSignerSignatureRequiresConfiguredPublicKey(t *testing.T) {
 		t.Fatal(err)
 	}
 	publicKey := ethcrypto.FromECDSAPub(&key.PublicKey)
-	if err := validateSignerSignature(digest[:], signature, publicKey); err != nil {
+	if err := validateStandardSignerSignature(digest[:], signature, publicKey); err != nil {
 		t.Fatal(err)
 	}
 	other, err := ethcrypto.GenerateKey()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := validateSignerSignature(digest[:], signature, ethcrypto.FromECDSAPub(&other.PublicKey)); err == nil {
+	if err := validateStandardSignerSignature(digest[:], signature, ethcrypto.FromECDSAPub(&other.PublicKey)); err == nil {
 		t.Fatal("accepted signature from a different account")
+	}
+}
+
+func TestGuomiSignerMaterialIsVerifiedAndConvertedToNativeFormat(t *testing.T) {
+	t.Parallel()
+
+	key, err := sm2.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	publicKey := elliptic.Marshal(sm2.P256(), key.X, key.Y)
+	digest := sha256.Sum256([]byte("FISCO BCOS Guomi transaction digest"))
+	der, err := key.SignWithSM2(rand.Reader, []byte(cryptosuite.SM2DefaultUserID), digest[:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	trust := fiscobcos.TrustConfig{
+		CryptoMode: fiscobcos.CryptoModeGuomi,
+		SM2UserID:  cryptosuite.SM2DefaultUserID,
+	}
+	native, err := nativeSignerSignature(trust, digest[:], der, publicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(native) != 128 || !bytes.Equal(native[64:], publicKey[1:]) {
+		t.Fatalf("native Guomi signature is not R||S||pub: %x", native)
+	}
+	if err := validateNativeSignature(trust, digest[:], native, publicKey); err != nil {
+		t.Fatalf("native Guomi signature rejected: %v", err)
+	}
+	native[127] ^= 1
+	if err := validateNativeSignature(trust, digest[:], native, publicKey); err == nil {
+		t.Fatal("Guomi signature accepted a substituted embedded public key")
+	}
+	native[127] ^= 1
+	other, err := sm2.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherPublic := elliptic.Marshal(sm2.P256(), other.X, other.Y)
+	if _, err := nativeSignerSignature(trust, digest[:], der, otherPublic); err == nil {
+		t.Fatal("Guomi provider signature accepted a different configured public key")
+	}
+
+	address, err := accountAddress(fiscobcos.CryptoModeGuomi, publicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := sm3.Sum(publicKey[1:])
+	if !bytes.Equal(address, sum[12:]) {
+		t.Fatalf("Guomi account address = %x, want %x", address, sum[12:])
+	}
+}
+
+func TestGuomiPreparedTransactionRoundTripsWithSM3ModeBinding(t *testing.T) {
+	t.Parallel()
+
+	key, err := sm2.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	publicKey := elliptic.Marshal(sm2.P256(), key.X, key.Y)
+	contract := common.BytesToAddress(bytes.Repeat([]byte{0x42}, 20))
+	input := bytes.Repeat([]byte{0x51}, 68)
+	transaction := types.NewTransaction(
+		contract,
+		nil,
+		0,
+		nil,
+		9000,
+		input,
+		"guomi-nonce",
+		"chain0",
+		"group0",
+		"",
+		true,
+	)
+	digest := transaction.Hash().Bytes()
+	der, err := key.SignWithSM2(rand.Reader, []byte(cryptosuite.SM2DefaultUserID), digest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	trust := fiscobcos.TrustConfig{
+		CryptoMode: fiscobcos.CryptoModeGuomi,
+		SM2UserID:  cryptosuite.SM2DefaultUserID,
+		ChainID:    "chain0",
+		GroupID:    "group0",
+		Contract:   fiscobcos.ContractBinding{Address: contract.Bytes()},
+	}
+	native, err := nativeSignerSignature(trust, digest, der, publicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	transaction.Signature = native
+	sender, err := accountAddress(fiscobcos.CryptoModeGuomi, publicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	senderAddress := common.BytesToAddress(sender)
+	transaction.Sender = &senderAddress
+	attempt := fiscobcos.TransactionSubmission{
+		EncodedTransaction: transaction.Bytes(),
+		ChainID:            "chain0",
+		GroupID:            "group0",
+		To:                 contract.Bytes(),
+		Input:              input,
+		Signature:          native,
+		Sender:             sender,
+		TransactionHash:    digest,
+		BlockLimit:         9000,
+	}
+	if err := validatePreparedSubmission(attempt, trust, sender, publicKey); err != nil {
+		t.Fatalf("Guomi prepared transaction rejected: %v", err)
+	}
+	standardTrust := trust
+	standardTrust.CryptoMode = fiscobcos.CryptoModeStandard
+	standardTrust.SM2UserID = ""
+	if err := validatePreparedSubmission(attempt, standardTrust, sender, publicKey); err == nil {
+		t.Fatal("Guomi prepared transaction accepted under standard mode")
+	}
+	attempt.TransactionHash = append([]byte(nil), attempt.TransactionHash...)
+	attempt.TransactionHash[0] ^= 1
+	if err := validatePreparedSubmission(attempt, trust, sender, publicKey); err == nil {
+		t.Fatal("Guomi prepared transaction accepted a substituted transaction hash")
 	}
 }
 
@@ -92,7 +222,8 @@ func TestReceiptTransactionIdentityChecksEveryField(t *testing.T) {
 		BlockLimit:         500,
 	}
 	trust := fiscobcos.TrustConfig{
-		ChainID: "chain0", GroupID: "group0",
+		CryptoMode: fiscobcos.CryptoModeStandard,
+		ChainID:    "chain0", GroupID: "group0",
 		Contract: fiscobcos.ContractBinding{Address: contract},
 	}
 	receipt := &types.Receipt{
@@ -143,6 +274,7 @@ func TestLocalReferencesAreAbsoluteRegularAndPrivate(t *testing.T) {
 	}
 	caDigest := sha256.Sum256([]byte("not-empty"))
 	config := fiscobcos.TrustConfig{
+		CryptoMode: fiscobcos.CryptoModeStandard,
 		AccountProvider: fiscobcos.AccountProviderConfig{
 			Provider: "sdf", KeyReference: "sdf://slot/7",
 		},
@@ -153,14 +285,14 @@ func TestLocalReferencesAreAbsoluteRegularAndPrivate(t *testing.T) {
 			ClientSigningKeyRef:         keyPath,
 		},
 	}
-	if err := verifyCertificateReferences(config, false); err != nil {
+	if err := verifyCertificateReferences(config, false, time.Now()); err != nil {
 		t.Fatalf("injected signer should not read opaque account key reference: %v", err)
 	}
 	if runtime.GOOS != "windows" {
 		if err := os.Chmod(keyPath, 0o644); err != nil {
 			t.Fatal(err)
 		}
-		if err := verifyCertificateReferences(config, false); err == nil {
+		if err := verifyCertificateReferences(config, false, time.Now()); err == nil {
 			t.Fatal("accepted group-readable TLS private key")
 		}
 		if err := os.Chmod(keyPath, 0o600); err != nil {

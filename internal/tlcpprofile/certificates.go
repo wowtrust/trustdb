@@ -30,6 +30,193 @@ type certificateSet struct {
 	all                     []*smx509.Certificate
 }
 
+// ValidateSM2ClientDualCertificateFiles validates the file-backed signing and
+// encryption identities required by a Guomi FISCO BCOS client before native
+// SDK startup. It verifies current SM2-with-SM3 chains, separates certificate
+// roles, requires distinct keys, and proves that each private key matches its
+// declared leaf certificate.
+func ValidateSM2ClientDualCertificateFiles(
+	caFile,
+	signingChainFile,
+	signingKeyFile,
+	encryptionChainFile,
+	encryptionKeyFile string,
+	now time.Time,
+) error {
+	if now.IsZero() {
+		return errors.New("certificate validation time is required")
+	}
+	roots, err := loadCABundle(caFile, now)
+	if err != nil {
+		return fmt.Errorf("validate Guomi CA: %w", err)
+	}
+	signing, err := loadBCOSClientChain(signingChainFile, roots, now, signingCertificateRole)
+	if err != nil {
+		return fmt.Errorf("validate Guomi signing certificate: %w", err)
+	}
+	encryption, err := loadBCOSClientChain(encryptionChainFile, roots, now, encryptionCertificateRole)
+	if err != nil {
+		return fmt.Errorf("validate Guomi encryption certificate: %w", err)
+	}
+	if err := validateBCOSDualCertificateIdentity(signing[0], encryption[0]); err != nil {
+		return err
+	}
+	if err := validateSM2PrivateKeyFile(signingKeyFile, signing[0]); err != nil {
+		return fmt.Errorf("validate Guomi signing key: %w", err)
+	}
+	if err := validateSM2PrivateKeyFile(encryptionKeyFile, encryption[0]); err != nil {
+		return fmt.Errorf("validate Guomi encryption key: %w", err)
+	}
+	return nil
+}
+
+func validateBCOSDualCertificateIdentity(signing, encryption *smx509.Certificate) error {
+	if bytes.Equal(signing.Raw, encryption.Raw) {
+		return errors.New("Guomi signing and encryption certificates must be distinct")
+	}
+	signingKey, signingOK := signing.PublicKey.(*ecdsa.PublicKey)
+	encryptionKey, encryptionOK := encryption.PublicKey.(*ecdsa.PublicKey)
+	if !signingOK || !encryptionOK ||
+		(signingKey.X.Cmp(encryptionKey.X) == 0 && signingKey.Y.Cmp(encryptionKey.Y) == 0) {
+		return errors.New("Guomi signing and encryption certificates must use distinct SM2 public keys")
+	}
+	return nil
+}
+
+func loadBCOSClientChain(
+	path string,
+	roots []*smx509.Certificate,
+	now time.Time,
+	role certificateRole,
+) ([]*smx509.Certificate, error) {
+	certificates, err := loadCertificatePEM(path)
+	if err != nil {
+		return nil, err
+	}
+	leaf := certificates[0]
+	if leaf.BasicConstraintsValid && leaf.IsCA {
+		return nil, errors.New("leaf certificate must not be a CA")
+	}
+	if err := validateCurrentCertificate(leaf, now); err != nil {
+		return nil, err
+	}
+	if err := validateSM2Certificate(leaf); err != nil {
+		return nil, err
+	}
+	if err := validateBCOSClientRole(leaf, role); err != nil {
+		return nil, err
+	}
+	for index := 1; index < len(certificates); index++ {
+		certificate := certificates[index]
+		if err := validateCA(certificate, now, false); err != nil {
+			return nil, fmt.Errorf("intermediate certificate %d: %w", index, err)
+		}
+		if err := validateIssuerLink(certificates[index-1], certificate); err != nil {
+			return nil, fmt.Errorf("certificate %d does not issue certificate %d: %w", index, index-1, err)
+		}
+	}
+	rootPool := smx509.NewCertPool()
+	for _, root := range roots {
+		rootPool.AddCert(root)
+	}
+	intermediates := smx509.NewCertPool()
+	for _, certificate := range certificates[1:] {
+		intermediates.AddCert(certificate)
+	}
+	chains, err := leaf.Verify(smx509.VerifyOptions{
+		Roots:         rootPool,
+		Intermediates: intermediates,
+		CurrentTime:   now,
+		KeyUsages:     []smx509.ExtKeyUsage{smx509.ExtKeyUsageClientAuth},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("verify SM2 client certificate chain: %w", err)
+	}
+	if len(chains) == 0 {
+		return nil, errors.New("SM2 client certificate verification returned no chain")
+	}
+	return certificates, nil
+}
+
+func validateBCOSClientRole(certificate *smx509.Certificate, role certificateRole) error {
+	if len(certificate.UnknownExtKeyUsage) != 0 {
+		return errors.New("Guomi client certificate contains unknown extended key usages")
+	}
+	if len(certificate.ExtKeyUsage) != 0 &&
+		(len(certificate.ExtKeyUsage) != 1 || certificate.ExtKeyUsage[0] != smx509.ExtKeyUsageClientAuth) {
+		return errors.New("Guomi client certificate EKU is not clientAuth")
+	}
+	switch role {
+	case signingCertificateRole:
+		forbidden := smx509.KeyUsageKeyEncipherment |
+			smx509.KeyUsageDataEncipherment |
+			smx509.KeyUsageKeyAgreement |
+			smx509.KeyUsageCertSign |
+			smx509.KeyUsageCRLSign |
+			smx509.KeyUsageEncipherOnly |
+			smx509.KeyUsageDecipherOnly
+		if certificate.KeyUsage&smx509.KeyUsageDigitalSignature == 0 ||
+			certificate.KeyUsage&forbidden != 0 {
+			return errors.New("Guomi signing certificate does not have an exclusive signing role")
+		}
+	case encryptionCertificateRole:
+		allowed := smx509.KeyUsageKeyEncipherment |
+			smx509.KeyUsageDataEncipherment |
+			smx509.KeyUsageKeyAgreement |
+			smx509.KeyUsageEncipherOnly |
+			smx509.KeyUsageDecipherOnly
+		forbidden := smx509.KeyUsageDigitalSignature |
+			smx509.KeyUsageContentCommitment |
+			smx509.KeyUsageCertSign |
+			smx509.KeyUsageCRLSign
+		if certificate.KeyUsage&allowed == 0 || certificate.KeyUsage&forbidden != 0 {
+			return errors.New("Guomi encryption certificate does not have an exclusive encryption role")
+		}
+	default:
+		return errors.New("unknown Guomi client certificate role")
+	}
+	return nil
+}
+
+func validateSM2PrivateKeyFile(path string, certificate *smx509.Certificate) error {
+	data, err := readBoundedRegularFile(path, MaxCertificateBytes)
+	if err != nil {
+		return err
+	}
+	block, rest := pem.Decode(bytes.TrimSpace(data))
+	if block == nil || len(bytes.TrimSpace(rest)) != 0 || len(block.Headers) != 0 {
+		return errors.New("private key PEM must contain exactly one unencrypted block")
+	}
+	var parsed any
+	switch block.Type {
+	case "PRIVATE KEY":
+		parsed, err = smx509.ParsePKCS8PrivateKey(block.Bytes)
+	case "EC PRIVATE KEY":
+		parsed, err = smx509.ParseECPrivateKey(block.Bytes)
+	default:
+		return fmt.Errorf("unsupported private key PEM type %q", block.Type)
+	}
+	if err != nil {
+		return fmt.Errorf("parse SM2 private key: %w", err)
+	}
+	var privateKey *ecdsa.PrivateKey
+	switch key := parsed.(type) {
+	case *ecdsa.PrivateKey:
+		privateKey = key
+	case *sm2.PrivateKey:
+		privateKey = &key.PrivateKey
+	}
+	ok := privateKey != nil
+	if !ok || !sameCurve(privateKey.Curve, sm2.P256()) {
+		return errors.New("private key does not use sm2p256v1")
+	}
+	publicKey, ok := certificate.PublicKey.(*ecdsa.PublicKey)
+	if !ok || privateKey.X.Cmp(publicKey.X) != 0 || privateKey.Y.Cmp(publicKey.Y) != 0 {
+		return errors.New("private key does not match certificate public key")
+	}
+	return nil
+}
+
 func validatePublicTrust(profile Profile, now time.Time) (Report, error) {
 	identityManifest, proofKeys, identityManifestSHA256, err := loadTrustDBIdentityManifest(
 		profile.TrustDBIdentityManifestFile,
