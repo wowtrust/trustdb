@@ -6,10 +6,12 @@ import (
 	"encoding/hex"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/wowtrust/trustdb/internal/cborx"
 )
@@ -208,9 +210,10 @@ func TestSM4GCMKnownAnswer(t *testing.T) {
 }
 
 func TestEnvelopeStorageAtomicPermissionsAndSymlinkRejection(t *testing.T) {
-	if runtime.GOOS != "windows" {
-		t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows envelope storage intentionally fails closed")
 	}
+	t.Parallel()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "client.material")
 	provider := testPassphraseProvider("correct horse battery staple")
@@ -228,11 +231,21 @@ func TestEnvelopeStorageAtomicPermissionsAndSymlinkRejection(t *testing.T) {
 	if err := WriteFile(path, second); !errors.Is(err, os.ErrExist) {
 		t.Fatalf("second WriteFile error = %v", err)
 	}
-	if err := ReplaceFile(path, second); err != nil {
+	if err := UpdateFile(context.Background(), path, func(current []byte) ([]byte, error) {
+		return append([]byte(nil), second...), nil
+	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := ReplaceFile(path, second[:len(second)/2]); err == nil {
-		t.Fatal("ReplaceFile accepted a truncated envelope")
+	if err := UpdateFile(context.Background(), path, func(current []byte) ([]byte, error) {
+		return append([]byte(nil), second[:len(second)/2]...), nil
+	}); err == nil {
+		t.Fatal("UpdateFile accepted a truncated envelope")
+	}
+	injected := errors.New("injected update failure")
+	if err := UpdateFile(context.Background(), path, func(current []byte) ([]byte, error) {
+		return nil, injected
+	}); !errors.Is(err, injected) {
+		t.Fatalf("UpdateFile callback failure = %v", err)
 	}
 	got, err := ReadFile(path)
 	if err != nil {
@@ -264,8 +277,10 @@ func TestEnvelopeStorageAtomicPermissionsAndSymlinkRejection(t *testing.T) {
 		if _, err := ReadFile(link); !errors.Is(err, ErrUnsafeEnvelopeStorage) {
 			t.Fatalf("ReadFile(symlink) error = %v", err)
 		}
-		if err := ReplaceFile(link, second); !errors.Is(err, ErrUnsafeEnvelopeStorage) {
-			t.Fatalf("ReplaceFile(symlink) error = %v", err)
+		if err := UpdateFile(context.Background(), link, func(current []byte) ([]byte, error) {
+			return append([]byte(nil), second...), nil
+		}); !errors.Is(err, ErrUnsafeEnvelopeStorage) {
+			t.Fatalf("UpdateFile(symlink) error = %v", err)
 		}
 	}
 	secretPath := filepath.Join(dir, "private-secret-material")
@@ -273,6 +288,178 @@ func TestEnvelopeStorageAtomicPermissionsAndSymlinkRejection(t *testing.T) {
 		t.Fatal("ReadFile(missing secret path) error = nil")
 	} else if strings.Contains(err.Error(), filepath.Base(secretPath)) {
 		t.Fatalf("storage diagnostic leaked material path: %v", err)
+	}
+}
+
+func TestUpdateFileSerializesAcrossProcesses(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows envelope storage intentionally fails closed")
+	}
+	provider := testPassphraseProvider("correct horse battery staple")
+	data, err := sealWithRand(context.Background(), testMetadata, bytes.Repeat([]byte{0x31}, 64), provider, deterministicReader(6))
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "client.material")
+	if err := WriteFile(path, data); err != nil {
+		t.Fatal(err)
+	}
+
+	first := startEnvelopeLockHelper(t, path)
+	waitHelperReady(t, first, 5*time.Second)
+	second := startEnvelopeLockHelper(t, path)
+	select {
+	case err := <-second.ready:
+		t.Fatalf("second process entered update while first held lock: %v", err)
+	case <-time.After(250 * time.Millisecond):
+	}
+	first.release(t)
+	first.wait(t)
+	waitHelperReady(t, second, 5*time.Second)
+	second.release(t)
+	second.wait(t)
+}
+
+func TestUpdateFileRecoversAfterLockHolderProcessExit(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows envelope storage intentionally fails closed")
+	}
+	provider := testPassphraseProvider("correct horse battery staple")
+	data, err := sealWithRand(context.Background(), testMetadata, bytes.Repeat([]byte{0x32}, 64), provider, deterministicReader(7))
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "client.material")
+	if err := WriteFile(path, data); err != nil {
+		t.Fatal(err)
+	}
+
+	helper := startEnvelopeLockHelper(t, path)
+	waitHelperReady(t, helper, 5*time.Second)
+	if err := helper.cmd.Process.Kill(); err != nil {
+		t.Fatal(err)
+	}
+	if err := helper.cmd.Wait(); err == nil {
+		t.Fatal("killed lock helper exited successfully")
+	}
+	_ = helper.releaseOut.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := UpdateFile(ctx, path, func(current []byte) ([]byte, error) {
+		return append([]byte(nil), current...), nil
+	}); err != nil {
+		t.Fatalf("UpdateFile after lock-holder exit: %v", err)
+	}
+}
+
+func TestEnvelopeLockProcessHelper(t *testing.T) {
+	if os.Getenv("TRUSTDB_ENVELOPE_LOCK_HELPER") != "1" {
+		return
+	}
+	ready := os.NewFile(uintptr(3), "ready")
+	release := os.NewFile(uintptr(4), "release")
+	if ready == nil || release == nil {
+		t.Fatal("helper pipes are unavailable")
+	}
+	defer ready.Close()
+	defer release.Close()
+	path := os.Getenv("TRUSTDB_ENVELOPE_LOCK_PATH")
+	err := UpdateFile(context.Background(), path, func(current []byte) ([]byte, error) {
+		if _, err := ready.Write([]byte{1}); err != nil {
+			return nil, err
+		}
+		one := make([]byte, 1)
+		if _, err := release.Read(one); err != nil {
+			return nil, err
+		}
+		return append([]byte(nil), current...), nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+type envelopeLockHelper struct {
+	cmd        *exec.Cmd
+	ready      <-chan error
+	releaseOut *os.File
+	output     *bytes.Buffer
+}
+
+func startEnvelopeLockHelper(t *testing.T, path string) *envelopeLockHelper {
+	t.Helper()
+	readyIn, readyOut, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	releaseIn, releaseOut, err := os.Pipe()
+	if err != nil {
+		readyIn.Close()
+		readyOut.Close()
+		t.Fatal(err)
+	}
+	output := new(bytes.Buffer)
+	cmd := exec.Command(os.Args[0], "-test.run=^TestEnvelopeLockProcessHelper$")
+	cmd.Env = append(os.Environ(),
+		"TRUSTDB_ENVELOPE_LOCK_HELPER=1",
+		"TRUSTDB_ENVELOPE_LOCK_PATH="+path,
+	)
+	cmd.ExtraFiles = []*os.File{readyOut, releaseIn}
+	cmd.Stdout = output
+	cmd.Stderr = output
+	if err := cmd.Start(); err != nil {
+		readyIn.Close()
+		readyOut.Close()
+		releaseIn.Close()
+		releaseOut.Close()
+		t.Fatal(err)
+	}
+	readyOut.Close()
+	releaseIn.Close()
+	ready := make(chan error, 1)
+	go func() {
+		one := make([]byte, 1)
+		_, err := readyIn.Read(one)
+		_ = readyIn.Close()
+		ready <- err
+	}()
+	helper := &envelopeLockHelper{cmd: cmd, ready: ready, releaseOut: releaseOut, output: output}
+	t.Cleanup(func() {
+		_ = helper.releaseOut.Close()
+		if helper.cmd.Process != nil {
+			_ = helper.cmd.Process.Kill()
+		}
+	})
+	return helper
+}
+
+func waitHelperReady(t *testing.T, helper *envelopeLockHelper, timeout time.Duration) {
+	t.Helper()
+	select {
+	case err := <-helper.ready:
+		if err != nil {
+			t.Fatalf("lock helper readiness failed: %v\n%s", err, helper.output.String())
+		}
+	case <-time.After(timeout):
+		t.Fatalf("lock helper did not become ready\n%s", helper.output.String())
+	}
+}
+
+func (h *envelopeLockHelper) release(t *testing.T) {
+	t.Helper()
+	if _, err := h.releaseOut.Write([]byte{1}); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.releaseOut.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func (h *envelopeLockHelper) wait(t *testing.T) {
+	t.Helper()
+	if err := h.cmd.Wait(); err != nil {
+		t.Fatalf("lock helper failed: %v\n%s", err, h.output.String())
 	}
 }
 

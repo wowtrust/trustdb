@@ -62,7 +62,7 @@ func NewResolver(providers ...SignerProvider) (*Resolver, error) {
 
 func NewDefaultResolver() *Resolver {
 	software, err := NewSoftwareProvider(keyenvelope.NewPassphraseKEKProvider(
-		keyenvelope.EnvPassphraseSource(keyenvelope.DefaultPassphraseEnv),
+		keyenvelope.DefaultPassphraseSource(),
 	))
 	if err != nil {
 		panic(err)
@@ -305,7 +305,8 @@ func (p SoftwareProvider) ResolveSigner(ctx context.Context, descriptor Descript
 
 // RewrapSoftwareEnvelopeFile rotates only the KEK operation for an encrypted
 // software key. The descriptor, private key, public identity, and encrypted
-// content remain unchanged; ReplaceFile provides the durable atomic boundary.
+// content remain unchanged; UpdateFile holds the durable serialization and
+// atomic-replacement boundary across the complete rotation.
 func RewrapSoftwareEnvelopeFile(ctx context.Context, descriptorPath string, oldProvider, newProvider keyenvelope.KEKProvider) error {
 	descriptor, err := ReadFile(descriptorPath)
 	if err != nil {
@@ -319,17 +320,9 @@ func RewrapSoftwareEnvelopeFile(ctx context.Context, descriptorPath string, oldP
 	if err != nil {
 		return err
 	}
-	data, err := keyenvelope.ReadFile(path)
-	if err != nil {
-		return err
-	}
-	defer clear(data)
-	rotated, err := keyenvelope.Rewrap(ctx, data, softwareEnvelopeMetadata(descriptor), oldProvider, newProvider)
-	if err != nil {
-		return err
-	}
-	defer clear(rotated)
-	return keyenvelope.ReplaceFile(path, rotated)
+	return keyenvelope.UpdateFile(ctx, path, func(data []byte) ([]byte, error) {
+		return keyenvelope.Rewrap(ctx, data, softwareEnvelopeMetadata(descriptor), oldProvider, newProvider)
+	})
 }
 
 func softwareEnvelopeMetadata(descriptor Descriptor) keyenvelope.Metadata {

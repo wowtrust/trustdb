@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"runtime"
 
 	"github.com/emmansun/gmsm/sm3"
 	"golang.org/x/crypto/pbkdf2"
@@ -16,9 +17,12 @@ import (
 )
 
 const (
-	PassphraseProvider   = "passphrase-dev-v1"
-	PassphraseKDF        = "PBKDF2-HMAC-SM3"
-	DefaultPassphraseEnv = "TRUSTDB_DEV_KEY_PASSPHRASE"
+	PassphraseProvider       = "passphrase-dev-v1"
+	PassphraseKDF            = "PBKDF2-HMAC-SM3"
+	DefaultPassphraseEnv     = "TRUSTDB_DEV_KEY_PASSPHRASE"
+	DefaultPassphraseFileEnv = "TRUSTDB_DEV_KEY_PASSPHRASE_FILE"
+	NewPassphraseEnv         = "TRUSTDB_DEV_KEY_PASSPHRASE_NEW"
+	NewPassphraseFileEnv     = "TRUSTDB_DEV_KEY_PASSPHRASE_FILE_NEW"
 
 	DefaultPBKDF2Iterations = 200_000
 	MinPBKDF2Iterations     = 100_000
@@ -68,6 +72,74 @@ func EnvPassphraseSource(name string) PassphraseSource {
 		}
 		return []byte(value), nil
 	}
+}
+
+// DefaultPassphraseSource supports exactly one secret source: the standard
+// development environment variable or an owner-only secret file named by the
+// standard file environment variable. The file path itself is never persisted
+// in an envelope or diagnostic.
+func DefaultPassphraseSource() PassphraseSource {
+	return EnvironmentOrFilePassphraseSource(DefaultPassphraseEnv, DefaultPassphraseFileEnv)
+}
+
+func NewPassphraseSource() PassphraseSource {
+	return EnvironmentOrFilePassphraseSource(NewPassphraseEnv, NewPassphraseFileEnv)
+}
+
+func EnvironmentOrFilePassphraseSource(valueEnv, fileEnv string) PassphraseSource {
+	return func(ctx context.Context) ([]byte, error) {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		value, hasValue := os.LookupEnv(valueEnv)
+		path, hasFile := os.LookupEnv(fileEnv)
+		if hasValue == hasFile {
+			return nil, fmt.Errorf("%w: configure exactly one development passphrase source", ErrPassphraseUnavailable)
+		}
+		if hasValue {
+			return []byte(value), nil
+		}
+		return readPassphraseFile(path)
+	}
+}
+
+func readPassphraseFile(path string) ([]byte, error) {
+	before, err := os.Lstat(path)
+	if err != nil {
+		return nil, secretSafePathError("inspect development passphrase file", err)
+	}
+	if before.Mode()&os.ModeSymlink != 0 || !before.Mode().IsRegular() {
+		return nil, fmt.Errorf("%w: passphrase source is not a regular file", ErrPassphraseUnavailable)
+	}
+	if runtime.GOOS != "windows" && before.Mode().Perm()&0o077 != 0 {
+		return nil, fmt.Errorf("%w: passphrase file permissions grant group or other access", ErrPassphraseUnavailable)
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, secretSafePathError("open development passphrase file", err)
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		return nil, secretSafePathError("stat development passphrase file", err)
+	}
+	if !info.Mode().IsRegular() || !os.SameFile(before, info) {
+		return nil, fmt.Errorf("%w: passphrase source changed while opening", ErrPassphraseUnavailable)
+	}
+	data, err := io.ReadAll(io.LimitReader(file, maxPassphraseBytes+3))
+	if err != nil {
+		return nil, secretSafePathError("read development passphrase file", err)
+	}
+	if len(data) > maxPassphraseBytes+2 {
+		clearBytes(data)
+		return nil, fmt.Errorf("%w: passphrase file is too large", ErrPassphraseUnavailable)
+	}
+	if bytes.HasSuffix(data, []byte("\r\n")) {
+		data = data[:len(data)-2]
+	} else if bytes.HasSuffix(data, []byte("\n")) {
+		data = data[:len(data)-1]
+	}
+	return data, nil
 }
 
 func (*PassphraseKEKProvider) Name() string { return PassphraseProvider }

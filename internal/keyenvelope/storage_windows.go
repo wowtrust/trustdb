@@ -2,9 +2,22 @@
 
 package keyenvelope
 
-import "golang.org/x/sys/windows"
+import (
+	"context"
+	"errors"
 
-func storageSupported() bool { return true }
+	"golang.org/x/sys/windows"
+)
+
+// Windows envelope storage fails closed until the project can continuously
+// runtime-qualify an owner-only DACL across supported Windows editions and
+// filesystems. Plaintext-dev and external non-software providers are separate
+// explicit paths.
+func storageSupported() bool { return false }
+
+func acquireEnvelopeLock(ctx context.Context, path string) (func() error, error) {
+	return nil, errors.ErrUnsupported
+}
 
 func atomicInstall(src, dst string) error {
 	return moveFile(src, dst, windows.MOVEFILE_WRITE_THROUGH)

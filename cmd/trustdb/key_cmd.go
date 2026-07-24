@@ -100,7 +100,7 @@ func newKeygenCommand(rt *runtimeConfig, hidden bool) *cobra.Command {
 			verifierDescriptor.Software = nil
 			switch protection {
 			case keydescriptor.SoftwareProtectionSM4Envelope:
-				provider := keyenvelope.NewPassphraseKEKProvider(keyenvelope.EnvPassphraseSource(keyenvelope.DefaultPassphraseEnv))
+				provider := keyenvelope.NewPassphraseKEKProvider(keyenvelope.DefaultPassphraseSource())
 				encrypted, err := keyenvelope.Seal(cmd.Context(), keyenvelope.Metadata{
 					CryptoSuite:        string(suite.ID),
 					KeyID:              resolvedKeyID,
@@ -214,8 +214,8 @@ func newKeyRewrapCommand(rt *runtimeConfig) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			oldProvider := keyenvelope.NewPassphraseKEKProvider(keyenvelope.EnvPassphraseSource(keyenvelope.DefaultPassphraseEnv))
-			newProvider := keyenvelope.NewPassphraseKEKProvider(keyenvelope.EnvPassphraseSource(keyenvelope.DefaultPassphraseEnv + "_NEW"))
+			oldProvider := keyenvelope.NewPassphraseKEKProvider(keyenvelope.DefaultPassphraseSource())
+			newProvider := keyenvelope.NewPassphraseKEKProvider(keyenvelope.NewPassphraseSource())
 			if err := keydescriptor.RewrapSoftwareEnvelopeFile(cmd.Context(), descriptorPath, oldProvider, newProvider); err != nil {
 				return err
 			}

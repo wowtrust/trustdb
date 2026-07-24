@@ -1,6 +1,7 @@
 package keyenvelope
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -12,20 +13,45 @@ import (
 
 // WriteFile installs a new envelope without replacing an existing path.
 func WriteFile(path string, data []byte) error {
+	if !storageSupported() {
+		return errors.ErrUnsupported
+	}
 	if err := validateStoredEnvelope(data); err != nil {
 		return err
 	}
-	return writeFileAtomic(path, data, 0o600, false)
+	return withEnvelopeLock(context.Background(), path, func() error {
+		return writeFileAtomic(path, data, 0o600, false)
+	})
 }
 
-// ReplaceFile atomically rotates an existing envelope. It never creates a
-// plaintext or backup copy; the old envelope remains authoritative until the
-// final atomic replace.
-func ReplaceFile(path string, data []byte) error {
-	if err := validateStoredEnvelope(data); err != nil {
-		return err
+// UpdateFile serializes the complete read/authenticate/transform/replace
+// transaction with an OS-level adjacent lock. The callback always receives
+// the current bytes after the lock is held, so a process cannot publish an
+// envelope computed from stale pre-lock state.
+func UpdateFile(ctx context.Context, path string, update func([]byte) ([]byte, error)) error {
+	if !storageSupported() {
+		return errors.ErrUnsupported
 	}
-	return writeFileAtomic(path, data, 0o600, true)
+	if update == nil {
+		return errors.New("software key envelope update is nil")
+	}
+	return withEnvelopeLock(ctx, path, func() error {
+		current, err := readFile(path)
+		if err != nil {
+			return err
+		}
+		defer clearBytes(current)
+		next, err := update(current)
+		if err != nil {
+			clearBytes(next)
+			return err
+		}
+		defer clearBytes(next)
+		if err := validateStoredEnvelope(next); err != nil {
+			return err
+		}
+		return writeFileAtomic(path, next, 0o600, true)
+	})
 }
 
 func validateStoredEnvelope(data []byte) error {
@@ -38,6 +64,13 @@ func validateStoredEnvelope(data []byte) error {
 }
 
 func ReadFile(path string) ([]byte, error) {
+	if !storageSupported() {
+		return nil, errors.ErrUnsupported
+	}
+	return readFile(path)
+}
+
+func readFile(path string) ([]byte, error) {
 	before, err := os.Lstat(path)
 	if err != nil {
 		return nil, secretSafePathError("inspect software key envelope", err)
@@ -72,9 +105,6 @@ func ReadFile(path string) ([]byte, error) {
 }
 
 func writeFileAtomic(path string, data []byte, mode fs.FileMode, replace bool) error {
-	if !storageSupported() {
-		return errors.ErrUnsupported
-	}
 	if len(data) == 0 || len(data) > maxEnvelopeBytes {
 		return invalid("encoded envelope size is invalid")
 	}
@@ -136,6 +166,20 @@ func writeFileAtomic(path string, data []byte, mode fs.FileMode, replace bool) e
 		return secretSafePathError("sync software key envelope directory", err)
 	}
 	return nil
+}
+
+func withEnvelopeLock(ctx context.Context, path string, action func() error) (err error) {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	release, err := acquireEnvelopeLock(ctx, path)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		err = errors.Join(err, release())
+	}()
+	return action()
 }
 
 func secretSafePathError(action string, err error) error {

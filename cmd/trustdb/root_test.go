@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -656,7 +658,14 @@ func TestKeygenProducesResolvableDescriptorsAndRejectsLegacyRawKeys(t *testing.T
 	var out, errOut bytes.Buffer
 	cmd := newRootCommand(&out, &errOut)
 	cmd.SetArgs([]string{"keygen", "--out", tmp, "--prefix", "client"})
-	if err := cmd.Execute(); err != nil {
+	err := cmd.Execute()
+	if runtime.GOOS == "windows" {
+		if !errors.Is(err, errors.ErrUnsupported) {
+			t.Fatalf("Windows encrypted keygen error = %v, want unsupported", err)
+		}
+		return
+	}
+	if err != nil {
 		t.Fatalf("keygen error = %v stderr=%s", err, errOut.String())
 	}
 
