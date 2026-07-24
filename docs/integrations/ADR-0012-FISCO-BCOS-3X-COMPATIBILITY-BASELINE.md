@@ -156,7 +156,7 @@ Runtime evidence must include exact commands, host/CPU, every artifact digest, n
 
 ## Consequences and follow-up boundary
 
-- #462 may consume the verified native Air profiles for Linux/amd64 and Darwin/arm64; other platform and deployment rows retain their independent fail-closed status.
+- #462 consumed the verified native Air profiles to define the versioned anchor protocol and local trust boundary in [ADR-0013](ADR-0013-FISCO-BCOS-ANCHOR-PROTOCOL.md); other platform and deployment rows retain their independent fail-closed status.
 - #463–#471 must consume the JSON gate and add evidence without relaxing it.
 - Publishing new upstream assets or an image later does not mutate this ADR. Their hashes and provenance require a reviewed baseline update.
 - Pro/Max enablement requires a complete, pinned service artifact set (or a separately attested source build), plus Tars/TiKV deployment evidence. Air results cannot be copied to those architectures.
