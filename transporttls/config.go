@@ -54,6 +54,7 @@ type ClientConfig struct {
 	MinVersion     string                       `json:"min_version"`
 	MaxVersion     string                       `json:"max_version"`
 	ReloadInterval string                       `json:"reload_interval"`
+	ReloadError    func(error)                  `json:"-"`
 	Revocation     RevocationConfig             `json:"revocation"`
 	Checker        CertificateRevocationChecker `json:"-"`
 }

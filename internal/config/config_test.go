@@ -489,6 +489,10 @@ func TestProductionPlaintextRequiresExplicitLoopbackException(t *testing.T) {
 	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "loopback-only") {
 		t.Fatalf("Validate() error = %v, want external listener rejection", err)
 	}
+	cfg.Server.Listen = "localhost:8080"
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "loopback-only") {
+		t.Fatalf("Validate() error = %v, want literal loopback address requirement", err)
+	}
 }
 
 func TestFromViperMapsServerTransportTLS(t *testing.T) {

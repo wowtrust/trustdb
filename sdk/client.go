@@ -181,7 +181,7 @@ func NewClient(baseURL string, opts ...Option) (*Client, error) {
 		if err != nil {
 			return nil, fmt.Errorf("sdk: initialize TLS: %w", err)
 		}
-		manager.Start(context.Background(), nil)
+		manager.Start(context.Background(), transport.tlsConfig.ReloadError)
 		base, ok := transport.httpClient.Transport.(*http.Transport)
 		if transport.httpClient.Transport == nil {
 			base, _ = http.DefaultTransport.(*http.Transport)

@@ -79,6 +79,9 @@ func NewGRPCTransport(target string, opts ...GRPCOption) (Transport, error) {
 	if cfg.localPlaintext && cfg.tlsConfig != nil {
 		return nil, errors.New("sdk: gRPC local plaintext and TLS config are mutually exclusive")
 	}
+	if cfg.localPlaintext && cfg.transportCredentials != nil {
+		return nil, errors.New("sdk: gRPC local plaintext and custom transport credentials are mutually exclusive")
+	}
 	var tlsManager *transporttls.Manager
 	if cfg.localPlaintext {
 		if !isLoopbackGRPCTarget(trimmed) {
@@ -91,7 +94,7 @@ func NewGRPCTransport(target string, opts ...GRPCOption) (Transport, error) {
 		if err != nil {
 			return nil, &Error{Op: "grpc tls", URL: trimmed, Err: err}
 		}
-		tlsManager.Start(context.Background(), nil)
+		tlsManager.Start(context.Background(), cfg.tlsConfig.ReloadError)
 		cfg.transportCredentials = tlsManager.TransportCredentials()
 	}
 	if cfg.transportCredentials == nil {

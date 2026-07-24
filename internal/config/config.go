@@ -757,9 +757,6 @@ func isLoopbackTCPAddress(address string) bool {
 		return false
 	}
 	host = strings.TrimSpace(strings.Trim(host, "[]"))
-	if strings.EqualFold(host, "localhost") {
-		return true
-	}
 	ip := net.ParseIP(host)
 	return ip != nil && ip.IsLoopback()
 }
