@@ -61,8 +61,8 @@ type runningGateway struct {
 	upstreamContainer string
 	gatewayImage      string
 	fixture           certificateFixture
-	httpAddress       string
-	grpcAddress       string
+	httpPort          string
+	grpcPort          string
 }
 
 type synchronizedBuffer struct {
@@ -297,9 +297,11 @@ func TestTLCPGatewayHTTPAndGRPCMutualAuthentication(t *testing.T) {
 			upstreamContainer: active.upstreamContainer,
 			gatewayImage:      gatewayImage,
 			fixture:           fixture,
-			httpAddress:       publishedAddress(t, active.upstreamContainer, canaryHTTPPort),
-			grpcAddress:       publishedAddress(t, active.upstreamContainer, canaryGRPCPort),
+			httpPort:          canaryHTTPPort,
+			grpcPort:          canaryGRPCPort,
 		}
+		_ = publishedAddress(t, active.upstreamContainer, canaryHTTPPort)
+		_ = publishedAddress(t, active.upstreamContainer, canaryGRPCPort)
 		runHTTPClient(t, candidate, fixture, nil)
 		if err := runGRPCHealthClient(candidate, fixture); err != nil {
 			t.Fatalf("candidate generation gRPC canary: %v", err)
@@ -377,6 +379,9 @@ func buildGatewayImage(t *testing.T, root, architecture string) string {
 
 func buildUpstreamImage(t *testing.T, root, architecture string) string {
 	t.Helper()
+	if image := strings.TrimSpace(os.Getenv("TRUSTDB_TLCP_UPSTREAM_IMAGE")); image != "" {
+		return image
+	}
 	dir := t.TempDir()
 	binaryPath := filepath.Join(dir, "upstream")
 	command := exec.Command(
@@ -436,13 +441,15 @@ func startGateway(
 	waitForLog(t, upstream, "upstream ready")
 	startGatewayContainerNamed(t, gateway, upstream, gatewayImage, fixture, extra)
 	waitForLog(t, gateway, "start worker processes")
+	_ = publishedAddress(t, upstream, httpPort)
+	_ = publishedAddress(t, upstream, grpcPort)
 	return runningGateway{
 		gatewayContainer:  gateway,
 		upstreamContainer: upstream,
 		gatewayImage:      gatewayImage,
 		fixture:           fixture,
-		httpAddress:       publishedAddress(t, upstream, httpPort),
-		grpcAddress:       publishedAddress(t, upstream, grpcPort),
+		httpPort:          httpPort,
+		grpcPort:          grpcPort,
 	}
 }
 
@@ -603,18 +610,17 @@ func runStandardTLSClient(
 	running runningGateway,
 	fixture certificateFixture,
 ) (string, error) {
-	_, port := splitPublishedAddress(running.httpAddress)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	args := []string{
 		"run", "--rm", "--interactive",
-		"--add-host", "host.docker.internal:host-gateway",
+		"--network", "container:" + running.upstreamContainer,
 		"--user", "0:0",
 		"--mount", "type=bind,src=" + fixture.dir + ",dst=/certs,readonly",
 		"--entrypoint", "/opt/tongsuo/bin/openssl",
 		running.gatewayImage,
 		"s_client",
-		"-connect", "host.docker.internal:" + port,
+		"-connect", "127.0.0.1:" + running.httpPort,
 		"-servername", serverName,
 		"-tls1_2",
 		"-cipher", "ECDHE-RSA-AES256-GCM-SHA384",
@@ -634,16 +640,16 @@ func opensslDockerArgs(
 	alpn string,
 	withClientCertificate bool,
 ) []string {
-	host, port := splitPublishedAddress(runningAddress(running, alpn))
+	port := runningPort(running, alpn)
 	args := []string{
 		"run", "--rm", "--interactive",
-		"--add-host", "host.docker.internal:host-gateway",
+		"--network", "container:" + running.upstreamContainer,
 		"--user", "0:0",
 		"--mount", "type=bind,src=" + fixture.dir + ",dst=/certs,readonly",
 		"--entrypoint", "/opt/tongsuo/bin/openssl",
 		running.gatewayImage,
 		"s_client",
-		"-connect", "host.docker.internal:" + port,
+		"-connect", "127.0.0.1:" + port,
 		"-servername", serverName,
 		"-verify_hostname", serverName,
 		"-verify_return_error",
@@ -654,7 +660,6 @@ func opensslDockerArgs(
 		"-alpn", alpn,
 		"-brief",
 	}
-	_ = host
 	if withClientCertificate {
 		args = append(args,
 			"-sign_cert", "/certs/"+filepath.Base(fixture.clientSigningCert),
@@ -842,11 +847,11 @@ func waitForServerPublicKey(
 	t.Fatalf("server public key remained %s, want %s after %s", last, expected, timeout)
 }
 
-func runningAddress(running runningGateway, alpn string) string {
+func runningPort(running runningGateway, alpn string) string {
 	if alpn == "h2" {
-		return running.grpcAddress
+		return running.grpcPort
 	}
-	return running.httpAddress
+	return running.httpPort
 }
 
 func publishedAddress(t *testing.T, container, port string) string {
@@ -857,14 +862,6 @@ func publishedAddress(t *testing.T, container, port string) string {
 	}
 	lines := strings.Split(value, "\n")
 	return lines[0]
-}
-
-func splitPublishedAddress(address string) (string, string) {
-	index := strings.LastIndex(address, ":")
-	if index < 0 {
-		return "", address
-	}
-	return address[:index], address[index+1:]
 }
 
 func waitForLog(t *testing.T, container, text string) {
@@ -898,6 +895,12 @@ func dockerOutput(t *testing.T, args ...string) string {
 func newCertificateFixture(t *testing.T) certificateFixture {
 	t.Helper()
 	dir := t.TempDir()
+	// The gateway deliberately runs as UID 10001. Test fixtures are ephemeral,
+	// test-only software keys and must be readable through a native Linux bind
+	// mount even when the test runner has a different UID.
+	if err := os.Chmod(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	now := time.Now().UTC()
 	serverCA, serverCAKey := createCA(t, filepath.Join(dir, "server-ca.pem"), 1, "TLCP Server CA", now)
 	clientCA, clientCAKey := createCA(t, filepath.Join(dir, "client-ca.pem"), 2, "TLCP Client CA", now)
@@ -969,7 +972,7 @@ func prepareServerGenerations(
 		encryptionPublicKeySHA256: fixture.serverEncryptionSHA256,
 	}
 	firstDir := filepath.Join(fixture.dir, first.name)
-	if err := os.Mkdir(firstDir, 0o700); err != nil {
+	if err := os.Mkdir(firstDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	for _, name := range []string{
@@ -985,7 +988,7 @@ func prepareServerGenerations(
 
 	second := serverGeneration{name: "generation-2"}
 	secondDir := filepath.Join(fixture.dir, second.name)
-	if err := os.Mkdir(secondDir, 0o700); err != nil {
+	if err := os.Mkdir(secondDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	now := time.Now().UTC()
@@ -1028,7 +1031,7 @@ func prepareExpiredServerGeneration(
 	t.Helper()
 	generation := serverGeneration{name: "expired-generation"}
 	dir := filepath.Join(fixture.dir, generation.name)
-	if err := os.Mkdir(dir, 0o700); err != nil {
+	if err := os.Mkdir(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	expiredAt := time.Now().UTC().Add(-48 * time.Hour)
@@ -1240,7 +1243,7 @@ func appendCertificate(t *testing.T, path string, certificate *smx509.Certificat
 
 func writePEMFile(t *testing.T, path string, data []byte) {
 	t.Helper()
-	if err := os.WriteFile(path, data, 0o600); err != nil {
+	if err := os.WriteFile(path, data, 0o644); err != nil {
 		t.Fatal(err)
 	}
 }
