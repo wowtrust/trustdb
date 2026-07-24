@@ -60,7 +60,7 @@ func LoadEnvironment() (Environment, error) {
 	}
 	algorithms := strings.TrimSpace(os.Getenv(EnvAlgorithms))
 	if algorithms == "" {
-		return Environment{}, envError(EnvAlgorithms, "must explicitly list INTL_V1 and/or CN_SM_V1")
+		return Environment{}, envError(EnvAlgorithms, "must explicitly list INTL_V1, CN_SM_V1, and/or FISCO_BCOS_GUOMI_V1")
 	}
 	profiles := make([]Profile, 0, 2)
 	seen := make(map[string]struct{}, 2)
@@ -84,7 +84,7 @@ func LoadEnvironment() (Environment, error) {
 				Mechanism:       uint(mechanism),
 				SignatureFormat: SignatureFormatRaw,
 			})
-		case signerplugin.SuiteCNSMV1:
+		case signerplugin.SuiteCNSMV1, signerplugin.SuiteFISCOBCOSGuomi:
 			mechanism, parseErr := strconv.ParseUint(strings.TrimSpace(os.Getenv(EnvSM2Mechanism)), 0, strconv.IntSize)
 			if parseErr != nil || mechanism == 0 {
 				return Environment{}, envError(EnvSM2Mechanism, "must explicitly name a non-zero vendor mechanism")
@@ -102,7 +102,7 @@ func LoadEnvironment() (Environment, error) {
 				}
 			}
 			profiles = append(profiles, Profile{
-				CryptoSuite:     signerplugin.SuiteCNSMV1,
+				CryptoSuite:     algorithm,
 				Mechanism:       uint(mechanism),
 				Parameter:       parameter,
 				SignatureFormat: format,

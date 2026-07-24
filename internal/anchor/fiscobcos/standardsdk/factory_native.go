@@ -6,7 +6,10 @@ import (
 	"bytes"
 	"context"
 	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"crypto/sha256"
+	"encoding/asn1"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -15,6 +18,7 @@ import (
 	"math"
 	"math/big"
 	"net"
+	"net/netip"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -25,14 +29,20 @@ import (
 	"time"
 
 	"github.com/FISCO-BCOS/go-sdk/v3/client"
+	bcossm "github.com/FISCO-BCOS/go-sdk/v3/smcrypto"
 	"github.com/FISCO-BCOS/go-sdk/v3/types"
 	"github.com/TarsCloud/TarsGo/tars/protocol/codec"
+	"github.com/emmansun/gmsm/sm2"
+	"github.com/emmansun/gmsm/sm3"
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 	ethcrypto "github.com/ethereum/go-ethereum/crypto"
 	"golang.org/x/crypto/sha3"
 
 	"github.com/wowtrust/trustdb/internal/anchor/fiscobcos"
+	"github.com/wowtrust/trustdb/internal/cryptosuite"
+	"github.com/wowtrust/trustdb/internal/tlcpprofile"
+	"github.com/wowtrust/trustdb/internal/trustcrypto"
 )
 
 const (
@@ -70,7 +80,7 @@ type nativeDriver struct {
 }
 
 func (NativeFactory) NewDrivers(ctx context.Context, config Config) ([]fiscobcos.Driver, error) {
-	canonical, err := canonicalStandardTrust(config.TrustConfig)
+	canonical, err := canonicalNativeTrust(config.TrustConfig)
 	if err != nil {
 		return nil, err
 	}
@@ -78,7 +88,11 @@ func (NativeFactory) NewDrivers(ctx context.Context, config Config) ([]fiscobcos
 	if err != nil {
 		return nil, err
 	}
-	if err := verifyCertificateReferences(canonical, config.AccountSigner == nil); err != nil {
+	clock := config.Clock
+	if clock == nil {
+		clock = time.Now
+	}
+	if err := verifyCertificateReferences(canonical, config.AccountSigner == nil, clock().UTC()); err != nil {
 		return nil, err
 	}
 	caPath, err := localPath(canonical.Certificates.TrustedCAReferences[0])
@@ -104,29 +118,28 @@ func (NativeFactory) NewDrivers(ctx context.Context, config Config) ([]fiscobcos
 	if err != nil {
 		return nil, fmt.Errorf("read FISCO BCOS account public key: %w", err)
 	}
-	if len(publicKey) != 65 || publicKey[0] != 0x04 {
-		return nil, errors.New("FISCO BCOS account signer returned a non-canonical secp256k1 public key")
+	if err := validateAccountPublicKey(canonical.CryptoMode, publicKey); err != nil {
+		return nil, err
 	}
-	sender := accountAddress(publicKey)
-	clock := config.Clock
-	if clock == nil {
-		clock = time.Now
+	sender, err := accountAddress(canonical.CryptoMode, publicKey)
+	if err != nil {
+		return nil, err
 	}
 	drivers := make([]fiscobcos.Driver, 0, len(canonical.Endpoints))
 	for _, endpoint := range canonical.Endpoints {
-		host, port, err := parseEndpoint(endpoint)
+		host, port, err := parseEndpoint(endpoint, canonical.Certificates.TransportMode)
 		if err != nil {
 			closeDrivers(drivers)
 			return nil, err
 		}
-		ephemeral, err := ethcrypto.GenerateKey()
+		placeholder, err := sdkPlaceholderKey(canonical.CryptoMode)
 		if err != nil {
 			closeDrivers(drivers)
-			return nil, fmt.Errorf("initialize FISCO BCOS SDK account placeholder: %w", err)
+			return nil, err
 		}
 		sdkConfig := &client.Config{
-			IsSMCrypto:  false,
-			PrivateKey:  ethcrypto.FromECDSA(ephemeral),
+			IsSMCrypto:  canonical.CryptoMode == fiscobcos.CryptoModeGuomi,
+			PrivateKey:  placeholder,
 			GroupID:     canonical.GroupID,
 			Host:        host,
 			Port:        port,
@@ -135,15 +148,27 @@ func (NativeFactory) NewDrivers(ctx context.Context, config Config) ([]fiscobcos
 			TLSCertFile: certPath,
 			TLSKeyFile:  tlsKeyPath,
 		}
+		if canonical.CryptoMode == fiscobcos.CryptoModeGuomi {
+			sdkConfig.TLSSmEnCertFile, err = localPath(canonical.Certificates.ClientEncryptionCertificateRef)
+			if err != nil {
+				closeDrivers(drivers)
+				return nil, err
+			}
+			sdkConfig.TLSSmEnKeyFile, err = localPath(canonical.Certificates.ClientEncryptionKeyRef)
+			if err != nil {
+				closeDrivers(drivers)
+				return nil, err
+			}
+		}
 		sdkClient, err := client.DialContext(ctx, sdkConfig)
 		if err != nil {
 			closeDrivers(drivers)
 			return nil, fmt.Errorf("dial FISCO BCOS endpoint %q: %w", endpoint, err)
 		}
-		if sdkClient.SMCrypto() {
+		if sdkClient.SMCrypto() != (canonical.CryptoMode == fiscobcos.CryptoModeGuomi) {
 			sdkClient.Close()
 			closeDrivers(drivers)
-			return nil, fmt.Errorf("%w: endpoint %q negotiated Guomi mode", fiscobcos.ErrWrongNetwork, endpoint)
+			return nil, fmt.Errorf("%w: endpoint %q crypto mode differs from TrustConfig", fiscobcos.ErrWrongNetwork, endpoint)
 		}
 		drivers = append(drivers, &nativeDriver{
 			endpoint: endpoint, client: sdkClient, trust: canonical, signer: signer,
@@ -185,10 +210,13 @@ func (d *nativeDriver) ProbeChain(ctx context.Context) (fiscobcos.ChainProbe, er
 	if err != nil {
 		return fiscobcos.ChainProbe{}, fmt.Errorf("decode contract runtime: %w", err)
 	}
-	codeHash := legacyKeccak(code)
+	codeHash, err := chainHash(d.trust.CryptoMode, code)
+	if err != nil {
+		return fiscobcos.ChainProbe{}, err
+	}
 	return fiscobcos.ChainProbe{
 		Endpoint: d.endpoint, SDKVersion: d.sdkVersion,
-		CryptoMode: fiscobcos.CryptoModeStandard, ChainID: chainID,
+		CryptoMode: d.trust.CryptoMode, ChainID: chainID,
 		GroupID: d.client.GetGroupID(), GenesisHash: genesis.Bytes(),
 		CheckpointHash: checkpoint.Bytes(), Height: uint64(height),
 		ContractCodeHash: codeHash,
@@ -200,7 +228,7 @@ func (d *nativeDriver) PrepareAnchor(ctx context.Context, request fiscobcos.Subm
 	if err != nil || !bytes.Equal(canonical, request.CanonicalPayload) {
 		return fiscobcos.TransactionSubmission{}, fiscobcos.ErrInvalidPayload
 	}
-	callData, err := fiscobcos.PublishCallData(request.Payload)
+	callData, err := fiscobcos.PublishCallDataForMode(d.trust.CryptoMode, request.Payload)
 	if err != nil {
 		return fiscobcos.TransactionSubmission{}, err
 	}
@@ -220,11 +248,12 @@ func (d *nativeDriver) PrepareAnchor(ctx context.Context, request fiscobcos.Subm
 	if err != nil {
 		return fiscobcos.TransactionSubmission{}, err
 	}
-	signature, err := d.signer.SignDigest(ctx, append([]byte(nil), digest...))
+	providerSignature, err := d.signer.SignDigest(ctx, append([]byte(nil), digest...))
 	if err != nil {
 		return fiscobcos.TransactionSubmission{}, fmt.Errorf("sign FISCO BCOS transaction digest: %w", err)
 	}
-	if err := validateSignerSignature(digest, signature, d.publicKey); err != nil {
+	signature, err := nativeSignerSignature(d.trust, digest, providerSignature, d.publicKey)
+	if err != nil {
 		return fiscobcos.TransactionSubmission{}, &fiscobcos.DriverError{
 			Operation: "sign_anchor", Endpoint: d.endpoint,
 			Class: fiscobcos.FailurePermanent, Kind: err,
@@ -291,7 +320,7 @@ func (d *nativeDriver) SubmitPreparedAnchor(ctx context.Context, attempt fiscobc
 }
 
 func (d *nativeDriver) ReadAnchor(ctx context.Context, anchorID []byte) (fiscobcos.AnchorRecord, error) {
-	input, err := fiscobcos.GetAnchorCallData(anchorID)
+	input, err := fiscobcos.GetAnchorCallDataForMode(d.trust.CryptoMode, anchorID)
 	if err != nil {
 		return fiscobcos.AnchorRecord{}, err
 	}
@@ -352,7 +381,7 @@ func (d *nativeDriver) GetReceiptWithProof(ctx context.Context, attempt fiscobco
 	}
 	var event fiscobcos.AnchorPublishedEvent
 	if receipt.Status == types.Success {
-		event, err = decodeAnchorEvent(receipt, d.trust.Contract)
+		event, err = decodeAnchorEvent(receipt, d.trust.CryptoMode, d.trust.Contract)
 		if err != nil {
 			return fiscobcos.ReceiptWithProof{}, err
 		}
@@ -746,7 +775,7 @@ func validateTransactionHashText(value string) error {
 	return validateHexText(value, common.HashLength, false)
 }
 
-func validateSignerSignature(digest, signature, expectedPublicKey []byte) error {
+func validateStandardSignerSignature(digest, signature, expectedPublicKey []byte) error {
 	if len(digest) != 32 || len(signature) != 65 || len(expectedPublicKey) != 65 ||
 		expectedPublicKey[0] != 0x04 {
 		return errors.New("FISCO BCOS account signer returned non-canonical signature material")
@@ -763,12 +792,84 @@ func validateSignerSignature(digest, signature, expectedPublicKey []byte) error 
 	return nil
 }
 
+type sm2DERSignature struct {
+	R *big.Int
+	S *big.Int
+}
+
+func nativeSignerSignature(
+	trust fiscobcos.TrustConfig,
+	digest, providerSignature, expectedPublicKey []byte,
+) ([]byte, error) {
+	switch trust.CryptoMode {
+	case fiscobcos.CryptoModeStandard:
+		if err := validateStandardSignerSignature(digest, providerSignature, expectedPublicKey); err != nil {
+			return nil, err
+		}
+		return append([]byte(nil), providerSignature...), nil
+	case fiscobcos.CryptoModeGuomi:
+		if err := trustcrypto.ValidateSM2SignatureDER(providerSignature); err != nil {
+			return nil, fmt.Errorf("FISCO BCOS account signer returned invalid SM2 DER signature: %w", err)
+		}
+		publicKey, err := sm2.NewPublicKey(expectedPublicKey)
+		if err != nil || !sm2.VerifyASN1WithSM2(publicKey, []byte(trust.SM2UserID), digest, providerSignature) {
+			return nil, errors.New("FISCO BCOS account SM2 signature does not match the configured signer public key")
+		}
+		var parsed sm2DERSignature
+		rest, err := asn1.Unmarshal(providerSignature, &parsed)
+		if err != nil || len(rest) != 0 || parsed.R == nil || parsed.S == nil {
+			return nil, errors.New("FISCO BCOS account signer returned malformed SM2 signature")
+		}
+		native := make([]byte, 128)
+		parsed.R.FillBytes(native[:32])
+		parsed.S.FillBytes(native[32:64])
+		copy(native[64:], expectedPublicKey[1:])
+		return native, nil
+	default:
+		return nil, fiscobcos.ErrWrongNetwork
+	}
+}
+
+func validateNativeSignature(
+	trust fiscobcos.TrustConfig,
+	digest, signature, expectedPublicKey []byte,
+) error {
+	switch trust.CryptoMode {
+	case fiscobcos.CryptoModeStandard:
+		return validateStandardSignerSignature(digest, signature, expectedPublicKey)
+	case fiscobcos.CryptoModeGuomi:
+		if len(digest) != 32 || len(signature) != 128 ||
+			len(expectedPublicKey) != 65 || expectedPublicKey[0] != 0x04 ||
+			!bytes.Equal(signature[64:], expectedPublicKey[1:]) {
+			return errors.New("FISCO BCOS account signer returned non-canonical Guomi signature material")
+		}
+		der, err := asn1.Marshal(sm2DERSignature{
+			R: new(big.Int).SetBytes(signature[:32]),
+			S: new(big.Int).SetBytes(signature[32:64]),
+		})
+		if err != nil || trustcrypto.ValidateSM2SignatureDER(der) != nil {
+			return errors.New("FISCO BCOS account signer returned invalid SM2 signature values")
+		}
+		publicKey, err := sm2.NewPublicKey(expectedPublicKey)
+		if err != nil || !sm2.VerifyASN1WithSM2(publicKey, []byte(trust.SM2UserID), digest, der) {
+			return errors.New("FISCO BCOS account SM2 signature does not match the configured signer public key")
+		}
+		return nil
+	default:
+		return fiscobcos.ErrWrongNetwork
+	}
+}
+
 func validatePreparedSubmission(
 	attempt fiscobcos.TransactionSubmission,
 	trust fiscobcos.TrustConfig,
 	sender []byte,
 	publicKey []byte,
 ) error {
+	signatureBytes, err := fiscobcos.NativeTransactionSignatureBytes(trust.CryptoMode)
+	if err != nil {
+		return err
+	}
 	if len(attempt.EncodedTransaction) == 0 ||
 		len(attempt.EncodedTransaction) > maxSDKRawTransactionBytes ||
 		attempt.ChainID != trust.ChainID ||
@@ -777,7 +878,7 @@ func validatePreparedSubmission(
 		!bytes.Equal(attempt.Sender, sender) ||
 		len(attempt.Input) == 0 ||
 		len(attempt.TransactionHash) != 32 ||
-		len(attempt.Signature) != 65 ||
+		len(attempt.Signature) != signatureBytes ||
 		attempt.BlockLimit == 0 ||
 		attempt.BlockLimit > math.MaxInt64 {
 		return fiscobcos.ErrContractMismatch
@@ -791,11 +892,14 @@ func validatePreparedSubmission(
 		transaction.Data.To == nil ||
 		!bytes.Equal(transaction.Data.To.Bytes(), attempt.To) ||
 		!bytes.Equal(transaction.Data.Input, attempt.Input) ||
-		!bytes.Equal(transaction.Signature, attempt.Signature) ||
-		!bytes.Equal(transaction.Hash().Bytes(), attempt.TransactionHash) {
+		!bytes.Equal(transaction.Signature, attempt.Signature) {
 		return fiscobcos.ErrContractMismatch
 	}
-	if err := validateSignerSignature(attempt.TransactionHash, attempt.Signature, publicKey); err != nil {
+	transaction.SMCrypto = trust.CryptoMode == fiscobcos.CryptoModeGuomi
+	if !bytes.Equal(transaction.Hash().Bytes(), attempt.TransactionHash) {
+		return fiscobcos.ErrContractMismatch
+	}
+	if err := validateNativeSignature(trust, attempt.TransactionHash, attempt.Signature, publicKey); err != nil {
 		return err
 	}
 	return nil
@@ -828,6 +932,10 @@ func validateReceiptTransactionIdentity(receipt *types.Receipt, transaction *typ
 	if receipt == nil || transaction == nil {
 		return fiscobcos.ErrIncompleteChainEvidence
 	}
+	signatureBytes, modeErr := fiscobcos.NativeTransactionSignatureBytes(trust.CryptoMode)
+	if modeErr != nil {
+		return modeErr
+	}
 	expectedHash, err := strictHash(attempt.TransactionHash)
 	if err != nil ||
 		attempt.ChainID != trust.ChainID ||
@@ -837,7 +945,7 @@ func validateReceiptTransactionIdentity(receipt *types.Receipt, transaction *typ
 		len(attempt.To) != 20 ||
 		!bytes.Equal(attempt.To, trust.Contract.Address) ||
 		len(attempt.Input) == 0 ||
-		len(attempt.Signature) != 65 ||
+		len(attempt.Signature) != signatureBytes ||
 		attempt.BlockLimit == 0 {
 		return fiscobcos.ErrContractMismatch
 	}
@@ -909,7 +1017,11 @@ func boundedReceiptStatus(status int) string {
 	}
 }
 
-type softwareAccountSigner struct{ key *ecdsa.PrivateKey }
+type softwareAccountSigner struct {
+	mode        fiscobcos.CryptoMode
+	standardKey *ecdsa.PrivateKey
+	guomiKey    *sm2.PrivateKey
+}
 
 func newSoftwareAccountSigner(config fiscobcos.AccountProviderConfig) (AccountSigner, error) {
 	if config.Provider != "software" {
@@ -934,31 +1046,80 @@ func newSoftwareAccountSigner(config fiscobcos.AccountProviderConfig) (AccountSi
 	if err != nil || decoded != 32 {
 		return nil, errors.New("FISCO BCOS software account key is not valid hex")
 	}
-	key, err := ethcrypto.ToECDSA(keyBytes)
+	signer := &softwareAccountSigner{mode: configModeForAccountAlgorithm(config.Algorithm)}
+	switch signer.mode {
+	case fiscobcos.CryptoModeStandard:
+		signer.standardKey, err = ethcrypto.ToECDSA(keyBytes)
+	case fiscobcos.CryptoModeGuomi:
+		signer.guomiKey, err = sm2.NewPrivateKey(keyBytes)
+	default:
+		return nil, fmt.Errorf("unsupported FISCO BCOS account algorithm %q", config.Algorithm)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("parse FISCO BCOS software account key: %w", err)
 	}
-	return &softwareAccountSigner{key: key}, nil
+	return signer, nil
 }
 
 func (s *softwareAccountSigner) PublicKey(context.Context) ([]byte, error) {
-	if s == nil || s.key == nil {
+	if s == nil {
 		return nil, errors.New("FISCO BCOS software account signer is closed")
 	}
-	return ethcrypto.FromECDSAPub(&s.key.PublicKey), nil
+	switch s.mode {
+	case fiscobcos.CryptoModeStandard:
+		if s.standardKey == nil {
+			return nil, errors.New("FISCO BCOS software account signer is closed")
+		}
+		return ethcrypto.FromECDSAPub(&s.standardKey.PublicKey), nil
+	case fiscobcos.CryptoModeGuomi:
+		if s.guomiKey == nil {
+			return nil, errors.New("FISCO BCOS software account signer is closed")
+		}
+		return elliptic.Marshal(sm2.P256(), s.guomiKey.X, s.guomiKey.Y), nil
+	default:
+		return nil, fiscobcos.ErrWrongNetwork
+	}
 }
 
 func (s *softwareAccountSigner) SignDigest(_ context.Context, digest []byte) ([]byte, error) {
-	if s == nil || s.key == nil {
+	if s == nil {
 		return nil, errors.New("FISCO BCOS software account signer is closed")
 	}
 	if len(digest) != 32 {
 		return nil, errors.New("FISCO BCOS transaction digest must be 32 bytes")
 	}
-	return ethcrypto.Sign(digest, s.key)
+	switch s.mode {
+	case fiscobcos.CryptoModeStandard:
+		if s.standardKey == nil {
+			return nil, errors.New("FISCO BCOS software account signer is closed")
+		}
+		return ethcrypto.Sign(digest, s.standardKey)
+	case fiscobcos.CryptoModeGuomi:
+		if s.guomiKey == nil {
+			return nil, errors.New("FISCO BCOS software account signer is closed")
+		}
+		signature, err := s.guomiKey.SignWithSM2(rand.Reader, []byte(cryptosuite.SM2DefaultUserID), digest)
+		if err != nil {
+			return nil, err
+		}
+		return signature, trustcrypto.ValidateSM2SignatureDER(signature)
+	default:
+		return nil, fiscobcos.ErrWrongNetwork
+	}
 }
 
-func canonicalStandardTrust(config fiscobcos.TrustConfig) (fiscobcos.TrustConfig, error) {
+func configModeForAccountAlgorithm(algorithm string) fiscobcos.CryptoMode {
+	switch algorithm {
+	case fiscobcos.StandardAccountAlg:
+		return fiscobcos.CryptoModeStandard
+	case fiscobcos.GuomiAccountAlg:
+		return fiscobcos.CryptoModeGuomi
+	default:
+		return ""
+	}
+}
+
+func canonicalNativeTrust(config fiscobcos.TrustConfig) (fiscobcos.TrustConfig, error) {
 	data, err := fiscobcos.MarshalTrustConfig(config)
 	if err != nil {
 		return fiscobcos.TrustConfig{}, err
@@ -967,11 +1128,8 @@ func canonicalStandardTrust(config fiscobcos.TrustConfig) (fiscobcos.TrustConfig
 	if err != nil {
 		return fiscobcos.TrustConfig{}, err
 	}
-	if canonical.CryptoMode != fiscobcos.CryptoModeStandard {
-		return fiscobcos.TrustConfig{}, fmt.Errorf("%w: native standard SDK requires crypto_mode=standard", fiscobcos.ErrWrongNetwork)
-	}
 	if len(canonical.Certificates.TrustedCAReferences) != 1 {
-		return fiscobcos.TrustConfig{}, errors.New("native standard SDK requires exactly one trusted CA reference")
+		return fiscobcos.TrustConfig{}, errors.New("native FISCO BCOS SDK requires exactly one trusted CA reference")
 	}
 	if len(canonical.Certificates.PinnedPeerCertificateHashes) != 0 {
 		return fiscobcos.TrustConfig{}, errors.New("pinned peer certificates are unsupported by the pinned Go SDK")
@@ -979,7 +1137,7 @@ func canonicalStandardTrust(config fiscobcos.TrustConfig) (fiscobcos.TrustConfig
 	return canonical, nil
 }
 
-func verifyCertificateReferences(config fiscobcos.TrustConfig, requireSoftwareAccountKey bool) error {
+func verifyCertificateReferences(config fiscobcos.TrustConfig, requireSoftwareAccountKey bool, now time.Time) error {
 	caPath, err := localPath(config.Certificates.TrustedCAReferences[0])
 	if err != nil {
 		return err
@@ -988,10 +1146,20 @@ func verifyCertificateReferences(config fiscobcos.TrustConfig, requireSoftwareAc
 	if err != nil {
 		return fmt.Errorf("read FISCO BCOS CA certificate: %w", err)
 	}
-	digest := sha256.Sum256(ca)
+	var digest []byte
+	switch config.CryptoMode {
+	case fiscobcos.CryptoModeStandard:
+		sum := sha256.Sum256(ca)
+		digest = sum[:]
+	case fiscobcos.CryptoModeGuomi:
+		sum := sm3.Sum(ca)
+		digest = sum[:]
+	default:
+		return fiscobcos.ErrWrongNetwork
+	}
 	matched := false
 	for _, expected := range config.Certificates.TrustedCACertificateHashes {
-		if bytes.Equal(digest[:], expected) {
+		if bytes.Equal(digest, expected) {
 			matched = true
 			break
 		}
@@ -1006,6 +1174,12 @@ func verifyCertificateReferences(config fiscobcos.TrustConfig, requireSoftwareAc
 	references := []localReference{
 		{value: config.Certificates.ClientSigningCertificateRef},
 		{value: config.Certificates.ClientSigningKeyRef, privateKey: true},
+	}
+	if config.CryptoMode == fiscobcos.CryptoModeGuomi {
+		references = append(references,
+			localReference{value: config.Certificates.ClientEncryptionCertificateRef},
+			localReference{value: config.Certificates.ClientEncryptionKeyRef, privateKey: true},
+		)
 	}
 	if requireSoftwareAccountKey {
 		if config.AccountProvider.Provider != "software" {
@@ -1022,14 +1196,61 @@ func verifyCertificateReferences(config fiscobcos.TrustConfig, requireSoftwareAc
 			return fmt.Errorf("verify FISCO BCOS local reference: %w", err)
 		}
 	}
+	if config.CryptoMode == fiscobcos.CryptoModeGuomi {
+		signingCertificate, _ := localPath(config.Certificates.ClientSigningCertificateRef)
+		signingKey, _ := localPath(config.Certificates.ClientSigningKeyRef)
+		encryptionCertificate, _ := localPath(config.Certificates.ClientEncryptionCertificateRef)
+		encryptionKey, _ := localPath(config.Certificates.ClientEncryptionKeyRef)
+		if err := requireDistinctFiles(
+			signingCertificate,
+			signingKey,
+			encryptionCertificate,
+			encryptionKey,
+		); err != nil {
+			return err
+		}
+		if err := tlcpprofile.ValidateSM2ClientDualCertificateFiles(
+			caPath,
+			signingCertificate,
+			signingKey,
+			encryptionCertificate,
+			encryptionKey,
+			now,
+		); err != nil {
+			return fmt.Errorf("validate FISCO BCOS Guomi transport identity: %w", err)
+		}
+	}
 	return nil
 }
 
-func decodeAnchorEvent(receipt *types.Receipt, contract fiscobcos.ContractBinding) (fiscobcos.AnchorPublishedEvent, error) {
+func requireDistinctFiles(paths ...string) error {
+	identities := make([]os.FileInfo, len(paths))
+	for index, path := range paths {
+		info, err := os.Lstat(path)
+		if err != nil {
+			return err
+		}
+		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+			return errors.New("FISCO BCOS transport identity path is not a regular non-symlink file")
+		}
+		identities[index] = info
+		for previous := 0; previous < index; previous++ {
+			if os.SameFile(identities[previous], info) {
+				return errors.New("FISCO BCOS Guomi signing and encryption roles must use distinct files")
+			}
+		}
+	}
+	return nil
+}
+
+func decodeAnchorEvent(receipt *types.Receipt, mode fiscobcos.CryptoMode, contract fiscobcos.ContractBinding) (fiscobcos.AnchorPublishedEvent, error) {
 	if err := validateReceiptLogBounds(receipt.Logs); err != nil {
 		return fiscobcos.AnchorPublishedEvent{}, err
 	}
-	eventID := legacyKeccak([]byte(contract.EventSignature))
+	eventID, err := fiscobcos.EventTopicForMode(mode, contract.EventSignature)
+	if err != nil {
+		return fiscobcos.AnchorPublishedEvent{}, err
+	}
 	address := common.BytesToAddress(contract.Address)
 	var matched *types.NewLog
 	var matchedIndex uint64
@@ -1337,13 +1558,19 @@ func decodedHexLength(value string) int {
 	return len(value) / 2
 }
 
-func parseEndpoint(endpoint string) (string, int, error) {
-	value := strings.TrimSpace(endpoint)
+func parseEndpoint(endpoint, transportMode string) (string, int, error) {
+	value := endpoint
+	if strings.TrimSpace(value) != value {
+		return "", 0, fmt.Errorf("invalid FISCO BCOS %s endpoint %q", transportMode, endpoint)
+	}
 	if strings.Contains(value, "://") {
 		parsed, err := url.Parse(value)
-		if err != nil || parsed.User != nil || parsed.Path != "" && parsed.Path != "/" ||
-			(parsed.Scheme != "tls" && parsed.Scheme != "https") {
-			return "", 0, fmt.Errorf("invalid FISCO BCOS standard TLS endpoint %q", endpoint)
+		validScheme := parsed != nil && parsed.Scheme == transportMode
+		if err != nil || parsed == nil || parsed.User != nil || parsed.Opaque != "" ||
+			parsed.Path != "" || parsed.RawPath != "" || parsed.RawQuery != "" ||
+			parsed.ForceQuery || parsed.Fragment != "" || parsed.RawFragment != "" ||
+			!validScheme {
+			return "", 0, fmt.Errorf("invalid FISCO BCOS %s endpoint %q", transportMode, endpoint)
 		}
 		value = parsed.Host
 	}
@@ -1351,11 +1578,49 @@ func parseEndpoint(endpoint string) (string, int, error) {
 	if err != nil || strings.TrimSpace(host) == "" {
 		return "", 0, fmt.Errorf("invalid FISCO BCOS endpoint %q", endpoint)
 	}
+	if address, parseErr := netip.ParseAddr(host); parseErr == nil {
+		if address.Zone() != "" {
+			return "", 0, fmt.Errorf("invalid FISCO BCOS zoned endpoint %q", endpoint)
+		}
+	} else if strings.Contains(host, ":") || looksLikeLegacyIPv4Literal(host) {
+		return "", 0, fmt.Errorf("invalid FISCO BCOS numeric endpoint %q", endpoint)
+	}
 	port, err := strconv.Atoi(portText)
 	if err != nil || port < 1 || port > 65535 {
 		return "", 0, fmt.Errorf("invalid FISCO BCOS endpoint port")
 	}
 	return host, port, nil
+}
+
+func looksLikeLegacyIPv4Literal(host string) bool {
+	parts := strings.Split(host, ".")
+	if len(parts) == 0 || len(parts) > 4 {
+		return false
+	}
+	for _, part := range parts {
+		if part == "" {
+			return false
+		}
+		if strings.HasPrefix(part, "0x") || strings.HasPrefix(part, "0X") {
+			if len(part) == 2 {
+				return false
+			}
+			for _, item := range part[2:] {
+				if (item < '0' || item > '9') &&
+					(item < 'a' || item > 'f') &&
+					(item < 'A' || item > 'F') {
+					return false
+				}
+			}
+			continue
+		}
+		for _, item := range part {
+			if item < '0' || item > '9' {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func localPath(reference string) (string, error) {
@@ -1479,9 +1744,63 @@ func legacyKeccak(data []byte) []byte {
 	return hash.Sum(nil)
 }
 
-func accountAddress(publicKey []byte) []byte {
-	digest := legacyKeccak(publicKey[1:])
-	return append([]byte(nil), digest[len(digest)-20:]...)
+func chainHash(mode fiscobcos.CryptoMode, data []byte) ([]byte, error) {
+	switch mode {
+	case fiscobcos.CryptoModeStandard:
+		return legacyKeccak(data), nil
+	case fiscobcos.CryptoModeGuomi:
+		sum := sm3.Sum(data)
+		return append([]byte(nil), sum[:]...), nil
+	default:
+		return nil, fiscobcos.ErrWrongNetwork
+	}
+}
+
+func accountAddress(mode fiscobcos.CryptoMode, publicKey []byte) ([]byte, error) {
+	digest, err := chainHash(mode, publicKey[1:])
+	if err != nil {
+		return nil, err
+	}
+	return append([]byte(nil), digest[len(digest)-20:]...), nil
+}
+
+func validateAccountPublicKey(mode fiscobcos.CryptoMode, publicKey []byte) error {
+	if len(publicKey) != 65 || publicKey[0] != 0x04 {
+		return errors.New("FISCO BCOS account signer returned a non-canonical public key")
+	}
+	switch mode {
+	case fiscobcos.CryptoModeStandard:
+		if _, err := ethcrypto.UnmarshalPubkey(publicKey); err != nil {
+			return errors.New("FISCO BCOS account signer returned an invalid secp256k1 public key")
+		}
+	case fiscobcos.CryptoModeGuomi:
+		parsed, err := sm2.NewPublicKey(publicKey)
+		if err != nil || !bytes.Equal(elliptic.Marshal(sm2.P256(), parsed.X, parsed.Y), publicKey) {
+			return errors.New("FISCO BCOS account signer returned an invalid SM2 public key")
+		}
+	default:
+		return fiscobcos.ErrWrongNetwork
+	}
+	return nil
+}
+
+func sdkPlaceholderKey(mode fiscobcos.CryptoMode) ([]byte, error) {
+	switch mode {
+	case fiscobcos.CryptoModeStandard:
+		ephemeral, err := ethcrypto.GenerateKey()
+		if err != nil {
+			return nil, fmt.Errorf("initialize FISCO BCOS SDK account placeholder: %w", err)
+		}
+		return ethcrypto.FromECDSA(ephemeral), nil
+	case fiscobcos.CryptoModeGuomi:
+		ephemeral, err := bcossm.GenerateKey()
+		if err != nil {
+			return nil, fmt.Errorf("initialize FISCO BCOS Guomi SDK account placeholder: %w", err)
+		}
+		return ephemeral.D.FillBytes(make([]byte, 32)), nil
+	default:
+		return nil, fiscobcos.ErrWrongNetwork
+	}
 }
 
 func bytesToUint64(data []byte) uint64 {

@@ -3,13 +3,16 @@ package anchor
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
+	"crypto/elliptic"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/emmansun/gmsm/sm2"
+	ethcrypto "github.com/ethereum/go-ethereum/crypto"
 	"github.com/fxamacker/cbor/v2"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
@@ -54,20 +57,34 @@ func (d *fakeBCOSDriver) PrepareAnchor(_ context.Context, request fiscobcos.Subm
 	d.state.mu.Lock()
 	defer d.state.mu.Unlock()
 	d.state.prepareCalls++
-	txHash := sha256.Sum256(append(append([]byte(nil), request.Payload.AnchorID...), byte(d.state.prepareCalls)))
-	callData, err := fiscobcos.PublishCallData(request.Payload)
+	parameters, err := fiscobcos.ParametersForMode(d.probe.CryptoMode)
+	if err != nil {
+		return fiscobcos.TransactionSubmission{}, err
+	}
+	txHash, err := fiscobcos.HashNativeEvidence(
+		parameters.ChainHashAlgorithm,
+		append(append([]byte(nil), request.Payload.AnchorID...), byte(d.state.prepareCalls)),
+	)
+	if err != nil {
+		return fiscobcos.TransactionSubmission{}, err
+	}
+	callData, err := fiscobcos.PublishCallDataForMode(d.probe.CryptoMode, request.Payload)
+	if err != nil {
+		return fiscobcos.TransactionSubmission{}, err
+	}
+	signatureBytes, err := fiscobcos.NativeTransactionSignatureBytes(d.probe.CryptoMode)
 	if err != nil {
 		return fiscobcos.TransactionSubmission{}, err
 	}
 	d.state.attempt = fiscobcos.TransactionSubmission{
-		EncodedTransaction: append([]byte("encoded-transaction-"), txHash[:]...),
+		EncodedTransaction: append([]byte("encoded-transaction-"), txHash...),
 		ChainID:            d.probe.ChainID,
 		GroupID:            d.probe.GroupID,
 		To:                 bytes.Repeat([]byte{0x41}, 20),
 		Input:              callData,
-		Signature:          bytes.Repeat([]byte{0x51}, 65),
+		Signature:          bytes.Repeat([]byte{0x51}, signatureBytes),
 		Sender:             bytes.Repeat([]byte{0x61}, 20),
-		TransactionHash:    txHash[:],
+		TransactionHash:    txHash,
 		BlockLimit:         uint64(699 + d.state.prepareCalls),
 		SubmittedAtUnixN:   int64(d.state.prepareCalls),
 	}
@@ -109,7 +126,7 @@ func (d *fakeBCOSDriver) SubmitPreparedAnchor(_ context.Context, attempt fiscobc
 		SignedSTHDigest: append([]byte(nil), request.Payload.SignedSTHDigest...),
 		Publisher:       bytes.Repeat([]byte{0x61}, 20), PayloadVersion: request.Payload.Version, Exists: true,
 	}
-	header := fakeBCOSBlockHeader()
+	header := fakeBCOSBlockHeaderForMode(d.probe.CryptoMode)
 	blockHash := header.Evidence.BlockHash
 	receiptFields := fiscobcos.NativeReceiptFields{
 		Version:         0,
@@ -127,7 +144,11 @@ func (d *fakeBCOSDriver) SubmitPreparedAnchor(_ context.Context, attempt fiscobc
 	if err != nil {
 		return fiscobcos.SubmissionOutcome{}, err
 	}
-	receiptHash, err := fiscobcos.HashNativeEvidence(fiscobcos.HashKeccak256, rawReceipt)
+	parameters, err := fiscobcos.ParametersForMode(d.probe.CryptoMode)
+	if err != nil {
+		return fiscobcos.SubmissionOutcome{}, err
+	}
+	receiptHash, err := fiscobcos.HashNativeEvidence(parameters.ChainHashAlgorithm, rawReceipt)
 	if err != nil {
 		return fiscobcos.SubmissionOutcome{}, err
 	}
@@ -213,14 +234,14 @@ func (d *fakeBCOSDriver) GetBlockHeader(context.Context, uint64) (fiscobcos.Bloc
 	if d.readErr != nil {
 		return fiscobcos.BlockHeader{}, d.readErr
 	}
-	return fakeBCOSBlockHeader(), nil
+	return fakeBCOSBlockHeaderForMode(d.probe.CryptoMode), nil
 }
 func (d *fakeBCOSDriver) GetConsensusSnapshot(context.Context, uint64) (fiscobcos.ConsensusSnapshot, error) {
 	if d.readErr != nil {
 		return fiscobcos.ConsensusSnapshot{}, d.readErr
 	}
 	return fiscobcos.ConsensusSnapshot{
-		BlockNumber: 500, BlockHash: append([]byte(nil), fakeBCOSBlockHeader().Evidence.BlockHash...),
+		BlockNumber: 500, BlockHash: append([]byte(nil), fakeBCOSBlockHeaderForMode(d.probe.CryptoMode).Evidence.BlockHash...),
 		Finality: fiscobcos.FinalityEvidence{Signatures: []fiscobcos.CommitSignature{
 			{ValidatorNodeID: "validator-a", Signature: bytes.Repeat([]byte{0x81}, 64)},
 			{ValidatorNodeID: "validator-b", Signature: bytes.Repeat([]byte{0x82}, 64)},
@@ -231,6 +252,10 @@ func (d *fakeBCOSDriver) GetConsensusSnapshot(context.Context, uint64) (fiscobco
 func (d *fakeBCOSDriver) Close() error { d.closed = true; return nil }
 
 func fakeBCOSBlockHeader() fiscobcos.BlockHeader {
+	return fakeBCOSBlockHeaderForMode(fiscobcos.CryptoModeStandard)
+}
+
+func fakeBCOSBlockHeaderForMode(mode fiscobcos.CryptoMode) fiscobcos.BlockHeader {
 	fields := fiscobcos.NativeBlockHeaderFields{
 		Version:          0,
 		ParentInfo:       []fiscobcos.NativeParentInfo{{BlockNumber: 499, BlockHash: bytes.Repeat([]byte{0x70}, 32)}},
@@ -248,7 +273,11 @@ func fakeBCOSBlockHeader() fiscobcos.BlockHeader {
 	if err != nil {
 		panic(err)
 	}
-	hash, err := fiscobcos.HashNativeEvidence(fiscobcos.HashKeccak256, raw)
+	parameters, err := fiscobcos.ParametersForMode(mode)
+	if err != nil {
+		panic(err)
+	}
+	hash, err := fiscobcos.HashNativeEvidence(parameters.ChainHashAlgorithm, raw)
 	if err != nil {
 		panic(err)
 	}
@@ -316,7 +345,7 @@ func TestFISCOBCOSStandardSinkSystemHealthAndEndpointMetrics(t *testing.T) {
 	t.Parallel()
 
 	trust, drivers := fakeBCOSFixture(t)
-	trust.Endpoints = append(trust.Endpoints, "127.0.0.1:20202")
+	trust.Endpoints = append(trust.Endpoints, "tls://127.0.0.1:20202")
 	base := drivers[0].(*fakeBCOSDriver)
 	probe := cloneChainProbe(base.probe)
 	probe.Endpoint = trust.Endpoints[2]
@@ -462,7 +491,7 @@ func TestFISCOBCOSStandardSinkUsesConservativeQuorumHeightAcrossNormalDrift(t *t
 
 func TestFISCOBCOSStandardSinkPublishesWithUnavailableMinority(t *testing.T) {
 	trust, drivers := fakeBCOSFixture(t)
-	trust.Endpoints = append(trust.Endpoints, "127.0.0.1:20202")
+	trust.Endpoints = append(trust.Endpoints, "tls://127.0.0.1:20202")
 	base := drivers[0].(*fakeBCOSDriver)
 	probe := cloneChainProbe(base.probe)
 	probe.Endpoint = trust.Endpoints[2]
@@ -494,7 +523,7 @@ func TestFISCOBCOSStandardSinkPublishesWithUnavailableMinority(t *testing.T) {
 
 func TestFISCOBCOSStandardSinkDoesNotCountStaleAbsenceTowardSubmissionQuorum(t *testing.T) {
 	trust, drivers := fakeBCOSFixture(t)
-	trust.Endpoints = append(trust.Endpoints, "127.0.0.1:20202")
+	trust.Endpoints = append(trust.Endpoints, "tls://127.0.0.1:20202")
 	base := drivers[0].(*fakeBCOSDriver)
 	probe := cloneChainProbe(base.probe)
 	probe.Endpoint = trust.Endpoints[2]
@@ -524,7 +553,7 @@ func TestFISCOBCOSStandardSinkDoesNotCountStaleAbsenceTowardSubmissionQuorum(t *
 
 func TestFISCOBCOSStandardSinkDoesNotCountStaleNotFoundTowardReceiptQuorum(t *testing.T) {
 	trust, drivers := fakeBCOSFixture(t)
-	trust.Endpoints = append(trust.Endpoints, "127.0.0.1:20202")
+	trust.Endpoints = append(trust.Endpoints, "tls://127.0.0.1:20202")
 	base := drivers[0].(*fakeBCOSDriver)
 	probe := cloneChainProbe(base.probe)
 	probe.Endpoint = trust.Endpoints[2]
@@ -551,7 +580,7 @@ func TestFISCOBCOSStandardSinkDoesNotCountStaleNotFoundTowardReceiptQuorum(t *te
 
 func TestFISCOBCOSImmediateSuccessInspectsMinorityReceiptConflict(t *testing.T) {
 	trust, drivers := fakeBCOSFixture(t)
-	trust.Endpoints = append(trust.Endpoints, "127.0.0.1:20202")
+	trust.Endpoints = append(trust.Endpoints, "tls://127.0.0.1:20202")
 	base := drivers[0].(*fakeBCOSDriver)
 	probe := cloneChainProbe(base.probe)
 	probe.Endpoint = trust.Endpoints[2]
@@ -608,7 +637,7 @@ func TestFISCOBCOSReceiptBindingMismatchIsPermanent(t *testing.T) {
 
 func TestFISCOBCOSStandardSinkRebroadcastsExactPreparedBytesAfterEndpointFailover(t *testing.T) {
 	trust, drivers := fakeBCOSFixture(t)
-	trust.Endpoints = append(trust.Endpoints, "127.0.0.1:20202")
+	trust.Endpoints = append(trust.Endpoints, "tls://127.0.0.1:20202")
 	base := drivers[0].(*fakeBCOSDriver)
 	probe := cloneChainProbe(base.probe)
 	probe.Endpoint = trust.Endpoints[2]
@@ -707,7 +736,7 @@ func TestFISCOBCOSStandardSinkRejectsNonCanonicalV1BindingBeforeSideEffect(t *te
 
 func TestFISCOBCOSStandardSinkRejectsConflictingAnchorFromAnyEndpoint(t *testing.T) {
 	trust, drivers := fakeBCOSFixture(t)
-	trust.Endpoints = append(trust.Endpoints, "127.0.0.1:20202")
+	trust.Endpoints = append(trust.Endpoints, "tls://127.0.0.1:20202")
 	base := drivers[0].(*fakeBCOSDriver)
 	probe := cloneChainProbe(base.probe)
 	probe.Endpoint = trust.Endpoints[2]
@@ -738,7 +767,7 @@ func TestFISCOBCOSStandardSinkRejectsConflictingAnchorFromAnyEndpoint(t *testing
 
 func TestFISCOBCOSPostSubmitConflictDoesNotAdvanceAnchorResult(t *testing.T) {
 	trust, drivers := fakeBCOSFixture(t)
-	trust.Endpoints = append(trust.Endpoints, "127.0.0.1:20202")
+	trust.Endpoints = append(trust.Endpoints, "tls://127.0.0.1:20202")
 	base := drivers[0].(*fakeBCOSDriver)
 	probe := cloneChainProbe(base.probe)
 	probe.Endpoint = trust.Endpoints[2]
@@ -786,7 +815,7 @@ func TestFISCOBCOSPostSubmitConflictDoesNotAdvanceAnchorResult(t *testing.T) {
 
 func TestFISCOBCOSReadbackDisagreementRemainsRecoverOnlyAfterConvergence(t *testing.T) {
 	trust, drivers := fakeBCOSFixture(t)
-	trust.Endpoints = append(trust.Endpoints, "127.0.0.1:20202")
+	trust.Endpoints = append(trust.Endpoints, "tls://127.0.0.1:20202")
 	trust.ReadQuorum = 3
 	base := drivers[0].(*fakeBCOSDriver)
 	probe := cloneChainProbe(base.probe)
@@ -994,6 +1023,60 @@ func TestFISCOBCOSServiceRestartDoesNotRepeatImmediatelyVisibleUnknownSideEffect
 	defer state.mu.Unlock()
 	if state.submitCalls != 1 {
 		t.Fatalf("submit calls=%d, visible exact record must not be resubmitted", state.submitCalls)
+	}
+}
+
+func TestFISCOBCOSGuomiServiceRestartRecoversExactSM3Attempt(t *testing.T) {
+	trust, drivers := fakeBCOSFixtureForMode(t, fiscobcos.CryptoModeGuomi)
+	state := drivers[0].(*fakeBCOSDriver).state
+	state.failAfterEffectOnce = true
+	sink, err := NewFISCOBCOSStandardSink(FISCOBCOSStandardSinkConfig{TrustConfig: trust, Drivers: drivers})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := newBoundTestLocalStore(t, t.TempDir())
+	key := testScheduleKey(fiscobcos.SinkName)
+	sth := testSTH(key, 9, 0x39)
+	offer(t, store, key, sth, 100, 100)
+	now := time.Unix(0, 100)
+	first := newTestService(t, store, sink, key, &now, func(config *Config) {
+		config.InitialBackoff = time.Nanosecond
+		config.MaxBackoff = time.Nanosecond
+	})
+	first.tick(context.Background())
+	schedule, found, err := store.GetSTHAnchorSchedule(context.Background(), key)
+	if err != nil || !found || schedule.InFlight == nil {
+		t.Fatalf("Guomi schedule after ambiguous submission=%+v found=%v err=%v", schedule, found, err)
+	}
+	journal, err := fiscobcos.UnmarshalAttemptJournal(schedule.InFlight.ProviderState)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if journal.CryptoMode != fiscobcos.CryptoModeGuomi ||
+		len(journal.Attempts) != 1 ||
+		len(journal.Attempts[0].Transaction.Signature) != 128 {
+		t.Fatalf("Guomi attempt journal lost mode binding: %+v", journal)
+	}
+
+	now = now.Add(time.Second)
+	second := newTestService(t, store, sink, key, &now, nil)
+	second.tick(context.Background())
+	result, found, err := store.GetSTHAnchorResult(context.Background(), sth.TreeSize)
+	if err != nil || !found {
+		t.Fatalf("Guomi unknown-outcome result was not recovered: result=%+v found=%v err=%v", result, found, err)
+	}
+	proof, err := fiscobcos.UnmarshalProof(result.Proof)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if proof.CryptoMode != fiscobcos.CryptoModeGuomi ||
+		proof.ChainHashAlgorithm != "sm3" {
+		t.Fatalf("recovered proof is not Guomi-bound: %+v", proof)
+	}
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	if state.submitCalls != 1 {
+		t.Fatalf("Guomi submit calls=%d, visible exact record must not be resubmitted", state.submitCalls)
 	}
 }
 
@@ -1355,8 +1438,12 @@ func TestFISCOBCOSSubmissionStatusRecoveryMatrix(t *testing.T) {
 }
 
 func fakeBCOSFixture(t *testing.T) (fiscobcos.TrustConfig, []fiscobcos.Driver) {
+	return fakeBCOSFixtureForMode(t, fiscobcos.CryptoModeStandard)
+}
+
+func fakeBCOSFixtureForMode(t *testing.T, mode fiscobcos.CryptoMode) (fiscobcos.TrustConfig, []fiscobcos.Driver) {
 	t.Helper()
-	trust, err := fiscobcos.NewTrustConfig(fiscobcos.CryptoModeStandard)
+	trust, err := fiscobcos.NewTrustConfig(mode)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1369,27 +1456,56 @@ func fakeBCOSFixture(t *testing.T) (fiscobcos.TrustConfig, []fiscobcos.Driver) {
 		ProtocolVersion: fiscobcos.TrustDBAnchorV1ProtocolVersion,
 		EventSignature:  fiscobcos.TrustDBAnchorV1EventSignature,
 	}
-	trust.Endpoints = []string{"127.0.0.1:20200", "127.0.0.1:20201"}
+	parameters, err := fiscobcos.ParametersForMode(mode)
+	if err != nil {
+		t.Fatal(err)
+	}
+	trust.Endpoints = []string{
+		parameters.TransportMode + "://127.0.0.1:20200",
+		parameters.TransportMode + "://127.0.0.1:20201",
+	}
 	trust.ReadQuorum = 2
 	trust.AccountProvider = fiscobcos.AccountProviderConfig{
 		Provider: "software", KeyID: "publisher", KeyReference: "publisher.keyref",
-		Algorithm: fiscobcos.StandardAccountAlg,
+		Algorithm: parameters.ChainSignatureAlgorithm,
 	}
 	trust.Certificates = fiscobcos.CertificateConfig{
-		TransportMode:               fiscobcos.StandardTransport,
+		TransportMode:               parameters.TransportMode,
 		TrustedCAReferences:         []string{"ca.crt"},
 		TrustedCACertificateHashes:  [][]byte{bytes.Repeat([]byte{0xa1}, 32)},
 		ClientSigningCertificateRef: "sdk.crt", ClientSigningKeyRef: "sdk.key",
 	}
-	for _, id := range []string{"validator-a", "validator-b", "validator-c", "validator-d"} {
-		publicKey := append([]byte{0x04}, bytes.Repeat([]byte{byte(len(id))}, 64)...)
+	if mode == fiscobcos.CryptoModeGuomi {
+		trust.Certificates.ClientEncryptionCertificateRef = "sdk-encryption.crt"
+		trust.Certificates.ClientEncryptionKeyRef = "sdk-encryption.key"
+	}
+	for index := 1; index <= 4; index++ {
+		privateKey := make([]byte, 32)
+		privateKey[31] = byte(index)
+		var publicKey []byte
+		switch mode {
+		case fiscobcos.CryptoModeStandard:
+			private, err := ethcrypto.ToECDSA(privateKey)
+			if err != nil {
+				t.Fatal(err)
+			}
+			publicKey = ethcrypto.FromECDSAPub(&private.PublicKey)
+		case fiscobcos.CryptoModeGuomi:
+			private, err := sm2.NewPrivateKey(privateKey)
+			if err != nil {
+				t.Fatal(err)
+			}
+			publicKey = elliptic.Marshal(sm2.P256(), private.X, private.Y)
+		default:
+			t.Fatal("unsupported fixture mode")
+		}
 		trust.Validators = append(trust.Validators, fiscobcos.ValidatorDescriptor{
-			NodeID: id, Algorithm: fiscobcos.StandardAccountAlg,
-			PublicKeyEncoding: fiscobcos.StandardKeyEncoding, PublicKey: publicKey,
+			NodeID: "0x" + hex.EncodeToString(publicKey[1:]), Algorithm: parameters.ChainSignatureAlgorithm,
+			PublicKeyEncoding: parameters.PublicKeyEncoding, PublicKey: publicKey,
 		})
 	}
 	probe := fiscobcos.ChainProbe{
-		SDKVersion: fiscobcos.StandardSDKVersion, CryptoMode: fiscobcos.CryptoModeStandard,
+		SDKVersion: fiscobcos.StandardSDKVersion, CryptoMode: mode,
 		ChainID: trust.ChainID, GroupID: trust.GroupID,
 		GenesisHash:    append([]byte(nil), trust.GenesisHash...),
 		CheckpointHash: append([]byte(nil), trust.TrustedCheckpoint.BlockHash...),

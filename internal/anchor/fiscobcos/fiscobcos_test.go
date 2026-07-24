@@ -2,6 +2,7 @@ package fiscobcos
 
 import (
 	"bytes"
+	"crypto/elliptic"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -11,6 +12,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/emmansun/gmsm/sm2"
+	ethcrypto "github.com/ethereum/go-ethereum/crypto"
 	"github.com/fxamacker/cbor/v2"
 
 	"github.com/wowtrust/trustdb/internal/cborx"
@@ -62,6 +65,17 @@ func TestAnchorPayloadGoldenVectors(t *testing.T) {
 				t.Fatal("payload did not round-trip byte-identically")
 			}
 		})
+	}
+
+	valid := testTrustConfig(t, CryptoModeGuomi)
+	valid.Endpoints = []string{
+		"gm-tls://[::1]:20200",
+		"gm-tls://[2001:db8::1]:20200",
+		"gm-tls://127.1.example.test:20200",
+	}
+	valid.ReadQuorum = 2
+	if _, err := MarshalTrustConfig(valid); err != nil {
+		t.Fatalf("TrustConfig rejected canonical IPv6 or numeric DNS endpoint: %v", err)
 	}
 }
 
@@ -205,8 +219,8 @@ func TestTrustConfigGoldenVectorsAndCanonicalOrdering(t *testing.T) {
 		wantDigest    string
 		wantContextID string
 	}{
-		{mode: CryptoModeStandard, wantCBORSHA: "16bdc483dcd290ef4a98571e45a10675157e572845a5389da081347da75143d6", wantDigest: "bd9f616ecee5b175c4c0ab77d824cca5723693e7f4433851e3393f8d8bd20da4", wantContextID: "d0dd44454afa34e20ab27bff972906fb5b39c304508c0f6caa5c4e546a9b0ee5"},
-		{mode: CryptoModeGuomi, wantCBORSHA: "138ce174ad392da687124a434c5aa40ea74541ab8ef3f0045b36178f67fb2174", wantDigest: "0a2b3c2296136e237cde52c6d8ef5ba8aaaacc1ca18220251e44c2abc78fc207", wantContextID: "445718702bb699b5e32a6b4cfaac5605382850ed74b7707124f3a1db3e60df53"},
+		{mode: CryptoModeStandard, wantCBORSHA: "698ec89ec77da4aa09b1ec1e5f98dc8db2dc7f0e3b4b9544c5542679ae57db58", wantDigest: "42321af6d7cf4c914d3ef1141b981065815da62979af918610926272316d5c5d", wantContextID: "11643d2c4f29c8c0e990cb266bc4f1b7b937353308d1d0c9baccb125848d9363"},
+		{mode: CryptoModeGuomi, wantCBORSHA: "ee57d83b494703fd216b10ae567be4ccb1e073aac8400adae3792a0a14e1f230", wantDigest: "1d3f3b1a0ac10851650f78178c78533e7f7db818f076699cfa2a3417925744dd", wantContextID: "a311938565e61c8bd6c3d3875c7991aabaf4d42369d6976794ab3a2edf735766"},
 	}
 	for _, tc := range tests {
 		tc := tc
@@ -268,10 +282,119 @@ func TestTrustConfigRejectsInferredOrMixedModeParameters(t *testing.T) {
 	if _, err := MarshalTrustConfig(guomi); err == nil {
 		t.Fatal("Guomi config accepted a missing encryption key reference")
 	}
+	guomi = testTrustConfig(t, CryptoModeGuomi)
+	guomi.Certificates.ClientEncryptionCertificateRef = guomi.Certificates.ClientSigningCertificateRef
+	if _, err := MarshalTrustConfig(guomi); err == nil {
+		t.Fatal("Guomi config accepted certificate role reuse")
+	}
+	guomi = testTrustConfig(t, CryptoModeGuomi)
+	guomi.Certificates.ClientEncryptionKeyRef = guomi.Certificates.ClientSigningKeyRef
+	if _, err := MarshalTrustConfig(guomi); err == nil {
+		t.Fatal("Guomi config accepted private-key role reuse")
+	}
 	standard = testTrustConfig(t, CryptoModeStandard)
 	standard.SM2UserID = cryptosuite.SM2DefaultUserID
 	if _, err := MarshalTrustConfig(standard); err == nil {
 		t.Fatal("standard config accepted an SM2 user ID")
+	}
+}
+
+func TestTrustConfigRejectsEndpointAliasesAndIgnoredURLComponents(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		endpoints []string
+	}{
+		{
+			name: "query alias",
+			endpoints: []string{
+				"gm-tls://127.0.0.1:20200",
+				"gm-tls://127.0.0.1:20200?alias=second",
+			},
+		},
+		{
+			name: "root path alias",
+			endpoints: []string{
+				"gm-tls://127.0.0.1:20200",
+				"gm-tls://127.0.0.1:20200/",
+			},
+		},
+		{
+			name: "scheme and bare alias",
+			endpoints: []string{
+				"gm-tls://127.0.0.1:20200",
+				"127.0.0.1:20200",
+			},
+		},
+		{
+			name: "DNS case alias",
+			endpoints: []string{
+				"gm-tls://BCOS.example.test:20200",
+				"gm-tls://bcos.example.test:20200",
+			},
+		},
+		{
+			name: "DNS absolute alias",
+			endpoints: []string{
+				"gm-tls://bcos.example.test.:20200",
+				"gm-tls://bcos.example.test:20200",
+			},
+		},
+		{
+			name: "abbreviated IPv4 alias",
+			endpoints: []string{
+				"gm-tls://127.0.0.1:20200",
+				"gm-tls://127.1:20200",
+			},
+		},
+		{
+			name: "integer IPv4 alias",
+			endpoints: []string{
+				"gm-tls://127.0.0.1:20200",
+				"gm-tls://2130706433:20200",
+			},
+		},
+		{
+			name: "zero-padded IPv4 alias",
+			endpoints: []string{
+				"gm-tls://127.0.0.1:20200",
+				"gm-tls://127.000.000.001:20200",
+			},
+		},
+		{
+			name: "hexadecimal IPv4 alias",
+			endpoints: []string{
+				"gm-tls://127.0.0.1:20200",
+				"gm-tls://0x7f000001:20200",
+			},
+		},
+		{
+			name: "zoned IPv6 numeric alias",
+			endpoints: []string{
+				"[fe80::1%1]:20200",
+				"[fe80::1%01]:20200",
+			},
+		},
+		{
+			name: "zoned IPv6 interface alias",
+			endpoints: []string{
+				"gm-tls://[fe80::1%25lo]:20200",
+				"gm-tls://[fe80::1%251]:20200",
+			},
+		},
+	}
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			config := testTrustConfig(t, CryptoModeGuomi)
+			config.Endpoints = tc.endpoints
+			config.ReadQuorum = 2
+			if _, err := MarshalTrustConfig(config); err == nil {
+				t.Fatal("TrustConfig accepted aliased or non-canonical endpoints")
+			}
+		})
 	}
 }
 
@@ -426,7 +549,12 @@ func testTrustConfig(t *testing.T, mode CryptoMode) TrustConfig {
 		ProtocolVersion: TrustDBAnchorV1ProtocolVersion,
 		EventSignature:  TrustDBAnchorV1EventSignature,
 	}
-	config.Endpoints = []string{"127.0.0.1:20201", "127.0.0.1:20200", "https://bcos.example.test:20202"}
+	endpointScheme := params.TransportMode
+	config.Endpoints = []string{
+		endpointScheme + "://127.0.0.1:20201",
+		endpointScheme + "://127.0.0.1:20200",
+		endpointScheme + "://bcos.example.test:20202",
+	}
 	config.ReadQuorum = 2
 	config.AccountProvider = AccountProviderConfig{Provider: "keydescriptor", KeyID: "bcos-publisher-01", KeyReference: "keys/bcos-publisher-01.cbor", Algorithm: params.ChainSignatureAlgorithm}
 	config.Certificates = CertificateConfig{
@@ -442,11 +570,27 @@ func testTrustConfig(t *testing.T, mode CryptoMode) TrustConfig {
 		config.Certificates.ClientEncryptionKeyRef = "keys/sdk-encryption.keyref"
 	}
 	for i := 0; i < 4; i++ {
-		publicKey := make([]byte, 65)
-		publicKey[0] = 0x04
-		copy(publicKey[1:], sequenceBytes(byte(0xd0+i), 64))
+		privateKey := make([]byte, 32)
+		privateKey[31] = byte(i + 1)
+		var publicKey []byte
+		switch mode {
+		case CryptoModeStandard:
+			private, err := ethcrypto.ToECDSA(privateKey)
+			if err != nil {
+				t.Fatal(err)
+			}
+			publicKey = ethcrypto.FromECDSAPub(&private.PublicKey)
+		case CryptoModeGuomi:
+			private, err := sm2.NewPrivateKey(privateKey)
+			if err != nil {
+				t.Fatal(err)
+			}
+			publicKey = elliptic.Marshal(sm2.P256(), private.X, private.Y)
+		default:
+			t.Fatal("unsupported test crypto mode")
+		}
 		config.Validators = append(config.Validators, ValidatorDescriptor{
-			NodeID: "validator-" + string(rune('d'-i)), Algorithm: params.ChainSignatureAlgorithm,
+			NodeID: "0x" + hex.EncodeToString(publicKey[1:]), Algorithm: params.ChainSignatureAlgorithm,
 			PublicKeyEncoding: params.PublicKeyEncoding, PublicKey: publicKey,
 		})
 	}

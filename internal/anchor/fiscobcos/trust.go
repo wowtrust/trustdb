@@ -2,11 +2,18 @@ package fiscobcos
 
 import (
 	"bytes"
+	"encoding/hex"
 	"fmt"
+	"net"
+	"net/netip"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/emmansun/gmsm/sm2"
+	ethcrypto "github.com/ethereum/go-ethereum/crypto"
 
 	"github.com/wowtrust/trustdb/internal/cborx"
 	"github.com/wowtrust/trustdb/internal/cryptosuite"
@@ -260,13 +267,14 @@ func validateTrustConfig(config TrustConfig) error {
 	}
 	seenEndpoints := make(map[string]struct{}, len(config.Endpoints))
 	for _, endpoint := range config.Endpoints {
-		if err := validateEndpoint(endpoint); err != nil {
+		endpointKey, err := validateEndpoint(endpoint, params.TransportMode)
+		if err != nil {
 			return err
 		}
-		if _, exists := seenEndpoints[endpoint]; exists {
+		if _, exists := seenEndpoints[endpointKey]; exists {
 			return fmt.Errorf("%w: duplicate endpoint %q", ErrInvalidTrustConfig, endpoint)
 		}
-		seenEndpoints[endpoint] = struct{}{}
+		seenEndpoints[endpointKey] = struct{}{}
 	}
 	if config.ReadQuorum == 0 || int(config.ReadQuorum) > len(config.Endpoints) {
 		return fmt.Errorf("%w: read_quorum=%d exceeds endpoint count %d", ErrInvalidTrustConfig, config.ReadQuorum, len(config.Endpoints))
@@ -327,6 +335,10 @@ func validateCertificates(certificates CertificateConfig, params ModeParameters)
 		if err := validateConfigString("certificates.client_encryption_key_ref", certificates.ClientEncryptionKeyRef); err != nil {
 			return err
 		}
+		if certificates.ClientSigningCertificateRef == certificates.ClientEncryptionCertificateRef ||
+			certificates.ClientSigningKeyRef == certificates.ClientEncryptionKeyRef {
+			return fmt.Errorf("%w: Guomi signing and encryption certificate roles must use distinct references", ErrInvalidTrustConfig)
+		}
 	} else if certificates.ClientEncryptionCertificateRef != "" || certificates.ClientEncryptionKeyRef != "" {
 		return fmt.Errorf("%w: standard mode must not set Guomi encryption certificate references", ErrInvalidTrustConfig)
 	}
@@ -343,6 +355,22 @@ func validateValidator(validator ValidatorDescriptor, params ModeParameters) err
 	if len(validator.PublicKey) != 65 || validator.PublicKey[0] != 0x04 {
 		return fmt.Errorf("%w: validator %q public key must be canonical 65-byte uncompressed form", ErrInvalidTrustConfig, validator.NodeID)
 	}
+	switch params.Mode {
+	case CryptoModeStandard:
+		if _, err := ethcrypto.UnmarshalPubkey(validator.PublicKey); err != nil {
+			return fmt.Errorf("%w: validator %q public key is not valid secp256k1", ErrInvalidTrustConfig, validator.NodeID)
+		}
+	case CryptoModeGuomi:
+		if _, err := sm2.NewPublicKey(validator.PublicKey); err != nil {
+			return fmt.Errorf("%w: validator %q public key is not valid sm2p256v1", ErrInvalidTrustConfig, validator.NodeID)
+		}
+	default:
+		return fmt.Errorf("%w: validator %q has unsupported crypto mode", ErrInvalidTrustConfig, validator.NodeID)
+	}
+	wantNodeID := "0x" + hex.EncodeToString(validator.PublicKey[1:])
+	if validator.NodeID != wantNodeID {
+		return fmt.Errorf("%w: validator node_id %q does not match its canonical public key body", ErrInvalidTrustConfig, validator.NodeID)
+	}
 	return nil
 }
 
@@ -353,20 +381,93 @@ func validateConfigString(name, value string) error {
 	return nil
 }
 
-func validateEndpoint(endpoint string) error {
+func validateEndpoint(endpoint, transportMode string) (string, error) {
 	if err := validateConfigString("endpoint", endpoint); err != nil {
-		return err
+		return "", err
+	}
+	if strings.TrimSpace(endpoint) != endpoint {
+		return "", fmt.Errorf("%w: endpoint must not contain surrounding whitespace", ErrInvalidTrustConfig)
 	}
 	if strings.Contains(endpoint, "@") {
-		return fmt.Errorf("%w: endpoint must not contain user information", ErrInvalidTrustConfig)
+		return "", fmt.Errorf("%w: endpoint must not contain user information", ErrInvalidTrustConfig)
 	}
-	if strings.Contains(endpoint, "://") {
+	address := endpoint
+	if !strings.Contains(endpoint, "://") {
+		if strings.ContainsAny(endpoint, "/?#") {
+			return "", fmt.Errorf("%w: malformed endpoint %q", ErrInvalidTrustConfig, endpoint)
+		}
+	} else {
 		u, err := url.Parse(endpoint)
-		if err != nil || u.Host == "" || u.User != nil || u.Fragment != "" {
-			return fmt.Errorf("%w: malformed endpoint %q", ErrInvalidTrustConfig, endpoint)
+		if err != nil || u.Host == "" || u.User != nil || u.Opaque != "" ||
+			u.Path != "" || u.RawPath != "" || u.RawQuery != "" ||
+			u.ForceQuery || u.Fragment != "" || u.RawFragment != "" {
+			return "", fmt.Errorf("%w: malformed endpoint %q", ErrInvalidTrustConfig, endpoint)
+		}
+		if u.Scheme != transportMode {
+			return "", fmt.Errorf("%w: endpoint %q is not bound to transport_mode=%s", ErrInvalidTrustConfig, endpoint, transportMode)
+		}
+		address = u.Host
+	}
+	host, portText, err := net.SplitHostPort(address)
+	port, portErr := strconv.Atoi(portText)
+	if err != nil || portErr != nil || strings.TrimSpace(host) == "" || port < 1 || port > 65535 {
+		return "", fmt.Errorf("%w: endpoint %q has an invalid host or port", ErrInvalidTrustConfig, endpoint)
+	}
+	canonicalHost := host
+	if address, parseErr := netip.ParseAddr(host); parseErr == nil {
+		if address.Zone() != "" {
+			return "", fmt.Errorf(
+				"%w: endpoint %q must not use a host-dependent IPv6 zone",
+				ErrInvalidTrustConfig,
+				endpoint,
+			)
+		}
+		canonicalHost = address.Unmap().String()
+	} else {
+		if strings.Contains(host, ":") || looksLikeLegacyIPv4Literal(host) {
+			return "", fmt.Errorf(
+				"%w: endpoint %q uses a non-canonical numeric IP address",
+				ErrInvalidTrustConfig,
+				endpoint,
+			)
+		}
+		canonicalHost = strings.ToLower(strings.TrimSuffix(host, "."))
+	}
+	if canonicalHost == "" {
+		return "", fmt.Errorf("%w: endpoint %q has an invalid host", ErrInvalidTrustConfig, endpoint)
+	}
+	return transportMode + "://" + net.JoinHostPort(canonicalHost, strconv.Itoa(port)), nil
+}
+
+func looksLikeLegacyIPv4Literal(host string) bool {
+	parts := strings.Split(host, ".")
+	if len(parts) == 0 || len(parts) > 4 {
+		return false
+	}
+	for _, part := range parts {
+		if part == "" {
+			return false
+		}
+		if strings.HasPrefix(part, "0x") || strings.HasPrefix(part, "0X") {
+			if len(part) == 2 {
+				return false
+			}
+			for _, item := range part[2:] {
+				if (item < '0' || item > '9') &&
+					(item < 'a' || item > 'f') &&
+					(item < 'A' || item > 'F') {
+					return false
+				}
+			}
+			continue
+		}
+		for _, item := range part {
+			if item < '0' || item > '9' {
+				return false
+			}
 		}
 	}
-	return nil
+	return true
 }
 
 func hashForMode(mode CryptoMode, data []byte) ([]byte, error) {

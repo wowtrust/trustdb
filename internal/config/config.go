@@ -141,8 +141,8 @@ anchor:
   scope: "global"
   max_delay: "5m"
   poll_interval: "2s"
-  # Set sink to fisco-bcos-standard and provision this strict canonical-CBOR
-  # file to enable the pinned standard-crypto client.
+  # Set sink to fisco-bcos and provision this strict mode-bound canonical-CBOR
+  # file to enable the pinned standard or Guomi client.
   fisco_bcos:
     trust_config_file: ""
   plugin:
@@ -756,10 +756,12 @@ func (c Config) Validate() error {
 		return fmt.Errorf("anchor.plugin.command is required when anchor.sink is plugin")
 	}
 	switch strings.ToLower(strings.TrimSpace(c.Anchor.Sink)) {
-	case "fisco-bcos", "fisco-bcos-standard":
+	case "fisco-bcos":
 		if strings.TrimSpace(c.Anchor.FISCOBCOS.TrustConfigFile) == "" {
-			return fmt.Errorf("anchor.fisco_bcos.trust_config_file is required when anchor.sink is fisco-bcos-standard")
+			return fmt.Errorf("anchor.fisco_bcos.trust_config_file is required when anchor.sink is fisco-bcos")
 		}
+	case "fisco-bcos-standard":
+		return fmt.Errorf("anchor.sink fisco-bcos-standard is unsupported; use fisco-bcos with explicit crypto_mode")
 	}
 	for _, tc := range []struct {
 		name   string
