@@ -12,6 +12,7 @@ import (
 	"math/big"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"sync"
@@ -208,6 +209,13 @@ func TestFilePINSourceRejectsUnsafeFilesWithoutLeakingPath(t *testing.T) {
 		t.Fatal(err)
 	}
 	pin, err := source.Read(context.Background())
+	if runtime.GOOS == "windows" {
+		if err == nil {
+			clear(pin)
+			t.Fatal("Read() accepted a PIN file without qualified owner-only DACL validation")
+		}
+		return
+	}
 	if err != nil {
 		t.Fatalf("Read() error = %v", err)
 	}
@@ -216,17 +224,15 @@ func TestFilePINSourceRejectsUnsafeFilesWithoutLeakingPath(t *testing.T) {
 	}
 	clear(pin)
 
-	if runtime.GOOS != "windows" {
-		if err := os.Chmod(path, 0o644); err != nil {
-			t.Fatal(err)
-		}
-		_, err = source.Read(context.Background())
-		if err == nil {
-			t.Fatal("Read() accepted a group/other-readable PIN file")
-		}
-		if strings.Contains(err.Error(), path) || strings.Contains(err.Error(), "846295") {
-			t.Fatalf("error %q leaked PIN source details", err)
-		}
+	if err := os.Chmod(path, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err = source.Read(context.Background())
+	if err == nil {
+		t.Fatal("Read() accepted a group/other-readable PIN file")
+	}
+	if strings.Contains(err.Error(), path) || strings.Contains(err.Error(), "846295") {
+		t.Fatalf("error %q leaked PIN source details", err)
 	}
 }
 
@@ -252,6 +258,26 @@ func TestNormalizeSM2SignatureFormats(t *testing.T) {
 	roundTrip, err := normalizeSignature(profile, der)
 	if err != nil || string(roundTrip) != string(der) {
 		t.Fatalf("normalize DER signature = %x, %v", roundTrip, err)
+	}
+}
+
+func TestPortableSessionContractCannotExportPrivateMaterial(t *testing.T) {
+	t.Parallel()
+	sessionType := reflect.TypeOf((*Session)(nil)).Elem()
+	for index := 0; index < sessionType.NumMethod(); index++ {
+		name := strings.ToLower(sessionType.Method(index).Name)
+		for _, forbidden := range []string{"export", "privatekey", "attribute", "value"} {
+			if strings.Contains(name, forbidden) {
+				t.Fatalf("Session method %q exposes a private-material path", sessionType.Method(index).Name)
+			}
+		}
+	}
+	materialType := reflect.TypeOf(KeyMaterial{})
+	for index := 0; index < materialType.NumField(); index++ {
+		field := materialType.Field(index)
+		if strings.Contains(strings.ToLower(field.Name), "private") && field.Type.Kind() == reflect.Slice {
+			t.Fatalf("KeyMaterial field %q can carry private bytes", field.Name)
+		}
 	}
 }
 

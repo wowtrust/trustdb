@@ -211,6 +211,9 @@ func (s *nativeSession) Lookup(ctx context.Context, selector ObjectSelector) (Ke
 	if !found {
 		return KeyMaterial{}, newFault(faultNotFound)
 	}
+	if err := s.validatePrivateKeyPolicy(privateHandle); err != nil {
+		return KeyMaterial{}, err
+	}
 	publicTemplate := objectTemplate(pkcs11.CKO_PUBLIC_KEY, selector, true)
 	publicHandle, publicFound, err := s.findExactlyOne(publicTemplate)
 	if err != nil {
@@ -245,6 +248,29 @@ func (s *nativeSession) Lookup(ctx context.Context, selector ObjectSelector) (Ke
 		return KeyMaterial{}, err
 	}
 	return material, nil
+}
+
+func (s *nativeSession) validatePrivateKeyPolicy(handle pkcs11.ObjectHandle) error {
+	for _, requirement := range []struct {
+		attribute uint
+		want      bool
+	}{
+		{attribute: pkcs11.CKA_PRIVATE, want: true},
+		{attribute: pkcs11.CKA_SENSITIVE, want: true},
+		{attribute: pkcs11.CKA_EXTRACTABLE, want: false},
+		{attribute: pkcs11.CKA_SIGN, want: true},
+		{attribute: pkcs11.CKA_ALWAYS_SENSITIVE, want: true},
+		{attribute: pkcs11.CKA_NEVER_EXTRACTABLE, want: true},
+	} {
+		value, err := s.requiredAttribute(handle, requirement.attribute)
+		if err != nil {
+			return err
+		}
+		if len(value) != 1 || (value[0] != 0) != requirement.want {
+			return newFault(faultPrecondition)
+		}
+	}
+	return nil
 }
 
 func (s *nativeSession) Sign(ctx context.Context, handle ObjectHandle, profile Profile, message []byte) ([]byte, error) {
@@ -379,25 +405,31 @@ func classifyNativeError(err error) error {
 	}
 	switch uint(native) {
 	case pkcs11.CKR_ARGUMENTS_BAD, pkcs11.CKR_DATA_INVALID, pkcs11.CKR_DATA_LEN_RANGE,
-		pkcs11.CKR_TEMPLATE_INCOMPLETE, pkcs11.CKR_TEMPLATE_INCONSISTENT:
+		pkcs11.CKR_TEMPLATE_INCOMPLETE, pkcs11.CKR_TEMPLATE_INCONSISTENT,
+		pkcs11.CKR_ATTRIBUTE_VALUE_INVALID:
 		return newFault(faultInvalid)
-	case pkcs11.CKR_KEY_HANDLE_INVALID, pkcs11.CKR_OBJECT_HANDLE_INVALID, pkcs11.CKR_KEY_CHANGED:
+	case pkcs11.CKR_KEY_HANDLE_INVALID, pkcs11.CKR_OBJECT_HANDLE_INVALID, pkcs11.CKR_KEY_CHANGED,
+		pkcs11.CKR_ATTRIBUTE_TYPE_INVALID, pkcs11.CKR_ATTRIBUTE_SENSITIVE:
 		return newFault(faultPrecondition)
 	case pkcs11.CKR_PIN_INCORRECT, pkcs11.CKR_PIN_INVALID, pkcs11.CKR_PIN_LEN_RANGE,
 		pkcs11.CKR_PIN_EXPIRED, pkcs11.CKR_PIN_LOCKED, pkcs11.CKR_USER_NOT_LOGGED_IN,
-		pkcs11.CKR_USER_PIN_NOT_INITIALIZED:
+		pkcs11.CKR_USER_PIN_NOT_INITIALIZED, pkcs11.CKR_USER_ANOTHER_ALREADY_LOGGED_IN,
+		pkcs11.CKR_USER_TOO_MANY_TYPES:
 		return newFault(faultAuthentication)
-	case pkcs11.CKR_KEY_FUNCTION_NOT_PERMITTED, pkcs11.CKR_ACTION_PROHIBITED:
+	case pkcs11.CKR_KEY_FUNCTION_NOT_PERMITTED, pkcs11.CKR_ACTION_PROHIBITED,
+		pkcs11.CKR_SESSION_READ_ONLY:
 		return newFault(faultPermission)
 	case pkcs11.CKR_MECHANISM_INVALID, pkcs11.CKR_MECHANISM_PARAM_INVALID,
-		pkcs11.CKR_FUNCTION_NOT_SUPPORTED, pkcs11.CKR_KEY_TYPE_INCONSISTENT:
+		pkcs11.CKR_FUNCTION_NOT_SUPPORTED, pkcs11.CKR_KEY_TYPE_INCONSISTENT,
+		pkcs11.CKR_SESSION_PARALLEL_NOT_SUPPORTED:
 		return newFault(faultUnsupported)
 	case pkcs11.CKR_SESSION_COUNT, pkcs11.CKR_DEVICE_MEMORY, pkcs11.CKR_HOST_MEMORY,
 		pkcs11.CKR_FUNCTION_REJECTED:
 		return newFault(faultBusy)
 	case pkcs11.CKR_DEVICE_REMOVED, pkcs11.CKR_TOKEN_NOT_PRESENT, pkcs11.CKR_TOKEN_NOT_RECOGNIZED,
 		pkcs11.CKR_SESSION_CLOSED, pkcs11.CKR_SESSION_HANDLE_INVALID, pkcs11.CKR_DEVICE_ERROR,
-		pkcs11.CKR_CRYPTOKI_NOT_INITIALIZED:
+		pkcs11.CKR_CRYPTOKI_NOT_INITIALIZED, pkcs11.CKR_SLOT_ID_INVALID,
+		pkcs11.CKR_FUNCTION_CANCELED:
 		return newFault(faultUnavailable)
 	default:
 		return newFault(faultInternal)

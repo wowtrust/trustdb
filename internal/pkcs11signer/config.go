@@ -6,6 +6,8 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/wowtrust/trustdb/sdk/signerplugin"
 )
@@ -34,8 +36,8 @@ type Environment struct {
 // is never accepted from an environment value or command argument.
 func LoadEnvironment() (Environment, error) {
 	module := strings.TrimSpace(os.Getenv(EnvModulePath))
-	if module == "" {
-		return Environment{}, envError(EnvModulePath, "is required")
+	if !validEnvironmentPath(module) {
+		return Environment{}, envError(EnvModulePath, "is required and must be a bounded path without control characters")
 	}
 	tokenURI := strings.TrimSpace(os.Getenv(EnvTokenURI))
 	if tokenURI == "" {
@@ -72,7 +74,7 @@ func LoadEnvironment() (Environment, error) {
 		case signerplugin.SuiteINTLV1:
 			mechanism := uint64(defaultEdDSAMechanism)
 			if raw := strings.TrimSpace(os.Getenv(EnvEdDSAMechanism)); raw != "" {
-				mechanism, err = strconv.ParseUint(raw, 0, 64)
+				mechanism, err = strconv.ParseUint(raw, 0, strconv.IntSize)
 				if err != nil || mechanism == 0 {
 					return Environment{}, envError(EnvEdDSAMechanism, "must be a non-zero integer")
 				}
@@ -83,7 +85,7 @@ func LoadEnvironment() (Environment, error) {
 				SignatureFormat: SignatureFormatRaw,
 			})
 		case signerplugin.SuiteCNSMV1:
-			mechanism, parseErr := strconv.ParseUint(strings.TrimSpace(os.Getenv(EnvSM2Mechanism)), 0, 64)
+			mechanism, parseErr := strconv.ParseUint(strings.TrimSpace(os.Getenv(EnvSM2Mechanism)), 0, strconv.IntSize)
 			if parseErr != nil || mechanism == 0 {
 				return Environment{}, envError(EnvSM2Mechanism, "must explicitly name a non-zero vendor mechanism")
 			}
@@ -123,4 +125,16 @@ func LoadEnvironment() (Environment, error) {
 
 func envError(name, message string) error {
 	return fmt.Errorf("%w: %s %s", ErrInvalidConfiguration, name, message)
+}
+
+func validEnvironmentPath(value string) bool {
+	if value == "" || len(value) > maxURIBytes || !utf8.ValidString(value) {
+		return false
+	}
+	for _, r := range value {
+		if unicode.IsControl(r) {
+			return false
+		}
+	}
+	return true
 }

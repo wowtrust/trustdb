@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"runtime"
 )
 
 const maxPINBytes = 1024
@@ -36,7 +35,7 @@ func (s *FilePINSource) Read(ctx context.Context) ([]byte, error) {
 	if err != nil || !before.Mode().IsRegular() || before.Mode()&os.ModeSymlink != 0 {
 		return nil, newFault(faultAuthentication)
 	}
-	if runtime.GOOS != "windows" && before.Mode().Perm()&0o077 != 0 {
+	if !pinFilePermissionsSafe(before) {
 		return nil, newFault(faultAuthentication)
 	}
 	file, err := os.Open(s.path)
