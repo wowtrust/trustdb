@@ -10,6 +10,7 @@ import (
 const (
 	StandardSDKVersion               = "fisco-bcos-go-sdk-v3.0.2+c-sdk-v3.6.0@53240138c396c10cb0e1a2b7b4d5c0cdaa0ac539"
 	ReceiptStatusOK                  = 0
+	ReceiptStatusNonceCheckFailed    = 10000
 	ReceiptStatusTransactionPoolFull = 10002
 	ReceiptStatusAlreadyInPool       = 10004
 	ReceiptStatusAlreadyInChain      = 10005
@@ -87,14 +88,16 @@ func ClassifyReceiptStatus(status int) ReceiptStatusDisposition {
 		return ReceiptStatusBlockLimit
 	case 10002:
 		return ReceiptStatusRetryable
-	case 10000, 10004, 10005, 10011:
+	case ReceiptStatusNonceCheckFailed, ReceiptStatusAlreadyInPool,
+		ReceiptStatusAlreadyInChain, ReceiptStatusAlreadyInPoolAccept:
 		// Nonce/duplicate responses require deterministic lookup of the exact
 		// immutable attempt before any replacement is permitted (#470).
 		return ReceiptStatusDuplicate
 	case 2, 7,
 		10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
 		32, 33, 34, 35,
-		10003, 10006, 10007, 10008, 10009:
+		10003, 10006, 10007, 10008, 10009,
+		10012, 10013, 10014, 10015:
 		return ReceiptStatusPermanent
 	default:
 		return ReceiptStatusAmbiguous

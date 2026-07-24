@@ -401,7 +401,8 @@ func validateSubmissionObservation(observation *SubmissionObservation, expectedS
 
 func isDuplicateSubmissionStatus(status int64) bool {
 	switch status {
-	case ReceiptStatusAlreadyInPool,
+	case ReceiptStatusNonceCheckFailed,
+		ReceiptStatusAlreadyInPool,
 		ReceiptStatusAlreadyInChain,
 		ReceiptStatusAlreadyInPoolAccept:
 		return true

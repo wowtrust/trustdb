@@ -295,7 +295,8 @@ func (s *FISCOBCOSStandardSink) resumeAttemptJournal(
 				return model.STHAnchorResult{}, checkpointErr
 			}
 			return model.STHAnchorResult{}, fmt.Errorf("FISCO BCOS block limit rejected prepared transaction")
-		case fiscobcos.ReceiptStatusAlreadyInPool,
+		case fiscobcos.ReceiptStatusNonceCheckFailed,
+			fiscobcos.ReceiptStatusAlreadyInPool,
 			fiscobcos.ReceiptStatusAlreadyInChain,
 			fiscobcos.ReceiptStatusAlreadyInPoolAccept:
 			if last.Outcome == fiscobcos.AttemptOutcomePrepared ||
