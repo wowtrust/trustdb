@@ -1,0 +1,16 @@
+{
+  "schema_version": "trustdb.test.fisco-bcos-receipt-inclusion.v1",
+  "source": "https://github.com/FISCO-BCOS/FISCO-BCOS/blob/v3.16.3/bcos-crypto/bcos-crypto/merkle/Merkle.h",
+  "crypto_mode": "standard",
+  "chain_hash_algorithm": "keccak256",
+  "leaf_index": 1,
+  "leaf_hash": "2222222222222222222222222222222222222222222222222222222222222222",
+  "proof": [
+    "00000002",
+    "1111111111111111111111111111111111111111111111111111111111111111",
+    "2222222222222222222222222222222222222222222222222222222222222222"
+  ],
+  "root_hash": "3e92e0db88d6afea9edc4eedf62fffa4d92bcdfc310dccbe943747fe8302e871",
+  "publish_selector": "b6176090",
+  "anchor_event_topic": "be07528b0b055cb8ba3e88331e102adc06f43de4c6cbe0ac74c51e01ecc43def"
+}

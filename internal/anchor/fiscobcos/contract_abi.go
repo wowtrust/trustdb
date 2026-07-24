@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"fmt"
 
+	"github.com/emmansun/gmsm/sm3"
 	"golang.org/x/crypto/sha3"
 )
 
@@ -17,11 +18,21 @@ const (
 )
 
 func PublishCallData(payload AnchorPayload) ([]byte, error) {
+	return PublishCallDataForMode(CryptoModeStandard, payload)
+}
+
+// PublishCallDataForMode encodes the fixed TrustDBAnchorV1 call with the ABI
+// selector hash mandated by the locally selected BCOS cryptographic mode.
+func PublishCallDataForMode(mode CryptoMode, payload AnchorPayload) ([]byte, error) {
 	if err := validatePayload(payload); err != nil {
 		return nil, err
 	}
 	out := make([]byte, 4+32*6)
-	copy(out[:4], abiSelector(publishSignature))
+	selector, err := ABISelectorForMode(mode, publishSignature)
+	if err != nil {
+		return nil, err
+	}
+	copy(out[:4], selector)
 	copy(out[4:36], payload.AnchorID)
 	copy(out[36:68], payload.StreamID)
 	binary.BigEndian.PutUint64(out[4+32*2+24:4+32*3], payload.TreeSize)
@@ -31,12 +42,35 @@ func PublishCallData(payload AnchorPayload) ([]byte, error) {
 	return out, nil
 }
 
+// EventTopicForMode returns the mode-specific 32-byte ABI event identifier.
+func EventTopicForMode(mode CryptoMode, signature string) ([]byte, error) {
+	return abiHashForMode(mode, signature)
+}
+
+// ABISelectorForMode returns the first four bytes of the mode-specific ABI
+// signature hash.
+func ABISelectorForMode(mode CryptoMode, signature string) ([]byte, error) {
+	digest, err := abiHashForMode(mode, signature)
+	if err != nil {
+		return nil, err
+	}
+	return append([]byte(nil), digest[:4]...), nil
+}
+
 func GetAnchorCallData(anchorID []byte) ([]byte, error) {
+	return GetAnchorCallDataForMode(CryptoModeStandard, anchorID)
+}
+
+func GetAnchorCallDataForMode(mode CryptoMode, anchorID []byte) ([]byte, error) {
 	if len(anchorID) != identifierBytes {
 		return nil, fmt.Errorf("%w: anchor_id must be %d bytes", ErrInvalidPayload, identifierBytes)
 	}
 	out := make([]byte, 4+32)
-	copy(out[:4], abiSelector(getAnchorSignature))
+	selector, err := ABISelectorForMode(mode, getAnchorSignature)
+	if err != nil {
+		return nil, err
+	}
+	copy(out[:4], selector)
 	copy(out[4:], anchorID)
 	return out, nil
 }
@@ -78,9 +112,22 @@ func DecodeAnchorRecord(data []byte) (AnchorRecord, error) {
 }
 
 func abiSelector(signature string) []byte {
-	h := sha3.NewLegacyKeccak256()
-	_, _ = h.Write([]byte(signature))
-	return h.Sum(nil)[:4]
+	selector, _ := ABISelectorForMode(CryptoModeStandard, signature)
+	return selector
+}
+
+func abiHashForMode(mode CryptoMode, signature string) ([]byte, error) {
+	switch mode {
+	case CryptoModeStandard:
+		h := sha3.NewLegacyKeccak256()
+		_, _ = h.Write([]byte(signature))
+		return h.Sum(nil), nil
+	case CryptoModeGuomi:
+		sum := sm3.Sum([]byte(signature))
+		return sum[:], nil
+	default:
+		return nil, fmt.Errorf("%w: unsupported ABI crypto mode %q", ErrInvalidPayload, mode)
+	}
 }
 
 func zeroPrefix(data []byte, length int) bool {
