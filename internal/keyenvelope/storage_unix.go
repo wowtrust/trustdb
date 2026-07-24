@@ -6,13 +6,33 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
+	"path/filepath"
 	"time"
 
 	"golang.org/x/sys/unix"
 )
 
 func storageSupported() bool { return true }
+
+func secureEnvelopeFile(file *os.File, mode fs.FileMode) error {
+	if err := file.Chmod(mode); err != nil {
+		return secretSafePathError("set software key envelope permissions", err)
+	}
+	info, err := file.Stat()
+	if err != nil {
+		return secretSafePathError("stat software key envelope", err)
+	}
+	return validateEnvelopeFile(file, info)
+}
+
+func validateEnvelopeFile(_ *os.File, info fs.FileInfo) error {
+	if !info.Mode().IsRegular() || info.Mode().Perm()&0o077 != 0 {
+		return fmt.Errorf("%w: envelope permissions grant group or other access", ErrUnsafeEnvelopeStorage)
+	}
+	return nil
+}
 
 func acquireEnvelopeLock(ctx context.Context, path string) (func() error, error) {
 	lockPath := path + ".lock"
@@ -66,6 +86,13 @@ func atomicInstall(src, dst string) error {
 
 func atomicReplace(src, dst string) error {
 	return os.Rename(src, dst)
+}
+
+func removeFileDurable(path string) error {
+	if err := os.Remove(path); err != nil {
+		return err
+	}
+	return syncDirectory(filepath.Dir(path))
 }
 
 func syncDirectory(path string) error {
