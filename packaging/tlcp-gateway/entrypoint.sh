@@ -193,7 +193,10 @@ http {
         listen $TLCP_GATEWAY_HTTP_BIND ssl http2;
         server_name $TLCP_SERVER_NAME;
         enable_ntls on;
-        ssl_ciphers ECDHE-SM2-SM4-GCM-SM3;
+        # Tengine initializes its ordinary TLS context from this directive too.
+        # The RSA suite is only an initialization sentinel: this server has no
+        # ordinary TLS certificate, while NTLS can negotiate only the SM suite.
+        ssl_ciphers ECDHE-SM2-SM4-GCM-SM3:ECDHE-RSA-AES256-GCM-SHA384;
         ssl_prefer_server_ciphers on;
         ssl_sign_certificate $TLCP_SERVER_SIGNING_CHAIN_FILE;
         ssl_sign_certificate_key $TLCP_SIGNING_KEY_REFERENCE;
@@ -216,7 +219,9 @@ http {
         listen $TLCP_GATEWAY_GRPC_BIND ssl http2;
         server_name $TLCP_SERVER_NAME;
         enable_ntls on;
-        ssl_ciphers ECDHE-SM2-SM4-GCM-SM3;
+        # See the HTTP listener comment above. Integration tests require
+        # ordinary TLS and every other NTLS cipher to fail.
+        ssl_ciphers ECDHE-SM2-SM4-GCM-SM3:ECDHE-RSA-AES256-GCM-SHA384;
         ssl_prefer_server_ciphers on;
         ssl_sign_certificate $TLCP_SERVER_SIGNING_CHAIN_FILE;
         ssl_sign_certificate_key $TLCP_SIGNING_KEY_REFERENCE;
