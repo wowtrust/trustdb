@@ -27,10 +27,13 @@ import "C"
 
 import (
 	"errors"
+	"fmt"
 	"path/filepath"
 	"syscall"
 	"unsafe"
 )
+
+var getLongPathNameW = syscall.NewLazyDLL("kernel32.dll").NewProc("GetLongPathNameW")
 
 // LoadedLibraryPath returns the DLL that actually supplies
 // bcos_sdk_version.
@@ -47,5 +50,29 @@ func LoadedLibraryPath() (string, error) {
 	if err != nil {
 		return "", err
 	}
+	path, err = longWindowsPath(path)
+	if err != nil {
+		return "", err
+	}
 	return filepath.Clean(path), nil
+}
+
+func longWindowsPath(path string) (string, error) {
+	source, err := syscall.UTF16PtrFromString(path)
+	if err != nil {
+		return "", err
+	}
+	buffer := make([]uint16, 32768)
+	length, _, callErr := getLongPathNameW.Call(
+		uintptr(unsafe.Pointer(source)),
+		uintptr(unsafe.Pointer(&buffer[0])),
+		uintptr(len(buffer)),
+	)
+	if length == 0 {
+		return "", fmt.Errorf("cannot expand loaded FISCO BCOS native SDK path: %w", callErr)
+	}
+	if length >= uintptr(len(buffer)) {
+		return "", errors.New("loaded FISCO BCOS native SDK path is too long")
+	}
+	return syscall.UTF16ToString(buffer[:length]), nil
 }
