@@ -89,11 +89,67 @@ jobs:
       - name: Run offline verifier interoperability consumer
         run: go test -count=1 -mod=readonly ./internal/sproof -run '^TestOfflineVerifierConsumesSharedCNSMInteropProofWithoutExternalAccess$'
 
+      - name: Run offline verifier with networking disabled
+        shell: bash
+        run: |
+          go test -c -mod=readonly \
+            -o "${RUNNER_TEMP}/sproof-offline.test" ./internal/sproof
+          sudo unshare --net -- \
+            "${RUNNER_TEMP}/sproof-offline.test" \
+            -test.v \
+            -test.run '^TestOfflineVerifierConsumesSharedCNSMInteropProofWithoutExternalAccess$'
+
       - name: Run Go SDK interoperability consumer
         run: go test -count=1 -mod=readonly ./sdk -run '^TestGoSDKConsumesSharedCNSMInteropProof$'
 
       - name: Run CLI interoperability consumer
         run: go test -count=1 -mod=readonly ./cmd/trustdb -run '^TestCLIConsumesSharedCNSMInteropProofOffline$'
+
+  cn-sm-interoperability-macos:
+    name: CN_SM_V1 interoperability (macOS arm64)
+    runs-on: macos-15
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: clients/desktop/frontend/package-lock.json
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: |
+            go.sum
+            clients/desktop/go.sum
+
+      - name: Install OpenSSL 3
+        shell: bash
+        run: |
+          brew list openssl@3 >/dev/null 2>&1 || brew install openssl@3
+          echo "$(brew --prefix openssl@3)/bin" >>"${GITHUB_PATH}"
+
+      - name: Build embedded Desktop assets
+        working-directory: clients/desktop/frontend
+        run: |
+          npm ci
+          npm run build
+
+      - name: Reject unreviewed vector drift
+        run: go run -mod=readonly ./test/cnsmvectors/cmd/generate -check
+
+      - name: Run corpus and independent OpenSSL oracle
+        run: go test -count=1 -mod=readonly ./test/cnsmvectors
+
+      - name: Run macOS Desktop interoperability consumer
+        working-directory: clients/desktop
+        run: go test -count=1 -mod=readonly -run '^TestDesktopConsumesSharedCNSMInteropProofOffline$'
 
   backend:
     name: Backend unit tests
@@ -396,6 +452,14 @@ jobs:
 
       - name: Run Windows key envelope tests
         run: go test -count=1 -mod=readonly ./internal/keyenvelope
+
+      - name: Reject CN_SM_V1 vector drift
+        run: go run -mod=readonly ./test/cnsmvectors/cmd/generate -check
+
+      - name: Run Windows CN_SM_V1 corpus tests
+        run: >
+          go test -count=1 -mod=readonly ./test/cnsmvectors
+          -run '^(TestCorpus|TestContentSM3ExpectedBytes)'
 
       - name: Run Windows desktop tests
         working-directory: clients/desktop

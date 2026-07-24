@@ -119,6 +119,14 @@ The negative matrix rejects:
 - a different verifier-local key under the expected KeyID;
 - an altered STH root or inclusion path.
 
-Desktop verification remains in the existing Windows/macOS/Linux Desktop test
-jobs. The dedicated Linux interoperability job runs the generator drift gate,
-OpenSSL oracle, and the Server, provider, offline, SDK, and CLI consumers.
+The required Linux interoperability job runs the generator drift gate,
+OpenSSL oracle, and the Server, provider, offline, SDK, and CLI consumers. Its
+offline verifier binary is also executed inside a Linux network namespace with
+no network interfaces.
+
+The required Windows Desktop job regenerates the corpus, runs the platform
+corpus tests, and consumes the same evidence through the Desktop verifier. A
+dedicated required macOS arm64 job performs byte-for-byte regeneration, runs
+the OpenSSL oracle, and consumes the corpus through the Desktop verifier. The
+required Linux Desktop job continues to run the same Desktop consumer as part
+of its full test suite.
