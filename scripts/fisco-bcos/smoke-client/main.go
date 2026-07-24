@@ -17,6 +17,7 @@ import (
 	"github.com/FISCO-BCOS/go-sdk/v3/abi"
 	"github.com/FISCO-BCOS/go-sdk/v3/client"
 	"github.com/FISCO-BCOS/go-sdk/v3/types"
+	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 	ethcrypto "github.com/ethereum/go-ethereum/crypto"
 )
@@ -76,6 +77,42 @@ type performanceEvidence struct {
 	VerificationSamples       []performanceVerificationSample `json:"verification_samples"`
 }
 
+type anchorPayload struct {
+	AnchorID        [32]byte
+	StreamID        [32]byte
+	TreeSize        uint64
+	RootHash        [32]byte
+	SignedSTHDigest [32]byte
+	PayloadVersion  uint16
+}
+
+type anchorPayloadEvidence struct {
+	AnchorID        string `json:"anchor_id"`
+	StreamID        string `json:"stream_id"`
+	TreeSize        uint64 `json:"tree_size"`
+	RootHash        string `json:"root_hash"`
+	SignedSTHDigest string `json:"signed_sth_digest"`
+	PayloadVersion  uint16 `json:"payload_version"`
+	Publisher       string `json:"publisher"`
+}
+
+type anchorPublishedData struct {
+	TreeSize        uint64
+	RootHash        [32]byte
+	SignedSTHDigest [32]byte
+	PayloadVersion  uint16
+}
+
+type storedAnchorRecord struct {
+	StreamID        [32]byte
+	TreeSize        uint64
+	RootHash        [32]byte
+	SignedSTHDigest [32]byte
+	Publisher       common.Address
+	PayloadVersion  uint16
+	Exists          bool
+}
+
 type evidence struct {
 	SchemaVersion       int                        `json:"schema_version"`
 	TimingSemantics     string                     `json:"timing_semantics"`
@@ -93,6 +130,8 @@ type evidence struct {
 	StaleBlockLimit     int64                      `json:"stale_block_limit"`
 	StaleLimitRejected  bool                       `json:"stale_block_limit_rejected"`
 	StaleRejectionError string                     `json:"stale_rejection_error,omitempty"`
+	AnchorPayload       *anchorPayloadEvidence     `json:"anchor_payload,omitempty"`
+	ProductionPublish   bool                       `json:"production_publish_verified"`
 	ProbeSource         string                     `json:"probe_source"`
 	Performance         performanceEvidence        `json:"performance"`
 	CleanTeardown       bool                       `json:"clean_teardown"`
@@ -267,9 +306,9 @@ func collectPerformanceEvidence(
 	if queriedReceipt == nil || queriedReceipt.Status != types.Success || queriedReceipt.ReceiptProof == nil {
 		return performanceTimingSample{}, performanceVerificationSample{}, errors.New("performance receipt is unsuccessful or lacks its proof field")
 	}
-	if expectFreshAnchor && len(queriedReceipt.Logs) != 2 {
+	if expectFreshAnchor && len(queriedReceipt.Logs) != 1 {
 		return performanceTimingSample{}, performanceVerificationSample{}, fmt.Errorf(
-			"fresh performance anchor emitted %d logs, expected AnchorPublished and Anchored",
+			"fresh performance anchor emitted %d logs, expected exactly AnchorPublished",
 			len(queriedReceipt.Logs),
 		)
 	}
@@ -319,7 +358,7 @@ func runPerformanceSamples(
 		WarmupCount:        cfg.PerformanceWarmup,
 		SampleCount:        cfg.PerformanceSamples,
 		DeploymentExcluded: true,
-		Payload:            "deterministic unique anchor(bytes32) calls with one 32-byte digest each",
+		Payload:            "deterministic unique TrustDBAnchorV1 publish calls with identical fields in both modes",
 		TimingSamples:      make([]performanceTimingSample, 0, cfg.PerformanceSamples),
 		WarmupVerificationSamples: make(
 			[]performanceVerificationSample,
@@ -385,23 +424,148 @@ func performanceCallInput(parsed abi.ABI, rawEVM bool, index int) ([]byte, error
 	if rawEVM {
 		return []byte{byte(index)}, nil
 	}
-	digest := performanceDigest(index)
-	input, err := parsed.Pack("anchor", digest)
+	payload := performanceAnchorPayload(index)
+	input, err := packAnchorCall(parsed, payload)
 	if err != nil {
-		return nil, fmt.Errorf("pack performance anchor call %d: %w", index, err)
+		return nil, fmt.Errorf("pack performance publish call %d: %w", index, err)
 	}
 	return input, nil
 }
 
 func performanceDigest(index int) [32]byte {
+	return deterministicDigest("performance-anchor", index)
+}
+
+func deterministicDigest(label string, index int) [32]byte {
 	var encodedIndex [8]byte
 	binary.BigEndian.PutUint64(encodedIndex[:], uint64(index))
 	hash := sha256.New()
-	_, _ = hash.Write([]byte("trustdb.fisco-bcos.performance-anchor.v1\x00"))
+	_, _ = hash.Write([]byte("trustdb.fisco-bcos.smoke.v1\x00"))
+	_, _ = hash.Write([]byte(label))
+	_, _ = hash.Write([]byte{0})
 	_, _ = hash.Write(encodedIndex[:])
 	var result [32]byte
 	copy(result[:], hash.Sum(nil))
 	return result
+}
+
+func functionalAnchorPayload() anchorPayload {
+	return anchorPayload{
+		AnchorID:        deterministicDigest("functional-anchor", 0),
+		StreamID:        deterministicDigest("stream", 0),
+		TreeSize:        1,
+		RootHash:        deterministicDigest("functional-root", 0),
+		SignedSTHDigest: deterministicDigest("functional-sth", 0),
+		PayloadVersion:  1,
+	}
+}
+
+func performanceAnchorPayload(index int) anchorPayload {
+	return anchorPayload{
+		AnchorID:        performanceDigest(index),
+		StreamID:        deterministicDigest("stream", 0),
+		TreeSize:        uint64(index) + 2,
+		RootHash:        deterministicDigest("performance-root", index),
+		SignedSTHDigest: deterministicDigest("performance-sth", index),
+		PayloadVersion:  1,
+	}
+}
+
+func packAnchorCall(parsed abi.ABI, payload anchorPayload) ([]byte, error) {
+	return parsed.Pack(
+		"publish",
+		payload.AnchorID,
+		payload.StreamID,
+		payload.TreeSize,
+		payload.RootHash,
+		payload.SignedSTHDigest,
+		payload.PayloadVersion,
+	)
+}
+
+func verifyAnchorPublishedEvent(
+	parsed abi.ABI,
+	event types.Log,
+	payload anchorPayload,
+	publisher common.Address,
+) error {
+	published, ok := parsed.Events["AnchorPublished"]
+	if !ok {
+		return errors.New("compiled ABI does not contain AnchorPublished event")
+	}
+	expectedTopics := []common.Hash{
+		published.ID(),
+		common.BytesToHash(payload.AnchorID[:]),
+		common.BytesToHash(payload.StreamID[:]),
+		common.BytesToHash(publisher.Bytes()),
+	}
+	if len(event.Topics) != len(expectedTopics) {
+		return fmt.Errorf("AnchorPublished topic count = %d, want %d", len(event.Topics), len(expectedTopics))
+	}
+	for index := range expectedTopics {
+		if event.Topics[index] != expectedTopics[index] {
+			return fmt.Errorf("AnchorPublished topic %d does not match the submitted payload", index)
+		}
+	}
+	var decoded anchorPublishedData
+	if err := parsed.Unpack(&decoded, "AnchorPublished", event.Data); err != nil {
+		return fmt.Errorf("decode AnchorPublished data: %w", err)
+	}
+	if decoded.TreeSize != payload.TreeSize ||
+		decoded.RootHash != payload.RootHash ||
+		decoded.SignedSTHDigest != payload.SignedSTHDigest ||
+		decoded.PayloadVersion != payload.PayloadVersion {
+		return errors.New("AnchorPublished data does not match the submitted payload")
+	}
+	return nil
+}
+
+func verifyStoredAnchor(
+	ctx context.Context,
+	c *client.Client,
+	parsed abi.ABI,
+	address common.Address,
+	payload anchorPayload,
+	publisher common.Address,
+) error {
+	input, err := parsed.Pack("getAnchor", payload.AnchorID)
+	if err != nil {
+		return fmt.Errorf("pack getAnchor call: %w", err)
+	}
+	output, err := c.CallContract(ctx, ethereum.CallMsg{
+		From: publisher,
+		To:   &address,
+		Data: input,
+	})
+	if err != nil {
+		return fmt.Errorf("call getAnchor: %w", err)
+	}
+	var record storedAnchorRecord
+	if err := parsed.Unpack(&record, "getAnchor", output); err != nil {
+		return fmt.Errorf("decode getAnchor result: %w", err)
+	}
+	if !record.Exists ||
+		record.StreamID != payload.StreamID ||
+		record.TreeSize != payload.TreeSize ||
+		record.RootHash != payload.RootHash ||
+		record.SignedSTHDigest != payload.SignedSTHDigest ||
+		record.Publisher != publisher ||
+		record.PayloadVersion != payload.PayloadVersion {
+		return errors.New("getAnchor record does not match the submitted payload and publisher")
+	}
+	return nil
+}
+
+func newAnchorPayloadEvidence(payload anchorPayload, publisher common.Address) *anchorPayloadEvidence {
+	return &anchorPayloadEvidence{
+		AnchorID:        common.BytesToHash(payload.AnchorID[:]).Hex(),
+		StreamID:        common.BytesToHash(payload.StreamID[:]).Hex(),
+		TreeSize:        payload.TreeSize,
+		RootHash:        common.BytesToHash(payload.RootHash[:]).Hex(),
+		SignedSTHDigest: common.BytesToHash(payload.SignedSTHDigest[:]).Hex(),
+		PayloadVersion:  payload.PayloadVersion,
+		Publisher:       publisher.Hex(),
+	}
 }
 
 func performanceRunBinding(mode string, input performanceEvidence) (string, error) {
@@ -512,15 +676,17 @@ func main() {
 	}
 
 	address := common.HexToAddress(deployReceipt.ContractAddress)
-	var anchoredEvent *abi.Event
+	publisher := c.GetTransactOpts().From
+	functionalPayload := functionalAnchorPayload()
+	var publishedEvent *abi.Event
 	eventTopics := []string{}
 	if !cfg.RawEVM {
 		var ok bool
-		anchoredEvent, ok = parsed.Events["Anchored"]
+		publishedEvent, ok = parsed.Events["AnchorPublished"]
 		if !ok {
-			fatalf("compiled ABI does not contain Anchored event")
+			fatalf("compiled ABI does not contain AnchorPublished event")
 		}
-		eventTopics = []string{anchoredEvent.ID().Hex()}
+		eventTopics = []string{publishedEvent.ID().Hex()}
 	}
 	eventChannel := make(chan types.Log, 1)
 	fromBlock := int64(deployReceipt.BlockNumber)
@@ -541,12 +707,10 @@ func main() {
 		fatalf("subscribe event: %v", err)
 	}
 	callInput := []byte{1}
-	var expectedDigest [32]byte
 	if !cfg.RawEVM {
-		copy(expectedDigest[:], []byte("trustdb-fisco-compatibility-probe"))
-		callInput, err = parsed.Pack("anchor", expectedDigest)
+		callInput, err = packAnchorCall(parsed, functionalPayload)
 		if err != nil {
-			fatalf("pack anchor call: %v", err)
+			fatalf("pack production publish call: %v", err)
 		}
 	}
 	current, err := c.GetBlockNumber(ctx)
@@ -576,7 +740,7 @@ func main() {
 	select {
 	case event = <-eventChannel:
 	case <-time.After(10 * time.Second):
-		fatalf("timed out waiting for Anchored event")
+		fatalf("timed out waiting for AnchorPublished event")
 	}
 	if event.TxHash != eventHash {
 		fatalf("event transaction mismatch: want %s, got %s", eventHash.Hex(), event.TxHash.Hex())
@@ -589,15 +753,18 @@ func main() {
 			fatalf("raw EVM fixture emitted unexpected topics or data")
 		}
 	} else {
-		expectedTopics := []common.Hash{
-			anchoredEvent.ID(),
-			common.BytesToHash(expectedDigest[:]),
+		if err := verifyAnchorPublishedEvent(parsed, event, functionalPayload, publisher); err != nil {
+			fatalf("verify production AnchorPublished event: %v", err)
 		}
-		if len(event.Topics) != len(expectedTopics) || event.Topics[0] != expectedTopics[0] || event.Topics[1] != expectedTopics[1] {
-			fatalf("Anchored event topics do not match the ABI signature and submitted digest")
-		}
-		if len(event.Data) != 0 {
-			fatalf("Anchored event unexpectedly contains non-indexed data")
+		if err := verifyStoredAnchor(
+			ctx,
+			c,
+			parsed,
+			address,
+			functionalPayload,
+			publisher,
+		); err != nil {
+			fatalf("verify production getAnchor record: %v", err)
 		}
 	}
 	if err := c.UnSubscribeEventLogs(context.Background(), taskID); err != nil {
@@ -677,6 +844,10 @@ func main() {
 			}
 			return "pinned-solidity-compiler"
 		}(),
+	}
+	if !cfg.RawEVM {
+		output.AnchorPayload = newAnchorPayloadEvidence(functionalPayload, publisher)
+		output.ProductionPublish = true
 	}
 	c.Close()
 	output.CleanTeardown = true

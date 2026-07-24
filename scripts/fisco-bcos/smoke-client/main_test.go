@@ -2,15 +2,19 @@ package main
 
 import (
 	"encoding/hex"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/FISCO-BCOS/go-sdk/v3/abi"
 	"github.com/FISCO-BCOS/go-sdk/v3/types"
+	"github.com/ethereum/go-ethereum/common"
 )
 
 func TestPerformanceDigestSequence(t *testing.T) {
 	t.Parallel()
-	const expectedFirst = "b8f72afd867de7595dca41f2a87f93d76a25ae6263f21c7a0cc694415e89c197"
+	const expectedFirst = "6a87537eee5ad5958dd9ce306346f58e8ad8efcc388e68b3921382962ca40342"
 	first := performanceDigest(0)
 	if hex.EncodeToString(first[:]) != expectedFirst {
 		t.Fatalf("unexpected first deterministic digest: %x", first)
@@ -44,6 +48,105 @@ func TestRawPerformanceInputsAreUniqueAndBounded(t *testing.T) {
 	if _, err := performanceCallInput(parsed, true, 256); err == nil {
 		t.Fatal("performanceCallInput accepted an out-of-domain sample")
 	}
+}
+
+func TestProductionPublishInputsAndEventAreModeBound(t *testing.T) {
+	t.Parallel()
+
+	standard := testProductionAnchorABI(t, false)
+	guomi := testProductionAnchorABI(t, true)
+	standardInput, err := performanceCallInput(standard, false, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	guomiInput, err := performanceCallInput(guomi, false, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(standardInput) != 4+6*32 || len(guomiInput) != len(standardInput) {
+		t.Fatalf("publish calldata lengths = %d/%d", len(standardInput), len(guomiInput))
+	}
+	if string(standardInput[:4]) == string(guomiInput[:4]) {
+		t.Fatal("standard and Guomi publish selectors are identical")
+	}
+	if string(standardInput[4:]) != string(guomiInput[4:]) {
+		t.Fatal("standard and Guomi publish arguments are not the same opaque payload")
+	}
+
+	payload := functionalAnchorPayload()
+	publisher := common.HexToAddress("0x1234567890123456789012345678901234567890")
+	eventDefinition := guomi.Events["AnchorPublished"]
+	data, err := eventDefinition.Inputs.NonIndexed().Pack(
+		payload.TreeSize,
+		payload.RootHash,
+		payload.SignedSTHDigest,
+		payload.PayloadVersion,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	event := types.Log{
+		Topics: []common.Hash{
+			eventDefinition.ID(),
+			common.BytesToHash(payload.AnchorID[:]),
+			common.BytesToHash(payload.StreamID[:]),
+			common.BytesToHash(publisher.Bytes()),
+		},
+		Data: data,
+	}
+	if err := verifyAnchorPublishedEvent(guomi, event, payload, publisher); err != nil {
+		t.Fatalf("verify Guomi AnchorPublished: %v", err)
+	}
+	event.Data[len(event.Data)-1] ^= 1
+	if err := verifyAnchorPublishedEvent(guomi, event, payload, publisher); err == nil {
+		t.Fatal("AnchorPublished verification accepted tampered payload data")
+	}
+
+	record := storedAnchorRecord{
+		StreamID:        payload.StreamID,
+		TreeSize:        payload.TreeSize,
+		RootHash:        payload.RootHash,
+		SignedSTHDigest: payload.SignedSTHDigest,
+		Publisher:       publisher,
+		PayloadVersion:  payload.PayloadVersion,
+		Exists:          true,
+	}
+	output, err := guomi.Methods["getAnchor"].Outputs.Pack(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded storedAnchorRecord
+	if err := guomi.Unpack(&decoded, "getAnchor", output); err != nil {
+		t.Fatalf("decode production getAnchor output: %v", err)
+	}
+	if decoded != record {
+		t.Fatalf("decoded getAnchor record = %+v, want %+v", decoded, record)
+	}
+}
+
+func testProductionAnchorABI(t *testing.T, smCrypto bool) abi.ABI {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(
+		"..",
+		"..",
+		"..",
+		"contracts",
+		"fisco-bcos",
+		"artifacts",
+		"standard",
+		"TrustDBAnchorV1.abi",
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := abi.JSON(strings.NewReader(string(data)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if smCrypto {
+		parsed.SetSMCrypto()
+	}
+	return parsed
 }
 
 func TestPerformanceRunBindingGolden(t *testing.T) {

@@ -45,7 +45,7 @@ class PerformanceStatsTests(unittest.TestCase):
                 "run_binding": "a" * 64,
                 "warmup_count": 3,
                 "sample_count": 20,
-                "payload": "deterministic unique anchor(bytes32) calls with one 32-byte digest each",
+                "payload": "deterministic unique TrustDBAnchorV1 publish calls with identical fields in both modes",
                 "deployment_excluded": True,
                 "timing_samples": [copy.deepcopy(client_sample) for _ in range(20)],
             }

@@ -476,6 +476,11 @@ if preimages.get("block_consensus_hash_matched") is not True:
     raise SystemExit("production block consensus preimage did not match the node hash")
 if preimages.get("pbft_commit_signatures_valid") is not True:
     raise SystemExit("production PBFT commit signatures did not verify")
+raw_fixture = raw_evm_fixture == "true"
+if not raw_fixture and client.get("production_publish_verified") is not True:
+    raise SystemExit("production publish event and getAnchor record were not verified")
+if not raw_fixture and not client.get("anchor_payload"):
+    raise SystemExit("production publish payload evidence is missing")
 artifacts = json.loads((work / "artifact-verification.json").read_text(encoding="utf-8"))
 baseline = json.loads(Path(baseline_path).read_text(encoding="utf-8"))
 environment = {
@@ -538,7 +543,6 @@ pins = {
     "solidity": f"{components['solidity']['tag']}@{components['solidity']['commit']}",
     "tassl": f"{components['tassl']['tag']}@{components['tassl']['commit']}",
 }
-raw_fixture = raw_evm_fixture == "true"
 command = [
     "scripts/fisco-bcos/smoke-air.sh",
     "--mode", mode,
@@ -590,6 +594,7 @@ evidence = {
         "receipt_verification_ns": preimages["receipt_verification_ns"],
         "block_verification_ns": preimages["block_verification_ns"],
         "pbft_verification_ns": preimages["pbft_verification_ns"],
+        "production_publish_verified": client["production_publish_verified"],
     },
     "performance": performance,
     "cleanup": {
@@ -604,6 +609,7 @@ evidence = {
         "final_block_number": client["final_block_number"],
         "deployment": transaction(client["deployment"]),
         "event_transaction": transaction(client["event_transaction"], event_match=True),
+        "anchor_payload": client.get("anchor_payload"),
         "containing_block": {
             "hash": with_prefix(block["hash"]),
             "transactions_root": with_prefix(block["txsRoot"]),

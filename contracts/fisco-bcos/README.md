@@ -177,8 +177,9 @@ samples so p95 has a meaningful minimum population and smoke runtime remains
 bounded. The result's `performance` object reports `n`, p50, p95 and maximum
 for transaction preparation/signing/encoding, receipt submission, split
 receipt/transaction proof retrieval, block retrieval, and local
-receipt/block/PBFT verification. Every measured call uses a deterministic
-unique 32-byte digest in both modes and must take the fresh insertion path;
+receipt/block/PBFT verification. Every measured call invokes the production
+`publish` method with a deterministic, unique payload whose six fields are
+identical in both modes, and must emit exactly one `AnchorPublished` event;
 contract deployment and network lifecycle work are excluded. See
 [ADR-0012](../../docs/integrations/ADR-0012-FISCO-BCOS-3X-COMPATIBILITY-BASELINE.md)
 for the exact methodology and interpretation limits.

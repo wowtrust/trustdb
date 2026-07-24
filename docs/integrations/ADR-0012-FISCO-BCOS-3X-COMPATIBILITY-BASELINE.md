@@ -148,14 +148,15 @@ runner deploys the probe once and excludes that deployment from all
 measurements. It then completes 3–20 full-pipeline warmup calls and records
 20–100 sequential calls. The default is 5 warmups and 20 measured calls.
 Standard and Guomi execute the same deterministic sequence of fresh
-`anchor(bytes32)` logical payloads. Each call derives a unique 32-byte digest
-as SHA-256 of the fixed performance domain plus its big-endian sample index;
-only the required native selector, hashing, signature and transport algorithms
-differ. A successful compiled-contract sample must emit both
-`AnchorPublished` and `Anchored`, so an accidental idempotent-duplicate path
-fails the run. The SHA-256 sequence is a harness workload generator, not a
-TrustDB or Guomi cryptographic primitive. Use the same host profile, smoke
-version, warmup count and sample count for a comparison pair.
+`TrustDBAnchorV1.publish` payloads. Every six-field payload is byte-identical
+between the modes; only the required native selector, hashing, signature and
+transport algorithms differ. Tree size advances monotonically and the anchor,
+root and Signed STH digest fields are unique. A successful compiled-contract
+sample must emit exactly one `AnchorPublished`, so an accidental
+idempotent-duplicate path fails the run. SHA-256 only generates deterministic
+opaque harness fixture bytes; it is not a TrustDB or Guomi cryptographic
+primitive. Use the same host profile, smoke version, warmup count and sample
+count for a comparison pair.
 
 Each stage reports `n`, nearest-rank p50, nearest-rank p95 and maximum in
 nanoseconds. Network-facing stages are prepare/sign/encode,
