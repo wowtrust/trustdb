@@ -19,7 +19,10 @@ import (
 	"github.com/wowtrust/trustdb/internal/prooflevel"
 	"github.com/wowtrust/trustdb/internal/submission"
 	"github.com/wowtrust/trustdb/internal/trusterr"
+	"github.com/wowtrust/trustdb/transporttls"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 )
 
@@ -77,8 +80,20 @@ func isTypedNil(v any) bool {
 	}
 }
 
-func (s *Server) Health(context.Context, *HealthRequest) (*HealthResponse, error) {
-	return &HealthResponse{OK: true}, nil
+func (s *Server) Health(ctx context.Context, _ *HealthRequest) (*HealthResponse, error) {
+	response := &HealthResponse{OK: true, TransportSecurity: transporttls.ModePlaintext}
+	if p, ok := peer.FromContext(ctx); ok {
+		if tlsInfo, ok := p.AuthInfo.(credentials.TLSInfo); ok {
+			response.TransportSecurity = transporttls.ModeTLS
+			response.TLSVersion = transporttls.VersionName(tlsInfo.State.Version)
+		}
+	}
+	if identity, ok := transporttls.PeerIdentityFromContext(ctx); ok {
+		response.TransportSecurity = transporttls.ModeMTLS
+		response.PeerAuthenticated = true
+		response.PeerSubject = identity.Subject
+	}
+	return response, nil
 }
 
 func (s *Server) SubmitClaim(ctx context.Context, req *SubmitClaimRequest) (*SubmitClaimResponse, error) {

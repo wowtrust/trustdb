@@ -22,12 +22,15 @@ import (
 	"github.com/wowtrust/trustdb/internal/model"
 	"github.com/wowtrust/trustdb/internal/statusnotify"
 	"github.com/wowtrust/trustdb/internal/trustcrypto"
+	"github.com/wowtrust/trustdb/transporttls"
 )
 
 type httpTransport struct {
 	baseURL    string
 	httpClient *http.Client
 	userAgent  string
+	tlsConfig  *TLSConfig
+	tlsManager *transporttls.Manager
 }
 
 func (t *httpTransport) Endpoint() string {
@@ -38,13 +41,20 @@ func (t *httpTransport) Close() error {
 	if t.httpClient != nil {
 		t.httpClient.CloseIdleConnections()
 	}
+	if t.tlsManager != nil {
+		return t.tlsManager.Close()
+	}
 	return nil
 }
 
 func (t *httpTransport) CheckHealth(ctx context.Context) HealthStatus {
 	start := time.Now()
 	var out struct {
-		OK bool `json:"ok"`
+		OK                bool   `json:"ok"`
+		TransportSecurity string `json:"transport_security"`
+		TLSVersion        string `json:"tls_version"`
+		PeerAuthenticated bool   `json:"peer_authenticated"`
+		PeerSubject       string `json:"peer_subject"`
 	}
 	err := t.getJSON(ctx, "/healthz", nil, &out)
 	rtt := time.Since(start).Milliseconds()
@@ -58,7 +68,7 @@ func (t *httpTransport) CheckHealth(ctx context.Context) HealthStatus {
 	if !out.OK {
 		return HealthStatus{ServerURL: t.baseURL, RTTMillis: rtt, Error: "server returned ok=false"}
 	}
-	return HealthStatus{OK: true, ServerURL: t.baseURL, RTTMillis: rtt}
+	return HealthStatus{OK: true, ServerURL: t.baseURL, RTTMillis: rtt, TransportSecurity: out.TransportSecurity, TLSVersion: out.TLSVersion, PeerAuthenticated: out.PeerAuthenticated, PeerSubject: out.PeerSubject}
 }
 
 func (t *httpTransport) SubmitSignedClaim(ctx context.Context, signed SignedClaim) (SubmitResult, error) {

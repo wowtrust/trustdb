@@ -126,6 +126,17 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("server.write_timeout", defaults.Server.WriteTimeout)
 	v.SetDefault("server.idle_timeout", defaults.Server.IdleTimeout)
 	v.SetDefault("server.shutdown_timeout", defaults.Server.ShutdownTimeout)
+	v.SetDefault("server.transport.mode", defaults.Server.Transport.Mode)
+	v.SetDefault("server.transport.allow_local_plaintext", defaults.Server.Transport.AllowLocalPlaintext)
+	v.SetDefault("server.transport.cert_file", defaults.Server.Transport.CertFile)
+	v.SetDefault("server.transport.key_file", defaults.Server.Transport.KeyFile)
+	v.SetDefault("server.transport.client_ca_file", defaults.Server.Transport.ClientCAFile)
+	v.SetDefault("server.transport.client_ca_pins_sha256", defaults.Server.Transport.ClientCAPinsSHA256)
+	v.SetDefault("server.transport.min_version", defaults.Server.Transport.MinVersion)
+	v.SetDefault("server.transport.max_version", defaults.Server.Transport.MaxVersion)
+	v.SetDefault("server.transport.reload_interval", defaults.Server.Transport.ReloadInterval)
+	v.SetDefault("server.transport.revocation.mode", defaults.Server.Transport.Revocation.Mode)
+	v.SetDefault("server.transport.revocation.serial_file", defaults.Server.Transport.Revocation.SerialFile)
 	v.SetDefault("nats.enabled", defaults.NATS.Enabled)
 	v.SetDefault("nats.urls", defaults.NATS.URLs)
 	v.SetDefault("nats.stream", defaults.NATS.Stream)
@@ -550,6 +561,8 @@ func configString(cfg trustconfig.Config, key string) string {
 		return cfg.Server.ID
 	case "server.listen", "server_listen":
 		return cfg.Server.Listen
+	case "server.grpc_listen", "server_grpc_listen":
+		return cfg.Server.GRPCListen
 	case "server.key_id", "server_key_id":
 		return cfg.Server.KeyID
 	case "registry.key_id", "registry_key_id":

@@ -50,10 +50,14 @@ RUN chmod 0755 /usr/local/bin/trustdb /usr/local/bin/trustdb-entrypoint \
 USER trustdb
 WORKDIR /var/lib/trustdb
 ENV TRUSTDB_CONFIG=/etc/trustdb/config.yaml \
-    TRUSTDB_ADMIN_WEB_DIR=/opt/trustdb/admin
+    TRUSTDB_ADMIN_WEB_DIR=/opt/trustdb/admin \
+    TRUSTDB_HEALTH_SERVER_NAME=trustdb
 VOLUME ["/var/lib/trustdb"]
 EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-  CMD curl --fail --silent http://127.0.0.1:8080/healthz >/dev/null || exit 1
+  CMD curl --fail --silent --cacert /etc/trustdb/tls/server-ca.crt \
+    --cert /etc/trustdb/tls/health-client.crt --key /etc/trustdb/tls/health-client.key \
+    --resolve "${TRUSTDB_HEALTH_SERVER_NAME}:8080:127.0.0.1" \
+    "https://${TRUSTDB_HEALTH_SERVER_NAME}:8080/healthz" >/dev/null || exit 1
 ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/trustdb-entrypoint"]
 CMD ["serve"]

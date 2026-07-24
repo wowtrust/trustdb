@@ -5,6 +5,12 @@ import { api, Settings } from '@/lib/api'
 const defaultSettings: Settings = {
   server_url: 'http://127.0.0.1:8080',
   server_transport: 'http',
+  server_ca_file: '',
+  server_name: '',
+  server_ca_pins_sha256: '',
+  client_tls_cert_file: '',
+  client_tls_key_file: '',
+  tls_reload_interval: '1m',
   server_public_key_b64: '',
   anchor_plugin_command: '',
   anchor_plugin_args_text: '',

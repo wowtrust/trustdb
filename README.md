@@ -242,7 +242,7 @@ Implemented HTTP endpoints:
 | `GET /v1/anchors/sth/{tree_size}` | Fetch an immutable published STH anchor result. |
 | `GET /metrics` | Prometheus metrics. |
 
-The optional gRPC listener is enabled with `--grpc-listen` or `server.grpc_listen`. It uses TrustDB's deterministic CBOR payload model so HTTP and gRPC transports share proof semantics.
+The optional gRPC listener is enabled with `--grpc-listen` or `server.grpc_listen`. It uses TrustDB's deterministic CBOR payload model so HTTP and gRPC transports share proof semantics. HTTP and gRPC share TLS 1.2/1.3 and mTLS listener policy; CA pinning, zero-listener-restart rotation, revocation hooks, SDK/desktop configuration, and the strict separation between transport and proof trust are documented in [TLS and mutual TLS transport security](docs/integrations/TLS_MTLS.md).
 
 ## Configuration
 

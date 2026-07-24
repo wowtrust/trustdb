@@ -461,10 +461,75 @@ func TestValidateRunProfileAliases(t *testing.T) {
 			t.Parallel()
 			cfg := Default()
 			cfg.RunProfile = raw
+			if NormalizeRunProfile(raw) == RunProfileSingleNodeProduction {
+				cfg.Server.Transport.Mode = "tls"
+				cfg.Server.Transport.CertFile = "/run/trustdb/server.crt"
+				cfg.Server.Transport.KeyFile = "/run/trustdb/server.key"
+			}
 			if err := cfg.Validate(); err != nil {
 				t.Fatalf("Validate: %v", err)
 			}
 		})
+	}
+}
+
+func TestProductionPlaintextRequiresExplicitLoopbackException(t *testing.T) {
+	t.Parallel()
+
+	cfg := Default()
+	cfg.RunProfile = RunProfileSingleNodeProduction
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "allow_local_plaintext") {
+		t.Fatalf("Validate() error = %v, want explicit plaintext exception", err)
+	}
+	cfg.Server.Transport.AllowLocalPlaintext = true
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() rejected explicit loopback exception: %v", err)
+	}
+	cfg.Server.Listen = "0.0.0.0:8080"
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "loopback-only") {
+		t.Fatalf("Validate() error = %v, want external listener rejection", err)
+	}
+	cfg.Server.Listen = "localhost:8080"
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "loopback-only") {
+		t.Fatalf("Validate() error = %v, want literal loopback address requirement", err)
+	}
+}
+
+func TestFromViperMapsServerTransportTLS(t *testing.T) {
+	t.Parallel()
+
+	v := viper.New()
+	v.Set("server.transport.mode", "mtls")
+	v.Set("server.transport.allow_local_plaintext", false)
+	v.Set("server.transport.cert_file", "/tls/server.crt")
+	v.Set("server.transport.key_file", "/tls/server.key")
+	v.Set("server.transport.client_ca_file", "/tls/client-ca.crt")
+	v.Set("server.transport.client_ca_pins_sha256", []string{strings.Repeat("ab", 32)})
+	v.Set("server.transport.min_version", "1.3")
+	v.Set("server.transport.max_version", "1.3")
+	v.Set("server.transport.reload_interval", "30s")
+	v.Set("server.transport.revocation.mode", "serial_denylist")
+	v.Set("server.transport.revocation.serial_file", "/tls/revoked.txt")
+	got := FromViper(v).Server.Transport
+	if got.Mode != "mtls" || got.CertFile != "/tls/server.crt" || got.ClientCAFile != "/tls/client-ca.crt" || got.MinVersion != "1.3" || len(got.ClientCAPinsSHA256) != 1 {
+		t.Fatalf("server transport = %+v", got)
+	}
+	if got.Revocation.Mode != "serial_denylist" || got.Revocation.SerialFile != "/tls/revoked.txt" {
+		t.Fatalf("server revocation = %+v", got.Revocation)
+	}
+}
+
+func TestProductionTLSConfigurationIsValid(t *testing.T) {
+	t.Parallel()
+	cfg := Default()
+	cfg.RunProfile = RunProfileSingleNodeProduction
+	cfg.Server.Listen = "0.0.0.0:8080"
+	cfg.Server.Transport = ServerTransport{
+		Mode: "mtls", CertFile: "/tls/server.crt", KeyFile: "/tls/server.key", ClientCAFile: "/tls/client-ca.crt",
+		MinVersion: "1.2", ReloadInterval: "1m",
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() rejected production mTLS: %v", err)
 	}
 }
 
@@ -486,6 +551,7 @@ func TestRedactedHidesKeyPaths(t *testing.T) {
 	cfg.Keys.ServerPublic = "server.pub"
 	cfg.NATS.Password = "password"
 	cfg.NATS.Token = "token"
+	cfg.Server.Transport.KeyFile = "transport.key"
 	redacted := cfg.Redacted()
 	if redacted.Keys.ClientPrivate != "<redacted>" {
 		t.Fatalf("client private = %q", redacted.Keys.ClientPrivate)
@@ -498,5 +564,8 @@ func TestRedactedHidesKeyPaths(t *testing.T) {
 	}
 	if redacted.NATS.Password != "<redacted>" || redacted.NATS.Token != "<redacted>" {
 		t.Fatalf("NATS secrets were not redacted: %+v", redacted.NATS)
+	}
+	if redacted.Server.Transport.KeyFile != "<redacted>" {
+		t.Fatalf("transport key path was not redacted: %+v", redacted.Server.Transport)
 	}
 }

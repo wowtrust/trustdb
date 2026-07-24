@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/spf13/viper"
+	"github.com/wowtrust/trustdb/transporttls"
 )
 
 // FromViper maps a populated viper instance into Config. It mirrors the
@@ -54,6 +55,21 @@ func FromViper(v *viper.Viper) Config {
 			WriteTimeout:      v.GetString("server.write_timeout"),
 			IdleTimeout:       v.GetString("server.idle_timeout"),
 			ShutdownTimeout:   v.GetString("server.shutdown_timeout"),
+			Transport: ServerTransport{
+				Mode:                v.GetString("server.transport.mode"),
+				AllowLocalPlaintext: v.GetBool("server.transport.allow_local_plaintext"),
+				CertFile:            v.GetString("server.transport.cert_file"),
+				KeyFile:             v.GetString("server.transport.key_file"),
+				ClientCAFile:        v.GetString("server.transport.client_ca_file"),
+				ClientCAPinsSHA256:  append([]string(nil), v.GetStringSlice("server.transport.client_ca_pins_sha256")...),
+				MinVersion:          v.GetString("server.transport.min_version"),
+				MaxVersion:          v.GetString("server.transport.max_version"),
+				ReloadInterval:      v.GetString("server.transport.reload_interval"),
+				Revocation: transporttls.RevocationConfig{
+					Mode:       v.GetString("server.transport.revocation.mode"),
+					SerialFile: v.GetString("server.transport.revocation.serial_file"),
+				},
+			},
 		},
 		NATS: NATS{
 			Enabled:         v.GetBool("nats.enabled"),

@@ -43,6 +43,13 @@ server:
   write_timeout: "10s"
   idle_timeout: "120s"
   shutdown_timeout: "10s"
+  transport:
+    mode: "plaintext"
+    allow_local_plaintext: false
+    min_version: "1.2"
+    reload_interval: "1m"
+    revocation:
+      mode: "off"
 
 registry:
   key_id: "registry-key"

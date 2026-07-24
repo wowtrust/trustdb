@@ -83,7 +83,7 @@ func TestBenchIngestCollectsPebbleMetricsOverHTTPAndGRPC(t *testing.T) {
 			transport: "grpc",
 			clientFor: func(tb testing.TB, env benchPebbleE2EEnv) *sdk.Client {
 				tb.Helper()
-				client, err := sdk.NewGRPCClient(env.grpcTarget)
+				client, err := sdk.NewGRPCClient(env.grpcTarget, sdk.WithGRPCLocalPlaintext())
 				if err != nil {
 					tb.Fatalf("NewGRPCClient: %v", err)
 				}

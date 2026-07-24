@@ -25,6 +25,12 @@ const dirty = computed(() => {
   return (
     form.server_url !== settings.settings.server_url ||
     form.server_transport !== settings.settings.server_transport ||
+    form.server_ca_file !== settings.settings.server_ca_file ||
+    form.server_name !== settings.settings.server_name ||
+    form.server_ca_pins_sha256 !== settings.settings.server_ca_pins_sha256 ||
+    form.client_tls_cert_file !== settings.settings.client_tls_cert_file ||
+    form.client_tls_key_file !== settings.settings.client_tls_key_file ||
+    form.tls_reload_interval !== settings.settings.tls_reload_interval ||
     form.server_public_key_b64 !== settings.settings.server_public_key_b64 ||
     form.anchor_plugin_command !== settings.settings.anchor_plugin_command ||
     form.anchor_plugin_args_text !== settings.settings.anchor_plugin_args_text ||
@@ -134,6 +140,33 @@ async function pickAnchorPlugin() {
           <Input v-model="form.server_public_key_b64" placeholder="Ed25519 public key" :mono="true" multiline :rows="2" />
         </Field>
 
+        <div class="rounded-[18px] border border-white/10 bg-black/15 p-4 space-y-3">
+          <div>
+            <div class="text-[12px] font-semibold text-ink-200">TLS / mTLS 传输信任</div>
+            <div class="mt-1 text-[11.5px] text-ink-500">仅验证网络证书；与上方 proof 签名公钥相互独立。HTTPS 或远端 gRPC 默认校验系统 CA 和主机名。</div>
+          </div>
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <Field label="服务器 CA PEM" hint="留空使用系统 CA；填写后固定到该 CA 集合">
+              <Input v-model="form.server_ca_file" placeholder="/etc/trustdb/tls/server-ca.crt" :mono="true" />
+            </Field>
+            <Field label="TLS server_name" hint="留空使用 URL / target 主机名">
+              <Input v-model="form.server_name" placeholder="trustdb.internal" :mono="true" />
+            </Field>
+            <Field label="客户端证书" hint="mTLS 客户端证书 PEM">
+              <Input v-model="form.client_tls_cert_file" placeholder="/path/client.crt" :mono="true" />
+            </Field>
+            <Field label="客户端私钥" hint="必须与客户端证书一起配置">
+              <Input v-model="form.client_tls_key_file" placeholder="/path/client.key" :mono="true" />
+            </Field>
+            <Field label="CA SHA-256 pins" hint="每行或逗号分隔 CA DER 指纹">
+              <Input v-model="form.server_ca_pins_sha256" placeholder="64 hex characters" :mono="true" multiline :rows="2" />
+            </Field>
+            <Field label="轮换检查间隔" hint="证书、CA 和撤销策略无中断重载">
+              <Input v-model="form.tls_reload_interval" placeholder="1m" :mono="true" />
+            </Field>
+          </div>
+        </div>
+
         <div class="flex items-center justify-between pt-1">
           <div v-if="pingResult" class="flex items-center gap-2 text-[12.5px]">
             <StatusDot :state="pingResult.ok ? 'ok' : 'bad'" />
@@ -142,6 +175,7 @@ async function pickAnchorPlugin() {
             </span>
             <span class="text-ink-400">·</span>
             <span class="text-ink-500 font-mono uppercase">{{ pingResult.transport || form.server_transport || 'http' }}</span>
+            <span v-if="pingResult.transport_security" class="text-ink-500 font-mono uppercase">· {{ pingResult.transport_security }} {{ pingResult.tls_version || '' }}</span>
             <span class="text-ink-400">·</span>
             <span class="text-ink-500 font-mono">{{ pingResult.server_url }}</span>
           </div>

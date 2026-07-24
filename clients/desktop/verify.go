@@ -275,7 +275,7 @@ func (a *App) remoteClient(override string) (*serverClient, error) {
 	}
 	cfg := s.getSettings()
 	cfg.ServerURL = override
-	return newServerClient(cfg.ServerTransport, cfg.ServerURL)
+	return newServerClientWithTLS(cfg.ServerTransport, cfg.ServerURL, tlsConfigFromSettings(cfg))
 }
 
 func (a *App) resolveClientPub(bundle model.ProofBundle, override string) (ed25519.PublicKey, error) {

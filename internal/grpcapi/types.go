@@ -29,7 +29,11 @@ const (
 type HealthRequest struct{}
 
 type HealthResponse struct {
-	OK bool `cbor:"ok" json:"ok"`
+	OK                bool   `cbor:"ok" json:"ok"`
+	TransportSecurity string `cbor:"transport_security" json:"transport_security"`
+	TLSVersion        string `cbor:"tls_version,omitempty" json:"tls_version,omitempty"`
+	PeerAuthenticated bool   `cbor:"peer_authenticated" json:"peer_authenticated"`
+	PeerSubject       string `cbor:"peer_subject,omitempty" json:"peer_subject,omitempty"`
 }
 
 type SubmitClaimRequest struct {

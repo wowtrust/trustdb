@@ -146,11 +146,15 @@ type AnchorPage struct {
 }
 
 type HealthStatus struct {
-	OK         bool
-	ServerURL  string
-	RTTMillis  int64
-	Error      string
-	StatusCode int
+	OK                bool
+	ServerURL         string
+	RTTMillis         int64
+	Error             string
+	StatusCode        int
+	TransportSecurity string
+	TLSVersion        string
+	PeerAuthenticated bool
+	PeerSubject       string
 }
 
 type AnchorStatus struct {

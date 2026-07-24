@@ -23,6 +23,7 @@ import (
 	"github.com/wowtrust/trustdb/internal/statusnotify"
 	"github.com/wowtrust/trustdb/internal/submission"
 	"github.com/wowtrust/trustdb/internal/trusterr"
+	"github.com/wowtrust/trustdb/transporttls"
 )
 
 const (
@@ -88,7 +89,11 @@ type GlobalEvidenceService interface {
 }
 
 type healthResponse struct {
-	OK bool `json:"ok"`
+	OK                bool   `json:"ok"`
+	TransportSecurity string `json:"transport_security"`
+	TLSVersion        string `json:"tls_version,omitempty"`
+	PeerAuthenticated bool   `json:"peer_authenticated"`
+	PeerSubject       string `json:"peer_subject,omitempty"`
 }
 
 type submitClaimResponse struct {
@@ -363,7 +368,17 @@ func isTypedNil(v any) bool {
 }
 
 func (h Handler) health(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, healthResponse{OK: true})
+	response := healthResponse{OK: true, TransportSecurity: transporttls.ModePlaintext}
+	if r.TLS != nil {
+		response.TransportSecurity = transporttls.ModeTLS
+		response.TLSVersion = transporttls.VersionName(r.TLS.Version)
+	}
+	if identity, ok := transporttls.PeerIdentityFromContext(r.Context()); ok {
+		response.TransportSecurity = transporttls.ModeMTLS
+		response.PeerAuthenticated = true
+		response.PeerSubject = identity.Subject
+	}
+	writeJSON(w, http.StatusOK, response)
 }
 
 func (h Handler) submitClaim(w http.ResponseWriter, r *http.Request) {

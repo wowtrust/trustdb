@@ -790,6 +790,15 @@ func TestShippedProfileConfigsLoad(t *testing.T) {
 	}
 }
 
+func TestConfigStringMapsGRPCListen(t *testing.T) {
+	t.Parallel()
+	cfg := trustconfig.Default()
+	cfg.Server.GRPCListen = "127.0.0.1:9090"
+	if got := configString(cfg, "server.grpc_listen"); got != cfg.Server.GRPCListen {
+		t.Fatalf("configString(server.grpc_listen) = %q, want %q", got, cfg.Server.GRPCListen)
+	}
+}
+
 func TestVersionCommand(t *testing.T) {
 	t.Parallel()
 

@@ -250,6 +250,10 @@ export namespace main {
 	    rtt_millis: number;
 	    error?: string;
 	    status_code?: number;
+	    transport_security?: string;
+	    tls_version?: string;
+	    peer_authenticated?: boolean;
+	    peer_subject?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new HealthStatus(source);
@@ -263,6 +267,10 @@ export namespace main {
 	        this.rtt_millis = source["rtt_millis"];
 	        this.error = source["error"];
 	        this.status_code = source["status_code"];
+	        this.transport_security = source["transport_security"];
+	        this.tls_version = source["tls_version"];
+	        this.peer_authenticated = source["peer_authenticated"];
+	        this.peer_subject = source["peer_subject"];
 	    }
 	}
 	export class IdentityView {
@@ -383,6 +391,12 @@ export namespace main {
 	export class Settings {
 	    server_url: string;
 	    server_transport: string;
+	    server_ca_file: string;
+	    server_name: string;
+	    server_ca_pins_sha256: string;
+	    client_tls_cert_file: string;
+	    client_tls_key_file: string;
+	    tls_reload_interval: string;
 	    server_public_key_b64: string;
 	    anchor_plugin_command: string;
 	    anchor_plugin_args_text: string;
@@ -400,6 +414,12 @@ export namespace main {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.server_url = source["server_url"];
 	        this.server_transport = source["server_transport"];
+	        this.server_ca_file = source["server_ca_file"];
+	        this.server_name = source["server_name"];
+	        this.server_ca_pins_sha256 = source["server_ca_pins_sha256"];
+	        this.client_tls_cert_file = source["client_tls_cert_file"];
+	        this.client_tls_key_file = source["client_tls_key_file"];
+	        this.tls_reload_interval = source["tls_reload_interval"];
 	        this.server_public_key_b64 = source["server_public_key_b64"];
 	        this.anchor_plugin_command = source["anchor_plugin_command"];
 	        this.anchor_plugin_args_text = source["anchor_plugin_args_text"];

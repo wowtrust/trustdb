@@ -39,7 +39,9 @@ import (
 	"github.com/wowtrust/trustdb/internal/trustcrypto"
 	"github.com/wowtrust/trustdb/internal/trusterr"
 	"github.com/wowtrust/trustdb/internal/wal"
+	"github.com/wowtrust/trustdb/transporttls"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/health"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 )
@@ -74,6 +76,9 @@ func newServeCommand(rt *runtimeConfig) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			listen = stringOrConfig(cmd, rt, "listen", listen, "server.listen")
 			grpcListen = stringOrConfig(cmd, rt, "grpc-listen", grpcListen, "server.grpc_listen")
+			if err := trustconfig.ValidateServerTransportPolicy(rt.cfg.RunProfile, listen, grpcListen, rt.cfg.Server.Transport); err != nil {
+				return usageError(err.Error())
+			}
 			serverKeyPath = stringOrConfig(cmd, rt, "server-private-key", serverKeyPath, "keys.server_private")
 			walPath = stringOrConfig(cmd, rt, "wal", walPath, "wal")
 			proofDir = stringOrConfig(cmd, rt, "proof-dir", proofDir, "proof_dir")
@@ -659,6 +664,21 @@ func newServeCommand(rt *runtimeConfig) *cobra.Command {
 
 			serveCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 			defer stop()
+			transportMode := strings.ToLower(strings.TrimSpace(rt.cfg.Server.Transport.Mode))
+			if transportMode == "" {
+				transportMode = transporttls.ModePlaintext
+			}
+			var tlsManager *transporttls.Manager
+			if transportMode != transporttls.ModePlaintext {
+				tlsManager, err = transporttls.NewServerManager(rt.cfg.Server.Transport.TLSConfig())
+				if err != nil {
+					return trusterr.Wrap(trusterr.CodeFailedPrecondition, "initialize listener TLS", err)
+				}
+				defer tlsManager.Close()
+				tlsManager.Start(serveCtx, func(err error) {
+					rt.logger.Error().Err(err).Msg("listener TLS reload failed; retaining last known-good certificate policy")
+				})
+			}
 			natsIngress, err := startServeNATSIngress(serveCtx, rt.cfg.NATS, submissionSvc, metrics, rt.logger)
 			if err != nil {
 				return err
@@ -707,6 +727,7 @@ func newServeCommand(rt *runtimeConfig) *cobra.Command {
 				}
 				handler = adminweb.Mount(bp, publicHandler, ah)
 			}
+			handler = transporttls.HTTPPeerIdentity(handler)
 			server := &http.Server{
 				Addr:              listen,
 				Handler:           handler,
@@ -715,7 +736,15 @@ func newServeCommand(rt *runtimeConfig) *cobra.Command {
 				WriteTimeout:      writeTimeout,
 				IdleTimeout:       idleTimeout,
 			}
+			if tlsManager != nil {
+				server.TLSConfig = tlsManager.ServerTLSConfig()
+			}
 			errCh := make(chan error, 2)
+			httpListener, err := net.Listen("tcp", listen)
+			if err != nil {
+				return trusterr.Wrap(trusterr.CodeInvalidArgument, "listen http", err)
+			}
+			defer httpListener.Close()
 			var grpcServer *grpc.Server
 			if strings.TrimSpace(grpcListen) != "" {
 				listener, err := net.Listen("tcp", grpcListen)
@@ -723,10 +752,16 @@ func newServeCommand(rt *runtimeConfig) *cobra.Command {
 					return trusterr.Wrap(trusterr.CodeInvalidArgument, "listen grpc", err)
 				}
 				defer listener.Close()
-				grpcServer = grpc.NewServer(
+				grpcOptions := []grpc.ServerOption{
 					grpc.MaxRecvMsgSize(grpcapi.MaxMessageBytes),
 					grpc.MaxSendMsgSize(grpcapi.MaxMessageBytes),
-				)
+					grpc.UnaryInterceptor(transporttls.UnaryServerInterceptor),
+					grpc.StreamInterceptor(transporttls.StreamServerInterceptor),
+				}
+				if tlsManager != nil {
+					grpcOptions = append(grpcOptions, grpc.Creds(credentials.NewTLS(tlsManager.ServerTLSConfig())))
+				}
+				grpcServer = grpc.NewServer(grpcOptions...)
 				healthSvc := health.NewServer()
 				healthSvc.SetServingStatus("", healthpb.HealthCheckResponse_SERVING)
 				healthpb.RegisterHealthServer(grpcServer, healthSvc)
@@ -734,7 +769,7 @@ func newServeCommand(rt *runtimeConfig) *cobra.Command {
 				grpcapi.RegisterTrustDBServiceServer(grpcServer, grpcapi.NewServerWithSubmitter(submissionSvc, batchSvc, globalSvc, anchorAPI, metricsHandler))
 				defer grpcServer.Stop()
 				go func() {
-					rt.logger.Info().Str("listen", grpcListen).Msg("starting trustdb grpc server")
+					rt.logger.Info().Str("listen", grpcListen).Str("transport", transportMode).Msg("starting trustdb grpc server")
 					if err := grpcServer.Serve(listener); err != nil && !errors.Is(err, grpc.ErrServerStopped) {
 						errCh <- err
 					}
@@ -742,8 +777,14 @@ func newServeCommand(rt *runtimeConfig) *cobra.Command {
 			}
 
 			go func() {
-				rt.logger.Info().Str("listen", listen).Msg("starting trustdb server")
-				if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				rt.logger.Info().Str("listen", listen).Str("transport", transportMode).Msg("starting trustdb server")
+				var err error
+				if tlsManager != nil {
+					err = server.ServeTLS(httpListener, "", "")
+				} else {
+					err = server.Serve(httpListener)
+				}
+				if err != nil && !errors.Is(err, http.ErrServerClosed) {
 					errCh <- err
 				}
 			}()

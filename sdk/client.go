@@ -2,15 +2,18 @@ package sdk
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
 	"time"
 
 	"github.com/wowtrust/trustdb/internal/sproof"
+	"github.com/wowtrust/trustdb/transporttls"
 )
 
 const defaultHTTPTimeout = 15 * time.Second
@@ -105,6 +108,21 @@ func WithHTTPTransport(transport http.RoundTripper) Option {
 	}
 }
 
+// TLSConfig is transport certificate trust. It is intentionally separate from
+// TrustedKeys, which verifies signed TrustDB proof material.
+type TLSConfig = transporttls.ClientConfig
+
+// WithTLSConfig configures CA trust/pinning, hostname verification, optional
+// mTLS, revocation, and reload for an HTTPS SDK client. HTTP proxies are
+// rejected because net/http performs the post-CONNECT TLS handshake outside a
+// custom DialTLSContext, which would bypass the reloadable policy.
+func WithTLSConfig(config TLSConfig) Option {
+	return func(t *httpTransport) {
+		copy := config
+		t.tlsConfig = &copy
+	}
+}
+
 func NewHTTPClientForConcurrency(concurrency int) *http.Client {
 	return &http.Client{
 		Timeout:   defaultHTTPTimeout,
@@ -127,6 +145,7 @@ func NewHTTPTransportForConcurrency(concurrency int) *http.Transport {
 	transport.MaxConnsPerHost = maxPerHost
 	transport.IdleConnTimeout = 90 * time.Second
 	transport.ForceAttemptHTTP2 = true
+	transport.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12}
 	return transport
 }
 
@@ -142,6 +161,12 @@ func NewClient(baseURL string, opts ...Option) (*Client, error) {
 	if u.Scheme == "" || u.Host == "" {
 		return nil, fmt.Errorf("sdk: server url must include scheme and host: %s", trimmed)
 	}
+	if !strings.EqualFold(u.Scheme, "http") && !strings.EqualFold(u.Scheme, "https") {
+		return nil, fmt.Errorf("sdk: server url scheme must be http or https: %s", trimmed)
+	}
+	if strings.EqualFold(u.Scheme, "http") && !isLoopbackHost(u.Hostname()) {
+		return nil, fmt.Errorf("sdk: plaintext HTTP is limited to loopback endpoints; use https for %s", u.Hostname())
+	}
 	transport := &httpTransport{
 		baseURL:    strings.TrimRight(trimmed, "/"),
 		httpClient: NewHTTPClientForConcurrency(defaultHTTPConcurrency),
@@ -150,7 +175,58 @@ func NewClient(baseURL string, opts ...Option) (*Client, error) {
 	for _, apply := range opts {
 		apply(transport)
 	}
+	if transport.tlsConfig != nil {
+		if !strings.EqualFold(u.Scheme, "https") {
+			return nil, errors.New("sdk: TLS configuration requires an https server URL")
+		}
+		manager, err := transporttls.NewClientManager(*transport.tlsConfig)
+		if err != nil {
+			return nil, fmt.Errorf("sdk: initialize TLS: %w", err)
+		}
+		manager.Start(context.Background(), transport.tlsConfig.ReloadError)
+		base, ok := transport.httpClient.Transport.(*http.Transport)
+		if transport.httpClient.Transport == nil {
+			base, _ = http.DefaultTransport.(*http.Transport)
+			ok = base != nil
+		}
+		if !ok {
+			_ = manager.Close()
+			return nil, errors.New("sdk: WithTLSConfig requires an *http.Transport")
+		}
+		clone := base.Clone()
+		clone.Proxy = rejectHTTPProxy(clone.Proxy)
+		clone.TLSClientConfig = nil
+		clone.DialTLSContext = manager.DialTLSContext
+		clone.ForceAttemptHTTP2 = true
+		transport.httpClient.Transport = clone
+		transport.tlsManager = manager
+	}
 	return NewClientWithTransport(transport)
+}
+
+func rejectHTTPProxy(proxy func(*http.Request) (*url.URL, error)) func(*http.Request) (*url.URL, error) {
+	if proxy == nil {
+		return nil
+	}
+	return func(request *http.Request) (*url.URL, error) {
+		proxyURL, err := proxy(request)
+		if err != nil {
+			return nil, err
+		}
+		if proxyURL != nil {
+			return nil, errors.New("sdk: HTTP proxies are unsupported with reloadable TLS configuration")
+		}
+		return nil, nil
+	}
+}
+
+func isLoopbackHost(host string) bool {
+	host = strings.TrimSpace(strings.Trim(host, "[]"))
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 func NewClientWithTransport(transport Transport) (*Client, error) {

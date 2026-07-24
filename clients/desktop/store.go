@@ -33,6 +33,12 @@ type Identity struct {
 type Settings struct {
 	ServerURL                string `json:"server_url"`
 	ServerTransport          string `json:"server_transport"`
+	ServerCAFile             string `json:"server_ca_file"`
+	ServerName               string `json:"server_name"`
+	ServerCAPinsSHA256       string `json:"server_ca_pins_sha256"`
+	ClientTLSCertFile        string `json:"client_tls_cert_file"`
+	ClientTLSKeyFile         string `json:"client_tls_key_file"`
+	TLSReloadInterval        string `json:"tls_reload_interval"`
 	ServerPubKeyB64          string `json:"server_public_key_b64"`
 	AnchorPluginCommand      string `json:"anchor_plugin_command"`
 	AnchorPluginArgsText     string `json:"anchor_plugin_args_text"`
@@ -161,6 +167,7 @@ func defaultSettings() Settings {
 	return Settings{
 		ServerURL:                "http://127.0.0.1:8080",
 		ServerTransport:          serverTransportHTTP,
+		TLSReloadInterval:        "1m",
 		AnchorPluginStartTimeout: "10s",
 		AnchorPluginRPCTimeout:   "30s",
 		DefaultMedia:             "application/octet-stream",
@@ -228,6 +235,9 @@ func (s *store) load() error {
 		loaded.Settings.ServerURL = defaults.ServerURL
 	}
 	loaded.Settings.ServerTransport = normalizeServerTransport(loaded.Settings.ServerTransport)
+	if loaded.Settings.TLSReloadInterval == "" {
+		loaded.Settings.TLSReloadInterval = "1m"
+	}
 	if loaded.Settings.DefaultMedia == "" {
 		loaded.Settings.DefaultMedia = "application/octet-stream"
 	}
@@ -328,6 +338,9 @@ func (s *store) setSettings(cfg Settings) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	cfg.ServerTransport = normalizeServerTransport(cfg.ServerTransport)
+	if cfg.TLSReloadInterval == "" {
+		cfg.TLSReloadInterval = "1m"
+	}
 	if cfg.DefaultMedia == "" {
 		cfg.DefaultMedia = "application/octet-stream"
 	}

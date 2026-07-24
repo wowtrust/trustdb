@@ -2,14 +2,17 @@ package sdk
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"io"
+	"net"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/wowtrust/trustdb/internal/grpcapi"
 	"github.com/wowtrust/trustdb/internal/trusterr"
+	"github.com/wowtrust/trustdb/transporttls"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
@@ -22,6 +25,21 @@ type GRPCOption func(*grpcTransportConfig)
 type grpcTransportConfig struct {
 	dialOptions          []grpc.DialOption
 	transportCredentials credentials.TransportCredentials
+	tlsConfig            *TLSConfig
+	localPlaintext       bool
+}
+
+// WithGRPCTLSConfig configures reloadable TLS/mTLS and CA pinning for gRPC.
+func WithGRPCTLSConfig(config TLSConfig) GRPCOption {
+	return func(c *grpcTransportConfig) {
+		copy := config
+		c.tlsConfig = &copy
+	}
+}
+
+// WithGRPCLocalPlaintext explicitly selects plaintext for a loopback target.
+func WithGRPCLocalPlaintext() GRPCOption {
+	return func(c *grpcTransportConfig) { c.localPlaintext = true }
 }
 
 func WithGRPCDialOptions(opts ...grpc.DialOption) GRPCOption {
@@ -55,8 +73,32 @@ func NewGRPCTransport(target string, opts ...GRPCOption) (Transport, error) {
 	for _, apply := range opts {
 		apply(&cfg)
 	}
-	if cfg.transportCredentials == nil {
+	if cfg.tlsConfig != nil && cfg.transportCredentials != nil {
+		return nil, errors.New("sdk: gRPC TLS config and custom transport credentials are mutually exclusive")
+	}
+	if cfg.localPlaintext && cfg.tlsConfig != nil {
+		return nil, errors.New("sdk: gRPC local plaintext and TLS config are mutually exclusive")
+	}
+	if cfg.localPlaintext && cfg.transportCredentials != nil {
+		return nil, errors.New("sdk: gRPC local plaintext and custom transport credentials are mutually exclusive")
+	}
+	var tlsManager *transporttls.Manager
+	if cfg.localPlaintext {
+		if !isLoopbackGRPCTarget(trimmed) {
+			return nil, errors.New("sdk: gRPC plaintext exception is limited to loopback targets")
+		}
 		cfg.transportCredentials = insecure.NewCredentials()
+	} else if cfg.tlsConfig != nil {
+		var err error
+		tlsManager, err = transporttls.NewClientManager(*cfg.tlsConfig)
+		if err != nil {
+			return nil, &Error{Op: "grpc tls", URL: trimmed, Err: err}
+		}
+		tlsManager.Start(context.Background(), cfg.tlsConfig.ReloadError)
+		cfg.transportCredentials = tlsManager.TransportCredentials()
+	}
+	if cfg.transportCredentials == nil {
+		cfg.transportCredentials = credentials.NewTLS(&tls.Config{MinVersion: tls.VersionTLS12, ServerName: grpcTargetHost(trimmed)})
 	}
 	dialOptions := []grpc.DialOption{
 		grpc.WithTransportCredentials(cfg.transportCredentials),
@@ -71,9 +113,24 @@ func NewGRPCTransport(target string, opts ...GRPCOption) (Transport, error) {
 	defer cancel()
 	conn, err := grpc.DialContext(ctx, trimmed, dialOptions...)
 	if err != nil {
+		if tlsManager != nil {
+			_ = tlsManager.Close()
+		}
 		return nil, &Error{Op: "grpc dial", URL: trimmed, Err: err}
 	}
-	return NewGRPCTransportFromConn(trimmed, conn), nil
+	return &grpcTransport{target: trimmed, conn: conn, tlsManager: tlsManager}, nil
+}
+
+func grpcTargetHost(target string) string {
+	target = strings.TrimSpace(target)
+	if host, _, err := net.SplitHostPort(target); err == nil {
+		return strings.Trim(host, "[]")
+	}
+	return ""
+}
+
+func isLoopbackGRPCTarget(target string) bool {
+	return isLoopbackHost(grpcTargetHost(target))
 }
 
 func NewGRPCTransportFromConn(target string, conn *grpc.ClientConn) Transport {
@@ -81,8 +138,9 @@ func NewGRPCTransportFromConn(target string, conn *grpc.ClientConn) Transport {
 }
 
 type grpcTransport struct {
-	target string
-	conn   *grpc.ClientConn
+	target     string
+	conn       *grpc.ClientConn
+	tlsManager *transporttls.Manager
 }
 
 func (t *grpcTransport) Endpoint() string {
@@ -93,7 +151,11 @@ func (t *grpcTransport) Close() error {
 	if t.conn == nil {
 		return nil
 	}
-	return t.conn.Close()
+	err := t.conn.Close()
+	if t.tlsManager != nil {
+		err = errors.Join(err, t.tlsManager.Close())
+	}
+	return err
 }
 
 func (t *grpcTransport) CheckHealth(ctx context.Context) HealthStatus {
@@ -109,7 +171,7 @@ func (t *grpcTransport) CheckHealth(ctx context.Context) HealthStatus {
 	if !out.OK {
 		return HealthStatus{ServerURL: t.target, RTTMillis: rtt, Error: "server returned ok=false"}
 	}
-	return HealthStatus{OK: true, ServerURL: t.target, RTTMillis: rtt}
+	return HealthStatus{OK: true, ServerURL: t.target, RTTMillis: rtt, TransportSecurity: out.TransportSecurity, TLSVersion: out.TLSVersion, PeerAuthenticated: out.PeerAuthenticated, PeerSubject: out.PeerSubject}
 }
 
 func (t *grpcTransport) SubmitSignedClaim(ctx context.Context, signed SignedClaim) (SubmitResult, error) {

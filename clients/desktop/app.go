@@ -321,6 +321,23 @@ func (a *App) SaveSettings(s Settings) error {
 		s.ServerPubKeyB64 = encodeKey(raw)
 	}
 	s.AnchorPluginCommand = strings.TrimSpace(s.AnchorPluginCommand)
+	s.ServerCAFile = strings.TrimSpace(s.ServerCAFile)
+	s.ServerName = strings.TrimSpace(s.ServerName)
+	s.ServerCAPinsSHA256 = strings.TrimSpace(s.ServerCAPinsSHA256)
+	s.ClientTLSCertFile = strings.TrimSpace(s.ClientTLSCertFile)
+	s.ClientTLSKeyFile = strings.TrimSpace(s.ClientTLSKeyFile)
+	if (s.ClientTLSCertFile == "") != (s.ClientTLSKeyFile == "") {
+		return errors.New("client TLS certificate and key must be configured together")
+	}
+	if strings.TrimSpace(s.TLSReloadInterval) == "" {
+		s.TLSReloadInterval = "1m"
+	}
+	if _, err := time.ParseDuration(s.TLSReloadInterval); err != nil {
+		return errors.New("TLS reload interval must be a valid duration")
+	}
+	if err := tlsConfigFromSettings(s).Validate(); err != nil && (strings.EqualFold(parsedScheme(s.ServerURL), "https") || hasTLSInputs(tlsConfigFromSettings(s))) {
+		return fmt.Errorf("transport TLS settings: %w", err)
+	}
 	if strings.TrimSpace(s.AnchorPluginStartTimeout) == "" {
 		s.AnchorPluginStartTimeout = "10s"
 	}
@@ -658,7 +675,7 @@ func (a *App) serverClient() (*serverClient, error) {
 		return nil, err
 	}
 	cfg := s.getSettings()
-	return newServerClient(cfg.ServerTransport, cfg.ServerURL)
+	return newServerClientWithTLS(cfg.ServerTransport, cfg.ServerURL, tlsConfigFromSettings(cfg))
 }
 
 // serverPublicKey decodes the configured server public key, or returns

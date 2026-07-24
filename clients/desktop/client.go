@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -20,6 +21,10 @@ type serverClient struct {
 }
 
 func newServerClient(transport, endpoint string) (*serverClient, error) {
+	return newServerClientWithTLS(transport, endpoint, sdk.TLSConfig{})
+}
+
+func newServerClientWithTLS(transport, endpoint string, tlsConfig sdk.TLSConfig) (*serverClient, error) {
 	transport = normalizeServerTransport(transport)
 	endpoint = strings.TrimSpace(endpoint)
 	var (
@@ -28,13 +33,21 @@ func newServerClient(transport, endpoint string) (*serverClient, error) {
 	)
 	switch transport {
 	case serverTransportHTTP:
-		client, err = sdk.NewClient(endpoint)
+		if strings.EqualFold(parsedScheme(endpoint), "https") {
+			client, err = sdk.NewClient(endpoint, sdk.WithTLSConfig(tlsConfig))
+		} else {
+			client, err = sdk.NewClient(endpoint)
+		}
 	case serverTransportGRPC:
 		target, targetErr := normalizeGRPCTarget(endpoint)
 		if targetErr != nil {
 			return nil, targetErr
 		}
-		client, err = sdk.NewGRPCClient(target)
+		if hasTLSInputs(tlsConfig) || !isLoopbackDesktopTarget(target) {
+			client, err = sdk.NewGRPCClient(target, sdk.WithGRPCTLSConfig(tlsConfig))
+		} else {
+			client, err = sdk.NewGRPCClient(target, sdk.WithGRPCLocalPlaintext())
+		}
 	default:
 		return nil, fmt.Errorf("unsupported server transport: %s", transport)
 	}
@@ -42,6 +55,42 @@ func newServerClient(transport, endpoint string) (*serverClient, error) {
 		return nil, err
 	}
 	return &serverClient{sdk: client, transport: transport}, nil
+}
+
+func parsedScheme(endpoint string) string {
+	u, err := url.Parse(strings.TrimSpace(endpoint))
+	if err != nil {
+		return ""
+	}
+	return u.Scheme
+}
+
+func hasTLSInputs(config sdk.TLSConfig) bool {
+	return strings.TrimSpace(config.CAFile) != "" || strings.TrimSpace(config.CertFile) != "" || strings.TrimSpace(config.KeyFile) != "" || strings.TrimSpace(config.ServerName) != "" || len(config.CAPinsSHA256) > 0
+}
+
+func isLoopbackDesktopTarget(target string) bool {
+	host, _, err := net.SplitHostPort(strings.TrimSpace(target))
+	if err != nil {
+		return false
+	}
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(strings.Trim(host, "[]"))
+	return ip != nil && ip.IsLoopback()
+}
+
+func tlsConfigFromSettings(settings Settings) sdk.TLSConfig {
+	pins := strings.FieldsFunc(settings.ServerCAPinsSHA256, func(r rune) bool { return r == ',' || r == '\n' || r == '\r' })
+	return sdk.TLSConfig{
+		CAFile:         strings.TrimSpace(settings.ServerCAFile),
+		CAPinsSHA256:   pins,
+		CertFile:       strings.TrimSpace(settings.ClientTLSCertFile),
+		KeyFile:        strings.TrimSpace(settings.ClientTLSKeyFile),
+		ServerName:     strings.TrimSpace(settings.ServerName),
+		ReloadInterval: strings.TrimSpace(settings.TLSReloadInterval),
+	}
 }
 
 func normalizeServerTransport(transport string) string {
@@ -101,23 +150,31 @@ func (c *serverClient) close() {
 type ServerError = sdk.Error
 
 type HealthStatus struct {
-	OK         bool   `json:"ok"`
-	ServerURL  string `json:"server_url"`
-	Transport  string `json:"transport"`
-	RTTMillis  int64  `json:"rtt_millis"`
-	Error      string `json:"error,omitempty"`
-	StatusCode int    `json:"status_code,omitempty"`
+	OK                bool   `json:"ok"`
+	ServerURL         string `json:"server_url"`
+	Transport         string `json:"transport"`
+	RTTMillis         int64  `json:"rtt_millis"`
+	Error             string `json:"error,omitempty"`
+	StatusCode        int    `json:"status_code,omitempty"`
+	TransportSecurity string `json:"transport_security,omitempty"`
+	TLSVersion        string `json:"tls_version,omitempty"`
+	PeerAuthenticated bool   `json:"peer_authenticated,omitempty"`
+	PeerSubject       string `json:"peer_subject,omitempty"`
 }
 
 func (c *serverClient) health(ctx context.Context) HealthStatus {
 	status := c.sdk.CheckHealth(ctx)
 	return HealthStatus{
-		OK:         status.OK,
-		ServerURL:  status.ServerURL,
-		Transport:  c.transport,
-		RTTMillis:  status.RTTMillis,
-		Error:      status.Error,
-		StatusCode: status.StatusCode,
+		OK:                status.OK,
+		ServerURL:         status.ServerURL,
+		Transport:         c.transport,
+		RTTMillis:         status.RTTMillis,
+		Error:             status.Error,
+		StatusCode:        status.StatusCode,
+		TransportSecurity: status.TransportSecurity,
+		TLSVersion:        status.TLSVersion,
+		PeerAuthenticated: status.PeerAuthenticated,
+		PeerSubject:       status.PeerSubject,
 	}
 }
 

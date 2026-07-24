@@ -39,6 +39,19 @@ server:
   write_timeout: "30s"
   idle_timeout: "120s"
   shutdown_timeout: "30s"
+  transport:
+    mode: "mtls"
+    allow_local_plaintext: false
+    cert_file: "/etc/trustdb/tls/server.crt"
+    key_file: "/etc/trustdb/tls/server.key"
+    client_ca_file: "/etc/trustdb/tls/client-ca.crt"
+    client_ca_pins_sha256: []
+    min_version: "1.2"
+    max_version: ""
+    reload_interval: "1m"
+    revocation:
+      mode: "off"
+      serial_file: ""
 
 registry:
   key_id: "registry-key"
@@ -103,7 +116,7 @@ admin:
   password_hash: ""
   session_secret: ""
   web_dir: "/opt/trustdb/admin"
-  cookie_secure: false
+  cookie_secure: true
   session_ttl: "12h"
 
 keys:

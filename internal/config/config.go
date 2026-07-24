@@ -2,11 +2,14 @@ package config
 
 import (
 	"fmt"
+	"net"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/wowtrust/trustdb/transporttls"
 )
 
 const DefaultYAML = `# TrustDB local client configuration.
@@ -52,6 +55,19 @@ server:
   write_timeout: "10s"
   idle_timeout: "120s"
   shutdown_timeout: "10s"
+  transport:
+    mode: "plaintext"
+    allow_local_plaintext: false
+    cert_file: ""
+    key_file: ""
+    client_ca_file: ""
+    client_ca_pins_sha256: []
+    min_version: "1.2"
+    max_version: ""
+    reload_interval: "1m"
+    revocation:
+      mode: "off"
+      serial_file: ""
 
 # Optional JetStream ingress. Disabled means TrustDB does not connect to NATS
 # or create any broker resources; the existing HTTP and gRPC transports remain
@@ -217,17 +233,47 @@ type Identity struct {
 }
 
 type Server struct {
-	Listen            string `mapstructure:"listen" json:"listen"`
-	GRPCListen        string `mapstructure:"grpc_listen" json:"grpc_listen"`
-	ID                string `mapstructure:"id" json:"id"`
-	KeyID             string `mapstructure:"key_id" json:"key_id"`
-	QueueSize         int    `mapstructure:"queue_size" json:"queue_size"`
-	Workers           int    `mapstructure:"workers" json:"workers"`
-	ReadTimeout       string `mapstructure:"read_timeout" json:"read_timeout"`
-	ReadHeaderTimeout string `mapstructure:"read_header_timeout" json:"read_header_timeout"`
-	WriteTimeout      string `mapstructure:"write_timeout" json:"write_timeout"`
-	IdleTimeout       string `mapstructure:"idle_timeout" json:"idle_timeout"`
-	ShutdownTimeout   string `mapstructure:"shutdown_timeout" json:"shutdown_timeout"`
+	Listen            string          `mapstructure:"listen" json:"listen"`
+	GRPCListen        string          `mapstructure:"grpc_listen" json:"grpc_listen"`
+	ID                string          `mapstructure:"id" json:"id"`
+	KeyID             string          `mapstructure:"key_id" json:"key_id"`
+	QueueSize         int             `mapstructure:"queue_size" json:"queue_size"`
+	Workers           int             `mapstructure:"workers" json:"workers"`
+	ReadTimeout       string          `mapstructure:"read_timeout" json:"read_timeout"`
+	ReadHeaderTimeout string          `mapstructure:"read_header_timeout" json:"read_header_timeout"`
+	WriteTimeout      string          `mapstructure:"write_timeout" json:"write_timeout"`
+	IdleTimeout       string          `mapstructure:"idle_timeout" json:"idle_timeout"`
+	ShutdownTimeout   string          `mapstructure:"shutdown_timeout" json:"shutdown_timeout"`
+	Transport         ServerTransport `mapstructure:"transport" json:"transport"`
+}
+
+// ServerTransport is network transport trust. It must never be populated from
+// keys.server_* or any proof-signing trust root.
+type ServerTransport struct {
+	Mode                string                        `mapstructure:"mode" json:"mode"`
+	AllowLocalPlaintext bool                          `mapstructure:"allow_local_plaintext" json:"allow_local_plaintext"`
+	CertFile            string                        `mapstructure:"cert_file" json:"cert_file"`
+	KeyFile             string                        `mapstructure:"key_file" json:"key_file"`
+	ClientCAFile        string                        `mapstructure:"client_ca_file" json:"client_ca_file"`
+	ClientCAPinsSHA256  []string                      `mapstructure:"client_ca_pins_sha256" json:"client_ca_pins_sha256"`
+	MinVersion          string                        `mapstructure:"min_version" json:"min_version"`
+	MaxVersion          string                        `mapstructure:"max_version" json:"max_version"`
+	ReloadInterval      string                        `mapstructure:"reload_interval" json:"reload_interval"`
+	Revocation          transporttls.RevocationConfig `mapstructure:"revocation" json:"revocation"`
+}
+
+func (c ServerTransport) TLSConfig() transporttls.ServerConfig {
+	return transporttls.ServerConfig{
+		Mode:               c.Mode,
+		CertFile:           c.CertFile,
+		KeyFile:            c.KeyFile,
+		ClientCAFile:       c.ClientCAFile,
+		ClientCAPinsSHA256: append([]string(nil), c.ClientCAPinsSHA256...),
+		MinVersion:         c.MinVersion,
+		MaxVersion:         c.MaxVersion,
+		ReloadInterval:     c.ReloadInterval,
+		Revocation:         c.Revocation,
+	}
 }
 
 // NATS configures the optional JetStream ingress transport. The runtime must
@@ -390,6 +436,13 @@ func Default() Config {
 			WriteTimeout:      "10s",
 			IdleTimeout:       "120s",
 			ShutdownTimeout:   "10s",
+			Transport: ServerTransport{
+				Mode:                transporttls.ModePlaintext,
+				AllowLocalPlaintext: false,
+				MinVersion:          "1.2",
+				ReloadInterval:      "1m",
+				Revocation:          transporttls.RevocationConfig{Mode: transporttls.RevocationOff},
+			},
 		},
 		NATS: NATS{
 			URLs:            []string{"nats://127.0.0.1:4222"},
@@ -496,6 +549,7 @@ func (c Config) Redacted() Config {
 	c.NATS.Token = redact(c.NATS.Token)
 	c.Admin.PasswordHash = redact(c.Admin.PasswordHash)
 	c.Admin.SessionSecret = redact(c.Admin.SessionSecret)
+	c.Server.Transport.KeyFile = redact(c.Server.Transport.KeyFile)
 	return c
 }
 
@@ -539,6 +593,9 @@ func (c Config) Validate() error {
 	}
 	if c.Server.Workers <= 0 {
 		return fmt.Errorf("server.workers must be greater than 0")
+	}
+	if err := ValidateServerTransportPolicy(c.RunProfile, c.Server.Listen, c.Server.GRPCListen, c.Server.Transport); err != nil {
+		return err
 	}
 	for _, tc := range []struct {
 		name  string
@@ -664,6 +721,44 @@ func (c Config) Validate() error {
 		return err
 	}
 	return nil
+}
+
+// ValidateServerTransportPolicy validates TLS material policy and the narrow
+// production plaintext exception. Production plaintext is accepted only when
+// explicitly enabled and every active TCP listener is loopback-only.
+func ValidateServerTransportPolicy(runProfile, httpListen, grpcListen string, config ServerTransport) error {
+	if err := config.TLSConfig().Validate(); err != nil {
+		return fmt.Errorf("server.transport: %w", err)
+	}
+	mode := strings.ToLower(strings.TrimSpace(config.Mode))
+	if mode == "" {
+		mode = transporttls.ModePlaintext
+	}
+	if mode != transporttls.ModePlaintext || NormalizeRunProfile(runProfile) != RunProfileSingleNodeProduction {
+		return nil
+	}
+	if !config.AllowLocalPlaintext {
+		return fmt.Errorf("server.transport.allow_local_plaintext must be explicitly true for plaintext production listeners")
+	}
+	for name, address := range map[string]string{"server.listen": httpListen, "server.grpc_listen": grpcListen} {
+		if strings.TrimSpace(address) == "" {
+			continue
+		}
+		if !isLoopbackTCPAddress(address) {
+			return fmt.Errorf("%s must be loopback-only when production plaintext exception is enabled", name)
+		}
+	}
+	return nil
+}
+
+func isLoopbackTCPAddress(address string) bool {
+	host, _, err := net.SplitHostPort(strings.TrimSpace(address))
+	if err != nil {
+		return false
+	}
+	host = strings.TrimSpace(strings.Trim(host, "[]"))
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 func validateNATS(n NATS) error {

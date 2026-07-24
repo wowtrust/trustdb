@@ -2,6 +2,12 @@
 
 Shipped YAML files are **starting points** only: adjust paths, keys, `server.listen`, anchor calendars, and TiKV endpoints for your environment.
 
+The production and container profiles enable mutual TLS and intentionally do
+not start without mounted transport certificates. See
+[`docs/integrations/TLS_MTLS.md`](../docs/integrations/TLS_MTLS.md) for TLS 1.2/1.3,
+CA pinning, rotation, revocation, SDK, desktop, and health-check configuration.
+Transport CA files are independent from every `keys.*` proof-signing path.
+
 Every `keys.*` path points to a canonical
 `trustdb.key-descriptor.v1` file, not raw Base64 key bytes. A software signer
 descriptor references separate private material relative to the descriptor;
