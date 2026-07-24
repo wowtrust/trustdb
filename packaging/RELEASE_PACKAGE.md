@@ -6,9 +6,23 @@ Run `trustdb version` to inspect the exact version, commit, target operating sys
 
 ```bash
 mkdir -p ./trustdb-data/keys
+read -r -s -p 'Development key passphrase: ' TRUSTDB_DEV_KEY_PASSPHRASE
+export TRUSTDB_DEV_KEY_PASSPHRASE
+printf '\n'
 trustdb keygen --out ./trustdb-data/keys --prefix server
 trustdb keygen --out ./trustdb-data/keys --prefix client
+unset TRUSTDB_DEV_KEY_PASSPHRASE
 ```
+
+The built-in passphrase provider is a development/offline facility. It accepts
+exactly one of `TRUSTDB_DEV_KEY_PASSPHRASE` or
+`TRUSTDB_DEV_KEY_PASSPHRASE_FILE`; the latter must name an owner-only regular
+file supplied by a service secret manager. Never put the passphrase in argv or
+logs, and keep a secret file outside the key/envelope directory and its backup
+volume. Windows software-envelope persistence currently fails closed until an
+owner-only DACL is continuously runtime-qualified; use an approved external
+signer there, or explicit `--protection plaintext-dev-v1` only for disposable
+evaluation.
 
 Copy `config/production.yaml`, adjust paths and deployment settings, and set `keys.server_private` plus either `keys.client_public` or a key registry. To enable the bundled Admin Web, configure `admin.enabled`, credentials, a session secret of at least 32 bytes, and set `admin.web_dir` to this package's `admin` directory.
 

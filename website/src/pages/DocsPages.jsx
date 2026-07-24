@@ -201,8 +201,10 @@ export function QuickStartPage({ route }) {
     "Invoke-TrustDB version",
     "Set-Content -Path .\\example.txt -Value 'hello TrustDB' -Encoding ascii",
     "New-Item -ItemType Directory -Path .trustdb-dev | Out-Null",
-    "Invoke-TrustDB key generate --out .trustdb-dev --prefix client",
-    "Invoke-TrustDB key generate --out .trustdb-dev --prefix server",
+    "# Windows encrypted software envelopes fail closed pending owner-only DACL qualification.",
+    "# This explicit plaintext mode is only for disposable quick-start data.",
+    "Invoke-TrustDB key generate --out .trustdb-dev --prefix client --protection plaintext-dev-v1",
+    "Invoke-TrustDB key generate --out .trustdb-dev --prefix server --protection plaintext-dev-v1",
     "Invoke-TrustDB claim-file `",
     "  --file .\\example.txt `",
     "  --private-key .trustdb-dev\\client.key `",
@@ -252,7 +254,7 @@ export function QuickStartPage({ route }) {
         </section>
         <section className="doc-section">
           <h2>{quickStart.keysTitle}</h2><p>{quickStart.keysBody}</p>
-          <CodeBlock>{`./bin/trustdb key generate --out .trustdb-dev --prefix client\n./bin/trustdb key generate --out .trustdb-dev --prefix server\nls -l .trustdb-dev`}</CodeBlock>
+          <CodeBlock>{`read -r -s -p 'Development key passphrase: ' TRUSTDB_DEV_KEY_PASSPHRASE\nexport TRUSTDB_DEV_KEY_PASSPHRASE\nprintf '\\n'\n./bin/trustdb key generate --out .trustdb-dev --prefix client\n./bin/trustdb key generate --out .trustdb-dev --prefix server\nls -l .trustdb-dev`}</CodeBlock>
           <Note tone="warn" title={ui.checkpoint}>{quickStart.keysWarning}</Note>
           <ExpectedResult label={ui.expected}>{quickStart.keysExpected}</ExpectedResult>
         </section>
@@ -300,7 +302,7 @@ export function ServerDocsPage({ route }) {
         </section>
         <section className="doc-section">
           <h2>{server.dockerTitle}</h2><p>{server.dockerBody}</p>
-          <CodeBlock>{`docker run -d \\\n  --name trustdb \\\n  -p 127.0.0.1:8080:8080 \\\n  -v trustdb-data:/var/lib/trustdb \\\n  ${dockerImage}\n\ndocker logs trustdb\ncurl --fail http://127.0.0.1:8080/healthz`}</CodeBlock>
+          <CodeBlock>{`read -r -s -p 'Development key passphrase: ' TRUSTDB_DEV_KEY_PASSPHRASE\nexport TRUSTDB_DEV_KEY_PASSPHRASE\nprintf '\\n'\ndocker run -d \\\n  --name trustdb \\\n  -e TRUSTDB_DEV_KEY_PASSPHRASE \\\n  -p 127.0.0.1:8080:8080 \\\n  -v trustdb-data:/var/lib/trustdb \\\n  ${dockerImage}\nunset TRUSTDB_DEV_KEY_PASSPHRASE\n\ndocker logs trustdb\ncurl --fail http://127.0.0.1:8080/healthz`}</CodeBlock>
           <ExpectedResult label={ui.expected}>{server.dockerExpected}</ExpectedResult>
           <Note tone="warn" title={ui.checkpoint}>{server.dockerBoundary}</Note>
           <InlineLink href={release.containerUrl}>GitHub Container Registry</InlineLink>

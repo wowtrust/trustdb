@@ -10,6 +10,11 @@ cleanup() {
 }
 trap cleanup EXIT HUP INT TERM
 
+# Disposable in-memory development KEK for this one-process demo. It is never
+# passed in argv, printed, or written beside the temporary envelope files.
+TRUSTDB_DEV_KEY_PASSPHRASE=$(LC_ALL=C od -An -N32 -tx1 /dev/urandom | tr -d ' \n')
+export TRUSTDB_DEV_KEY_PASSPHRASE
+
 printf 'Building TrustDB...\n'
 cd "$repo_dir"
 go build -o "$trustdb_bin" ./cmd/trustdb

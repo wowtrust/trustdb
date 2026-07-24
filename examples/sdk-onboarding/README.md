@@ -22,6 +22,10 @@ printf '\n'
 
 Export the same `TRUSTDB_DEV_KEY_PASSPHRASE` in each terminal below. This
 built-in passphrase provider is a development facility, not HSM custody.
+For unattended development, use an owner-only secret file outside
+`.trustdb-onboarding` and set `TRUSTDB_DEV_KEY_PASSPHRASE_FILE` instead; the
+direct and file sources are mutually exclusive. Windows software-envelope
+persistence currently fails closed, so this walkthrough requires Unix.
 
 In terminal 1, start a local server. The short batch delay keeps the tutorial wait brief:
 

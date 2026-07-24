@@ -15,8 +15,9 @@ TrustDB follows semantic versioning for stable releases. Proof, backup, storage,
 ### Changed
 
 - `trustdb key generate` now defaults to `sm4-envelope-v1` and requires
-  `TRUSTDB_DEV_KEY_PASSPHRASE`; `plaintext-dev-v1` remains an explicit
-  development-only compatibility option.
+  exactly one direct or owner-only file passphrase source;
+  `plaintext-dev-v1` remains an explicit development-only compatibility
+  option.
 
 ### Security and correctness
 
@@ -24,6 +25,10 @@ TrustDB follows semantic versioning for stable releases. Proof, backup, storage,
   tampering, truncation, metadata/KDF downgrade, unsafe permissions, symlinks,
   and unregistered providers. Software envelopes are not represented as HSM or
   certified production key custody.
+- Rewrap now holds an adjacent OS lock across read, authentication, and atomic
+  replacement, preventing concurrent or stale writers from overwriting a
+  winning rotation. Windows software-envelope persistence fails closed pending
+  continuously runtime-qualified owner-only DACL handling.
 
 ## [1.0.0] - 2026-07-22
 

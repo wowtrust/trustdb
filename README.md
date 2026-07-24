@@ -76,10 +76,24 @@ The multi-architecture Docker image is published with both immutable and stable-
 
 ```bash
 docker pull wsy19990317/trustdb:1.0.0
-docker run -d --name trustdb -p 127.0.0.1:8080:8080 -v trustdb-data:/var/lib/trustdb wsy19990317/trustdb:1.0.0
+read -r -s -p 'Development key passphrase: ' TRUSTDB_DEV_KEY_PASSPHRASE
+export TRUSTDB_DEV_KEY_PASSPHRASE
+printf '\n'
+docker run -d --name trustdb \
+  -e TRUSTDB_DEV_KEY_PASSPHRASE \
+  -p 127.0.0.1:8080:8080 \
+  -v trustdb-data:/var/lib/trustdb \
+  wsy19990317/trustdb:1.0.0
+unset TRUSTDB_DEV_KEY_PASSPHRASE
 docker logs trustdb
 curl --fail http://127.0.0.1:8080/healthz
 ```
+
+The value is forwarded from the shell without appearing in the `docker run`
+arguments. For a long-running service, prefer
+`TRUSTDB_DEV_KEY_PASSPHRASE_FILE` pointing to an owner-only secret-manager
+mount outside `/var/lib/trustdb`; configure exactly one passphrase source and
+never store the KEK beside the envelope or in the same backup volume.
 
 Desktop packages carry a release-specific self-signed certificate and its public `.cer` file. The certificate lets you inspect the signer used for this release, but does not establish Apple or Microsoft trust, so Gatekeeper or SmartScreen may still show an unknown-developer warning. Verify the downloaded file against `SHA256SUMS` before installing.
 
@@ -172,6 +186,11 @@ printf '\n'
 ./bin/trustdb key generate --out .trustdb-dev --prefix server
 ```
 
+For unattended development services, set
+`TRUSTDB_DEV_KEY_PASSPHRASE_FILE` instead. It must name an owner-only regular
+file, and `TRUSTDB_DEV_KEY_PASSPHRASE` must then be unset. Keep that secret file
+outside the key directory and its backups.
+
 For a development SM2 identity, select the suite explicitly. This enables key
 provisioning and registry lifecycle testing; CN_SM_V1 server evidence generation
 remains gated until the V2 server cutover in #454:
@@ -191,6 +210,10 @@ versioned PKCS#11, SDF, HSM/KMS, or remote-provider descriptor. A software SM4
 envelope is not production HSM custody. TrustDB does not read or fall back to
 legacy raw-base64 key files. See
 [`formats/SM4_KEY_ENVELOPE_V1.md`](formats/SM4_KEY_ENVELOPE_V1.md).
+Encrypted software-envelope persistence currently fails closed on Windows
+until TrustDB continuously runtime-qualifies an owner-only DACL. Windows
+deployments should use an approved external signer; explicit
+`plaintext-dev-v1` is only for disposable evaluation.
 
 Rotate the development KEK without changing the signing key or public identity:
 
@@ -202,6 +225,10 @@ printf '\n'
 export TRUSTDB_DEV_KEY_PASSPHRASE="$TRUSTDB_DEV_KEY_PASSPHRASE_NEW"
 unset TRUSTDB_DEV_KEY_PASSPHRASE_NEW
 ```
+
+File-based rotation uses `TRUSTDB_DEV_KEY_PASSPHRASE_FILE` for the current KEK
+and `TRUSTDB_DEV_KEY_PASSPHRASE_FILE_NEW` for the replacement. Configure
+exactly one direct or file source for each KEK.
 
 Create and sign a local file claim:
 

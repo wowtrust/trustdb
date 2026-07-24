@@ -22,8 +22,9 @@ passphrase together defeats the separation intended by envelope encryption.
 The file is RFC 8949 deterministic CBOR with schema
 `trustdb.software-key-envelope.v1`. Decoders reject unknown fields, duplicate
 map keys, tags, indefinite-length values, non-canonical encodings, trailing
-bytes, unsupported versions/algorithms/providers, and files larger than 16
-KiB.
+bytes, unsupported versions/algorithms, and files larger than 16 KiB. Parsing
+is provider-neutral: opening, not generic decoding, rejects a provider that is
+not registered by the caller.
 
 ```text
 schema_version     trustdb.software-key-envelope.v1
@@ -80,8 +81,11 @@ parameters in one rotation is rejected.
 ## Development passphrase provider
 
 The built-in `passphrase-dev-v1` provider reads the passphrase from
-`TRUSTDB_DEV_KEY_PASSPHRASE`; TrustDB never accepts it as an ordinary CLI flag.
-Its canonical parameters are:
+exactly one of `TRUSTDB_DEV_KEY_PASSPHRASE` or the owner-only regular file named
+by `TRUSTDB_DEV_KEY_PASSPHRASE_FILE`; TrustDB never accepts the secret as an
+ordinary CLI flag. For rotation, the replacement source is exactly one of the
+corresponding `_NEW` variables. Secret files must remain outside the envelope
+directory and its backup volume. The provider's canonical parameters are:
 
 ```text
 kdf         PBKDF2-HMAC-SM3
@@ -101,11 +105,21 @@ best-effort basis; Go and operating-system copies cannot be guaranteed erased.
 
 ## Persistence and failure behavior
 
-Envelope creation uses an owner-only same-directory temporary file, file
-`fsync`, no-replace installation, and directory `fsync`. KEK rotation uses the
-same sequence with an atomic replace. Symlinks, non-regular files, unsafe Unix
-permissions, missing rotation targets, and unsupported directory durability
-fail closed. Rotation creates no plaintext or `.bak` copy.
+On supported Unix systems, envelope creation holds an owner-only adjacent lock
+while using an owner-only same-directory temporary file, file `fsync`,
+no-replace installation, and directory `fsync`. KEK rotation holds that same
+OS lock across the complete read/authenticate/rewrap/atomic-replace transaction,
+so a concurrent or stale process must authenticate the winning envelope before
+it can publish. Process exit releases the kernel lock. Symlinks, non-regular
+files, unsafe permissions, missing rotation targets, callback/serialization
+failure, and unsupported directory durability fail closed without changing the
+previous envelope. Rotation creates no plaintext or `.bak` copy.
+
+Windows software-envelope persistence intentionally returns unsupported until
+TrustDB can continuously runtime-qualify owner-only DACL creation and checking
+across its supported Windows environments. Callers must use an approved
+external signer or, for disposable development only, explicitly select
+`plaintext-dev-v1`; there is no silent downgrade.
 
 Wrong passphrases, wrong KEKs, modified tags, KDF/provider-parameter changes,
 truncation, schema/algorithm downgrades, descriptor mismatch, and unregistered

@@ -56,12 +56,16 @@ If omitted, serve logs that the deployment is treated as **custom**.
 
 `trustdb key generate` defaults to an authenticated `sm4-envelope-v1` material
 file. The built-in development KEK provider reads
-`TRUSTDB_DEV_KEY_PASSPHRASE`; it is intentionally not a YAML field or ordinary
-CLI flag, so configuration display and process arguments cannot expose it.
-Every process that opens an encrypted software signer must receive that
-environment variable. This provider is for development/offline deployments,
-not production HSM custody. Production profiles should use an approved
-PKCS#11, SDF, HSM/KMS, or remote signer descriptor.
+exactly one of `TRUSTDB_DEV_KEY_PASSPHRASE` or
+`TRUSTDB_DEV_KEY_PASSPHRASE_FILE`; it is intentionally not a YAML field or
+ordinary CLI flag, so configuration display and process arguments cannot
+expose the value. The file source must be an owner-only regular file supplied
+outside the envelope directory and its backup volume. Every process that opens
+an encrypted software signer must receive the same source. This provider is
+for development/offline deployments, not production HSM custody. Production
+profiles should use an approved PKCS#11, SDF, HSM/KMS, or remote signer
+descriptor. Windows software-envelope persistence fails closed until an
+owner-only DACL is continuously runtime-qualified.
 
 The owner-permissions-only compatibility path requires explicit
 `--protection plaintext-dev-v1` and must not be used in production.

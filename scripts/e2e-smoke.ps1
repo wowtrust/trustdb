@@ -180,8 +180,12 @@ try {
     New-Item -ItemType Directory -Force -Path $keysDir, $inputDir, $claimsDir | Out-Null
 
     Write-Step "generating client/server keys"
-    Invoke-TrustDBJson @("--log-format", "json", "--log-output", "stderr", "keygen", "--out", $keysDir, "--prefix", "client") | Out-Null
-    Invoke-TrustDBJson @("--log-format", "json", "--log-output", "stderr", "keygen", "--out", $keysDir, "--prefix", "server") | Out-Null
+    # The Windows smoke test uses the explicit disposable plaintext fixture.
+    # Authenticated software envelopes fail closed on Windows until their DACL
+    # behavior is runtime-qualified; production deployments must use an
+    # approved external provider rather than this test-only escape hatch.
+    Invoke-TrustDBJson @("--log-format", "json", "--log-output", "stderr", "keygen", "--out", $keysDir, "--prefix", "client", "--protection", "plaintext-dev-v1") | Out-Null
+    Invoke-TrustDBJson @("--log-format", "json", "--log-output", "stderr", "keygen", "--out", $keysDir, "--prefix", "server", "--protection", "plaintext-dev-v1") | Out-Null
     $clientKey = Join-Path $keysDir "client.key"
     $clientPub = Join-Path $keysDir "client.pub"
     $serverKey = Join-Path $keysDir "server.key"
