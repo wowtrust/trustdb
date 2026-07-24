@@ -63,13 +63,13 @@ def run(command: list[str], cwd: Path = REPO_ROOT) -> str:
         cwd=cwd,
         check=False,
         stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
+        stderr=subprocess.PIPE,
         text=True,
     )
     if completed.returncode != 0:
         raise BuildError(
             f"command failed ({completed.returncode}): {' '.join(command)}\n"
-            f"{completed.stdout}"
+            f"stdout:\n{completed.stdout}\nstderr:\n{completed.stderr}"
         )
     return completed.stdout
 
