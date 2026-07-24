@@ -8,8 +8,13 @@ import (
 )
 
 const (
-	StandardSDKVersion = "fisco-bcos-go-sdk-v3.0.2+c-sdk-v3.6.0@53240138c396c10cb0e1a2b7b4d5c0cdaa0ac539"
-	ReceiptStatusOK    = 0
+	StandardSDKVersion               = "fisco-bcos-go-sdk-v3.0.2+c-sdk-v3.6.0@53240138c396c10cb0e1a2b7b4d5c0cdaa0ac539"
+	ReceiptStatusOK                  = 0
+	ReceiptStatusTransactionPoolFull = 10002
+	ReceiptStatusAlreadyInPool       = 10004
+	ReceiptStatusAlreadyInChain      = 10005
+	ReceiptStatusPoolTimeout         = 10010
+	ReceiptStatusAlreadyInPoolAccept = 10011
 )
 
 var (
@@ -22,6 +27,7 @@ var (
 	ErrInvalidReceiptStatus              = errors.New("FISCO BCOS receipt status is invalid")
 	ErrIncompleteChainEvidence           = errors.New("FISCO BCOS chain evidence is incomplete")
 	ErrExistingAnchorEvidenceUnavailable = errors.New("existing FISCO BCOS anchor requires immutable transaction evidence recovery")
+	ErrTransactionNotFound               = errors.New("FISCO BCOS transaction is not yet observable")
 )
 
 // ReceiptStatusDisposition is the pinned FISCO BCOS v3.16.3 interpretation of
@@ -184,8 +190,10 @@ type TransactionSubmission struct {
 	SubmittedAtUnixN   int64  `cbor:"submitted_at_unix_nano" json:"submitted_at_unix_nano"`
 }
 
-type Submission struct {
-	Attempt TransactionSubmission
+type SubmissionOutcome struct {
+	Status          int
+	StatusMessage   string
+	ObservedAtUnixN int64
 }
 
 type AnchorPublishedEvent struct {
@@ -226,6 +234,7 @@ type ReceiptWithProof struct {
 	BlockHash     []byte
 	Record        AnchorRecord
 	Event         AnchorPublishedEvent
+	Evidence      ReceiptEvidence
 	Observation   ReceiptRPCObservation
 }
 
@@ -236,24 +245,14 @@ type BlockRPCObservation struct {
 }
 
 type BlockHeader struct {
+	Evidence    BlockEvidence
 	Observation BlockRPCObservation
 }
 
-// ConsensusFinalityObservation contains only values bound to the requested
-// historical block. FISCO BCOS exposes the current PBFT view through a
-// separate latest-state RPC; it is not a historical block-header field.
-// Nil View and Round values explicitly record that the pinned standard SDK
-// cannot recover those historical values without inventing a binding.
-type ConsensusFinalityObservation struct {
-	View       *uint64           `cbor:"view" json:"view"`
-	Round      *uint64           `cbor:"round" json:"round"`
-	Signatures []CommitSignature `cbor:"signatures" json:"signatures"`
-}
-
 type ConsensusSnapshot struct {
-	BlockNumber uint64                       `cbor:"block_number" json:"block_number"`
-	BlockHash   []byte                       `cbor:"block_hash" json:"block_hash"`
-	Finality    ConsensusFinalityObservation `cbor:"finality" json:"finality"`
+	BlockNumber uint64           `cbor:"block_number" json:"block_number"`
+	BlockHash   []byte           `cbor:"block_hash" json:"block_hash"`
+	Finality    FinalityEvidence `cbor:"finality" json:"finality"`
 }
 
 // Driver is the complete network boundary used by the standard-crypto sink.
@@ -262,7 +261,8 @@ type ConsensusSnapshot struct {
 type Driver interface {
 	Endpoint() string
 	ProbeChain(context.Context) (ChainProbe, error)
-	SubmitAnchor(context.Context, SubmitRequest) (Submission, error)
+	PrepareAnchor(context.Context, SubmitRequest) (TransactionSubmission, error)
+	SubmitPreparedAnchor(context.Context, TransactionSubmission) (SubmissionOutcome, error)
 	ReadAnchor(context.Context, []byte) (AnchorRecord, error)
 	GetReceiptWithProof(context.Context, TransactionSubmission) (ReceiptWithProof, error)
 	GetBlockHeader(context.Context, uint64) (BlockHeader, error)

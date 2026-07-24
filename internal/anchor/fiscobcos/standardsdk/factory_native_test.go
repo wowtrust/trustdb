@@ -56,11 +56,14 @@ func TestSubmittedReceiptBindingAndBoundedStatusArePanicFree(t *testing.T) {
 		To:              "0x" + hex.EncodeToString(contract),
 		Input:           "0x" + hex.EncodeToString(input),
 	}
-	if err := validateSubmittedReceipt(receipt, digest, sender, contract, input); err != nil {
+	attempt := fiscobcos.TransactionSubmission{
+		TransactionHash: digest, Sender: sender, To: contract, Input: input,
+	}
+	if err := validateSubmittedReceiptIdentity(receipt, attempt); err != nil {
 		t.Fatal(err)
 	}
 	receipt.TransactionHash = "0x" + strings.Repeat("44", 32)
-	if err := validateSubmittedReceipt(receipt, digest, sender, contract, input); err == nil {
+	if err := validateSubmittedReceiptIdentity(receipt, attempt); err == nil {
 		t.Fatal("accepted mismatched transaction hash")
 	}
 	for _, status := range []int{types.Success, types.BlockLimitCheckFail, -1, int(^uint(0) >> 1)} {

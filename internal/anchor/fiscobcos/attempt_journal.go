@@ -18,7 +18,7 @@ const (
 	maxJournalMapPairs      = 64
 	maxReceiptAggregate     = 4 << 20
 	maxCanonicalLogs        = 512
-	ReceiptStatusBlockLimit = int64(10001)
+	ReceiptStatusCodeBlockLimit = int64(10001)
 )
 
 var ErrInvalidAttemptJournal = errors.New("invalid FISCO BCOS attempt journal")
@@ -287,8 +287,16 @@ func ValidateAttemptJournalTransition(previous, next AttemptJournal) error {
 	}
 	before := previous.Attempts[len(previous.Attempts)-1]
 	after := next.Attempts[len(next.Attempts)-1]
-	if !sameSignedTransaction(before.Transaction, after.Transaction) ||
-		!validOutcomeTransition(before.Outcome, after.Outcome) {
+	if !sameSignedTransaction(before.Transaction, after.Transaction) {
+		return fmt.Errorf("%w: invalid attempt outcome transition", ErrInvalidAttemptJournal)
+	}
+	if before.Outcome == AttemptOutcomeSubmitUnknown &&
+		after.Outcome == AttemptOutcomeSubmitUnknown &&
+		before.Submission == nil && after.Submission != nil &&
+		before.Receipt == nil && after.Receipt == nil {
+		return nil
+	}
+	if !validOutcomeTransition(before.Outcome, after.Outcome) {
 		return fmt.Errorf("%w: invalid attempt outcome transition", ErrInvalidAttemptJournal)
 	}
 	return nil
@@ -315,14 +323,30 @@ func validateJournalAttempt(attempt JournalAttempt, ordinal uint32, journal Atte
 		return fmt.Errorf("%w: transaction attempt %d input does not match payload", ErrInvalidAttemptJournal, ordinal)
 	}
 	switch attempt.Outcome {
-	case AttemptOutcomePrepared, AttemptOutcomeSubmitUnknown, AttemptOutcomeBlockLimitExpired:
+	case AttemptOutcomePrepared, AttemptOutcomeBlockLimitExpired:
 		if attempt.Submission != nil || attempt.Receipt != nil {
 			return fmt.Errorf("%w: outcome %q must not contain submission or receipt evidence", ErrInvalidAttemptJournal, attempt.Outcome)
 		}
+	case AttemptOutcomeSubmitUnknown:
+		if attempt.Receipt != nil {
+			return fmt.Errorf("%w: submit-unknown outcome must not claim a receipt", ErrInvalidAttemptJournal)
+		}
+		if attempt.Submission != nil {
+			if err := validateSubmissionObservation(attempt.Submission, -1); err != nil {
+				return err
+			}
+			if !isDuplicateSubmissionStatus(attempt.Submission.Status) {
+				return fmt.Errorf("%w: submit-unknown response status=%d is not recoverable", ErrInvalidAttemptJournal, attempt.Submission.Status)
+			}
+		}
 	case AttemptOutcomeReceiptSuccess:
 		if attempt.Submission != nil {
-			if err := validateSubmissionObservation(attempt.Submission, ReceiptStatusOK); err != nil {
+			if err := validateSubmissionObservation(attempt.Submission, -1); err != nil {
 				return err
+			}
+			if attempt.Submission.Status != ReceiptStatusOK &&
+				!isDuplicateSubmissionStatus(attempt.Submission.Status) {
+				return fmt.Errorf("%w: successful attempt has incompatible submission status=%d", ErrInvalidAttemptJournal, attempt.Submission.Status)
 			}
 		}
 		if err := validateAttemptReceipt(attempt.Outcome, attempt.Receipt, transaction.TransactionHash); err != nil {
@@ -332,7 +356,7 @@ func validateJournalAttempt(attempt JournalAttempt, ordinal uint32, journal Atte
 		if attempt.Receipt != nil {
 			return fmt.Errorf("%w: block-limit rejection must not claim an included receipt", ErrInvalidAttemptJournal)
 		}
-		if err := validateSubmissionObservation(attempt.Submission, ReceiptStatusBlockLimit); err != nil {
+		if err := validateSubmissionObservation(attempt.Submission, ReceiptStatusCodeBlockLimit); err != nil {
 			return err
 		}
 	case AttemptOutcomeReceiptTerminalRejected:
@@ -343,7 +367,7 @@ func validateJournalAttempt(attempt JournalAttempt, ordinal uint32, journal Atte
 			return err
 		}
 		if attempt.Submission.Status == ReceiptStatusOK ||
-			attempt.Submission.Status == ReceiptStatusBlockLimit {
+			attempt.Submission.Status == ReceiptStatusCodeBlockLimit {
 			return fmt.Errorf("%w: terminal submission status=%d is not terminal", ErrInvalidAttemptJournal, attempt.Submission.Status)
 		}
 	default:
@@ -363,6 +387,17 @@ func validateSubmissionObservation(observation *SubmissionObservation, expectedS
 		return fmt.Errorf("%w: submission observation status=%d, want %d", ErrInvalidAttemptJournal, observation.Status, expectedStatus)
 	}
 	return nil
+}
+
+func isDuplicateSubmissionStatus(status int64) bool {
+	switch status {
+	case ReceiptStatusAlreadyInPool,
+		ReceiptStatusAlreadyInChain,
+		ReceiptStatusAlreadyInPoolAccept:
+		return true
+	default:
+		return false
+	}
 }
 
 func validateAttemptReceipt(outcome AttemptOutcome, receipt *AttemptReceiptObservation, transactionHash []byte) error {

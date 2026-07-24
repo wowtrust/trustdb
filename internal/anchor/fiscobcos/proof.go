@@ -186,12 +186,22 @@ func ValidateProofStructure(proof AnchorProof) error {
 			return fmt.Errorf("%w: non-final transaction attempt %d was not closed by block limit", ErrInvalidProof, i+1)
 		}
 		switch attempt.Outcome {
-		case AttemptOutcomeBlockLimitExpired, AttemptOutcomeReceiptSuccess:
+		case AttemptOutcomeBlockLimitExpired:
 			if attempt.Submission != nil {
 				return fmt.Errorf("%w: transaction attempt %d has unexpected submission response", ErrInvalidProof, i+1)
 			}
+		case AttemptOutcomeReceiptSuccess:
+			if attempt.Submission != nil {
+				if err := validateSubmissionObservation(attempt.Submission, -1); err != nil {
+					return err
+				}
+				if attempt.Submission.Status != ReceiptStatusOK &&
+					!isDuplicateSubmissionStatus(attempt.Submission.Status) {
+					return fmt.Errorf("%w: successful attempt %d has incompatible submission status", ErrInvalidProof, i+1)
+				}
+			}
 		case AttemptOutcomeReceiptBlockLimitRejected:
-			if err := validateSubmissionObservation(attempt.Submission, ReceiptStatusBlockLimit); err != nil {
+			if err := validateSubmissionObservation(attempt.Submission, ReceiptStatusCodeBlockLimit); err != nil {
 				return err
 			}
 		case AttemptOutcomeReceiptTerminalRejected:
@@ -199,7 +209,7 @@ func ValidateProofStructure(proof AnchorProof) error {
 				return err
 			}
 			if attempt.Submission.Status == ReceiptStatusOK ||
-				attempt.Submission.Status == ReceiptStatusBlockLimit {
+				attempt.Submission.Status == ReceiptStatusCodeBlockLimit {
 				return fmt.Errorf("%w: transaction attempt %d has non-terminal status", ErrInvalidProof, i+1)
 			}
 		}
