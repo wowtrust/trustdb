@@ -53,6 +53,60 @@ func TestServiceCommitsFullBatch(t *testing.T) {
 	}
 }
 
+func TestServiceRecordStatusMovesFromProcessingToCommitted(t *testing.T) {
+	t.Parallel()
+
+	block := make(chan struct{})
+	entered := make(chan struct{}, 1)
+	store := proofstore.LocalStore{Root: t.TempDir()}
+	changes := make(chan []model.RecordStatus, 8)
+	svc := New(blockingEngine{block: block, entered: entered}, store, Options{
+		QueueSize:  1,
+		MaxRecords: 1,
+		MaxDelay:   time.Hour,
+		OnRecordStatusesChanged: func(statuses []model.RecordStatus) {
+			changes <- append([]model.RecordStatus(nil), statuses...)
+		},
+	}, nil)
+	defer svc.Shutdown(context.Background())
+
+	rec := record("tr1status")
+	rec.TenantID = "tenant-a"
+	rec.ClientID = "client-a"
+	rec.KeyID = "key-a"
+	if err := svc.Enqueue(context.Background(), signed(rec.RecordID), rec, accepted(rec.RecordID)); err != nil {
+		t.Fatalf("Enqueue() error = %v", err)
+	}
+	<-entered
+
+	status, found, err := svc.RecordStatus(context.Background(), rec.RecordID)
+	if err != nil || !found {
+		t.Fatalf("RecordStatus(processing) found=%v err=%v", found, err)
+	}
+	if status.Status != model.RecordStatusProcessing || status.ProofLevel != "L2" || status.Terminal {
+		t.Fatalf("RecordStatus(processing) = %+v", status)
+	}
+
+	close(block)
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		status, found, err = svc.RecordStatus(context.Background(), rec.RecordID)
+		if err == nil && found && status.Status == model.RecordStatusCommitted {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if status.Status != model.RecordStatusCommitted || status.ProofLevel != "L3" || !status.Terminal || status.BatchID == "" {
+		t.Fatalf("RecordStatus(committed) = %+v found=%v err=%v", status, found, err)
+	}
+	if status.TenantID != rec.TenantID || status.ClientID != rec.ClientID || status.KeyID != rec.KeyID {
+		t.Fatalf("RecordStatus identity = %+v", status)
+	}
+	if len(changes) < 2 {
+		t.Fatalf("status change notifications = %d, want at least accepted and committed", len(changes))
+	}
+}
+
 func TestServiceShutdownFlushesPartialBatch(t *testing.T) {
 	t.Parallel()
 

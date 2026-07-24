@@ -20,6 +20,7 @@ import (
 	"github.com/wowtrust/trustdb/internal/model"
 	"github.com/wowtrust/trustdb/internal/observability"
 	"github.com/wowtrust/trustdb/internal/prooflevel"
+	"github.com/wowtrust/trustdb/internal/statusnotify"
 	"github.com/wowtrust/trustdb/internal/submission"
 	"github.com/wowtrust/trustdb/internal/trusterr"
 )
@@ -40,6 +41,8 @@ type Handler struct {
 	Global    GlobalLogService
 	Anchors   AnchorService
 	Metrics   http.Handler
+	Statuses  RecordStatusService
+	StatusHub *statusnotify.Hub
 }
 
 type BatchService interface {
@@ -54,6 +57,11 @@ type BatchService interface {
 	Manifest(context.Context, string) (model.BatchManifest, error)
 	BatchTreeLeaves(context.Context, model.BatchTreeLeafListOptions) ([]model.BatchTreeLeaf, error)
 	BatchTreeNodes(context.Context, model.BatchTreeNodeListOptions) ([]model.BatchTreeNode, error)
+}
+
+type RecordStatusService interface {
+	RecordStatus(context.Context, string) (model.RecordStatus, bool, error)
+	RecordStatuses(context.Context, []string) ([]model.RecordStatus, error)
 }
 
 // AnchorService exposes immutable L5 publication evidence only. Mutable
@@ -148,6 +156,15 @@ type recordsResponse struct {
 	NextCursor string              `json:"next_cursor,omitempty"`
 }
 
+type recordStatusesRequest struct {
+	RecordIDs []string `json:"record_ids"`
+}
+
+type recordStatusesResponse struct {
+	Statuses         []model.RecordStatus `json:"statuses"`
+	MissingRecordIDs []string             `json:"missing_record_ids,omitempty"`
+}
+
 type sthsResponse struct {
 	STHs       []model.SignedTreeHead `json:"sths"`
 	Limit      int                    `json:"limit"`
@@ -240,14 +257,22 @@ func NewWithSubmitterAndGlobalAndAnchors(
 	batchSvc BatchService,
 	globalSvc GlobalLogService,
 	anchorSvc AnchorService,
+	statusHub ...*statusnotify.Hub,
 ) http.Handler {
-	return buildMux(Handler{
+	h := Handler{
 		Submitter: submitter,
 		Batch:     batchSvc,
 		Global:    globalSvc,
 		Anchors:   anchorSvc,
 		Metrics:   metrics,
-	})
+	}
+	if statuses, ok := batchSvc.(RecordStatusService); ok {
+		h.Statuses = statuses
+	}
+	if len(statusHub) > 0 {
+		h.StatusHub = statusHub[0]
+	}
+	return buildMux(h)
 }
 
 func buildMux(h Handler) http.Handler {
@@ -258,6 +283,16 @@ func buildMux(h Handler) http.Handler {
 	mux.HandleFunc("POST /v1/claims/batch", h.submitClaimsBatch)
 	mux.HandleFunc("GET /v1/records", h.listRecords)
 	mux.HandleFunc("GET /v1/records/{record_id}", h.getRecordIndex)
+	if h.Statuses != nil {
+		mux.HandleFunc("GET /v1/records/{record_id}/status", h.getRecordStatus)
+		mux.HandleFunc("POST /v1/records/status:batchGet", h.getRecordStatuses)
+	}
+	if h.StatusHub != nil && h.Statuses != nil {
+		mux.HandleFunc("POST /v1/status-subscriptions", h.createStatusSubscription)
+		mux.HandleFunc("DELETE /v1/status-subscriptions/{subscription_id}", h.deleteStatusSubscription)
+		mux.HandleFunc("GET /v1/status-subscriptions/{subscription_id}/statuses", h.getSubscriptionStatuses)
+		mux.HandleFunc("GET /v1/status-subscriptions/{subscription_id}/events", h.streamStatusSubscription)
+	}
 	mux.HandleFunc("GET /v1/proofs/{record_id}", h.getProof)
 	mux.HandleFunc("GET /v1/roots", h.listRoots)
 	mux.HandleFunc("GET /v1/roots/latest", h.latestRoot)
@@ -299,6 +334,17 @@ func normalizeHandler(h Handler) Handler {
 	}
 	if isTypedNil(h.Anchors) {
 		h.Anchors = nil
+	}
+	if isTypedNil(h.Statuses) {
+		h.Statuses = nil
+	}
+	if h.Statuses == nil && h.Batch != nil {
+		if statuses, ok := h.Batch.(RecordStatusService); ok && !isTypedNil(statuses) {
+			h.Statuses = statuses
+		}
+	}
+	if h.StatusHub == nil {
+		h.StatusHub = nil
 	}
 	return h
 }
@@ -422,6 +468,22 @@ func decodeCBORRequest(body io.Reader, contentLength int64, maxBytes int, out an
 	return cborx.UnmarshalLimit(raw, out, maxBytes)
 }
 
+func decodeJSONRequest(body io.Reader, maxBytes int64, out any) error {
+	decoder := json.NewDecoder(io.LimitReader(body, maxBytes+1))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(out); err != nil {
+		return err
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		if err == nil {
+			return errors.New("request contains multiple JSON values")
+		}
+		return err
+	}
+	return nil
+}
+
 func acquireRequestBodyBuffer(size int) *[]byte {
 	buffer := requestBodyBufferPool.Get().(*[]byte)
 	if cap(*buffer) < size {
@@ -527,6 +589,180 @@ func (h Handler) getRecordIndex(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, idx)
+}
+
+func (h Handler) getRecordStatus(w http.ResponseWriter, r *http.Request) {
+	status, found, err := h.Statuses.RecordStatus(r.Context(), r.PathValue("record_id"))
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	if !found {
+		writeError(w, trusterr.New(trusterr.CodeNotFound, "record status not found"))
+		return
+	}
+	writeJSON(w, http.StatusOK, status)
+}
+
+func (h Handler) getRecordStatuses(w http.ResponseWriter, r *http.Request) {
+	var request recordStatusesRequest
+	if err := decodeJSONRequest(r.Body, 1<<20, &request); err != nil {
+		writeError(w, trusterr.Wrap(trusterr.CodeInvalidArgument, "decode record status batch", err))
+		return
+	}
+	h.writeRecordStatuses(w, r, request.RecordIDs)
+}
+
+func (h Handler) createStatusSubscription(w http.ResponseWriter, r *http.Request) {
+	var request statusnotify.CreateRequest
+	if err := decodeJSONRequest(r.Body, 1<<20, &request); err != nil {
+		writeError(w, trusterr.Wrap(trusterr.CodeInvalidArgument, "decode status subscription", err))
+		return
+	}
+	// Authenticate and bound the request before performing the selected-record
+	// lookups. Otherwise an unsigned request could amplify one HTTP call into up
+	// to maxRecordIDs proofstore reads.
+	if err := h.StatusHub.ValidateCreateRequest(request); err != nil {
+		writeError(w, err)
+		return
+	}
+	recordIDs, err := normalizeStatusRecordIDs(request.RecordIDs)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	statuses, err := h.Statuses.RecordStatuses(r.Context(), recordIDs)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	if len(statuses) != len(recordIDs) {
+		writeError(w, trusterr.New(trusterr.CodeNotFound, "one or more subscribed record_ids were not found"))
+		return
+	}
+	for i := range statuses {
+		if statuses[i].TenantID != strings.TrimSpace(request.TenantID) || statuses[i].ClientID != strings.TrimSpace(request.ClientID) {
+			writeError(w, trusterr.New(trusterr.CodeFailedPrecondition, "subscribed record does not belong to the upstream identity"))
+			return
+		}
+	}
+	subscription, err := h.StatusHub.Create(r.Context(), request)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, subscription)
+}
+
+func normalizeStatusRecordIDs(values []string) ([]string, error) {
+	if len(values) == 0 || len(values) > 1000 {
+		return nil, trusterr.New(trusterr.CodeInvalidArgument, "record_ids must contain between 1 and 1000 items")
+	}
+	seen := make(map[string]struct{}, len(values))
+	out := make([]string, 0, len(values))
+	for _, raw := range values {
+		value := strings.TrimSpace(raw)
+		if value == "" {
+			return nil, trusterr.New(trusterr.CodeInvalidArgument, "record_id must not be empty")
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	return out, nil
+}
+
+func (h Handler) deleteStatusSubscription(w http.ResponseWriter, r *http.Request) {
+	if err := h.StatusHub.Delete(r.Context(), r.PathValue("subscription_id")); err != nil {
+		writeError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h Handler) getSubscriptionStatuses(w http.ResponseWriter, r *http.Request) {
+	subscription, found := h.StatusHub.Get(r.PathValue("subscription_id"))
+	if !found {
+		writeError(w, trusterr.New(trusterr.CodeNotFound, "status subscription not found"))
+		return
+	}
+	h.writeRecordStatuses(w, r, subscription.RecordIDs)
+}
+
+func (h Handler) writeRecordStatuses(w http.ResponseWriter, r *http.Request, recordIDs []string) {
+	recordIDs, err := normalizeStatusRecordIDs(recordIDs)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	statuses, err := h.Statuses.RecordStatuses(r.Context(), recordIDs)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	found := make(map[string]struct{}, len(statuses))
+	for i := range statuses {
+		found[statuses[i].RecordID] = struct{}{}
+	}
+	missing := make([]string, 0)
+	for _, recordID := range recordIDs {
+		if _, ok := found[recordID]; !ok {
+			missing = append(missing, recordID)
+		}
+	}
+	writeJSON(w, http.StatusOK, recordStatusesResponse{Statuses: statuses, MissingRecordIDs: missing})
+}
+
+func (h Handler) streamStatusSubscription(w http.ResponseWriter, r *http.Request) {
+	events, cancel, err := h.StatusHub.Watch(r.PathValue("subscription_id"))
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	defer cancel()
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache, no-transform")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+	controller := http.NewResponseController(w)
+	_ = controller.SetWriteDeadline(time.Time{})
+	if _, err := io.WriteString(w, ": trustdb status stream\n\n"); err != nil {
+		return
+	}
+	if err := controller.Flush(); err != nil {
+		return
+	}
+	keepalive := time.NewTicker(15 * time.Second)
+	defer keepalive.Stop()
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case notification, ok := <-events:
+			if !ok {
+				return
+			}
+			data, err := json.Marshal(notification)
+			if err != nil {
+				return
+			}
+			if _, err := fmt.Fprintf(w, "id: %d\nevent: refresh_required\ndata: %s\n\n", notification.Version, data); err != nil {
+				return
+			}
+			if err := controller.Flush(); err != nil {
+				return
+			}
+		case <-keepalive.C:
+			if _, err := io.WriteString(w, ": keepalive\n\n"); err != nil {
+				return
+			}
+			if err := controller.Flush(); err != nil {
+				return
+			}
+		}
+	}
 }
 
 func (h Handler) listRecords(w http.ResponseWriter, r *http.Request) {

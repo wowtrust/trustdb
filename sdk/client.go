@@ -44,6 +44,18 @@ type globalEvidenceTransport interface {
 	GetGlobalEvidence(context.Context, string) (GlobalLogEvidence, error)
 }
 
+type recordStatusTransport interface {
+	GetRecordStatus(context.Context, string) (RecordStatus, error)
+	GetRecordStatuses(context.Context, []string) (RecordStatusBatch, error)
+}
+
+type statusSubscriptionTransport interface {
+	CreateStatusSubscription(context.Context, CreateStatusSubscriptionOptions) (StatusSubscription, error)
+	DeleteStatusSubscription(context.Context, string) error
+	GetStatusSubscriptionStatuses(context.Context, string) (RecordStatusBatch, error)
+	SubscribeStatusRefresh(context.Context, string) (<-chan StatusRefresh, <-chan error, error)
+}
+
 type signedClaimStreamTransport interface {
 	SubmitSignedClaimStream(context.Context, <-chan signedClaimStreamItem) (<-chan signedClaimStreamItemResult, error)
 }
@@ -191,6 +203,57 @@ func (c *Client) SubmitSignedClaim(ctx context.Context, signed SignedClaim) (Sub
 
 func (c *Client) GetRecord(ctx context.Context, recordID string) (RecordIndex, error) {
 	return c.transport.GetRecord(ctx, recordID)
+}
+
+func (c *Client) GetRecordStatus(ctx context.Context, recordID string) (RecordStatus, error) {
+	transport, ok := c.transport.(recordStatusTransport)
+	if !ok {
+		return RecordStatus{}, &Error{Op: "get record status", Message: "transport does not support record status queries"}
+	}
+	return transport.GetRecordStatus(ctx, recordID)
+}
+
+func (c *Client) GetRecordStatuses(ctx context.Context, recordIDs []string) (RecordStatusBatch, error) {
+	transport, ok := c.transport.(recordStatusTransport)
+	if !ok {
+		return RecordStatusBatch{}, &Error{Op: "get record statuses", Message: "transport does not support record status queries"}
+	}
+	return transport.GetRecordStatuses(ctx, recordIDs)
+}
+
+func (c *Client) CreateStatusSubscription(ctx context.Context, opts CreateStatusSubscriptionOptions) (StatusSubscription, error) {
+	transport, ok := c.transport.(statusSubscriptionTransport)
+	if !ok {
+		return StatusSubscription{}, &Error{Op: "create status subscription", Message: "transport does not support status subscriptions"}
+	}
+	return transport.CreateStatusSubscription(ctx, opts)
+}
+
+func (c *Client) DeleteStatusSubscription(ctx context.Context, subscriptionID string) error {
+	transport, ok := c.transport.(statusSubscriptionTransport)
+	if !ok {
+		return &Error{Op: "delete status subscription", Message: "transport does not support status subscriptions"}
+	}
+	return transport.DeleteStatusSubscription(ctx, subscriptionID)
+}
+
+func (c *Client) GetStatusSubscriptionStatuses(ctx context.Context, subscriptionID string) (RecordStatusBatch, error) {
+	transport, ok := c.transport.(statusSubscriptionTransport)
+	if !ok {
+		return RecordStatusBatch{}, &Error{Op: "get subscription statuses", Message: "transport does not support status subscriptions"}
+	}
+	return transport.GetStatusSubscriptionStatuses(ctx, subscriptionID)
+}
+
+// SubscribeStatusRefresh opens the SSE invalidation stream. The status
+// channel closes when ctx is canceled or the stream ends; terminal stream
+// errors are reported on the separate buffered error channel.
+func (c *Client) SubscribeStatusRefresh(ctx context.Context, subscriptionID string) (<-chan StatusRefresh, <-chan error, error) {
+	transport, ok := c.transport.(statusSubscriptionTransport)
+	if !ok {
+		return nil, nil, &Error{Op: "subscribe status refresh", Message: "transport does not support status subscriptions"}
+	}
+	return transport.SubscribeStatusRefresh(ctx, subscriptionID)
 }
 
 func (c *Client) ListRecords(ctx context.Context, opts ListRecordsOptions) (RecordPage, error) {

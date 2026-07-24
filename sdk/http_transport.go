@@ -1,8 +1,12 @@
 package sdk
 
 import (
+	"bufio"
 	"bytes"
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,7 +18,10 @@ import (
 	"time"
 
 	"github.com/wowtrust/trustdb/internal/cborx"
+	"github.com/wowtrust/trustdb/internal/cryptosuite"
 	"github.com/wowtrust/trustdb/internal/model"
+	"github.com/wowtrust/trustdb/internal/statusnotify"
+	"github.com/wowtrust/trustdb/internal/trustcrypto"
 )
 
 type httpTransport struct {
@@ -111,6 +118,135 @@ func (t *httpTransport) GetRecord(ctx context.Context, recordID string) (RecordI
 		return RecordIndex{}, &Error{Op: "get record", Message: "server returned empty record index"}
 	}
 	return idx, nil
+}
+
+func (t *httpTransport) GetRecordStatus(ctx context.Context, recordID string) (RecordStatus, error) {
+	var status model.RecordStatus
+	if err := t.getJSON(ctx, "/v1/records/"+url.PathEscape(recordID)+"/status", nil, &status); err != nil {
+		return RecordStatus{}, err
+	}
+	return status, nil
+}
+
+func (t *httpTransport) GetRecordStatuses(ctx context.Context, recordIDs []string) (RecordStatusBatch, error) {
+	body, err := json.Marshal(recordStatusesRequestEnvelope{RecordIDs: recordIDs})
+	if err != nil {
+		return RecordStatusBatch{}, err
+	}
+	var response recordStatusesEnvelope
+	if err := t.doJSON(ctx, http.MethodPost, "/v1/records/status:batchGet", nil, bytes.NewReader(body), "application/json", &response); err != nil {
+		return RecordStatusBatch{}, err
+	}
+	return RecordStatusBatch{Statuses: response.Statuses, MissingRecordIDs: response.MissingRecordIDs}, nil
+}
+
+func (t *httpTransport) CreateStatusSubscription(ctx context.Context, opts CreateStatusSubscriptionOptions) (StatusSubscription, error) {
+	if opts.TTL < 0 {
+		return StatusSubscription{}, &Error{Op: "create status subscription", Message: "subscription TTL must not be negative"}
+	}
+	ttlSeconds := int64(0)
+	if opts.TTL > 0 {
+		ttlSeconds = int64((opts.TTL + time.Second - 1) / time.Second)
+	}
+	request := statusnotify.CreateRequest{
+		TenantID:      opts.Identity.TenantID,
+		ClientID:      opts.Identity.ClientID,
+		KeyID:         opts.Identity.KeyID,
+		RecordIDs:     append([]string(nil), opts.RecordIDs...),
+		Channels:      opts.Channels,
+		TTLSeconds:    ttlSeconds,
+		SignedAtUnixN: time.Now().UTC().UnixNano(),
+	}
+	if len(opts.Identity.PrivateKey) != ed25519.PrivateKeySize {
+		return StatusSubscription{}, &Error{Op: "create status subscription", Message: "identity private key is invalid"}
+	}
+	nonce := make([]byte, 18)
+	if _, err := rand.Read(nonce); err != nil {
+		return StatusSubscription{}, err
+	}
+	request.Nonce = base64.RawURLEncoding.EncodeToString(nonce)
+	if err := statusnotify.SignCreateRequest(ctx, cryptosuite.INTLV1, trustcrypto.MustNewEd25519Signer(opts.Identity.KeyID, opts.Identity.PrivateKey), &request); err != nil {
+		return StatusSubscription{}, err
+	}
+	body, err := json.Marshal(request)
+	if err != nil {
+		return StatusSubscription{}, err
+	}
+	var subscription statusnotify.Subscription
+	if err := t.doJSON(ctx, http.MethodPost, "/v1/status-subscriptions", nil, bytes.NewReader(body), "application/json", &subscription); err != nil {
+		return StatusSubscription{}, err
+	}
+	return subscription, nil
+}
+
+func (t *httpTransport) DeleteStatusSubscription(ctx context.Context, subscriptionID string) error {
+	return t.doJSON(ctx, http.MethodDelete, "/v1/status-subscriptions/"+url.PathEscape(subscriptionID), nil, nil, "", nil)
+}
+
+func (t *httpTransport) GetStatusSubscriptionStatuses(ctx context.Context, subscriptionID string) (RecordStatusBatch, error) {
+	var response recordStatusesEnvelope
+	path := "/v1/status-subscriptions/" + url.PathEscape(subscriptionID) + "/statuses"
+	if err := t.getJSON(ctx, path, nil, &response); err != nil {
+		return RecordStatusBatch{}, err
+	}
+	return RecordStatusBatch{Statuses: response.Statuses, MissingRecordIDs: response.MissingRecordIDs}, nil
+}
+
+func (t *httpTransport) SubscribeStatusRefresh(ctx context.Context, subscriptionID string) (<-chan StatusRefresh, <-chan error, error) {
+	path := "/v1/status-subscriptions/" + url.PathEscape(subscriptionID) + "/events"
+	endpoint := t.endpoint(path, nil)
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, nil, &Error{Op: "subscribe status refresh", URL: endpoint, Err: err}
+	}
+	request.Header.Set("Accept", "text/event-stream")
+	if t.userAgent != "" {
+		request.Header.Set("User-Agent", t.userAgent)
+	}
+	client := *t.httpClient
+	client.Timeout = 0
+	response, err := client.Do(request)
+	if err != nil {
+		return nil, nil, &Error{Op: "subscribe status refresh", URL: endpoint, Err: err}
+	}
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		defer response.Body.Close()
+		return nil, nil, decodeHTTPError(http.MethodGet, endpoint, response)
+	}
+	events := make(chan StatusRefresh, 1)
+	errorsCh := make(chan error, 1)
+	go func() {
+		defer close(events)
+		defer close(errorsCh)
+		defer response.Body.Close()
+		scanner := bufio.NewScanner(response.Body)
+		scanner.Buffer(make([]byte, 4096), 1<<20)
+		var data string
+		for scanner.Scan() {
+			line := scanner.Text()
+			switch {
+			case strings.HasPrefix(line, "data: "):
+				data = strings.TrimPrefix(line, "data: ")
+			case line == "" && data != "":
+				var notification model.StatusRefresh
+				if err := json.Unmarshal([]byte(data), &notification); err != nil {
+					errorsCh <- &Error{Op: "subscribe status refresh", URL: endpoint, Err: fmt.Errorf("decode SSE notification: %w", err)}
+					return
+				}
+				select {
+				case events <- notification:
+				default:
+					// A queued invalidation already instructs the caller to pull
+					// current state, so another SSE hint can be coalesced.
+				}
+				data = ""
+			}
+		}
+		if err := scanner.Err(); err != nil && ctx.Err() == nil {
+			errorsCh <- &Error{Op: "subscribe status refresh", URL: endpoint, Err: err}
+		}
+	}()
+	return events, errorsCh, nil
 }
 
 func (t *httpTransport) ListRecords(ctx context.Context, opts ListRecordsOptions) (RecordPage, error) {
@@ -461,6 +597,15 @@ type recordsEnvelope struct {
 	Limit      int           `json:"limit"`
 	Direction  string        `json:"direction"`
 	NextCursor string        `json:"next_cursor,omitempty"`
+}
+
+type recordStatusesRequestEnvelope struct {
+	RecordIDs []string `json:"record_ids"`
+}
+
+type recordStatusesEnvelope struct {
+	Statuses         []RecordStatus `json:"statuses"`
+	MissingRecordIDs []string       `json:"missing_record_ids,omitempty"`
 }
 
 type rootsEnvelope struct {

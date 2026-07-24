@@ -36,6 +36,9 @@ type Config struct {
 	PollInterval time.Duration
 	Clock        func() time.Time
 	Logger       zerolog.Logger
+	// OnBatchesPromoted runs only after the whole page and its continuous
+	// checkpoint are durable. It is intended for lightweight invalidation.
+	OnBatchesPromoted func(context.Context, []string)
 }
 
 type Service struct {
@@ -112,6 +115,7 @@ func (s *Service) ProjectPage(ctx context.Context) (bool, error) {
 	if len(leaves) != count {
 		return false, trusterr.New(trusterr.CodeDataLoss, "L5 coverage page contains a missing Global Log leaf")
 	}
+	batchIDs := make([]string, 0, len(leaves))
 	for i, leaf := range leaves {
 		wantIndex := start + uint64(i)
 		if leaf.LeafIndex != wantIndex {
@@ -126,10 +130,14 @@ func (s *Service) ProjectPage(ctx context.Context) (bool, error) {
 		if err := s.cfg.Store.PromoteBatchProofLevel(ctx, leaf.BatchID, "L5"); err != nil {
 			return false, err
 		}
+		batchIDs = append(batchIDs, leaf.BatchID)
 	}
 	end := start + uint64(count)
 	if _, err := s.cfg.Store.AdvanceL5CoverageCheckpoint(ctx, s.cfg.Key, end, s.cfg.Clock().UTC().UnixNano()); err != nil {
 		return false, err
+	}
+	if s.cfg.OnBatchesPromoted != nil {
+		s.cfg.OnBatchesPromoted(ctx, batchIDs)
 	}
 	return true, nil
 }

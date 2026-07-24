@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -14,6 +15,7 @@ import (
 	"github.com/wowtrust/trustdb/internal/merkle"
 	"github.com/wowtrust/trustdb/internal/model"
 	"github.com/wowtrust/trustdb/internal/observability"
+	"github.com/wowtrust/trustdb/internal/prooflevel"
 	"github.com/wowtrust/trustdb/internal/proofstore"
 	"github.com/wowtrust/trustdb/internal/trusterr"
 )
@@ -119,7 +121,11 @@ type Options struct {
 	// batch goroutine. The hook must not block on slow IO for the same
 	// reason as OnCheckpointAdvanced.
 	OnBatchCommitted func(context.Context, model.BatchRoot)
-	LoadBatchItems   func(context.Context, model.BatchManifest) ([]Accepted, error)
+	// OnRecordStatusesChanged is a lightweight invalidation hook. Callers must
+	// only mark interested subscriptions dirty here; network delivery belongs
+	// in an independent worker so proof commits never wait on an upstream.
+	OnRecordStatusesChanged func([]model.RecordStatus)
+	LoadBatchItems          func(context.Context, model.BatchManifest) ([]Accepted, error)
 }
 
 type Service struct {
@@ -156,6 +162,7 @@ type Service struct {
 	pendingMu           sync.Mutex
 	pending             map[string][]Accepted
 	pendingOrder        []string
+	statusPending       sync.Map // record_id -> model.RecordStatus
 
 	checkpointMu               sync.Mutex
 	checkpointCoverage         []walCoverageRun
@@ -303,16 +310,21 @@ func (s *Service) enqueue(ctx context.Context, item Accepted) error {
 		<-s.queueSlots
 		return trusterr.Wrap(trusterr.CodeDeadlineExceeded, "batch enqueue canceled", err)
 	}
+	s.setRecordStatuses([]Accepted{item}, model.RecordStatusAccepted, "", false, "")
 
 	s.mu.RLock()
 	if s.closed {
 		s.mu.RUnlock()
 		<-s.queueSlots
+		s.statusPending.Delete(item.Record.RecordID)
 		return trusterr.New(trusterr.CodeFailedPrecondition, "batch service is shutting down")
 	}
 	s.queue <- item
 	s.setQueueDepth()
 	s.mu.RUnlock()
+	if value, ok := s.statusPending.Load(item.Record.RecordID); ok {
+		s.fireOnRecordStatusesChanged([]model.RecordStatus{value.(model.RecordStatus)})
+	}
 	return nil
 }
 
@@ -371,6 +383,119 @@ func (s *Service) RecordIndex(ctx context.Context, recordID string) (model.Recor
 		return model.RecordIndex{}, false, trusterr.New(trusterr.CodeFailedPrecondition, "proof store is not configured")
 	}
 	return s.store.GetRecordIndex(ctx, recordID)
+}
+
+// RecordStatus performs only point lookups and never loads a ProofBundle. Hot
+// L2/in-flight records are served from a concurrent in-memory projection;
+// committed records fall through to the proofstore's RecordIndex key.
+func (s *Service) RecordStatus(ctx context.Context, recordID string) (model.RecordStatus, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return model.RecordStatus{}, false, trusterr.Wrap(trusterr.CodeDeadlineExceeded, "record status lookup canceled", err)
+	}
+	recordID = strings.TrimSpace(recordID)
+	if recordID == "" {
+		return model.RecordStatus{}, false, trusterr.New(trusterr.CodeInvalidArgument, "record_id is required")
+	}
+	if value, ok := s.statusPending.Load(recordID); ok {
+		return value.(model.RecordStatus), true, nil
+	}
+	if s.store == nil {
+		return model.RecordStatus{}, false, trusterr.New(trusterr.CodeFailedPrecondition, "proof store is not configured")
+	}
+	idx, found, err := s.store.GetRecordIndex(ctx, recordID)
+	if err != nil || !found {
+		return model.RecordStatus{}, found, err
+	}
+	status := model.RecordStatus{
+		SchemaVersion:  model.SchemaRecordStatus,
+		RecordID:       idx.RecordID,
+		TenantID:       idx.TenantID,
+		ClientID:       idx.ClientID,
+		KeyID:          idx.KeyID,
+		Status:         model.RecordStatusCommitted,
+		ProofLevel:     model.RecordIndexProofLevel(idx),
+		BatchID:        idx.BatchID,
+		UpdatedAtUnixN: idx.BatchClosedAtUnixN,
+		Terminal:       true,
+	}
+	if idx.BatchID != "" {
+		manifest, manifestErr := s.store.GetManifest(ctx, idx.BatchID)
+		if manifestErr == nil {
+			switch manifest.State {
+			case model.BatchStatePreparing, model.BatchStatePrepared:
+				status.Status = model.RecordStatusProcessing
+				status.ProofLevel = prooflevel.L2.String()
+				status.Terminal = false
+				status.UpdatedAtUnixN = maxInt64(manifest.PreparedAtUnixN, manifest.PreparingAtUnixN, idx.ReceivedAtUnixN)
+			case model.BatchStateFailed:
+				status.Status = model.RecordStatusFailed
+				status.ProofLevel = prooflevel.L2.String()
+				status.Terminal = true
+				status.FailureCode = manifest.MaterializeFailureCode
+				status.UpdatedAtUnixN = maxInt64(manifest.MaterializeNextUnixN, manifest.PreparedAtUnixN, manifest.PreparingAtUnixN)
+			default:
+				status.UpdatedAtUnixN = maxInt64(manifest.CommittedAtUnixN, idx.BatchClosedAtUnixN, idx.ReceivedAtUnixN)
+			}
+		} else if trusterr.CodeOf(manifestErr) != trusterr.CodeNotFound {
+			return model.RecordStatus{}, false, manifestErr
+		}
+	}
+	status.StatusVersion = statusVersion(status.UpdatedAtUnixN)
+	return status, true, nil
+}
+
+func (s *Service) RecordStatuses(ctx context.Context, recordIDs []string) ([]model.RecordStatus, error) {
+	if len(recordIDs) == 0 {
+		return []model.RecordStatus{}, nil
+	}
+	type result struct {
+		status model.RecordStatus
+		found  bool
+		err    error
+	}
+	results := make([]result, len(recordIDs))
+	workers := runtime.GOMAXPROCS(0) * 2
+	if workers < 4 {
+		workers = 4
+	}
+	if workers > 32 {
+		workers = 32
+	}
+	if workers > len(recordIDs) {
+		workers = len(recordIDs)
+	}
+	jobs := make(chan int)
+	var wg sync.WaitGroup
+	wg.Add(workers)
+	for i := 0; i < workers; i++ {
+		go func() {
+			defer wg.Done()
+			for index := range jobs {
+				results[index].status, results[index].found, results[index].err = s.RecordStatus(ctx, recordIDs[index])
+			}
+		}()
+	}
+	for index := range recordIDs {
+		select {
+		case jobs <- index:
+		case <-ctx.Done():
+			close(jobs)
+			wg.Wait()
+			return nil, trusterr.Wrap(trusterr.CodeDeadlineExceeded, "record status batch lookup canceled", ctx.Err())
+		}
+	}
+	close(jobs)
+	wg.Wait()
+	statuses := make([]model.RecordStatus, 0, len(recordIDs))
+	for i := range results {
+		if results[i].err != nil {
+			return nil, results[i].err
+		}
+		if results[i].found {
+			statuses = append(statuses, results[i].status)
+		}
+	}
+	return statuses, nil
 }
 
 func (s *Service) Records(ctx context.Context, opts model.RecordListOptions) ([]model.RecordIndex, error) {
@@ -542,8 +667,10 @@ func (s *Service) commit(items []Accepted) {
 	}
 	start := time.Now().UTC()
 	batchID := s.nextBatchID(start)
+	s.setRecordStatuses(items, model.RecordStatusProcessing, batchID, true, "")
 	if err := s.persistBatch(context.Background(), batchID, start, items); err != nil {
 		s.setLastError(err)
+		s.setRecordStatuses(items, model.RecordStatusRetryPending, batchID, true, string(trusterr.CodeOf(err)))
 		return
 	}
 	if s.metrics != nil {
@@ -675,6 +802,7 @@ func (s *Service) persistBatch(ctx context.Context, batchID string, closedAt tim
 	}
 	stageStart = time.Now()
 	s.fireOnBatchCommitted(ctx, root)
+	s.markRecordStatusesCommitted(items, batchID, manifest.CommittedAtUnixN)
 	s.observeBatchStage("outbox_hook", stageStart)
 	return nil
 }
@@ -907,10 +1035,13 @@ func cloneAcceptedItems(items []Accepted) []Accepted {
 // root/index artifacts and leaves bundles lazy so the first Proof call remains
 // the materialization boundary.
 func (s *Service) RecoverManifest(ctx context.Context, manifest model.BatchManifest, items []Accepted) error {
+	s.setRecordStatuses(items, model.RecordStatusProcessing, manifest.BatchID, false, "")
 	if manifest.State == model.BatchStateCommitted {
+		s.markRecordStatusesCommitted(items, manifest.BatchID, manifest.CommittedAtUnixN)
 		return nil
 	}
 	if manifest.State == model.BatchStateFailed {
+		s.setRecordStatuses(items, model.RecordStatusFailed, manifest.BatchID, true, manifest.MaterializeFailureCode)
 		return trusterr.New(trusterr.CodeFailedPrecondition, "batch materialization is permanently failed")
 	}
 	if manifest.State != model.BatchStatePreparing && manifest.State != model.BatchStatePrepared {
@@ -1127,7 +1258,35 @@ func (s *Service) recordMaterializationFailure(ctx context.Context, manifest mod
 	}
 	if err := s.store.PutManifest(ctx, manifest); err != nil {
 		s.setLastError(err)
+		return
 	}
+	if manifest.State == model.BatchStateFailed {
+		s.setManifestRecordStatuses(manifest, model.RecordStatusFailed, manifest.MaterializeFailureCode)
+	} else {
+		s.setManifestRecordStatuses(manifest, model.RecordStatusRetryPending, manifest.MaterializeFailureCode)
+	}
+}
+
+func (s *Service) setManifestRecordStatuses(manifest model.BatchManifest, state, failureCode string) {
+	now := time.Now().UTC().UnixNano()
+	statuses := make([]model.RecordStatus, 0, len(manifest.RecordIDs))
+	for _, recordID := range manifest.RecordIDs {
+		value, found := s.statusPending.Load(recordID)
+		if !found {
+			continue
+		}
+		status := value.(model.RecordStatus)
+		status.Status = state
+		status.BatchID = manifest.BatchID
+		status.UpdatedAtUnixN = now
+		status.StatusVersion = statusVersion(now)
+		status.Retryable = state == model.RecordStatusRetryPending
+		status.Terminal = state == model.RecordStatusFailed
+		status.FailureCode = failureCode
+		s.statusPending.Store(recordID, status)
+		statuses = append(statuses, status)
+	}
+	s.fireOnRecordStatusesChanged(statuses)
 }
 
 func permanentMaterializationError(err error) bool {
@@ -1247,6 +1406,7 @@ func (s *Service) materializeManifest(ctx context.Context, manifest model.BatchM
 	}
 	s.forgetPending(manifest.BatchID)
 	s.fireOnBatchCommitted(ctx, root)
+	s.markRecordStatusesCommitted(items, manifest.BatchID, manifest.CommittedAtUnixN)
 	return root, nil
 }
 
@@ -1362,6 +1522,101 @@ func (s *Service) fireOnBatchCommitted(ctx context.Context, root model.BatchRoot
 		}
 	}()
 	s.opts.OnBatchCommitted(ctx, root)
+}
+
+func (s *Service) setRecordStatuses(items []Accepted, state, batchID string, notify bool, failureCode string) {
+	if len(items) == 0 {
+		return
+	}
+	now := time.Now().UTC().UnixNano()
+	statuses := make([]model.RecordStatus, 0, len(items))
+	for i := range items {
+		item := items[i]
+		updatedAt := now
+		if state == model.RecordStatusAccepted {
+			updatedAt = maxInt64(item.Record.ReceivedAtUnixN, item.Accepted.ReceivedAtUnixN)
+			if updatedAt == 0 {
+				updatedAt = now
+			}
+		}
+		status := model.RecordStatus{
+			SchemaVersion:  model.SchemaRecordStatus,
+			RecordID:       item.Record.RecordID,
+			TenantID:       item.Record.TenantID,
+			ClientID:       item.Record.ClientID,
+			KeyID:          item.Record.KeyID,
+			Status:         state,
+			ProofLevel:     prooflevel.L2.String(),
+			BatchID:        batchID,
+			UpdatedAtUnixN: updatedAt,
+			Retryable:      state == model.RecordStatusRetryPending,
+			FailureCode:    failureCode,
+		}
+		status.StatusVersion = statusVersion(updatedAt)
+		s.statusPending.Store(status.RecordID, status)
+		statuses = append(statuses, status)
+	}
+	if notify {
+		s.fireOnRecordStatusesChanged(statuses)
+	}
+}
+
+func (s *Service) markRecordStatusesCommitted(items []Accepted, batchID string, committedAtUnixN int64) {
+	if len(items) == 0 {
+		return
+	}
+	if committedAtUnixN == 0 {
+		committedAtUnixN = time.Now().UTC().UnixNano()
+	}
+	statuses := make([]model.RecordStatus, 0, len(items))
+	for i := range items {
+		item := items[i]
+		status := model.RecordStatus{
+			SchemaVersion:  model.SchemaRecordStatus,
+			RecordID:       item.Record.RecordID,
+			TenantID:       item.Record.TenantID,
+			ClientID:       item.Record.ClientID,
+			KeyID:          item.Record.KeyID,
+			Status:         model.RecordStatusCommitted,
+			ProofLevel:     prooflevel.L3.String(),
+			BatchID:        batchID,
+			UpdatedAtUnixN: committedAtUnixN,
+			Terminal:       true,
+			StatusVersion:  statusVersion(committedAtUnixN),
+		}
+		s.statusPending.Delete(status.RecordID)
+		statuses = append(statuses, status)
+	}
+	s.fireOnRecordStatusesChanged(statuses)
+}
+
+func (s *Service) fireOnRecordStatusesChanged(statuses []model.RecordStatus) {
+	if len(statuses) == 0 || s.opts.OnRecordStatusesChanged == nil {
+		return
+	}
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			s.setLastError(trusterr.New(trusterr.CodeInternal, fmt.Sprintf("record status hook panic: %v", recovered)))
+		}
+	}()
+	s.opts.OnRecordStatusesChanged(statuses)
+}
+
+func statusVersion(updatedAtUnixN int64) uint64 {
+	if updatedAtUnixN <= 0 {
+		return 1
+	}
+	return uint64(updatedAtUnixN)
+}
+
+func maxInt64(values ...int64) int64 {
+	var max int64
+	for _, value := range values {
+		if value > max {
+			max = value
+		}
+	}
+	return max
 }
 
 // DeferCheckpointAdvance pauses checkpoint persistence and callbacks while

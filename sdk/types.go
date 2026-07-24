@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/wowtrust/trustdb/internal/model"
+	"github.com/wowtrust/trustdb/internal/statusnotify"
 	"github.com/wowtrust/trustdb/sdk/anchorplugin"
 )
 
@@ -24,6 +25,22 @@ type GlobalLogProof = model.GlobalLogProof
 type GlobalLogEvidence = model.GlobalLogEvidence
 type STHAnchorResult = model.STHAnchorResult
 type SingleProof = model.SingleProof
+type RecordStatus = model.RecordStatus
+type StatusRefresh = model.StatusRefresh
+type StatusSubscription = statusnotify.Subscription
+type StatusSubscriptionChannels = statusnotify.Channels
+
+type CreateStatusSubscriptionOptions struct {
+	Identity  Identity
+	RecordIDs []string
+	Channels  StatusSubscriptionChannels
+	TTL       time.Duration
+}
+
+type RecordStatusBatch struct {
+	Statuses         []RecordStatus
+	MissingRecordIDs []string
+}
 
 const (
 	ProofLevelL1 = "L1"

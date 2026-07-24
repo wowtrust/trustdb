@@ -146,9 +146,13 @@ func TestOutboxWorkerPublishesBatch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
+	var published []string
 	worker := NewOutboxWorker(OutboxConfig{
 		Store:  store,
 		Global: svc,
+		OnBatchesPublished: func(_ context.Context, batchIDs []string) {
+			published = append(published, batchIDs...)
+		},
 	})
 	worker.tick(ctx)
 
@@ -161,6 +165,9 @@ func TestOutboxWorkerPublishesBatch(t *testing.T) {
 	}
 	if _, ok, err := store.GetGlobalLeafByBatchID(ctx, root.BatchID); err != nil || !ok {
 		t.Fatalf("GetGlobalLeafByBatchID ok=%v err=%v", ok, err)
+	}
+	if len(published) != 1 || published[0] != root.BatchID {
+		t.Fatalf("OnBatchesPublished = %v, want [%s]", published, root.BatchID)
 	}
 }
 

@@ -30,7 +30,10 @@ type OutboxConfig struct {
 	AnchorKey      *model.STHAnchorScheduleKey
 	AnchorMaxDelay time.Duration
 	OnAnchorReady  func()
-	Metrics        *observability.Metrics
+	// OnBatchesPublished runs after the L4 publication marker and record-index
+	// promotions are durable. It is intended for lightweight invalidation only.
+	OnBatchesPublished func(context.Context, []string)
+	Metrics            *observability.Metrics
 
 	Logger         zerolog.Logger
 	PollInterval   time.Duration
@@ -297,6 +300,9 @@ func (w *OutboxWorker) processBatch(ctx context.Context, items []model.GlobalLog
 	}
 	if w.cfg.Metrics != nil {
 		w.cfg.Metrics.GlobalLogPublished.Add(float64(len(items)))
+	}
+	if w.cfg.OnBatchesPublished != nil {
+		w.cfg.OnBatchesPublished(ctx, append([]string(nil), batchIDs...))
 	}
 	if anchorCandidateStored {
 		if w.cfg.OnAnchorReady != nil {

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"sync/atomic"
 
 	"github.com/wowtrust/trustdb/internal/trusterr"
@@ -48,9 +49,10 @@ func NewLoadBalancedClient(endpoints []string, lb LoadBalanceOptions, opts ...Op
 }
 
 type loadBalancedTransport struct {
-	transports []Transport
-	next       atomic.Uint64
-	mode       LoadBalanceMode
+	transports         []Transport
+	next               atomic.Uint64
+	mode               LoadBalanceMode
+	subscriptionOwners sync.Map // subscription_id -> Transport
 }
 
 func (t *loadBalancedTransport) Endpoint() string {
@@ -148,6 +150,125 @@ func (t *loadBalancedTransport) GetRecord(ctx context.Context, recordID string) 
 	return tryEndpoints(ctx, t, "get record", func(ctx context.Context, transport Transport) (RecordIndex, error) {
 		return transport.GetRecord(ctx, recordID)
 	})
+}
+
+func (t *loadBalancedTransport) GetRecordStatus(ctx context.Context, recordID string) (RecordStatus, error) {
+	return tryEndpoints(ctx, t, "get record status", func(ctx context.Context, transport Transport) (RecordStatus, error) {
+		statusTransport, ok := transport.(recordStatusTransport)
+		if !ok {
+			return RecordStatus{}, &Error{Op: "get record status", Message: "endpoint transport does not support record status queries"}
+		}
+		return statusTransport.GetRecordStatus(ctx, recordID)
+	})
+}
+
+func (t *loadBalancedTransport) GetRecordStatuses(ctx context.Context, recordIDs []string) (RecordStatusBatch, error) {
+	return tryEndpoints(ctx, t, "get record statuses", func(ctx context.Context, transport Transport) (RecordStatusBatch, error) {
+		statusTransport, ok := transport.(recordStatusTransport)
+		if !ok {
+			return RecordStatusBatch{}, &Error{Op: "get record statuses", Message: "endpoint transport does not support record status queries"}
+		}
+		return statusTransport.GetRecordStatuses(ctx, recordIDs)
+	})
+}
+
+func (t *loadBalancedTransport) CreateStatusSubscription(ctx context.Context, opts CreateStatusSubscriptionOptions) (StatusSubscription, error) {
+	var errs error
+	start := t.startIndex()
+	for offset := range len(t.transports) {
+		index := (start + offset) % len(t.transports)
+		transport := t.transports[index]
+		subscriptionTransport, ok := transport.(statusSubscriptionTransport)
+		if !ok {
+			continue
+		}
+		subscription, err := subscriptionTransport.CreateStatusSubscription(ctx, opts)
+		if err == nil {
+			t.subscriptionOwners.Store(subscription.ID, transport)
+			return subscription, nil
+		}
+		errs = errors.Join(errs, err)
+		if !retryableEndpointError(err) {
+			break
+		}
+	}
+	if errs == nil {
+		errs = &Error{Op: "create status subscription", Message: "no endpoint transport supports status subscriptions"}
+	}
+	return StatusSubscription{}, errs
+}
+
+func (t *loadBalancedTransport) DeleteStatusSubscription(ctx context.Context, subscriptionID string) error {
+	_, err := withStatusSubscriptionTransport(ctx, t, subscriptionID, "delete status subscription", func(transport statusSubscriptionTransport) (struct{}, error) {
+		return struct{}{}, transport.DeleteStatusSubscription(ctx, subscriptionID)
+	})
+	if err == nil {
+		t.subscriptionOwners.Delete(subscriptionID)
+	}
+	return err
+}
+
+func (t *loadBalancedTransport) GetStatusSubscriptionStatuses(ctx context.Context, subscriptionID string) (RecordStatusBatch, error) {
+	return withStatusSubscriptionTransport(ctx, t, subscriptionID, "get subscription statuses", func(transport statusSubscriptionTransport) (RecordStatusBatch, error) {
+		return transport.GetStatusSubscriptionStatuses(ctx, subscriptionID)
+	})
+}
+
+func (t *loadBalancedTransport) SubscribeStatusRefresh(ctx context.Context, subscriptionID string) (<-chan StatusRefresh, <-chan error, error) {
+	owner, ok := t.subscriptionOwners.Load(subscriptionID)
+	if ok {
+		if transport, supported := owner.(statusSubscriptionTransport); supported {
+			return transport.SubscribeStatusRefresh(ctx, subscriptionID)
+		}
+	}
+	for _, endpoint := range t.transports {
+		transport, supported := endpoint.(statusSubscriptionTransport)
+		if !supported {
+			continue
+		}
+		events, errorsCh, err := transport.SubscribeStatusRefresh(ctx, subscriptionID)
+		if err == nil {
+			t.subscriptionOwners.Store(subscriptionID, endpoint)
+			return events, errorsCh, nil
+		}
+		if !IsNotFound(err) {
+			return nil, nil, err
+		}
+	}
+	return nil, nil, &Error{Op: "subscribe status refresh", Message: "status subscription not found on any endpoint"}
+}
+
+func withStatusSubscriptionTransport[T any](ctx context.Context, t *loadBalancedTransport, subscriptionID, op string, fn func(statusSubscriptionTransport) (T, error)) (T, error) {
+	var zero T
+	if owner, ok := t.subscriptionOwners.Load(subscriptionID); ok {
+		if transport, supported := owner.(statusSubscriptionTransport); supported {
+			result, err := fn(transport)
+			if err == nil || !IsNotFound(err) {
+				return result, err
+			}
+			t.subscriptionOwners.Delete(subscriptionID)
+		}
+	}
+	var errs error
+	for _, endpoint := range t.transports {
+		transport, supported := endpoint.(statusSubscriptionTransport)
+		if !supported {
+			continue
+		}
+		result, err := fn(transport)
+		if err == nil {
+			t.subscriptionOwners.Store(subscriptionID, endpoint)
+			return result, nil
+		}
+		errs = errors.Join(errs, fmt.Errorf("%s %s: %w", op, endpoint.Endpoint(), err))
+		if !IsNotFound(err) {
+			return zero, errs
+		}
+	}
+	if errs == nil {
+		errs = &Error{Op: op, Message: "no endpoint transport supports status subscriptions"}
+	}
+	return zero, errs
 }
 
 func (t *loadBalancedTransport) ListRecords(ctx context.Context, opts ListRecordsOptions) (RecordPage, error) {

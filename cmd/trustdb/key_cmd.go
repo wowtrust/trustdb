@@ -11,6 +11,7 @@ import (
 	"github.com/wowtrust/trustdb/internal/keydescriptor"
 	"github.com/wowtrust/trustdb/internal/keystore"
 	"github.com/wowtrust/trustdb/internal/model"
+	"github.com/wowtrust/trustdb/internal/statusnotify"
 	"github.com/wowtrust/trustdb/internal/trustcrypto"
 )
 
@@ -175,6 +176,7 @@ func newKeyInspectCommand(rt *runtimeConfig) *cobra.Command {
 
 func newKeyRegisterCommand(rt *runtimeConfig, hidden bool) *cobra.Command {
 	var registryPrivate, publicKeyPath string
+	var statusWebhookURL, statusNATSSubject, statusNATSQueueGroup string
 	var validFromUnix, validUntilUnix int64
 	cmd := &cobra.Command{
 		Use:     "key-register",
@@ -214,6 +216,14 @@ func newKeyRegisterCommand(rt *runtimeConfig, hidden bool) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			routeStorePath, err := configureStatusNotificationRoute(registryPath, tenantID, clientID, model.UpstreamNotificationRoute{
+				WebhookURL:     statusWebhookURL,
+				NATSSubject:    statusNATSSubject,
+				NATSQueueGroup: statusNATSQueueGroup,
+			}, registrySigner, registryPub)
+			if err != nil {
+				return err
+			}
 			var validUntil time.Time
 			if validUntilUnix != 0 {
 				validUntil = time.Unix(validUntilUnix, 0).UTC()
@@ -228,13 +238,17 @@ func newKeyRegisterCommand(rt *runtimeConfig, hidden bool) *cobra.Command {
 				Str("key_id", keyID).
 				Uint64("sequence", ev.Sequence).
 				Msg("registered client key")
-			return rt.writeJSON(map[string]any{
+			result := map[string]any{
 				"sequence":     ev.Sequence,
 				"event_hash":   base64.RawURLEncoding.EncodeToString(ev.EventHash),
 				"registry":     registryPath,
 				"crypto_suite": string(ev.CryptoSuite),
 				"provider":     clientKey.Provider,
-			})
+			}
+			if routeStorePath != "" {
+				result["status_notification_routes"] = routeStorePath
+			}
+			return rt.writeJSON(result)
 		},
 	}
 	addRegistryFlags(cmd)
@@ -244,6 +258,7 @@ func newKeyRegisterCommand(rt *runtimeConfig, hidden bool) *cobra.Command {
 	cmd.Flags().StringVar(&publicKeyPath, "public-key", "", "client signer or verifier descriptor to import")
 	cmd.Flags().Int64Var(&validFromUnix, "valid-from-unix", time.Now().UTC().Unix(), "valid from unix seconds")
 	cmd.Flags().Int64Var(&validUntilUnix, "valid-until-unix", 0, "valid until unix seconds, 0 means no expiry")
+	addStatusNotificationRouteFlags(cmd, &statusWebhookURL, &statusNATSSubject, &statusNATSQueueGroup)
 	return cmd
 }
 
@@ -360,6 +375,7 @@ func newKeyCompromiseCommand(rt *runtimeConfig) *cobra.Command {
 
 func newKeyRotateCommand(rt *runtimeConfig) *cobra.Command {
 	var registryPrivate, registryPublic, descriptorPath, previousKeyID, reason string
+	var statusWebhookURL, statusNATSSubject, statusNATSQueueGroup string
 	var rotatedAtUnix, validUntilUnix int64
 	cmd := &cobra.Command{
 		Use:   "rotate",
@@ -382,7 +398,15 @@ func newKeyRotateCommand(rt *runtimeConfig) *cobra.Command {
 			if err := requireKeyID(keyID, descriptor); err != nil {
 				return err
 			}
-			registry, err := openLifecycleRegistry(cmd.Context(), registryPath, registryPrivate, registryPublic, registryKeyID)
+			registry, registrySigner, registryPub, err := openLifecycleRegistryWithSigner(cmd.Context(), registryPath, registryPrivate, registryPublic, registryKeyID)
+			if err != nil {
+				return err
+			}
+			routeStorePath, err := configureStatusNotificationRoute(registryPath, tenantID, clientID, model.UpstreamNotificationRoute{
+				WebhookURL:     statusWebhookURL,
+				NATSSubject:    statusNATSSubject,
+				NATSQueueGroup: statusNATSQueueGroup,
+			}, registrySigner, registryPub)
 			if err != nil {
 				return err
 			}
@@ -402,14 +426,18 @@ func newKeyRotateCommand(rt *runtimeConfig) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return rt.writeJSON(map[string]any{
+			result := map[string]any{
 				"sequence":        event.Sequence,
 				"event_hash":      base64.RawURLEncoding.EncodeToString(event.EventHash),
 				"registry":        registryPath,
 				"crypto_suite":    string(event.CryptoSuite),
 				"previous_key_id": previousKeyID,
 				"key_id":          descriptor.KeyID,
-			})
+			}
+			if routeStorePath != "" {
+				result["status_notification_routes"] = routeStorePath
+			}
+			return rt.writeJSON(result)
 		},
 	}
 	addRegistryFlags(cmd)
@@ -421,31 +449,62 @@ func newKeyRotateCommand(rt *runtimeConfig) *cobra.Command {
 	cmd.Flags().StringVar(&reason, "reason", "rotation", "rotation reason")
 	cmd.Flags().Int64Var(&rotatedAtUnix, "rotated-at-unix", time.Now().UTC().Unix(), "rotation effective time in unix seconds")
 	cmd.Flags().Int64Var(&validUntilUnix, "valid-until-unix", 0, "replacement validity end in unix seconds, 0 means no expiry")
+	addStatusNotificationRouteFlags(cmd, &statusWebhookURL, &statusNATSSubject, &statusNATSQueueGroup)
 	return cmd
 }
 
+func addStatusNotificationRouteFlags(cmd *cobra.Command, webhookURL, natsSubject, natsQueueGroup *string) {
+	cmd.Flags().StringVar(webhookURL, "status-webhook-url", "", "preconfigured upstream status refresh webhook URL")
+	cmd.Flags().StringVar(natsSubject, "status-nats-subject", "", "preconfigured upstream status refresh NATS subject")
+	cmd.Flags().StringVar(natsQueueGroup, "status-nats-queue-group", "", "fixed NATS queue group shared by this upstream's replicas")
+}
+
+func configureStatusNotificationRoute(registryPath, tenantID, clientID string, route model.UpstreamNotificationRoute, signer trustcrypto.Signer, registryPub trustcrypto.PublicKeyDescriptor) (string, error) {
+	if route.Empty() {
+		return "", nil
+	}
+	path := statusnotify.RouteStorePath(registryPath)
+	store, err := statusnotify.OpenRouteStore(path, signer, registryPub)
+	if err != nil {
+		return "", err
+	}
+	if err := store.Configure(tenantID, clientID, route); err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
 func openLifecycleRegistry(ctx context.Context, registryPath, registryPrivate, registryPublic, registryKeyID string) (*keystore.Registry, error) {
+	registry, _, _, err := openLifecycleRegistryWithSigner(ctx, registryPath, registryPrivate, registryPublic, registryKeyID)
+	return registry, err
+}
+
+func openLifecycleRegistryWithSigner(ctx context.Context, registryPath, registryPrivate, registryPublic, registryKeyID string) (*keystore.Registry, trustcrypto.Signer, trustcrypto.PublicKeyDescriptor, error) {
 	registrySigner, registryDescriptor, err := readLifecycleSigner(ctx, registryPrivate)
 	if err != nil {
-		return nil, err
+		return nil, nil, trustcrypto.PublicKeyDescriptor{}, err
 	}
 	if err := requireKeyID(registryKeyID, registryDescriptor); err != nil {
-		return nil, err
+		return nil, nil, trustcrypto.PublicKeyDescriptor{}, err
 	}
 	registryPub, err := registrySigner.PublicKey(ctx)
 	if err != nil {
-		return nil, err
+		return nil, nil, trustcrypto.PublicKeyDescriptor{}, err
 	}
 	if registryPublic != "" {
 		configuredPub, _, err := readPublicKeyDescriptor(registryPublic)
 		if err != nil {
-			return nil, err
+			return nil, nil, trustcrypto.PublicKeyDescriptor{}, err
 		}
 		if configuredPub.Suite != registryPub.Suite || configuredPub.KeyID != registryPub.KeyID || configuredPub.Algorithm != registryPub.Algorithm || configuredPub.Encoding != registryPub.Encoding || !bytes.Equal(configuredPub.Bytes, registryPub.Bytes) {
-			return nil, usageError("registry public descriptor does not match registry signer descriptor")
+			return nil, nil, trustcrypto.PublicKeyDescriptor{}, usageError("registry public descriptor does not match registry signer descriptor")
 		}
 	}
-	return keystore.Open(registryPath, registrySigner, registryPub)
+	registry, err := keystore.Open(registryPath, registrySigner, registryPub)
+	if err != nil {
+		return nil, nil, trustcrypto.PublicKeyDescriptor{}, err
+	}
+	return registry, registrySigner, registryPub, nil
 }
 
 func newKeyListCommand(rt *runtimeConfig, hidden bool) *cobra.Command {

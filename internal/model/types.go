@@ -11,6 +11,8 @@ const (
 	SchemaProofBundle          = "trustdb.proof-bundle.v1"
 	SchemaSingleProof          = "trustdb.sproof.v1"
 	SchemaRecordIndex          = "trustdb.record-index.v1"
+	SchemaRecordStatus         = "trustdb.record-status.v1"
+	SchemaStatusRefresh        = "trustdb.status-refresh.v1"
 	SchemaBatchRoot            = "trustdb.batch-root.v1"
 	SchemaBatchManifest        = "trustdb.batch-manifest.v1"
 	SchemaBatchTreeLeaf        = "trustdb.batch-tree-leaf.v1"
@@ -65,6 +67,12 @@ const (
 	AnchorStatePending   = "pending"
 	AnchorStatePublished = "published"
 	AnchorStateFailed    = "failed"
+
+	RecordStatusAccepted     = "accepted"
+	RecordStatusProcessing   = "processing"
+	RecordStatusRetryPending = "retry_pending"
+	RecordStatusCommitted    = "committed"
+	RecordStatusFailed       = "failed"
 )
 
 type Content struct {
@@ -226,6 +234,54 @@ type RecordIndex struct {
 	FileName           string `cbor:"file_name,omitempty" json:"file_name,omitempty"`
 	EventType          string `cbor:"event_type,omitempty" json:"event_type,omitempty"`
 	Source             string `cbor:"source,omitempty" json:"source,omitempty"`
+}
+
+// RecordStatus is the lightweight, real-time projection returned to an
+// upstream while a record moves from durable L2 acceptance to a committed
+// proof. It deliberately excludes proof material so point and batch lookups
+// remain cheap under high concurrency.
+type RecordStatus struct {
+	SchemaVersion  string `cbor:"schema_version" json:"schema_version"`
+	RecordID       string `cbor:"record_id" json:"record_id"`
+	TenantID       string `cbor:"tenant_id,omitempty" json:"tenant_id,omitempty"`
+	ClientID       string `cbor:"client_id,omitempty" json:"client_id,omitempty"`
+	KeyID          string `cbor:"key_id,omitempty" json:"key_id,omitempty"`
+	Status         string `cbor:"status" json:"status"`
+	ProofLevel     string `cbor:"proof_level" json:"proof_level"`
+	StatusVersion  uint64 `cbor:"status_version" json:"status_version"`
+	BatchID        string `cbor:"batch_id,omitempty" json:"batch_id,omitempty"`
+	UpdatedAtUnixN int64  `cbor:"updated_at_unix_nano" json:"updated_at_unix_nano"`
+	Terminal       bool   `cbor:"terminal" json:"terminal"`
+	Retryable      bool   `cbor:"retryable,omitempty" json:"retryable,omitempty"`
+	FailureCode    string `cbor:"failure_code,omitempty" json:"failure_code,omitempty"`
+}
+
+// UpstreamNotificationRoute is administrator-controlled metadata associated
+// with an upstream identity. It is stored in a registry-signed sidecar rather
+// than the Key Registry V2 event stream; public subscription APIs may select a
+// channel but can never inject or replace its delivery destination.
+type UpstreamNotificationRoute struct {
+	WebhookURL     string `cbor:"webhook_url,omitempty" json:"webhook_url,omitempty"`
+	NATSSubject    string `cbor:"nats_subject,omitempty" json:"nats_subject,omitempty"`
+	NATSQueueGroup string `cbor:"nats_queue_group,omitempty" json:"nats_queue_group,omitempty"`
+}
+
+func (r UpstreamNotificationRoute) Empty() bool {
+	return r.WebhookURL == "" && r.NATSSubject == "" && r.NATSQueueGroup == ""
+}
+
+// StatusRefresh is a signed invalidation hint. Receivers always pull the
+// current status projection after receiving it; therefore repeated or merged
+// notifications are harmless and no historical event queue is required.
+type StatusRefresh struct {
+	SchemaVersion   string    `cbor:"schema_version" json:"schema_version"`
+	SubscriptionID  string    `cbor:"subscription_id" json:"subscription_id"`
+	TenantID        string    `cbor:"tenant_id" json:"tenant_id"`
+	ClientID        string    `cbor:"client_id" json:"client_id"`
+	Version         uint64    `cbor:"version" json:"version"`
+	RefreshRequired bool      `cbor:"refresh_required" json:"refresh_required"`
+	EmittedAtUnixN  int64     `cbor:"emitted_at_unix_nano" json:"emitted_at_unix_nano"`
+	ServerSig       Signature `cbor:"server_signature" json:"server_signature"`
 }
 
 type RecordListOptions struct {

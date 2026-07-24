@@ -31,8 +31,10 @@ import (
 	"github.com/wowtrust/trustdb/internal/l5projector"
 	"github.com/wowtrust/trustdb/internal/merkle"
 	"github.com/wowtrust/trustdb/internal/model"
+	"github.com/wowtrust/trustdb/internal/natsingress"
 	"github.com/wowtrust/trustdb/internal/observability"
 	"github.com/wowtrust/trustdb/internal/proofstore"
+	"github.com/wowtrust/trustdb/internal/statusnotify"
 	"github.com/wowtrust/trustdb/internal/submission"
 	"github.com/wowtrust/trustdb/internal/trustcrypto"
 	"github.com/wowtrust/trustdb/internal/trusterr"
@@ -451,6 +453,55 @@ func newServeCommand(rt *runtimeConfig) *cobra.Command {
 					return loadManifestItemsFromWAL(ctx, walPath, engine, manifest)
 				},
 			}
+			var statusHub *statusnotify.Hub
+			if clientKeys != nil {
+				trustRoot, ok := clientKeys.(interface {
+					RegistryPublicKey() trustcrypto.PublicKeyDescriptor
+				})
+				if !ok {
+					return trusterr.New(trusterr.CodeInternal, "key registry does not expose its validated public trust root")
+				}
+				routeStore, err := statusnotify.OpenRouteStore(statusnotify.RouteStorePath(registryPath), nil, trustRoot.RegistryPublicKey())
+				if err != nil {
+					return trusterr.Wrap(trusterr.CodeDataLoss, "open status notification routes", err)
+				}
+				routes, err := statusnotify.NewStoredRouteResolver(clientKeys, routeStore)
+				if err != nil {
+					return trusterr.Wrap(trusterr.CodeInternal, "build status notification route resolver", err)
+				}
+				suiteID, err := proofstore.BoundCryptoSuite(proofStore)
+				if err != nil {
+					return err
+				}
+				statusHub, err = statusnotify.New(statusnotify.Config{
+					StatePath:   filepath.Join(proofDir, "status-subscriptions.json"),
+					Routes:      routes,
+					Signer:      serverSigner,
+					CryptoSuite: suiteID,
+				})
+				if err != nil {
+					return trusterr.Wrap(trusterr.CodeInternal, "build status notification hub", err)
+				}
+				defer statusHub.Close()
+				batchOpts.OnRecordStatusesChanged = statusHub.Notify
+			}
+			var notifyPromotedBatches func(context.Context, []string)
+			if statusHub != nil {
+				notifyPromotedBatches = func(ctx context.Context, batchIDs []string) {
+					for _, batchID := range batchIDs {
+						manifest, err := proofStore.GetManifest(ctx, batchID)
+						if err != nil {
+							rt.logger.Warn().Err(err).Str("batch_id", batchID).Msg("status notification: load promoted batch manifest failed")
+							continue
+						}
+						statuses := make([]model.RecordStatus, 0, len(manifest.RecordIDs))
+						for _, recordID := range manifest.RecordIDs {
+							statuses = append(statuses, model.RecordStatus{RecordID: recordID})
+						}
+						statusHub.Notify(statuses)
+					}
+				}
+			}
 			// Only wire automatic prune on directory-mode WALs: single-file
 			// deployments have no notion of "older segments to delete" so
 			// firing PruneSegmentsBefore against them is both pointless
@@ -508,10 +559,11 @@ func newServeCommand(rt *runtimeConfig) *cobra.Command {
 					return trusterr.New(trusterr.CodeFailedPrecondition, "proofstore does not support recoverable L5 coverage projection")
 				}
 				coverageProjector, err = l5projector.New(l5projector.Config{
-					Store:        coverageStore,
-					Key:          anchorSvc.ScheduleKey(),
-					PollInterval: anchorPollInterval,
-					Logger:       rt.logger,
+					Store:             coverageStore,
+					Key:               anchorSvc.ScheduleKey(),
+					PollInterval:      anchorPollInterval,
+					Logger:            rt.logger,
+					OnBatchesPromoted: notifyPromotedBatches,
 				})
 				if err != nil {
 					return trusterr.Wrap(trusterr.CodeInternal, "build L5 coverage projector", err)
@@ -541,13 +593,14 @@ func newServeCommand(rt *runtimeConfig) *cobra.Command {
 					return trusterr.Wrap(trusterr.CodeInternal, "build global log service", err)
 				}
 				globalOutbox = globallog.NewOutboxWorker(globallog.OutboxConfig{
-					Store:          proofStore,
-					Global:         globalSvc,
-					AnchorKey:      anchorKey,
-					AnchorMaxDelay: anchorMaxDelay,
-					OnAnchorReady:  onAnchorReady,
-					Metrics:        metrics,
-					Logger:         rt.logger,
+					Store:              proofStore,
+					Global:             globalSvc,
+					AnchorKey:          anchorKey,
+					AnchorMaxDelay:     anchorMaxDelay,
+					OnAnchorReady:      onAnchorReady,
+					OnBatchesPublished: notifyPromotedBatches,
+					Metrics:            metrics,
+					Logger:             rt.logger,
 				})
 				defer globalOutbox.Stop()
 				batchOpts.OnBatchCommitted = newGlobalLogEnqueueHook(rt, proofStore, globalOutbox)
@@ -611,6 +664,13 @@ func newServeCommand(rt *runtimeConfig) *cobra.Command {
 				return err
 			}
 			if natsIngress != nil {
+				if statusHub != nil {
+					publisher, err := natsingress.NewStatusPublisher(natsIngress.runtime)
+					if err != nil {
+						return trusterr.Wrap(trusterr.CodeInternal, "build NATS status publisher", err)
+					}
+					statusHub.SetNATSPublisher(publisher)
+				}
 				defer func() {
 					closeCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 					defer cancel()
@@ -623,9 +683,9 @@ func newServeCommand(rt *runtimeConfig) *cobra.Command {
 			metricsHandler := observability.Handler(reg)
 			var publicHandler http.Handler
 			if anchorAPI != nil {
-				publicHandler = httpapi.NewWithSubmitterAndGlobalAndAnchors(submissionSvc, metricsHandler, batchSvc, globalSvc, anchorAPI)
+				publicHandler = httpapi.NewWithSubmitterAndGlobalAndAnchors(submissionSvc, metricsHandler, batchSvc, globalSvc, anchorAPI, statusHub)
 			} else {
-				publicHandler = httpapi.NewWithSubmitterAndGlobalAndAnchors(submissionSvc, metricsHandler, batchSvc, globalSvc, nil)
+				publicHandler = httpapi.NewWithSubmitterAndGlobalAndAnchors(submissionSvc, metricsHandler, batchSvc, globalSvc, nil, statusHub)
 			}
 			handler := http.Handler(publicHandler)
 			if rt.cfg.Admin.Enabled {

@@ -9,14 +9,18 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/wowtrust/trustdb/internal/anchorschedule"
 	"github.com/wowtrust/trustdb/internal/cborx"
+	"github.com/wowtrust/trustdb/internal/cryptosuite"
 	"github.com/wowtrust/trustdb/internal/ingest"
 	"github.com/wowtrust/trustdb/internal/model"
+	"github.com/wowtrust/trustdb/internal/statusnotify"
 	"github.com/wowtrust/trustdb/internal/submission"
+	"github.com/wowtrust/trustdb/internal/trustcrypto"
 	"github.com/wowtrust/trustdb/internal/trusterr"
 )
 
@@ -487,6 +491,34 @@ func TestRecordEndpoints(t *testing.T) {
 		t.Fatalf("record index = %+v", idx)
 	}
 
+	req = httptest.NewRequest(http.MethodGet, "/v1/records/rec-2/status", nil)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"status":"committed"`) {
+		t.Fatalf("record status = %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/v1/records/status:batchGet", strings.NewReader(`{"record_ids":["rec-2","missing"]}`))
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"missing_record_ids":["missing"]`) {
+		t.Fatalf("record status batch = %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/v1/records/status:batchGet", strings.NewReader(`{"record_ids":[" rec-2 ","rec-2"]}`))
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("normalized record status batch = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var normalizedStatuses recordStatusesResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &normalizedStatuses); err != nil {
+		t.Fatalf("decode normalized status batch: %v", err)
+	}
+	if len(normalizedStatuses.Statuses) != 1 || len(normalizedStatuses.MissingRecordIDs) != 0 {
+		t.Fatalf("normalized status batch = %+v", normalizedStatuses)
+	}
+
 	req = httptest.NewRequest(http.MethodGet, "/v1/records?q=screenshot&limit=10", nil)
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
@@ -541,6 +573,44 @@ func TestRecordEndpoints(t *testing.T) {
 	}
 	if len(byLevel.Records) != 1 || byLevel.Records[0].RecordID != "rec-3" {
 		t.Fatalf("level records page = %+v", byLevel)
+	}
+}
+
+func TestCreateStatusSubscriptionAuthenticatesBeforeRecordLookups(t *testing.T) {
+	t.Parallel()
+
+	clientPublic, _, err := trustcrypto.GenerateEd25519Key()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, serverPrivate, err := trustcrypto.GenerateEd25519Key()
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolver := staticStatusRouteResolver{key: model.ClientKey{
+		TenantID: "tenant", ClientID: "client", KeyID: "key",
+		Alg: cryptosuite.SignatureEd25519, PublicKey: clientPublic, Status: model.KeyStatusValid,
+	}}
+	hub, err := statusnotify.New(statusnotify.Config{
+		Routes: resolver,
+		Signer: trustcrypto.MustNewEd25519Signer("server-key", serverPrivate),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer hub.Close()
+
+	statuses := &countingRecordStatusService{}
+	handler := buildMux(Handler{Statuses: statuses, StatusHub: hub})
+	body := `{"tenant_id":"tenant","client_id":"client","key_id":"key","record_ids":["tr1"]}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/status-subscriptions", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d body=%s", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+	if got := statuses.calls.Load(); got != 0 {
+		t.Fatalf("RecordStatuses calls = %d, want 0 for unauthenticated request", got)
 	}
 }
 
@@ -877,6 +947,37 @@ type fakeBatchService struct {
 	treeNodes  []model.BatchTreeNode
 }
 
+type staticStatusRouteResolver struct {
+	key model.ClientKey
+}
+
+func (r staticStatusRouteResolver) LookupClientKeyAt(tenantID, clientID, keyID string, _ time.Time) (model.ClientKey, error) {
+	if tenantID != r.key.TenantID || clientID != r.key.ClientID || keyID != r.key.KeyID {
+		return model.ClientKey{}, trusterr.New(trusterr.CodeNotFound, "key not found")
+	}
+	return r.key, nil
+}
+
+func (r staticStatusRouteResolver) LookupNotificationRoute(tenantID, clientID, keyID string) (model.UpstreamNotificationRoute, bool) {
+	if tenantID != r.key.TenantID || clientID != r.key.ClientID || keyID != r.key.KeyID {
+		return model.UpstreamNotificationRoute{}, false
+	}
+	return model.UpstreamNotificationRoute{}, true
+}
+
+type countingRecordStatusService struct {
+	calls atomic.Int64
+}
+
+func (s *countingRecordStatusService) RecordStatus(context.Context, string) (model.RecordStatus, bool, error) {
+	return model.RecordStatus{}, false, nil
+}
+
+func (s *countingRecordStatusService) RecordStatuses(context.Context, []string) ([]model.RecordStatus, error) {
+	s.calls.Add(1)
+	return nil, nil
+}
+
 type blockingBatchService struct {
 	BatchService
 	entered chan struct{}
@@ -914,6 +1015,39 @@ func (f *fakeBatchService) RecordIndex(ctx context.Context, recordID string) (mo
 		}
 	}
 	return model.RecordIndex{}, false, nil
+}
+
+func (f *fakeBatchService) RecordStatus(ctx context.Context, recordID string) (model.RecordStatus, bool, error) {
+	for _, idx := range f.records {
+		if idx.RecordID == recordID {
+			return model.RecordStatus{
+				SchemaVersion: model.SchemaRecordStatus,
+				RecordID:      idx.RecordID,
+				TenantID:      idx.TenantID,
+				ClientID:      idx.ClientID,
+				KeyID:         idx.KeyID,
+				Status:        model.RecordStatusCommitted,
+				ProofLevel:    model.RecordIndexProofLevel(idx),
+				BatchID:       idx.BatchID,
+				Terminal:      true,
+			}, true, nil
+		}
+	}
+	return model.RecordStatus{}, false, nil
+}
+
+func (f *fakeBatchService) RecordStatuses(ctx context.Context, recordIDs []string) ([]model.RecordStatus, error) {
+	statuses := make([]model.RecordStatus, 0, len(recordIDs))
+	for _, recordID := range recordIDs {
+		status, found, err := f.RecordStatus(ctx, recordID)
+		if err != nil {
+			return nil, err
+		}
+		if found {
+			statuses = append(statuses, status)
+		}
+	}
+	return statuses, nil
 }
 
 func (f *fakeBatchService) Records(ctx context.Context, opts model.RecordListOptions) ([]model.RecordIndex, error) {

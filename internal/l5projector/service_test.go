@@ -19,7 +19,13 @@ func TestProjectPagePromotesCoveredPrefixAcrossPages(t *testing.T) {
 	key := projectorKey()
 	store := newProjectorStore(key, 6)
 	store.result = projectorResult(key, 5)
-	service, err := New(Config{Store: store, Key: key, PageSize: 2, Clock: func() time.Time { return time.Unix(0, 500) }})
+	var promoted []string
+	service, err := New(Config{
+		Store: store, Key: key, PageSize: 2, Clock: func() time.Time { return time.Unix(0, 500) },
+		OnBatchesPromoted: func(_ context.Context, batchIDs []string) {
+			promoted = append(promoted, batchIDs...)
+		},
+	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -41,6 +47,9 @@ func TestProjectPagePromotesCoveredPrefixAcrossPages(t *testing.T) {
 	}
 	if got := store.level("batch-5"); got != "L4" {
 		t.Fatalf("uncovered batch level=%q, want L4", got)
+	}
+	if len(promoted) != 5 {
+		t.Fatalf("OnBatchesPromoted = %v, want five batches", promoted)
 	}
 }
 
