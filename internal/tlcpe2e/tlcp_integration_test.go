@@ -21,6 +21,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -62,6 +63,23 @@ type runningGateway struct {
 	fixture           certificateFixture
 	httpAddress       string
 	grpcAddress       string
+}
+
+type synchronizedBuffer struct {
+	mu     sync.Mutex
+	buffer bytes.Buffer
+}
+
+func (buffer *synchronizedBuffer) Write(data []byte) (int, error) {
+	buffer.mu.Lock()
+	defer buffer.mu.Unlock()
+	return buffer.buffer.Write(data)
+}
+
+func (buffer *synchronizedBuffer) String() string {
+	buffer.mu.Lock()
+	defer buffer.mu.Unlock()
+	return buffer.buffer.String()
 }
 
 type serverGeneration struct {
@@ -653,7 +671,7 @@ func runGRPCHealthClient(running runningGateway, fixture certificateFixture) err
 	defer cancel()
 	args := opensslDockerArgs(running, fixture, "h2", true)
 	command := exec.CommandContext(ctx, "docker", args...)
-	var diagnostics bytes.Buffer
+	var diagnostics synchronizedBuffer
 	command.Stderr = &diagnostics
 	stdin, err := command.StdinPipe()
 	if err != nil {

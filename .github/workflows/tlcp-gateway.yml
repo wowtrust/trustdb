@@ -99,6 +99,15 @@ jobs:
             -run TestTLCPGatewayHTTPAndGRPCMutualAuthentication \
             ./internal/tlcpe2e
 
+      - name: Run TLCP integration race test
+        if: matrix.name == 'linux-amd64'
+        env:
+          TRUSTDB_TLCP_GATEWAY_IMAGE: ${{ steps.build.outputs.image }}
+        run: |
+          go test -race -count=1 -mod=readonly -tags="integration tlcp" \
+            -run TestTLCPGatewayHTTPAndGRPCMutualAuthentication \
+            ./internal/tlcpe2e
+
       - name: Upload verified build evidence
         uses: actions/upload-artifact@v7
         with:
