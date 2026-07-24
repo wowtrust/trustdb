@@ -238,6 +238,8 @@ func (s *FISCOBCOSStandardSink) resumeAttemptJournal(
 			}
 			next.Revision++
 			next.Attempts[lastIndex].Outcome = fiscobcos.AttemptOutcomeBlockLimitExpired
+			next.Attempts[lastIndex].Submission = nil
+			next.Attempts[lastIndex].Receipt = nil
 			nextRaw, err := s.checkpointAttemptJournal(ctx, journal, rawJournal, next, checkpoint)
 			if err != nil {
 				return model.STHAnchorResult{}, err

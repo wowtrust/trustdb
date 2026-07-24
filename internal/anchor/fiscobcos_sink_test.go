@@ -953,6 +953,62 @@ func TestFISCOBCOSBlockLimitRetryPreservesEverySignedAttempt(t *testing.T) {
 	}
 }
 
+func TestFISCOBCOSDuplicateSubmissionCanExpireAndRefreshBlockLimit(t *testing.T) {
+	trust, drivers := fakeBCOSFixture(t)
+	state := drivers[0].(*fakeBCOSDriver).state
+	state.submitStatuses = []int{fiscobcos.ReceiptStatusAlreadyInPool}
+	sink, err := NewFISCOBCOSStandardSink(FISCOBCOSStandardSinkConfig{
+		TrustConfig: trust,
+		Drivers:     drivers,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	inFlight := model.STHAnchorAttempt{
+		Generation: 10,
+		Target:     testSTH(testScheduleKey(fiscobcos.SinkName), 16, 0x20),
+	}
+	var providerState []byte
+	checkpoint := func(_ context.Context, expected, next []byte) error {
+		if !bytes.Equal(expected, providerState) {
+			return errors.New("stale provider state")
+		}
+		providerState = append([]byte(nil), next...)
+		return nil
+	}
+	if _, err := sink.PublishDurable(context.Background(), inFlight, checkpoint); err == nil {
+		t.Fatal("duplicate response without a receipt unexpectedly completed")
+	}
+	journal, err := fiscobcos.UnmarshalAttemptJournal(providerState)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(journal.Attempts) != 1 ||
+		journal.Attempts[0].Outcome != fiscobcos.AttemptOutcomeSubmitUnknown ||
+		journal.Attempts[0].Submission == nil {
+		t.Fatalf("journal after duplicate response=%+v", journal)
+	}
+
+	for _, driver := range drivers {
+		driver.(*fakeBCOSDriver).probe.Height = journal.Attempts[0].Transaction.BlockLimit + 1
+	}
+	inFlight.ProviderState = append([]byte(nil), providerState...)
+	result, err := sink.PublishDurable(context.Background(), inFlight, checkpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proof, err := fiscobcos.UnmarshalProof(result.Proof)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(proof.TransactionAttempts) != 2 ||
+		proof.TransactionAttempts[0].Outcome != fiscobcos.AttemptOutcomeBlockLimitExpired ||
+		proof.TransactionAttempts[0].Submission != nil ||
+		proof.TransactionAttempts[1].Outcome != fiscobcos.AttemptOutcomeReceiptSuccess {
+		t.Fatalf("block-limit refresh proof=%+v", proof.TransactionAttempts)
+	}
+}
+
 func TestFISCOBCOSPreparedCheckpointFailurePreventsSideEffectAndResumesExactBytes(t *testing.T) {
 	trust, drivers := fakeBCOSFixture(t)
 	state := drivers[0].(*fakeBCOSDriver).state
