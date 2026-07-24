@@ -20,7 +20,7 @@ import (
 func storageSupported() bool { return true }
 
 func secureEnvelopeFile(file *os.File, _ fs.FileMode) error {
-	if err := setOwnerOnlyACL(windows.Handle(file.Fd())); err != nil {
+	if err := setOwnerOnlyACL(file.Name(), windows.Handle(file.Fd())); err != nil {
 		return secretSafePathError("protect software key envelope", err)
 	}
 	info, err := file.Stat()
@@ -79,7 +79,7 @@ func acquireEnvelopeLock(ctx context.Context, path string) (func() error, error)
 	if info.FileAttributes&(windows.FILE_ATTRIBUTE_REPARSE_POINT|windows.FILE_ATTRIBUTE_DIRECTORY) != 0 {
 		return nil, fmt.Errorf("%w: lock file is a reparse point or directory", ErrUnsafeEnvelopeStorage)
 	}
-	if err := setOwnerOnlyACL(handle); err != nil {
+	if err := setOwnerOnlyACL(lockPath, handle); err != nil {
 		return nil, secretSafePathError("protect software key envelope lock", err)
 	}
 	if err := validateOwnerOnlyACL(handle); err != nil {
@@ -119,10 +119,46 @@ func acquireEnvelopeLock(ctx context.Context, path string) (func() error, error)
 	}, nil
 }
 
-func setOwnerOnlyACL(handle windows.Handle) error {
+func setOwnerOnlyACL(path string, handle windows.Handle) error {
 	owner, err := currentProcessUserSID()
 	if err != nil {
 		return err
+	}
+	// Data handles do not carry WRITE_DAC. Reopen the same file without
+	// share-delete, prove the file identity is unchanged, and update only the
+	// DACL. Ownership must already belong to the current user; this path never
+	// requests WRITE_OWNER or takes ownership of an attacker-controlled file.
+	name, err := windows.UTF16PtrFromString(path)
+	if err != nil {
+		return err
+	}
+	securityHandle, err := windows.CreateFile(
+		name,
+		windows.READ_CONTROL|windows.WRITE_DAC,
+		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE,
+		nil,
+		windows.OPEN_EXISTING,
+		windows.FILE_FLAG_OPEN_REPARSE_POINT,
+		0,
+	)
+	if err != nil {
+		return err
+	}
+	defer windows.CloseHandle(securityHandle)
+	if err := requireSameFileHandle(handle, securityHandle); err != nil {
+		return err
+	}
+	descriptor, err := windows.GetSecurityInfo(
+		securityHandle,
+		windows.SE_FILE_OBJECT,
+		windows.OWNER_SECURITY_INFORMATION,
+	)
+	if err != nil {
+		return err
+	}
+	actualOwner, _, err := descriptor.Owner()
+	if err != nil || actualOwner == nil || !actualOwner.Equals(owner) {
+		return errors.New("software key envelope owner is not the current user")
 	}
 	acl, err := windows.ACLFromEntries([]windows.EXPLICIT_ACCESS{{
 		AccessPermissions: windows.GENERIC_ALL,
@@ -138,16 +174,35 @@ func setOwnerOnlyACL(handle windows.Handle) error {
 		return err
 	}
 	return windows.SetSecurityInfo(
-		handle,
+		securityHandle,
 		windows.SE_FILE_OBJECT,
-		windows.OWNER_SECURITY_INFORMATION|
-			windows.DACL_SECURITY_INFORMATION|
+		windows.DACL_SECURITY_INFORMATION|
 			windows.PROTECTED_DACL_SECURITY_INFORMATION,
-		owner,
+		nil,
 		nil,
 		acl,
 		nil,
 	)
+}
+
+func requireSameFileHandle(left, right windows.Handle) error {
+	var leftInfo windows.ByHandleFileInformation
+	if err := windows.GetFileInformationByHandle(left, &leftInfo); err != nil {
+		return err
+	}
+	var rightInfo windows.ByHandleFileInformation
+	if err := windows.GetFileInformationByHandle(right, &rightInfo); err != nil {
+		return err
+	}
+	if leftInfo.VolumeSerialNumber != rightInfo.VolumeSerialNumber ||
+		leftInfo.FileIndexHigh != rightInfo.FileIndexHigh ||
+		leftInfo.FileIndexLow != rightInfo.FileIndexLow {
+		return errors.New("software key envelope path changed during ACL installation")
+	}
+	if rightInfo.FileAttributes&(windows.FILE_ATTRIBUTE_REPARSE_POINT|windows.FILE_ATTRIBUTE_DIRECTORY) != 0 {
+		return errors.New("software key envelope security handle is unsafe")
+	}
+	return nil
 }
 
 func validateOwnerOnlyACL(handle windows.Handle) error {
