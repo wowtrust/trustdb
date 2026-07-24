@@ -29,6 +29,7 @@ build_image() {
   SOURCE_DATE_EPOCH=$source_date_epoch docker buildx build \
     --file "$dockerfile" \
     --metadata-file "$metadata" \
+    --no-cache \
     --output "type=oci,dest=$destination,rewrite-timestamp=true" \
     --platform "$platform" \
     --progress "$build_progress" \
