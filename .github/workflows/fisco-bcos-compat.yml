@@ -1,0 +1,193 @@
+name: FISCO BCOS compatibility
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/fisco-bcos-compat.yml"
+      - "configs/compatibility/fisco-bcos-v3.16.3.json"
+      - "docs/integrations/ADR-0012-FISCO-BCOS-3X-COMPATIBILITY-BASELINE.md"
+      - "docs/integrations/evidence/fisco-bcos/**"
+      - "scripts/fisco-bcos/**"
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/fisco-bcos-compat.yml"
+      - "configs/compatibility/fisco-bcos-v3.16.3.json"
+      - "docs/integrations/ADR-0012-FISCO-BCOS-3X-COMPATIBILITY-BASELINE.md"
+      - "docs/integrations/evidence/fisco-bcos/**"
+      - "scripts/fisco-bcos/**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fisco-bcos-compat-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  macos-air:
+    name: macOS arm64 Air runtime
+    runs-on: macos-15
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: |
+            go.sum
+            scripts/fisco-bcos/smoke-client/go.sum
+
+      - name: Install pinned compiler runtime dependency
+        shell: bash
+        run: brew list z3 >/dev/null 2>&1 || brew install z3
+
+      - name: Validate compatibility policy
+        shell: bash
+        run: |
+          python3 scripts/fisco-bcos/compatibility.py validate
+          python3 scripts/fisco-bcos/test_compatibility.py
+          bash -n scripts/fisco-bcos/smoke-air.sh
+
+      - name: Run TrustDB tests
+        run: go test -count=1 -mod=readonly ./...
+
+      - name: Run standard Air smoke
+        shell: bash
+        env:
+          GOMODCACHE: ${{ runner.temp }}/trustdb-fisco-go-mod
+          GOCACHE: ${{ runner.temp }}/trustdb-fisco-go-build
+        run: |
+          scripts/fisco-bcos/smoke-air.sh \
+            --mode standard \
+            --work-dir "${RUNNER_TEMP}/fisco-standard" \
+            --cache-dir "${RUNNER_TEMP}/fisco-cache" \
+            >"${RUNNER_TEMP}/fisco-standard-evidence.json"
+
+      - name: Run Guomi Air smoke
+        shell: bash
+        env:
+          GOMODCACHE: ${{ runner.temp }}/trustdb-fisco-go-mod
+          GOCACHE: ${{ runner.temp }}/trustdb-fisco-go-build
+        run: |
+          scripts/fisco-bcos/smoke-air.sh \
+            --mode guomi \
+            --work-dir "${RUNNER_TEMP}/fisco-guomi" \
+            --cache-dir "${RUNNER_TEMP}/fisco-cache" \
+            >"${RUNNER_TEMP}/fisco-guomi-evidence.json"
+
+      - name: Upload sanitized runtime evidence
+        uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: fisco-bcos-macos-arm64-evidence
+          path: |
+            ${{ runner.temp }}/fisco-standard-evidence.json
+            ${{ runner.temp }}/fisco-guomi-evidence.json
+          if-no-files-found: error
+          retention-days: 14
+
+  windows-toolchain:
+    name: Windows amd64 developer toolchain
+    runs-on: windows-2025
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: |
+            go.sum
+            scripts/fisco-bcos/smoke-client/go.sum
+
+      - name: Validate compatibility policy
+        shell: pwsh
+        run: |
+          python scripts/fisco-bcos/compatibility.py validate
+          if ($LASTEXITCODE -ne 0) { throw "compatibility validation failed" }
+          python scripts/fisco-bcos/test_compatibility.py
+          if ($LASTEXITCODE -ne 0) { throw "compatibility tests failed" }
+
+      - name: Run TrustDB tests
+        run: go test -count=1 -mod=readonly ./...
+
+      - name: Verify and execute pinned Windows tools
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $cache = Join-Path $env:RUNNER_TEMP "fisco-cache"
+          $unpack = Join-Path $env:RUNNER_TEMP "fisco-tools"
+          $contract = Join-Path $env:GITHUB_WORKSPACE "scripts/fisco-bcos/CompatibilityProbe.sol"
+          New-Item -ItemType Directory -Force -Path $cache, $unpack | Out-Null
+
+          foreach ($mode in @("standard", "guomi")) {
+            python scripts/fisco-bcos/compatibility.py verify-artifacts `
+              --platform windows/amd64 `
+              --crypto $mode `
+              --cache-dir $cache
+            if ($LASTEXITCODE -ne 0) { throw "artifact verification failed for $mode" }
+          }
+
+          $standardDir = Join-Path $unpack "solc-standard"
+          $guomiDir = Join-Path $unpack "solc-guomi"
+          $tasslDir = Join-Path $unpack "tassl"
+          New-Item -ItemType Directory -Force -Path $standardDir, $guomiDir, $tasslDir | Out-Null
+          tar -xzf (Join-Path $cache "solidity/solc-win.tar.gz") -C $standardDir
+          if ($LASTEXITCODE -ne 0) { throw "standard compiler extraction failed" }
+          tar -xzf (Join-Path $cache "solidity/solc-win-gm.tar.gz") -C $guomiDir
+          if ($LASTEXITCODE -ne 0) { throw "Guomi compiler extraction failed" }
+          tar -xzf (Join-Path $cache "tassl/tassl-1.1.1b-win-x86_64.tar.gz") -C $tasslDir
+          if ($LASTEXITCODE -ne 0) { throw "TASSL extraction failed" }
+
+          $standardSolc = Get-ChildItem $standardDir -Recurse -Filter "*.exe" | Select-Object -First 1
+          $guomiSolc = Get-ChildItem $guomiDir -Recurse -Filter "*.exe" | Select-Object -First 1
+          $tassl = Get-ChildItem $tasslDir -Recurse -Filter "*.exe" | Select-Object -First 1
+          if (-not $standardSolc -or -not $guomiSolc -or -not $tassl) {
+            throw "one or more pinned archives did not contain an executable"
+          }
+
+          foreach ($compiler in @(
+            @{ Name = "standard"; Path = $standardSolc.FullName },
+            @{ Name = "guomi"; Path = $guomiSolc.FullName }
+          )) {
+            & $compiler.Path --version
+            if ($LASTEXITCODE -ne 0) { throw "$($compiler.Name) compiler could not execute" }
+            $output = Join-Path $unpack "contract-$($compiler.Name)"
+            New-Item -ItemType Directory -Force -Path $output | Out-Null
+            & $compiler.Path --bin --abi --overwrite -o $output $contract
+            if ($LASTEXITCODE -ne 0) { throw "$($compiler.Name) compiler could not compile CompatibilityProbe.sol" }
+            if (-not (Get-ChildItem $output -Filter "CompatibilityProbe.bin") -or
+                -not (Get-ChildItem $output -Filter "CompatibilityProbe.abi")) {
+              throw "$($compiler.Name) compiler did not emit the expected ABI and bytecode"
+            }
+          }
+
+          & $tassl.FullName version
+          if ($LASTEXITCODE -ne 0) { throw "TASSL could not execute" }
+
+      - name: Link the Go SDK smoke client against the pinned C SDK
+        shell: pwsh
+        working-directory: scripts/fisco-bcos/smoke-client
+        run: |
+          $ErrorActionPreference = "Stop"
+          $cache = Join-Path $env:RUNNER_TEMP "fisco-cache/c_sdk"
+          $moduleDir = go list -m -f '{{.Dir}}' github.com/FISCO-BCOS/bcos-c-sdk
+          if ($LASTEXITCODE -ne 0) { throw "could not locate the pinned C SDK module" }
+          $nativeDir = Join-Path $moduleDir "bindings/go/csdk/libs/win"
+          New-Item -ItemType Directory -Force -Path $nativeDir | Out-Null
+          Copy-Item (Join-Path $cache "bcos-c-sdk.lib") $nativeDir
+          Copy-Item (Join-Path $cache "bcos-c-sdk.dll") $nativeDir
+          $env:PATH = "$cache;$env:PATH"
+          $env:CGO_ENABLED = "1"
+          go test -count=1 -mod=readonly ./...
+          if ($LASTEXITCODE -ne 0) { throw "Windows Go SDK/C SDK link test failed" }
+
