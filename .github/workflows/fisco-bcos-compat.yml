@@ -43,9 +43,12 @@ jobs:
             go.sum
             scripts/fisco-bcos/smoke-client/go.sum
 
-      - name: Install pinned compiler runtime dependency
+      - name: Install macOS native test dependencies
         shell: bash
-        run: brew list z3 >/dev/null 2>&1 || brew install z3
+        run: |
+          brew list z3 >/dev/null 2>&1 || brew install z3
+          brew list openssl@3 >/dev/null 2>&1 || brew install openssl@3
+          echo "$(brew --prefix openssl@3)/bin" >>"${GITHUB_PATH}"
 
       - name: Validate compatibility policy
         shell: bash
@@ -83,7 +86,7 @@ jobs:
 
       - name: Upload sanitized runtime evidence
         uses: actions/upload-artifact@v7
-        if: always()
+        if: success()
         with:
           name: fisco-bcos-macos-arm64-evidence
           path: |
@@ -116,9 +119,6 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "compatibility validation failed" }
           python scripts/fisco-bcos/test_compatibility.py
           if ($LASTEXITCODE -ne 0) { throw "compatibility tests failed" }
-
-      - name: Run TrustDB tests
-        run: go test -count=1 -mod=readonly ./...
 
       - name: Verify and execute pinned Windows tools
         shell: pwsh
@@ -185,3 +185,16 @@ jobs:
           $env:CGO_LDFLAGS = "-L$cache"
           go test -count=1 -mod=readonly ./...
           if ($LASTEXITCODE -ne 0) { throw "Windows Go SDK/C SDK link test failed" }
+
+      - name: Compile TrustDB and run platform-safe tests
+        shell: pwsh
+        run: |
+          go test -count=1 -mod=readonly -run '^$' ./...
+          if ($LASTEXITCODE -ne 0) { throw "Windows TrustDB package compilation failed" }
+          go test -count=1 -mod=readonly `
+            ./internal/wal `
+            ./internal/cryptosuite `
+            ./internal/smconformance `
+            ./internal/anchorsystem `
+            ./sdk/anchorplugin
+          if ($LASTEXITCODE -ne 0) { throw "Windows platform-safe tests failed" }
