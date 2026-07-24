@@ -71,6 +71,45 @@ Artifact hashes are audit identities, not trust roots. A verifier must pin the
 deployed chain, group, contract address, runtime code hash, protocol version,
 and validator checkpoint in its local `TrustConfig`.
 
+## Guomi deployment and startup
+
+Guomi mode is a complete chain-mode binding, not a different encoding of a
+standard-chain transaction. Deploy the contract from `artifacts/guomi`, then
+create a canonical `trustdb.fisco-bcos-trust-config.v1` CBOR file with:
+
+- `crypto_mode=guomi`, protocol and chain hashes set to SM3, account and
+  validator signatures set to SM2-with-SM3, and the fixed TrustDB SM2 user ID;
+- `gm-tls://host:port` endpoints, the exact chain/group/genesis/checkpoint, the
+  deployed address, and the SM3 runtime-code hash;
+- every validator's 65-byte uncompressed SM2 public key and a `node_id` equal
+  to `0x` plus that public key's 64-byte body;
+- the SM3 digest of the exact trusted CA file and separate `sm_sdk` signing and
+  `sm_ensdk` encryption certificate/key references; and
+- an account provider exposing the `FISCO_BCOS_GUOMI_V1` signer profile. For
+  PKCS#11 or SDF providers, the private key remains inside the provider.
+
+Start the native-enabled server with:
+
+```bash
+trustdb serve \
+  --anchor-sink=fisco-bcos \
+  --anchor-fisco-bcos-trust-config=/absolute/path/trust-config.cbor
+```
+
+The binary must be built with `CGO_ENABLED=1`, the `fiscobcos_sdk` build tag,
+and the pinned FISCO BCOS C SDK available to the dynamic loader. Before
+connecting, TrustDB verifies the Guomi CA, certificate chains, signing and
+encryption key usages, private-key matches, and distinct dual-certificate
+identities. It also rejects standard TLS endpoints, secp256k1 validators,
+standard contract artifacts, and standard-chain transaction material under a
+Guomi configuration.
+
+Offline verification uses the verifier's local `TrustConfig` as the trust
+root. It recomputes SM3 transaction, receipt, event, block, and contract
+bindings and verifies the pinned SM2 PBFT validator quorum without contacting
+the chain. The anchored TrustDB payload and its evidence cryptographic suite
+remain unchanged and opaque to FISCO BCOS.
+
 ## Deployment record
 
 Copy `deployments/deployment-record.template.json` into a controlled deployment

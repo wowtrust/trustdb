@@ -9,11 +9,15 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/FISCO-BCOS/go-sdk/v3/types"
 
 	"github.com/wowtrust/trustdb/internal/anchor/fiscobcos"
+	"github.com/wowtrust/trustdb/internal/cryptosuite"
+	"github.com/wowtrust/trustdb/internal/tlcpprofile"
 )
 
 type smokeEvidence struct {
@@ -23,16 +27,26 @@ type smokeEvidence struct {
 }
 
 type result struct {
-	ReceiptConsensusHashMatched bool `json:"receipt_consensus_hash_matched"`
-	BlockConsensusHashMatched   bool `json:"block_consensus_hash_matched"`
+	ReceiptConsensusHashMatched bool   `json:"receipt_consensus_hash_matched"`
+	BlockConsensusHashMatched   bool   `json:"block_consensus_hash_matched"`
+	PBFTCommitSignaturesValid   bool   `json:"pbft_commit_signatures_valid"`
+	TimingSemantics             string `json:"timing_semantics"`
+	ReceiptVerificationNS       int64  `json:"receipt_verification_ns"`
+	BlockVerificationNS         int64  `json:"block_verification_ns"`
+	PBFTVerificationNS          int64  `json:"pbft_verification_ns"`
 }
 
 func main() {
 	var input string
+	var certDir string
 	flag.StringVar(&input, "input", "", "smoke-client evidence JSON")
+	flag.StringVar(&certDir, "cert-dir", "", "generated SDK certificate directory")
 	flag.Parse()
 	if input == "" {
 		fatalf("--input is required")
+	}
+	if certDir == "" {
+		fatalf("--cert-dir is required")
 	}
 	data, err := os.ReadFile(input)
 	if err != nil {
@@ -45,18 +59,101 @@ func main() {
 	if evidence.Mode != "standard" && evidence.Mode != "guomi" {
 		fatalf("unsupported crypto mode %q", evidence.Mode)
 	}
+	if evidence.Mode == "guomi" {
+		if err := tlcpprofile.ValidateSM2ClientDualCertificateFiles(
+			filepath.Join(certDir, "sm_ca.crt"),
+			filepath.Join(certDir, "sm_sdk.crt"),
+			filepath.Join(certDir, "sm_sdk.key"),
+			filepath.Join(certDir, "sm_ensdk.crt"),
+			filepath.Join(certDir, "sm_ensdk.key"),
+			time.Now().UTC(),
+		); err != nil {
+			fatalf("validate Guomi SDK dual-certificate identity: %v", err)
+		}
+	}
+	receiptStarted := time.Now()
 	if err := verifyReceiptConsensusHash(evidence.EventReceipt, evidence.Mode); err != nil {
 		fatalf("verify receipt consensus hash: %v", err)
 	}
+	receiptElapsed := time.Since(receiptStarted)
+	blockStarted := time.Now()
 	if err := verifyBlockConsensusHash(evidence.Block, evidence.Mode); err != nil {
 		fatalf("verify block consensus hash: %v", err)
 	}
+	blockElapsed := time.Since(blockStarted)
+	pbftStarted := time.Now()
+	if err := verifyPBFTCommitSignatures(evidence.Block, evidence.Mode); err != nil {
+		fatalf("verify PBFT commit signatures: %v", err)
+	}
+	pbftElapsed := time.Since(pbftStarted)
 	if err := json.NewEncoder(os.Stdout).Encode(result{
 		ReceiptConsensusHashMatched: true,
 		BlockConsensusHashMatched:   true,
+		PBFTCommitSignaturesValid:   true,
+		TimingSemantics:             "single_sample_diagnostic_not_benchmark",
+		ReceiptVerificationNS:       receiptElapsed.Nanoseconds(),
+		BlockVerificationNS:         blockElapsed.Nanoseconds(),
+		PBFTVerificationNS:          pbftElapsed.Nanoseconds(),
 	}); err != nil {
 		fatalf("encode result: %v", err)
 	}
+}
+
+func verifyPBFTCommitSignatures(block *types.Block, mode string) error {
+	if block == nil || len(block.SealerList) == 0 ||
+		len(block.SignatureList) == 0 ||
+		len(block.ConsensusWeights) != len(block.SealerList) {
+		return errors.New("block lacks a complete PBFT validator snapshot")
+	}
+	cryptoMode := fiscobcos.CryptoModeStandard
+	sm2UserID := ""
+	if mode == "guomi" {
+		cryptoMode = fiscobcos.CryptoModeGuomi
+		sm2UserID = cryptosuite.SM2DefaultUserID
+	}
+	blockHash, err := decodeRPCBytes(block.Hash)
+	if err != nil || len(blockHash) != 32 {
+		return errors.New("block hash is not 32 bytes")
+	}
+	for index, weight := range block.ConsensusWeights {
+		if weight != 1 {
+			return fmt.Errorf("validator %d has unsupported PBFT weight %d", index, weight)
+		}
+	}
+	seen := make(map[uint64]struct{}, len(block.SignatureList))
+	for index, commit := range block.SignatureList {
+		if commit.SealerIndex >= uint64(len(block.SealerList)) {
+			return fmt.Errorf("commit %d has out-of-range sealer index", index)
+		}
+		if _, duplicate := seen[commit.SealerIndex]; duplicate {
+			return fmt.Errorf("commit %d duplicates sealer index %d", index, commit.SealerIndex)
+		}
+		seen[commit.SealerIndex] = struct{}{}
+		rawPublicKey, err := decodeRPCBytes(block.SealerList[commit.SealerIndex])
+		if err != nil || len(rawPublicKey) != 64 {
+			return fmt.Errorf("commit %d sealer public key is not 64 bytes", index)
+		}
+		signature, err := decodeRPCBytes(commit.Signature)
+		if err != nil {
+			return fmt.Errorf("decode commit %d signature: %w", index, err)
+		}
+		publicKey := append([]byte{0x04}, rawPublicKey...)
+		if err := fiscobcos.VerifyPBFTCommitSignature(
+			cryptoMode,
+			sm2UserID,
+			publicKey,
+			blockHash,
+			signature,
+		); err != nil {
+			return fmt.Errorf("commit %d: %w", index, err)
+		}
+	}
+	total := uint64(len(block.SealerList))
+	required := total - (total-1)/3
+	if uint64(len(seen)) < required {
+		return fmt.Errorf("PBFT commit quorum has %d signatures, requires %d of %d", len(seen), required, total)
+	}
+	return nil
 }
 
 func verifyReceiptConsensusHash(receipt *types.Receipt, mode string) error {

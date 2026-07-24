@@ -236,7 +236,7 @@ fi
 
 if ! (
     cd "${SCRIPT_DIR}/smoke-client"
-    GOWORK=off go build -trimpath -o "${WORK_DIR}/smoke-client" .
+    GOWORK=off go build -mod=readonly -trimpath -o "${WORK_DIR}/smoke-client" .
 ) >"${WORK_DIR}/smoke-client-build.log" 2>&1; then
     echo "the Go SDK smoke client failed to build" >&2
     sed 's/^/  /' "${WORK_DIR}/smoke-client-build.log" >&2
@@ -380,8 +380,9 @@ fi
 
 if ! (
     cd "${REPO_ROOT}"
-    go run ./scripts/fisco-bcos/evidence-check \
-        --input "${WORK_DIR}/client-evidence.json"
+    GOWORK=off go run -mod=readonly ./scripts/fisco-bcos/evidence-check \
+        --input "${WORK_DIR}/client-evidence.json" \
+        --cert-dir "${SDK_DIR}"
 ) >"${WORK_DIR}/consensus-preimage.json" \
   2>"${WORK_DIR}/consensus-preimage.stderr"; then
     echo "the production consensus-preimage evidence check failed" >&2
@@ -444,6 +445,8 @@ if preimages.get("receipt_consensus_hash_matched") is not True:
     raise SystemExit("production receipt consensus preimage did not match the node hash")
 if preimages.get("block_consensus_hash_matched") is not True:
     raise SystemExit("production block consensus preimage did not match the node hash")
+if preimages.get("pbft_commit_signatures_valid") is not True:
+    raise SystemExit("production PBFT commit signatures did not verify")
 artifacts = json.loads((work / "artifact-verification.json").read_text(encoding="utf-8"))
 baseline = json.loads(Path(baseline_path).read_text(encoding="utf-8"))
 environment = {
@@ -547,10 +550,15 @@ evidence = {
     "harness_validation": {
         "four_node_convergence_required_before_sdk": True,
         "stdout_is_single_json_document": True,
+        "timing_semantics": "single_sample_diagnostic_not_benchmark",
         "stderr_lines": client_stderr,
         "clean_teardown": client["clean_teardown"],
         "receipt_consensus_hash_matched": preimages["receipt_consensus_hash_matched"],
         "block_consensus_hash_matched": preimages["block_consensus_hash_matched"],
+        "pbft_commit_signatures_valid": preimages["pbft_commit_signatures_valid"],
+        "receipt_verification_ns": preimages["receipt_verification_ns"],
+        "block_verification_ns": preimages["block_verification_ns"],
+        "pbft_verification_ns": preimages["pbft_verification_ns"],
     },
     "cleanup": {
         "node_processes_absent": True,

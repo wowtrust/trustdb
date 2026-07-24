@@ -37,10 +37,19 @@ type txEvidence struct {
 	ReceiptProofPresent bool     `json:"receipt_proof_field_present"`
 	TransactionProof    []string `json:"transaction_proof"`
 	TxProofPresent      bool     `json:"transaction_proof_field_present"`
+	PrepareSignEncodeNS int64    `json:"prepare_sign_encode_ns"`
+	SubmitToReceiptNS   int64    `json:"submit_to_receipt_ns"`
+	ProofRetrievalNS    int64    `json:"proof_retrieval_ns"`
+}
+
+type txPhaseDurations struct {
+	prepareSignEncode time.Duration
+	submitToReceipt   time.Duration
 }
 
 type evidence struct {
 	SchemaVersion       int                        `json:"schema_version"`
+	TimingSemantics     string                     `json:"timing_semantics"`
 	Mode                string                     `json:"mode"`
 	SMCrypto            bool                       `json:"sm_crypto"`
 	InitialBlockNumber  int64                      `json:"initial_block_number"`
@@ -148,27 +157,34 @@ func sendEncoded(
 	input []byte,
 	abiJSON string,
 	blockLimit int64,
-) (common.Hash, *types.Receipt, error) {
+) (common.Hash, *types.Receipt, txPhaseDurations, error) {
+	prepareStarted := time.Now()
 	txData, hashBytes, err := c.CreateEncodedTransactionDataV1(to, input, blockLimit, abiJSON)
 	if err != nil {
-		return common.Hash{}, nil, fmt.Errorf("create transaction data: %w", err)
+		return common.Hash{}, nil, txPhaseDurations{}, fmt.Errorf("create transaction data: %w", err)
 	}
 	signature, err := c.CreateEncodedSignature(hashBytes)
 	if err != nil {
-		return common.Hash{}, nil, fmt.Errorf("sign transaction: %w", err)
+		return common.Hash{}, nil, txPhaseDurations{}, fmt.Errorf("sign transaction: %w", err)
 	}
 	tx, err := c.CreateEncodedTransaction(txData, hashBytes, signature, 0, "")
 	if err != nil {
-		return common.Hash{}, nil, fmt.Errorf("encode transaction: %w", err)
+		return common.Hash{}, nil, txPhaseDurations{}, fmt.Errorf("encode transaction: %w", err)
 	}
+	prepareElapsed := time.Since(prepareStarted)
+	submitStarted := time.Now()
 	receipt, err := c.SendEncodedTransaction(ctx, tx, true)
-	return common.BytesToHash(hashBytes), receipt, err
+	return common.BytesToHash(hashBytes), receipt, txPhaseDurations{
+		prepareSignEncode: prepareElapsed,
+		submitToReceipt:   time.Since(submitStarted),
+	}, err
 }
 
-func collectTxEvidence(ctx context.Context, c *client.Client, hash common.Hash, receipt *types.Receipt) (txEvidence, error) {
+func collectTxEvidence(ctx context.Context, c *client.Client, hash common.Hash, receipt *types.Receipt, phases txPhaseDurations) (txEvidence, error) {
 	if receipt == nil {
 		return txEvidence{}, errors.New("nil receipt")
 	}
+	proofStarted := time.Now()
 	queriedReceipt, err := c.GetTransactionReceipt(ctx, hash, true)
 	if err != nil {
 		return txEvidence{}, fmt.Errorf("get receipt with proof: %w", err)
@@ -177,6 +193,7 @@ func collectTxEvidence(ctx context.Context, c *client.Client, hash common.Hash, 
 	if err != nil {
 		return txEvidence{}, fmt.Errorf("get transaction with proof: %w", err)
 	}
+	proofElapsed := time.Since(proofStarted)
 	return txEvidence{
 		Hash:                hash.Hex(),
 		Status:              queriedReceipt.Status,
@@ -186,6 +203,9 @@ func collectTxEvidence(ctx context.Context, c *client.Client, hash common.Hash, 
 		ReceiptProofPresent: queriedReceipt.ReceiptProof != nil,
 		TransactionProof:    tx.TransactionProof,
 		TxProofPresent:      tx.TransactionProof != nil,
+		PrepareSignEncodeNS: phases.prepareSignEncode.Nanoseconds(),
+		SubmitToReceiptNS:   phases.submitToReceipt.Nanoseconds(),
+		ProofRetrievalNS:    proofElapsed.Nanoseconds(),
 	}, nil
 }
 
@@ -216,14 +236,14 @@ func main() {
 		fatalf("pack constructor: %v", err)
 	}
 	deployInput := append(common.FromHex(contractBin), constructor...)
-	deployHash, deployReceipt, err := sendEncoded(ctx, c, nil, deployInput, abiJSON, initial+600)
+	deployHash, deployReceipt, deployPhases, err := sendEncoded(ctx, c, nil, deployInput, abiJSON, initial+600)
 	if err != nil {
 		fatalf("deploy transaction: %v", err)
 	}
 	if deployReceipt.Status != types.Success {
 		fatalf("deploy receipt status: %d (%s)", deployReceipt.Status, deployReceipt.GetErrorMessage())
 	}
-	deployEvidence, err := collectTxEvidence(ctx, c, deployHash, deployReceipt)
+	deployEvidence, err := collectTxEvidence(ctx, c, deployHash, deployReceipt, deployPhases)
 	if err != nil {
 		fatalf("collect deploy evidence: %v", err)
 	}
@@ -273,14 +293,14 @@ func main() {
 	if err != nil {
 		fatalf("get block number before event transaction: %v", err)
 	}
-	eventHash, eventReceipt, err := sendEncoded(ctx, c, &address, callInput, "", current+600)
+	eventHash, eventReceipt, eventPhases, err := sendEncoded(ctx, c, &address, callInput, "", current+600)
 	if err != nil {
 		fatalf("event transaction: %v", err)
 	}
 	if eventReceipt.Status != types.Success {
 		fatalf("event receipt status: %d (%s)", eventReceipt.Status, eventReceipt.GetErrorMessage())
 	}
-	eventEvidence, err := collectTxEvidence(ctx, c, eventHash, eventReceipt)
+	eventEvidence, err := collectTxEvidence(ctx, c, eventHash, eventReceipt, eventPhases)
 	if err != nil {
 		fatalf("collect event transaction evidence: %v", err)
 	}
@@ -348,7 +368,7 @@ func main() {
 	if staleLimit < 0 {
 		staleLimit = 0
 	}
-	_, staleReceipt, staleErr := sendEncoded(ctx, c, &address, callInput, "", staleLimit)
+	_, staleReceipt, _, staleErr := sendEncoded(ctx, c, &address, callInput, "", staleLimit)
 	staleRejected := staleErr != nil || (staleReceipt != nil && staleReceipt.Status == types.BlockLimitCheckFail)
 	if !staleRejected {
 		status := -1
@@ -364,6 +384,7 @@ func main() {
 
 	output := evidence{
 		SchemaVersion:       1,
+		TimingSemantics:     "single_sample_diagnostic_not_benchmark",
 		Mode:                cfg.Mode,
 		SMCrypto:            c.SMCrypto(),
 		InitialBlockNumber:  initial,
