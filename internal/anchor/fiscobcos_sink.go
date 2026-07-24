@@ -42,11 +42,17 @@ type bcosProbeObservation struct {
 }
 
 type bcosQuorumRoute struct {
-	probes       []fiscobcos.ChainProbe
-	driver       fiscobcos.Driver
-	height       uint64
-	healthyCount int
-	degraded     bool
+	probes           []fiscobcos.ChainProbe
+	driver           fiscobcos.Driver
+	height           uint64
+	healthyEndpoints map[string]struct{}
+	healthyCount     int
+	degraded         bool
+}
+
+func (route bcosQuorumRoute) isHealthy(endpoint string) bool {
+	_, ok := route.healthyEndpoints[endpoint]
+	return ok
 }
 
 type FISCOBCOSStandardSinkConfig struct {
@@ -222,6 +228,7 @@ func (s *FISCOBCOSStandardSink) probeQuorum(ctx context.Context) (bcosQuorumRout
 	})
 	quorumHeight := heights[quorum-1].height
 	healthyCount := 0
+	healthyEndpoints := make(map[string]struct{}, len(heights))
 	probes := make([]fiscobcos.ChainProbe, 0, len(heights))
 	var selected fiscobcos.Driver
 	for index := range observations {
@@ -236,6 +243,7 @@ func (s *FISCOBCOSStandardSink) probeQuorum(ctx context.Context) (bcosQuorumRout
 		}
 		observation.healthy = true
 		healthyCount++
+		healthyEndpoints[observation.probe.Endpoint] = struct{}{}
 		probes = append(probes, cloneChainProbe(observation.probe))
 		if selected == nil {
 			selected = s.drivers[index]
@@ -253,7 +261,8 @@ func (s *FISCOBCOSStandardSink) probeQuorum(ctx context.Context) (bcosQuorumRout
 	s.setEndpointProbeMetrics(observations, true)
 	return bcosQuorumRoute{
 		probes: probes, driver: selected, height: quorumHeight,
-		healthyCount: healthyCount, degraded: healthyCount != len(s.drivers),
+		healthyEndpoints: healthyEndpoints,
+		healthyCount:     healthyCount, degraded: healthyCount != len(s.drivers),
 	}, nil
 }
 
@@ -303,10 +312,15 @@ func (s *FISCOBCOSStandardSink) Publish(ctx context.Context, sth model.SignedTre
 	)
 }
 
-func (s *FISCOBCOSStandardSink) readAnchorStateQuorum(ctx context.Context, payload fiscobcos.AnchorPayload) (bool, error) {
+func (s *FISCOBCOSStandardSink) readAnchorStateQuorum(
+	ctx context.Context,
+	payload fiscobcos.AnchorPayload,
+	route bcosQuorumRoute,
+) (bool, error) {
 	quorum := int(s.trust.ReadQuorum)
 	exact := 0
 	absent := 0
+	positiveSeen := false
 	var selected fiscobcos.AnchorRecord
 	for _, driver := range s.drivers {
 		record, err := driver.ReadAnchor(ctx, payload.AnchorID)
@@ -314,6 +328,7 @@ func (s *FISCOBCOSStandardSink) readAnchorStateQuorum(ctx context.Context, paylo
 			continue
 		}
 		if record.Exists {
+			positiveSeen = true
 			if err := fiscobcos.ValidateAnchorRecord(payload, record); err != nil {
 				s.recordQuorumFailure(bcosQuorumOperationAnchor, bcosQuorumFailureDisagreement)
 				return false, permanentDriverFailure("read_anchor_before_submit", driver.Endpoint(), err)
@@ -324,11 +339,13 @@ func (s *FISCOBCOSStandardSink) readAnchorStateQuorum(ctx context.Context, paylo
 				s.recordQuorumFailure(bcosQuorumOperationAnchor, bcosQuorumFailureDisagreement)
 				return false, permanentDriverFailure("read_anchor_before_submit", driver.Endpoint(), fiscobcos.ErrEndpointDisagreement)
 			}
-			exact++
+			if route.isHealthy(driver.Endpoint()) {
+				exact++
+			}
 		} else if len(record.StreamID) != 0 || record.TreeSize != 0 || len(record.RootHash) != 0 ||
 			len(record.SignedSTHDigest) != 0 || len(record.Publisher) != 0 || record.PayloadVersion != 0 {
 			return false, permanentDriverFailure("read_anchor_before_submit", driver.Endpoint(), fiscobcos.ErrDriverInvalid)
-		} else {
+		} else if route.isHealthy(driver.Endpoint()) {
 			absent++
 		}
 	}
@@ -338,7 +355,7 @@ func (s *FISCOBCOSStandardSink) readAnchorStateQuorum(ctx context.Context, paylo
 	// Any exact positive observation means a side effect may already exist.
 	// An absent quorum cannot authorize a duplicate submission until the
 	// positive observation is either corroborated or proven conflicting.
-	if exact > 0 {
+	if positiveSeen {
 		s.recordQuorumFailure(bcosQuorumOperationAnchor, bcosQuorumFailureInsufficient)
 		return false, ambiguousDriverFailure("read_anchor_before_submit", s.drivers[0].Endpoint(), fiscobcos.ErrIncompleteChainEvidence)
 	}
@@ -440,8 +457,13 @@ func (*FISCOBCOSStandardSink) Resource(context.Context, string, string) (model.A
 	return model.AnchorSystemResource{}, false, trusterr.New(trusterr.CodeFailedPrecondition, "FISCO BCOS explorer resources are not exposed by the anchor driver")
 }
 
-func (s *FISCOBCOSStandardSink) readAnchorQuorum(ctx context.Context, payload fiscobcos.AnchorPayload) ([]fiscobcos.AnchorRecord, error) {
+func (s *FISCOBCOSStandardSink) readAnchorQuorum(
+	ctx context.Context,
+	payload fiscobcos.AnchorPayload,
+	route bcosQuorumRoute,
+) ([]fiscobcos.AnchorRecord, error) {
 	records := make([]fiscobcos.AnchorRecord, 0, len(s.drivers))
+	var selected *fiscobcos.AnchorRecord
 	for _, driver := range s.drivers {
 		record, err := driver.ReadAnchor(ctx, payload.AnchorID)
 		if err != nil {
@@ -458,11 +480,17 @@ func (s *FISCOBCOSStandardSink) readAnchorQuorum(ctx context.Context, payload fi
 			s.recordQuorumFailure(bcosQuorumOperationAnchor, bcosQuorumFailureDisagreement)
 			return nil, permanentDriverFailure("read_anchor", driver.Endpoint(), err)
 		}
-		if len(records) > 0 && !sameAnchorRecord(records[0], record) {
+		if selected != nil && !sameAnchorRecord(*selected, record) {
 			s.recordQuorumFailure(bcosQuorumOperationAnchor, bcosQuorumFailureDisagreement)
 			return nil, permanentDriverFailure("read_anchor", driver.Endpoint(), fiscobcos.ErrEndpointDisagreement)
 		}
-		records = append(records, cloneAnchorRecord(record))
+		if selected == nil {
+			cloned := cloneAnchorRecord(record)
+			selected = &cloned
+		}
+		if route.isHealthy(driver.Endpoint()) {
+			records = append(records, cloneAnchorRecord(record))
+		}
 	}
 	if len(records) < int(s.trust.ReadQuorum) {
 		s.recordQuorumFailure(bcosQuorumOperationAnchor, bcosQuorumFailureInsufficient)
@@ -471,7 +499,12 @@ func (s *FISCOBCOSStandardSink) readAnchorQuorum(ctx context.Context, payload fi
 	return records, nil
 }
 
-func (s *FISCOBCOSStandardSink) readBlockQuorum(ctx context.Context, blockNumber uint64, blockHash []byte) (fiscobcos.BlockHeader, fiscobcos.ConsensusSnapshot, error) {
+func (s *FISCOBCOSStandardSink) readBlockQuorum(
+	ctx context.Context,
+	blockNumber uint64,
+	blockHash []byte,
+	route bcosQuorumRoute,
+) (fiscobcos.BlockHeader, fiscobcos.ConsensusSnapshot, error) {
 	var selectedHeader fiscobcos.BlockHeader
 	var selectedConsensus fiscobcos.ConsensusSnapshot
 	successes := 0
@@ -488,14 +521,16 @@ func (s *FISCOBCOSStandardSink) readBlockQuorum(ctx context.Context, blockNumber
 			s.recordQuorumFailure(bcosQuorumOperationBlock, bcosQuorumFailureDisagreement)
 			return fiscobcos.BlockHeader{}, fiscobcos.ConsensusSnapshot{}, ambiguousDriverFailure("read_block", driver.Endpoint(), err)
 		}
-		if successes == 0 {
+		if selectedHeader.Evidence.BlockNumber == 0 {
 			selectedHeader = cloneBlockHeader(header)
 			selectedConsensus = cloneConsensus(consensus)
 		} else if !sameBlockHeader(selectedHeader, header) || !sameConsensusSnapshot(selectedConsensus, consensus) {
 			s.recordQuorumFailure(bcosQuorumOperationBlock, bcosQuorumFailureDisagreement)
 			return fiscobcos.BlockHeader{}, fiscobcos.ConsensusSnapshot{}, ambiguousDriverFailure("read_block", driver.Endpoint(), fiscobcos.ErrEndpointDisagreement)
 		}
-		successes++
+		if route.isHealthy(driver.Endpoint()) {
+			successes++
+		}
 	}
 	if successes < int(s.trust.ReadQuorum) {
 		s.recordQuorumFailure(bcosQuorumOperationBlock, bcosQuorumFailureInsufficient)
