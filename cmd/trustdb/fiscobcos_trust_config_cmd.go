@@ -231,6 +231,9 @@ func consumeFISCOBCOSJSONValue(decoder *json.Decoder, depth int) error {
 			if !ok {
 				return errors.New("JSON object key is not a string")
 			}
+			if !isCanonicalFISCOBCOSJSONKey(key) {
+				return fmt.Errorf("JSON object key %q must use lowercase snake_case", key)
+			}
 			if _, duplicate := seen[key]; duplicate {
 				return fmt.Errorf("duplicate JSON object key %q", key)
 			}
@@ -265,6 +268,18 @@ func consumeFISCOBCOSJSONValue(decoder *json.Decoder, depth int) error {
 		return fmt.Errorf("unexpected JSON delimiter %q", delimiter)
 	}
 	return nil
+}
+
+func isCanonicalFISCOBCOSJSONKey(key string) bool {
+	if key == "" {
+		return false
+	}
+	for _, item := range key {
+		if item != '_' && (item < 'a' || item > 'z') && (item < '0' || item > '9') {
+			return false
+		}
+	}
+	return true
 }
 
 func (input fiscoBCOSTrustConfigInput) trustConfig() (fiscobcos.TrustConfig, error) {

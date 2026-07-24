@@ -132,6 +132,47 @@ func TestFISCOBCOSTrustConfigCreateRejectsUnknownAndCrossModeFields(t *testing.T
 		t.Fatal("create accepted a duplicate JSON field")
 	}
 
+	caseFoldedAlias := bytes.Replace(
+		cleanData,
+		[]byte(`"crypto_mode":"standard"`),
+		[]byte(`"crypto_mode":"standard","CRYPTO_MODE":"guomi"`),
+		1,
+	)
+	if err := os.WriteFile(inputPath, caseFoldedAlias, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	command = newRootCommand(&bytes.Buffer{}, &bytes.Buffer{})
+	command.SetArgs([]string{
+		"anchor", "fisco-bcos", "trust-config", "create",
+		"--input", inputPath,
+		"--out", outputPath,
+	})
+	if err := command.Execute(); err == nil {
+		t.Fatal("create accepted a case-folded JSON field alias")
+	}
+
+	nestedCaseFoldedAlias := bytes.Replace(
+		cleanData,
+		[]byte(`"block_number":100`),
+		[]byte(`"block_number":100,"BLOCK_NUMBER":7`),
+		1,
+	)
+	if bytes.Equal(nestedCaseFoldedAlias, cleanData) {
+		t.Fatal("nested alias test did not modify the JSON fixture")
+	}
+	if err := os.WriteFile(inputPath, nestedCaseFoldedAlias, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	command = newRootCommand(&bytes.Buffer{}, &bytes.Buffer{})
+	command.SetArgs([]string{
+		"anchor", "fisco-bcos", "trust-config", "create",
+		"--input", inputPath,
+		"--out", outputPath,
+	})
+	if err := command.Execute(); err == nil {
+		t.Fatal("create accepted a nested case-folded JSON field alias")
+	}
+
 	input = trustConfigInputForTest(config)
 	input.CryptoMode = string(fiscobcos.CryptoModeGuomi)
 	data, err := json.Marshal(input)

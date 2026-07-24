@@ -288,6 +288,63 @@ func TestTrustConfigRejectsInferredOrMixedModeParameters(t *testing.T) {
 	}
 }
 
+func TestTrustConfigRejectsEndpointAliasesAndIgnoredURLComponents(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		endpoints []string
+	}{
+		{
+			name: "query alias",
+			endpoints: []string{
+				"gm-tls://127.0.0.1:20200",
+				"gm-tls://127.0.0.1:20200?alias=second",
+			},
+		},
+		{
+			name: "root path alias",
+			endpoints: []string{
+				"gm-tls://127.0.0.1:20200",
+				"gm-tls://127.0.0.1:20200/",
+			},
+		},
+		{
+			name: "scheme and bare alias",
+			endpoints: []string{
+				"gm-tls://127.0.0.1:20200",
+				"127.0.0.1:20200",
+			},
+		},
+		{
+			name: "DNS case alias",
+			endpoints: []string{
+				"gm-tls://BCOS.example.test:20200",
+				"gm-tls://bcos.example.test:20200",
+			},
+		},
+		{
+			name: "DNS absolute alias",
+			endpoints: []string{
+				"gm-tls://bcos.example.test.:20200",
+				"gm-tls://bcos.example.test:20200",
+			},
+		},
+	}
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			config := testTrustConfig(t, CryptoModeGuomi)
+			config.Endpoints = tc.endpoints
+			config.ReadQuorum = 2
+			if _, err := MarshalTrustConfig(config); err == nil {
+				t.Fatal("TrustConfig accepted aliased or non-canonical endpoints")
+			}
+		})
+	}
+}
+
 func TestStrictCBORRejectsUnknownTrustAndProofFields(t *testing.T) {
 	t.Parallel()
 

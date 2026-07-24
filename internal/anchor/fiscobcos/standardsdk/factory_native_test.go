@@ -49,6 +49,28 @@ func TestValidateSignerSignatureRequiresConfiguredPublicKey(t *testing.T) {
 	}
 }
 
+func TestParseEndpointRejectsIgnoredURLComponents(t *testing.T) {
+	t.Parallel()
+
+	for _, endpoint := range []string{
+		"gm-tls://127.0.0.1:20200?alias=second",
+		"gm-tls://127.0.0.1:20200/",
+		"gm-tls://127.0.0.1:20200#second",
+		" gm-tls://127.0.0.1:20200",
+	} {
+		if _, _, err := parseEndpoint(endpoint, fiscobcos.GuomiTransport); err == nil {
+			t.Fatalf("parseEndpoint(%q) accepted an ignored URL component", endpoint)
+		}
+	}
+	host, port, err := parseEndpoint(
+		"gm-tls://127.0.0.1:20200",
+		fiscobcos.GuomiTransport,
+	)
+	if err != nil || host != "127.0.0.1" || port != 20200 {
+		t.Fatalf("parseEndpoint(valid) = %q, %d, %v", host, port, err)
+	}
+}
+
 func TestGuomiSignerMaterialIsVerifiedAndConvertedToNativeFormat(t *testing.T) {
 	t.Parallel()
 

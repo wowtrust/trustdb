@@ -1558,11 +1558,16 @@ func decodedHexLength(value string) int {
 }
 
 func parseEndpoint(endpoint, transportMode string) (string, int, error) {
-	value := strings.TrimSpace(endpoint)
+	value := endpoint
+	if strings.TrimSpace(value) != value {
+		return "", 0, fmt.Errorf("invalid FISCO BCOS %s endpoint %q", transportMode, endpoint)
+	}
 	if strings.Contains(value, "://") {
 		parsed, err := url.Parse(value)
 		validScheme := parsed != nil && parsed.Scheme == transportMode
-		if err != nil || parsed == nil || parsed.User != nil || parsed.Path != "" && parsed.Path != "/" ||
+		if err != nil || parsed == nil || parsed.User != nil || parsed.Opaque != "" ||
+			parsed.Path != "" || parsed.RawPath != "" || parsed.RawQuery != "" ||
+			parsed.ForceQuery || parsed.Fragment != "" || parsed.RawFragment != "" ||
 			!validScheme {
 			return "", 0, fmt.Errorf("invalid FISCO BCOS %s endpoint %q", transportMode, endpoint)
 		}

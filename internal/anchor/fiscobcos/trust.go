@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net"
+	"net/netip"
 	"net/url"
 	"sort"
 	"strconv"
@@ -266,13 +267,14 @@ func validateTrustConfig(config TrustConfig) error {
 	}
 	seenEndpoints := make(map[string]struct{}, len(config.Endpoints))
 	for _, endpoint := range config.Endpoints {
-		if err := validateEndpoint(endpoint, params.TransportMode); err != nil {
+		endpointKey, err := validateEndpoint(endpoint, params.TransportMode)
+		if err != nil {
 			return err
 		}
-		if _, exists := seenEndpoints[endpoint]; exists {
+		if _, exists := seenEndpoints[endpointKey]; exists {
 			return fmt.Errorf("%w: duplicate endpoint %q", ErrInvalidTrustConfig, endpoint)
 		}
-		seenEndpoints[endpoint] = struct{}{}
+		seenEndpoints[endpointKey] = struct{}{}
 	}
 	if config.ReadQuorum == 0 || int(config.ReadQuorum) > len(config.Endpoints) {
 		return fmt.Errorf("%w: read_quorum=%d exceeds endpoint count %d", ErrInvalidTrustConfig, config.ReadQuorum, len(config.Endpoints))
@@ -379,35 +381,48 @@ func validateConfigString(name, value string) error {
 	return nil
 }
 
-func validateEndpoint(endpoint, transportMode string) error {
+func validateEndpoint(endpoint, transportMode string) (string, error) {
 	if err := validateConfigString("endpoint", endpoint); err != nil {
-		return err
+		return "", err
+	}
+	if strings.TrimSpace(endpoint) != endpoint {
+		return "", fmt.Errorf("%w: endpoint must not contain surrounding whitespace", ErrInvalidTrustConfig)
 	}
 	if strings.Contains(endpoint, "@") {
-		return fmt.Errorf("%w: endpoint must not contain user information", ErrInvalidTrustConfig)
+		return "", fmt.Errorf("%w: endpoint must not contain user information", ErrInvalidTrustConfig)
 	}
+	address := endpoint
 	if !strings.Contains(endpoint, "://") {
-		host, portText, err := net.SplitHostPort(endpoint)
-		port, portErr := strconv.Atoi(portText)
-		if err != nil || portErr != nil || strings.TrimSpace(host) == "" || port < 1 || port > 65535 {
-			return fmt.Errorf("%w: malformed endpoint %q", ErrInvalidTrustConfig, endpoint)
+		if strings.ContainsAny(endpoint, "/?#") {
+			return "", fmt.Errorf("%w: malformed endpoint %q", ErrInvalidTrustConfig, endpoint)
 		}
-		return nil
+	} else {
+		u, err := url.Parse(endpoint)
+		if err != nil || u.Host == "" || u.User != nil || u.Opaque != "" ||
+			u.Path != "" || u.RawPath != "" || u.RawQuery != "" ||
+			u.ForceQuery || u.Fragment != "" || u.RawFragment != "" {
+			return "", fmt.Errorf("%w: malformed endpoint %q", ErrInvalidTrustConfig, endpoint)
+		}
+		if u.Scheme != transportMode {
+			return "", fmt.Errorf("%w: endpoint %q is not bound to transport_mode=%s", ErrInvalidTrustConfig, endpoint, transportMode)
+		}
+		address = u.Host
 	}
-	u, err := url.Parse(endpoint)
-	if err != nil || u.Host == "" || u.User != nil || u.Fragment != "" ||
-		u.Path != "" && u.Path != "/" {
-		return fmt.Errorf("%w: malformed endpoint %q", ErrInvalidTrustConfig, endpoint)
-	}
-	if u.Scheme != transportMode {
-		return fmt.Errorf("%w: endpoint %q is not bound to transport_mode=%s", ErrInvalidTrustConfig, endpoint, transportMode)
-	}
-	_, portText, err := net.SplitHostPort(u.Host)
+	host, portText, err := net.SplitHostPort(address)
 	port, portErr := strconv.Atoi(portText)
-	if err != nil || portErr != nil || port < 1 || port > 65535 {
-		return fmt.Errorf("%w: endpoint %q has an invalid port", ErrInvalidTrustConfig, endpoint)
+	if err != nil || portErr != nil || strings.TrimSpace(host) == "" || port < 1 || port > 65535 {
+		return "", fmt.Errorf("%w: endpoint %q has an invalid host or port", ErrInvalidTrustConfig, endpoint)
 	}
-	return nil
+	canonicalHost := host
+	if address, parseErr := netip.ParseAddr(host); parseErr == nil {
+		canonicalHost = address.Unmap().String()
+	} else {
+		canonicalHost = strings.ToLower(strings.TrimSuffix(host, "."))
+	}
+	if canonicalHost == "" {
+		return "", fmt.Errorf("%w: endpoint %q has an invalid host", ErrInvalidTrustConfig, endpoint)
+	}
+	return transportMode + "://" + net.JoinHostPort(canonicalHost, strconv.Itoa(port)), nil
 }
 
 func hashForMode(mode CryptoMode, data []byte) ([]byte, error) {
