@@ -547,6 +547,18 @@ func LifecycleTimeout(profile Profile, lifecycle string) (time.Duration, error) 
 	return duration, nil
 }
 
+func LifecycleTimeoutSeconds(profile Profile, lifecycle string) (uint64, error) {
+	duration, err := LifecycleTimeout(profile, lifecycle)
+	if err != nil {
+		return 0, err
+	}
+	seconds := uint64(duration / time.Second)
+	if duration%time.Second != 0 {
+		seconds++
+	}
+	return seconds, nil
+}
+
 func validateString(name, value string) error {
 	if value == "" || value != strings.TrimSpace(value) || len(value) > MaxStringBytes ||
 		!utf8.ValidString(value) || strings.IndexFunc(value, func(r rune) bool { return r < 0x20 || r == 0x7f }) >= 0 {

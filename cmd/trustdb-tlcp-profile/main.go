@@ -1,13 +1,18 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/wowtrust/trustdb/internal/tlcpprofile"
 )
@@ -35,8 +40,11 @@ func main() {
 func run(args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
 		return errors.New(
-			"usage: trustdb-tlcp-profile <validate|timeout|prepare-runtime|verify-runtime>",
+			"usage: trustdb-tlcp-profile <validate|timeout|activate-runtime|prepare-runtime|verify-runtime>",
 		)
+	}
+	if args[0] == "activate-runtime" {
+		return runActivateRuntime(args[1:], stdout, stderr)
 	}
 	if args[0] == "prepare-runtime" || args[0] == "verify-runtime" {
 		return runRuntime(args[0], args[1:], stdout, stderr)
@@ -108,12 +116,203 @@ func runTimeout(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	timeout, err := tlcpprofile.LifecycleTimeout(profile, lifecycle)
+	timeoutSeconds, err := tlcpprofile.LifecycleTimeoutSeconds(profile, lifecycle)
 	if err != nil {
 		return err
 	}
-	_, err = fmt.Fprintln(stdout, timeout.String())
+	_, err = fmt.Fprintln(stdout, timeoutSeconds)
 	return err
+}
+
+const maxActivationCommandOutputBytes = 64 << 10
+
+type activationOptions struct {
+	profilePath       string
+	lifecycle         string
+	imageDigest       string
+	configuration     string
+	manifest          string
+	gateway           string
+	gatewayPrefix     string
+	currentExecutable string
+}
+
+func runActivateRuntime(args []string, stdout, stderr io.Writer) error {
+	flags := flag.NewFlagSet("activate-runtime", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	var options activationOptions
+	flags.StringVar(&options.profilePath, "profile", "", "absolute path to the strict TLCP gateway profile")
+	flags.StringVar(&options.lifecycle, "lifecycle", "", "startup or reload deadline")
+	flags.StringVar(&options.imageDigest, "expected-image-digest", "", "deployed OCI image manifest digest")
+	flags.StringVar(&options.configuration, "configuration", "", "absolute active nginx configuration path")
+	flags.StringVar(&options.manifest, "runtime-manifest", "", "absolute active runtime manifest path")
+	flags.StringVar(&options.gateway, "gateway", "", "absolute TLCP gateway executable path")
+	flags.StringVar(&options.gatewayPrefix, "gateway-prefix", "", "absolute TLCP gateway runtime prefix")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 {
+		return errors.New("unexpected positional arguments")
+	}
+	for name, value := range map[string]string{
+		"--profile":               options.profilePath,
+		"--lifecycle":             options.lifecycle,
+		"--expected-image-digest": options.imageDigest,
+		"--configuration":         options.configuration,
+		"--runtime-manifest":      options.manifest,
+		"--gateway":               options.gateway,
+		"--gateway-prefix":        options.gatewayPrefix,
+	} {
+		if strings.TrimSpace(value) == "" {
+			return fmt.Errorf("%s is required", name)
+		}
+	}
+	if options.lifecycle != tlcpprofile.LifecycleStartup &&
+		options.lifecycle != tlcpprofile.LifecycleReload {
+		return errors.New("--lifecycle must be startup or reload")
+	}
+	for name, value := range map[string]string{
+		"--gateway":        options.gateway,
+		"--gateway-prefix": options.gatewayPrefix,
+	} {
+		if !filepath.IsAbs(value) || filepath.Clean(value) != value {
+			return fmt.Errorf("%s must be an absolute clean path", name)
+		}
+	}
+	executable, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("resolve TLCP profile executable: %w", err)
+	}
+	options.currentExecutable = executable
+	return activateRuntime(options, stdout, stderr, time.Now)
+}
+
+func activateRuntime(
+	options activationOptions,
+	stdout, stderr io.Writer,
+	now func() time.Time,
+) error {
+	started := now()
+	profile, _, err := tlcpprofile.LoadAndValidate(
+		options.profilePath,
+		tlcpprofile.Options{},
+	)
+	if err != nil {
+		return err
+	}
+	timeout, err := tlcpprofile.LifecycleTimeout(profile, options.lifecycle)
+	if err != nil {
+		return err
+	}
+	deadline := started.Add(timeout)
+	if !now().Before(deadline) {
+		return fmt.Errorf(
+			"TLCP %s deadline expired during initial profile validation",
+			options.lifecycle,
+		)
+	}
+	ctx, cancel := context.WithDeadline(context.Background(), deadline)
+	defer cancel()
+
+	suffix := fmt.Sprintf(".next.%d", os.Getpid())
+	nextConfiguration := options.configuration + suffix
+	nextManifest := options.manifest + suffix
+	defer os.Remove(nextConfiguration)
+	defer os.Remove(nextManifest)
+
+	prepare := exec.CommandContext(
+		ctx,
+		options.currentExecutable,
+		"prepare-runtime",
+		"--profile", options.profilePath,
+		"--expected-image-digest", options.imageDigest,
+		"--configuration", nextConfiguration,
+		"--runtime-manifest", nextManifest,
+	)
+	if err := runActivationCommand(prepare); err != nil {
+		return activationCommandError(ctx, "prepare TLCP runtime", err)
+	}
+	validate := exec.CommandContext(
+		ctx,
+		options.gateway,
+		"-t",
+		"-c", nextConfiguration,
+		"-p", options.gatewayPrefix,
+	)
+	if err := runActivationCommand(validate); err != nil {
+		return activationCommandError(ctx, "validate TLCP gateway configuration", err)
+	}
+	if err := os.Rename(nextConfiguration, options.configuration); err != nil {
+		return fmt.Errorf("activate TLCP gateway configuration: %w", err)
+	}
+	if err := os.Rename(nextManifest, options.manifest); err != nil {
+		return fmt.Errorf("activate TLCP runtime manifest: %w", err)
+	}
+	_, err = fmt.Fprintf(stdout, "TLCP %s runtime activated\n", options.lifecycle)
+	return err
+}
+
+func activationCommandError(ctx context.Context, action string, err error) error {
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return fmt.Errorf("%s: lifecycle deadline exceeded: %w", action, ctxErr)
+	}
+	return fmt.Errorf("%s: %w", action, err)
+}
+
+func runActivationCommand(command *exec.Cmd) error {
+	output := &boundedActivationOutput{limit: maxActivationCommandOutputBytes}
+	command.Stdout = output
+	command.Stderr = output
+	if err := command.Run(); err != nil {
+		diagnostics := strings.TrimSpace(string(output.Bytes()))
+		if diagnostics == "" {
+			return err
+		}
+		return fmt.Errorf("%w: %s", err, diagnostics)
+	}
+	if output.Exceeded() {
+		return fmt.Errorf(
+			"command output exceeds %d bytes",
+			maxActivationCommandOutputBytes,
+		)
+	}
+	return nil
+}
+
+type boundedActivationOutput struct {
+	mutex    sync.Mutex
+	data     []byte
+	limit    int
+	exceeded bool
+}
+
+func (output *boundedActivationOutput) Write(data []byte) (int, error) {
+	output.mutex.Lock()
+	defer output.mutex.Unlock()
+	remaining := output.limit - len(output.data)
+	if remaining <= 0 {
+		output.exceeded = true
+		return 0, errors.New("activation command output limit exceeded")
+	}
+	if len(data) > remaining {
+		output.data = append(output.data, data[:remaining]...)
+		output.exceeded = true
+		return remaining, errors.New("activation command output limit exceeded")
+	}
+	output.data = append(output.data, data...)
+	return len(data), nil
+}
+
+func (output *boundedActivationOutput) Bytes() []byte {
+	output.mutex.Lock()
+	defer output.mutex.Unlock()
+	return append([]byte(nil), output.data...)
+}
+
+func (output *boundedActivationOutput) Exceeded() bool {
+	output.mutex.Lock()
+	defer output.mutex.Unlock()
+	return output.exceeded
 }
 
 func runRuntime(command string, args []string, stdout, stderr io.Writer) error {

@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -34,5 +36,38 @@ func TestStringListRejectsEmptyReferences(t *testing.T) {
 	}
 	if got := values.String(); !strings.Contains(got, "opaque:key") {
 		t.Fatalf("String() = %q", got)
+	}
+}
+
+func TestPrepareRuntimeScriptCannotBypassDeadlineThroughEnvironment(t *testing.T) {
+	path := filepath.Join("..", "..", "packaging", "tlcp-gateway", "prepare-runtime.sh")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := string(data)
+	if strings.Contains(script, "TLCP_PREPARE_DEADLINE_ACTIVE") {
+		t.Fatal("runtime preparation still trusts an externally forgeable deadline flag")
+	}
+	if !strings.Contains(
+		script,
+		"trustdb-tlcp-profile activate-runtime",
+	) {
+		t.Fatal("runtime preparation does not use the deadline-owning wrapper")
+	}
+}
+
+func TestBoundedActivationOutputRejectsDiagnosticsFlood(t *testing.T) {
+	output := &boundedActivationOutput{limit: 4}
+	written, err := output.Write([]byte("overflow"))
+	if written != 4 || err == nil {
+		t.Fatalf("Write() = (%d, %v), want (4, limit error)", written, err)
+	}
+	if !output.Exceeded() || string(output.Bytes()) != "over" {
+		t.Fatalf(
+			"bounded activation output = exceeded %v, bytes %q",
+			output.Exceeded(),
+			output.Bytes(),
+		)
 	}
 }

@@ -246,6 +246,35 @@ func TestLifecycleTimeoutSelectsEveryBoundedContract(t *testing.T) {
 	}
 }
 
+func TestLifecycleTimeoutSecondsUsesIntegerCeiling(t *testing.T) {
+	profile := Profile{Timeouts: Timeouts{
+		Startup: "1m30s",
+		Reload:  "90.001s",
+		Canary:  "90s",
+	}}
+	for _, test := range []struct {
+		lifecycle string
+		want      uint64
+	}{
+		{LifecycleStartup, 90},
+		{LifecycleReload, 91},
+		{LifecycleCanary, 90},
+	} {
+		got, err := LifecycleTimeoutSeconds(profile, test.lifecycle)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != test.want {
+			t.Fatalf(
+				"LifecycleTimeoutSeconds(%q) = %d, want %d",
+				test.lifecycle,
+				got,
+				test.want,
+			)
+		}
+	}
+}
+
 func TestProductionOpaqueEngineReferencesValidateWithoutReadingPrivateKeys(t *testing.T) {
 	fixture := newTrustFixture(t)
 	profile := fixture.profile
