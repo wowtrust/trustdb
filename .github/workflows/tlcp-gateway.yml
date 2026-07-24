@@ -1,0 +1,140 @@
+name: TLCP Gateway
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/tlcp-gateway.yml"
+      - "cmd/trustdb-tlcp-build-record/**"
+      - "cmd/trustdb-tlcp-profile/**"
+      - "docs/integrations/TLCP_GATEWAY.md"
+      - "formats/TLCP_GATEWAY_PROFILE_V1.md"
+      - "internal/tlcpbuild/**"
+      - "internal/tlcpe2e/**"
+      - "internal/tlcpprofile/**"
+      - "packaging/tlcp-gateway/**"
+      - "test/vectors/tlcp-gateway-profile-v1.json"
+      - "go.mod"
+      - "go.sum"
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/tlcp-gateway.yml"
+      - "cmd/trustdb-tlcp-build-record/**"
+      - "cmd/trustdb-tlcp-profile/**"
+      - "docs/integrations/TLCP_GATEWAY.md"
+      - "formats/TLCP_GATEWAY_PROFILE_V1.md"
+      - "internal/tlcpbuild/**"
+      - "internal/tlcpe2e/**"
+      - "internal/tlcpprofile/**"
+      - "packaging/tlcp-gateway/**"
+      - "test/vectors/tlcp-gateway-profile-v1.json"
+      - "go.mod"
+      - "go.sum"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tlcp-gateway-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux-gateway:
+    name: Reproducible gateway and TLCP interop · ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-amd64
+            runner: ubuntu-24.04
+            platform: linux/amd64
+          - name: linux-arm64
+            runner: ubuntu-24.04-arm
+            platform: linux/arm64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 50
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Test profile and build contracts
+        run: |
+          go test -count=1 -mod=readonly \
+            ./internal/tlcpprofile ./internal/tlcpbuild \
+            ./cmd/trustdb-tlcp-profile ./cmd/trustdb-tlcp-build-record
+          go vet \
+            ./internal/tlcpprofile ./internal/tlcpbuild \
+            ./cmd/trustdb-tlcp-profile ./cmd/trustdb-tlcp-build-record
+
+      - name: Build twice and verify OCI, SBOM, and build record
+        id: build
+        shell: bash
+        env:
+          PLATFORM: ${{ matrix.platform }}
+          OUTPUT_DIR: ${{ runner.temp }}/trustdb-tlcp-artifacts
+        run: |
+          set -euo pipefail
+          packaging/tlcp-gateway/build.sh | tee "$RUNNER_TEMP/tlcp-build.log"
+          image="$(awk '/^TLCP gateway image:/ {print $4}' "$RUNNER_TEMP/tlcp-build.log")"
+          if ! [[ "$image" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::reproducible build did not emit an image digest"
+            exit 1
+          fi
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+
+      - name: Run real HTTP and HTTP/2 gRPC TLCP tests
+        env:
+          TRUSTDB_TLCP_GATEWAY_IMAGE: ${{ steps.build.outputs.image }}
+        run: |
+          go test -count=1 -mod=readonly -tags="integration tlcp" \
+            -run TestTLCPGatewayHTTPAndGRPCMutualAuthentication \
+            ./internal/tlcpe2e
+
+      - name: Upload verified build evidence
+        uses: actions/upload-artifact@v7
+        with:
+          name: trustdb-tlcp-${{ matrix.name }}
+          path: ${{ runner.temp }}/trustdb-tlcp-artifacts/
+          if-no-files-found: error
+          retention-days: 14
+
+  portable-developer-tools:
+    name: Profile and test compilation · ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macos-arm64
+            runner: macos-15
+          - name: windows-amd64
+            runner: windows-2025
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Test portable profile and build-record tools
+        run: |
+          go test -count=1 -mod=readonly ./internal/tlcpprofile ./internal/tlcpbuild
+          go test -count=1 -mod=readonly ./cmd/trustdb-tlcp-profile ./cmd/trustdb-tlcp-build-record
+          go build -trimpath ./cmd/trustdb-tlcp-profile ./cmd/trustdb-tlcp-build-record
+
+      - name: Compile TLCP integration harness
+        run: go test -count=1 -mod=readonly -tags="integration tlcp" -run "^$" ./internal/tlcpe2e
