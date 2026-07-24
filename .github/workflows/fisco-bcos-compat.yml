@@ -148,9 +148,15 @@ jobs:
           tar -xzf (Join-Path $cache "tassl/tassl-1.1.1b-win-x86_64.tar.gz") -C $tasslDir
           if ($LASTEXITCODE -ne 0) { throw "TASSL extraction failed" }
 
-          $standardSolc = Get-ChildItem $standardDir -Recurse -Filter "*.exe" | Select-Object -First 1
-          $guomiSolc = Get-ChildItem $guomiDir -Recurse -Filter "*.exe" | Select-Object -First 1
-          $tassl = Get-ChildItem $tasslDir -Recurse -Filter "*.exe" | Select-Object -First 1
+          $standardSolc = Get-ChildItem $standardDir -Recurse -Filter "*.exe" |
+            Where-Object { -not $_.Name.StartsWith("._") } |
+            Select-Object -First 1
+          $guomiSolc = Get-ChildItem $guomiDir -Recurse -Filter "*.exe" |
+            Where-Object { -not $_.Name.StartsWith("._") } |
+            Select-Object -First 1
+          $tassl = Get-ChildItem $tasslDir -Recurse -Filter "*.exe" |
+            Where-Object { -not $_.Name.StartsWith("._") } |
+            Select-Object -First 1
           if (-not $standardSolc -or -not $guomiSolc -or -not $tassl) {
             throw "one or more pinned archives did not contain an executable"
           }
