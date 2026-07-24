@@ -38,14 +38,16 @@ func run() error {
 	defer grpcListener.Close()
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/health", func(writer http.ResponseWriter, request *http.Request) {
+	healthHandler := func(writer http.ResponseWriter, request *http.Request) {
 		if request.Method != http.MethodGet {
 			http.Error(writer, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
 		writer.Header().Set("Content-Type", "application/json")
 		_, _ = writer.Write([]byte(`{"status":"ok","transport":"loopback"}`))
-	})
+	}
+	mux.HandleFunc("/health", healthHandler)
+	mux.HandleFunc("/healthz", healthHandler)
 	httpServer := &http.Server{
 		Handler:           mux,
 		ReadHeaderTimeout: 2 * time.Second,
