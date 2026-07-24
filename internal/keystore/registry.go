@@ -751,7 +751,7 @@ func initializeRegistry(path string, manifest Manifest) error {
 		return err
 	}
 	cleanup = false
-	return syncDir(filepath.Dir(path))
+	return syncRegistryDirectory(filepath.Dir(path))
 }
 
 func validateManifest(manifest Manifest) error {
@@ -921,15 +921,6 @@ func writeAll(writer io.Writer, data []byte) error {
 		data = data[n:]
 	}
 	return nil
-}
-
-func syncDir(path string) error {
-	dir, err := os.Open(path)
-	if err != nil {
-		return err
-	}
-	defer dir.Close()
-	return dir.Sync()
 }
 
 func domainInput(domain string, payload []byte) []byte {
