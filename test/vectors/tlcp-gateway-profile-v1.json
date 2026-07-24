@@ -22,6 +22,7 @@
     "tongsuo_source_sha256": "57c2741750a699bfbdaa1bbe44a5733e9c8fc65d086c210151cfbc2bbd6fc975",
     "builder_image": "docker.io/library/debian:bookworm-slim@sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818",
     "runtime_image": "docker.io/library/debian:bookworm-slim@sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818",
+    "validator_builder_image": "docker.io/library/golang:1.26.5-bookworm@sha256:1ecb7edf62a0408027bd5729dfd6b1b8766e578e8df93995b225dfd0944eb651",
     "gateway_image_digest": "sha256:5555555555555555555555555555555555555555555555555555555555555555",
     "build_parameters": [
       "--add-module=modules/ngx_openssl_ntls",
@@ -44,7 +45,9 @@
       "--with-openssl-opt=enable-ntls no-tests",
       "--with-stream",
       "--with-stream_ssl_module",
-      "--with-stream_ssl_preread_module"
+      "--with-stream_ssl_preread_module",
+      "CGO_ENABLED=0",
+      "go build -trimpath -buildvcs=false -ldflags=-s -w -buildid="
     ],
     "sbom_sha256": "6666666666666666666666666666666666666666666666666666666666666666",
     "build_record_sha256": "7777777777777777777777777777777777777777777777777777777777777777"
@@ -54,7 +57,8 @@
     "host_network": false,
     "allowed_containers": [
       "trustdb",
-      "tlcp-gateway"
+      "tlcp-gateway",
+      "tlcp-gateway-candidate"
     ],
     "trustdb_http_upstream": "127.0.0.1:8080",
     "trustdb_grpc_upstream": "127.0.0.1:9090",
@@ -77,12 +81,19 @@
       "public_key_sha256": "9999999999999999999999999999999999999999999999999999999999999999"
     }
   },
+  "proof_signing_keys": [
+    {
+      "reference": "/etc/trustdb/keys/server.json",
+      "public_key_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    }
+  ],
   "revocation": {
     "mode": "crl",
     "crl_files": [
       "${FIXTURE_DIR}/server-ca.crl",
       "${FIXTURE_DIR}/client-ca.crl"
     ],
+    "gateway_crl_bundle_file": "${FIXTURE_DIR}/crl-bundle.pem",
     "max_staleness": "24h"
   },
   "timeouts": {

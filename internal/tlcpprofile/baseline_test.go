@@ -11,18 +11,19 @@ import (
 )
 
 type buildBaseline struct {
-	SchemaVersion   string         `json:"schema_version"`
-	SourceDateEpoch int64          `json:"source_date_epoch"`
-	Tengine         baselineSource `json:"tengine"`
-	Tongsuo         baselineSource `json:"tongsuo"`
-	BuilderImage    string         `json:"builder_image"`
-	RuntimeImage    string         `json:"runtime_image"`
-	FrontendImage   string         `json:"dockerfile_frontend_image"`
-	DebianSnapshot  string         `json:"debian_snapshot"`
-	BuilderPackages []string       `json:"builder_packages"`
-	RuntimePackages []string       `json:"runtime_packages"`
-	SyftImage       string         `json:"syft_image"`
-	BuildParameters []string       `json:"build_parameters"`
+	SchemaVersion         string         `json:"schema_version"`
+	SourceDateEpoch       int64          `json:"source_date_epoch"`
+	Tengine               baselineSource `json:"tengine"`
+	Tongsuo               baselineSource `json:"tongsuo"`
+	BuilderImage          string         `json:"builder_image"`
+	RuntimeImage          string         `json:"runtime_image"`
+	ValidatorBuilderImage string         `json:"validator_builder_image"`
+	FrontendImage         string         `json:"dockerfile_frontend_image"`
+	DebianSnapshot        string         `json:"debian_snapshot"`
+	BuilderPackages       []string       `json:"builder_packages"`
+	RuntimePackages       []string       `json:"runtime_packages"`
+	SyftImage             string         `json:"syft_image"`
+	BuildParameters       []string       `json:"build_parameters"`
 }
 
 type baselineSource struct {
@@ -58,6 +59,7 @@ func TestProductionBuildBaselineMatchesProfileContract(t *testing.T) {
 		baseline.Tongsuo.ArchiveSHA256 != PinnedTongsuoSourceSHA256 ||
 		baseline.BuilderImage != PinnedBuilderImage ||
 		baseline.RuntimeImage != PinnedRuntimeImage ||
+		baseline.ValidatorBuilderImage != PinnedValidatorBuilderImage ||
 		!equalStrings(baseline.BuildParameters, requiredBuildParameters()) {
 		t.Fatalf("build baseline drifted from the profile contract: %+v", baseline)
 	}
@@ -86,11 +88,12 @@ func TestDockerfileContainsExactBuildPins(t *testing.T) {
 		t.Fatal(err)
 	}
 	for name, value := range map[string]string{
-		"Tengine source SHA-256": PinnedTengineSourceSHA256,
-		"Tongsuo source SHA-256": PinnedTongsuoSourceSHA256,
-		"builder/runtime image":  PinnedBuilderImage,
-		"Tengine commit":         PinnedTengineCommit,
-		"Tongsuo commit":         PinnedTongsuoCommit,
+		"Tengine source SHA-256":  PinnedTengineSourceSHA256,
+		"Tongsuo source SHA-256":  PinnedTongsuoSourceSHA256,
+		"builder/runtime image":   PinnedBuilderImage,
+		"validator builder image": PinnedValidatorBuilderImage,
+		"Tengine commit":          PinnedTengineCommit,
+		"Tongsuo commit":          PinnedTongsuoCommit,
 	} {
 		if !bytes.Contains(data, []byte(value)) {
 			t.Fatalf("Dockerfile does not contain pinned %s", name)

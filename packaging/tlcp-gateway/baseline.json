@@ -17,6 +17,7 @@
   },
   "builder_image": "docker.io/library/debian:bookworm-slim@sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818",
   "runtime_image": "docker.io/library/debian:bookworm-slim@sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818",
+  "validator_builder_image": "docker.io/library/golang:1.26.5-bookworm@sha256:1ecb7edf62a0408027bd5729dfd6b1b8766e578e8df93995b225dfd0944eb651",
   "dockerfile_frontend_image": "docker.io/docker/dockerfile:1.7@sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e",
   "debian_snapshot": "20260713T000000Z",
   "builder_packages": [
@@ -50,6 +51,8 @@
     "--with-openssl-opt=enable-ntls no-tests",
     "--with-stream",
     "--with-stream_ssl_module",
-    "--with-stream_ssl_preread_module"
+    "--with-stream_ssl_preread_module",
+    "CGO_ENABLED=0",
+    "go build -trimpath -buildvcs=false -ldflags=-s -w -buildid="
   ]
 }

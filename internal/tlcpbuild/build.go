@@ -20,7 +20,7 @@ const (
 	BuildRecordSchema     = "trustdb.tlcp-gateway-build-record.v1"
 	SPDXVersion           = "SPDX-2.3"
 	DataLicense           = "CC0-1.0"
-	PinnedBaselineSHA256  = "0697aa1c6b20c6c0e44ca8b08e84ff0dffd371c350fbb24d712d261fcf63c22b"
+	PinnedBaselineSHA256  = "940e27034999e9b6ffbd89666123fb062c0a7384dc183eeabd3eb7eca436aecf"
 	maxBaselineBytes      = 1 << 20
 	maxBuildRecordBytes   = 1 << 20
 	maxSBOMBytes          = 128 << 20
@@ -35,6 +35,7 @@ type Baseline struct {
 	Tongsuo                 BaselineSource `json:"tongsuo"`
 	BuilderImage            string         `json:"builder_image"`
 	RuntimeImage            string         `json:"runtime_image"`
+	ValidatorBuilderImage   string         `json:"validator_builder_image"`
 	DockerfileFrontendImage string         `json:"dockerfile_frontend_image"`
 	DebianSnapshot          string         `json:"debian_snapshot"`
 	BuilderPackages         []string       `json:"builder_packages"`
@@ -64,6 +65,7 @@ type BuildRecord struct {
 	Tongsuo                 BaselineSource `json:"tongsuo"`
 	BuilderImage            string         `json:"builder_image"`
 	RuntimeImage            string         `json:"runtime_image"`
+	ValidatorBuilderImage   string         `json:"validator_builder_image"`
 	DockerfileFrontendImage string         `json:"dockerfile_frontend_image"`
 	SyftImage               string         `json:"syft_image"`
 }
@@ -454,6 +456,7 @@ func CreateBuildRecord(
 		Tongsuo:                 baseline.Tongsuo,
 		BuilderImage:            baseline.BuilderImage,
 		RuntimeImage:            baseline.RuntimeImage,
+		ValidatorBuilderImage:   baseline.ValidatorBuilderImage,
 		DockerfileFrontendImage: baseline.DockerfileFrontendImage,
 		SyftImage:               baseline.SyftImage,
 	}, nil
@@ -526,6 +529,7 @@ func validateBaseline(value Baseline) error {
 	for name, image := range map[string]string{
 		"builder image":             value.BuilderImage,
 		"runtime image":             value.RuntimeImage,
+		"validator builder image":   value.ValidatorBuilderImage,
 		"Dockerfile frontend image": value.DockerfileFrontendImage,
 		"Syft image":                value.SyftImage,
 	} {

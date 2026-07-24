@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -623,6 +624,27 @@ func writeCRL(t *testing.T, path string, ca *smx509.Certificate, caKey *sm2.Priv
 		t.Fatal(err)
 	}
 	writePEM(t, path, "X509 CRL", der)
+	refreshCRLBundle(t, filepath.Dir(path))
+}
+
+func refreshCRLBundle(t *testing.T, dir string) {
+	t.Helper()
+	paths, err := filepath.Glob(filepath.Join(dir, "*.crl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sort.Strings(paths)
+	var bundle []byte
+	for _, path := range paths {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		bundle = append(bundle, data...)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "crl-bundle.pem"), bundle, 0o600); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func writeStandardCA(t *testing.T, dir string) string {

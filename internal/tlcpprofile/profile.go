@@ -30,6 +30,7 @@ const (
 	PinnedTongsuoSourceSHA256    = "57c2741750a699bfbdaa1bbe44a5733e9c8fc65d086c210151cfbc2bbd6fc975"
 	PinnedBuilderImage           = "docker.io/library/debian:bookworm-slim@sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818"
 	PinnedRuntimeImage           = "docker.io/library/debian:bookworm-slim@sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818"
+	PinnedValidatorBuilderImage  = "docker.io/library/golang:1.26.5-bookworm@sha256:1ecb7edf62a0408027bd5729dfd6b1b8766e578e8df93995b225dfd0944eb651"
 
 	EnvironmentProduction = "production"
 	EnvironmentTest       = "test"
@@ -51,38 +52,41 @@ const (
 	MaxCRLCount            = 8
 	MaxStringBytes         = 4096
 	MaxBuildParameterCount = 32
+	MaxProofSigningKeys    = 32
 )
 
 type Profile struct {
-	SchemaVersion  string         `json:"schema_version"`
-	ProfileID      string         `json:"profile_id"`
-	Environment    string         `json:"environment"`
-	Mode           string         `json:"mode"`
-	CryptoMode     string         `json:"crypto_mode"`
-	ServerName     string         `json:"server_name"`
-	CipherSuites   []string       `json:"cipher_suites"`
-	ALPNProtocols  []string       `json:"alpn_protocols"`
-	Implementation Implementation `json:"implementation"`
-	Network        Network        `json:"network"`
-	Certificates   Certificates   `json:"certificates"`
-	Revocation     Revocation     `json:"revocation"`
-	Timeouts       Timeouts       `json:"timeouts"`
+	SchemaVersion    string            `json:"schema_version"`
+	ProfileID        string            `json:"profile_id"`
+	Environment      string            `json:"environment"`
+	Mode             string            `json:"mode"`
+	CryptoMode       string            `json:"crypto_mode"`
+	ServerName       string            `json:"server_name"`
+	CipherSuites     []string          `json:"cipher_suites"`
+	ALPNProtocols    []string          `json:"alpn_protocols"`
+	Implementation   Implementation    `json:"implementation"`
+	Network          Network           `json:"network"`
+	Certificates     Certificates      `json:"certificates"`
+	ProofSigningKeys []ProofSigningKey `json:"proof_signing_keys"`
+	Revocation       Revocation        `json:"revocation"`
+	Timeouts         Timeouts          `json:"timeouts"`
 }
 
 type Implementation struct {
-	Name                string   `json:"name"`
-	TengineVersion      string   `json:"tengine_version"`
-	TengineCommit       string   `json:"tengine_commit"`
-	TengineSourceSHA256 string   `json:"tengine_source_sha256"`
-	TongsuoVersion      string   `json:"tongsuo_version"`
-	TongsuoCommit       string   `json:"tongsuo_commit"`
-	TongsuoSourceSHA256 string   `json:"tongsuo_source_sha256"`
-	BuilderImage        string   `json:"builder_image"`
-	RuntimeImage        string   `json:"runtime_image"`
-	GatewayImageDigest  string   `json:"gateway_image_digest"`
-	BuildParameters     []string `json:"build_parameters"`
-	SBOMSHA256          string   `json:"sbom_sha256"`
-	BuildRecordSHA256   string   `json:"build_record_sha256"`
+	Name                  string   `json:"name"`
+	TengineVersion        string   `json:"tengine_version"`
+	TengineCommit         string   `json:"tengine_commit"`
+	TengineSourceSHA256   string   `json:"tengine_source_sha256"`
+	TongsuoVersion        string   `json:"tongsuo_version"`
+	TongsuoCommit         string   `json:"tongsuo_commit"`
+	TongsuoSourceSHA256   string   `json:"tongsuo_source_sha256"`
+	BuilderImage          string   `json:"builder_image"`
+	RuntimeImage          string   `json:"runtime_image"`
+	ValidatorBuilderImage string   `json:"validator_builder_image"`
+	GatewayImageDigest    string   `json:"gateway_image_digest"`
+	BuildParameters       []string `json:"build_parameters"`
+	SBOMSHA256            string   `json:"sbom_sha256"`
+	BuildRecordSHA256     string   `json:"build_record_sha256"`
 }
 
 type Network struct {
@@ -110,10 +114,19 @@ type KeyReference struct {
 	PublicKeySHA256 string `json:"public_key_sha256"`
 }
 
+// ProofSigningKey contains only public identity material. It binds the
+// gateway profile to every TrustDB proof-signing key that must remain outside
+// the transport trust boundary.
+type ProofSigningKey struct {
+	Reference       string `json:"reference"`
+	PublicKeySHA256 string `json:"public_key_sha256"`
+}
+
 type Revocation struct {
-	Mode         string   `json:"mode"`
-	CRLFiles     []string `json:"crl_files"`
-	MaxStaleness string   `json:"max_staleness"`
+	Mode                 string   `json:"mode"`
+	CRLFiles             []string `json:"crl_files"`
+	GatewayCRLBundleFile string   `json:"gateway_crl_bundle_file"`
+	MaxStaleness         string   `json:"max_staleness"`
 }
 
 type Timeouts struct {
@@ -138,6 +151,7 @@ type Report struct {
 	EncryptionPublicKeySHA256     string    `json:"encryption_public_key_sha256"`
 	ServerCASHA256                []string  `json:"server_ca_sha256"`
 	ClientCASHA256                []string  `json:"client_ca_sha256"`
+	ProofSigningPublicKeySHA256   []string  `json:"proof_signing_public_key_sha256"`
 	CRLIssuers                    []string  `json:"crl_issuers"`
 	EarliestCertificateExpiration time.Time `json:"earliest_certificate_expiration"`
 	EarliestCRLExpiration         time.Time `json:"earliest_crl_expiration"`
@@ -218,9 +232,12 @@ func validateProfileFields(profile Profile, options Options) error {
 	if err := validateCertificatesConfig(
 		profile.Certificates,
 		profile.Environment,
-		options.ForbiddenKeyReferences,
-		options.ForbiddenPublicKeySHA256s,
+		append(proofSigningKeyReferences(profile.ProofSigningKeys), options.ForbiddenKeyReferences...),
+		append(proofSigningKeyFingerprints(profile.ProofSigningKeys), options.ForbiddenPublicKeySHA256s...),
 	); err != nil {
+		return err
+	}
+	if err := validateProofSigningKeys(profile.ProofSigningKeys, profile.Environment); err != nil {
 		return err
 	}
 	if err := validateRevocationConfig(profile.Revocation); err != nil {
@@ -241,7 +258,8 @@ func validateImplementation(value Implementation) error {
 		value.TongsuoCommit != PinnedTongsuoCommit ||
 		value.TongsuoSourceSHA256 != PinnedTongsuoSourceSHA256 ||
 		value.BuilderImage != PinnedBuilderImage ||
-		value.RuntimeImage != PinnedRuntimeImage {
+		value.RuntimeImage != PinnedRuntimeImage ||
+		value.ValidatorBuilderImage != PinnedValidatorBuilderImage {
 		return errors.New("TLCP gateway implementation does not match the pinned Tengine/Tongsuo baseline")
 	}
 	for name, digest := range map[string]string{
@@ -263,6 +281,56 @@ func validateImplementation(value Implementation) error {
 		return errors.New("TLCP gateway build_parameters do not match the pinned baseline")
 	}
 	return nil
+}
+
+func validateProofSigningKeys(values []ProofSigningKey, environment string) error {
+	if environment == EnvironmentProduction && len(values) == 0 {
+		return errors.New("production TLCP gateway profile requires proof_signing_keys")
+	}
+	if len(values) > MaxProofSigningKeys {
+		return fmt.Errorf("TLCP gateway profile proof_signing_keys exceeds %d entries", MaxProofSigningKeys)
+	}
+	references := make(map[string]struct{}, len(values))
+	publicKeys := make(map[string]struct{}, len(values))
+	for index, value := range values {
+		if err := validateString(
+			fmt.Sprintf("proof_signing_keys[%d].reference", index),
+			value.Reference,
+		); err != nil {
+			return err
+		}
+		if err := validateCanonicalSHA256(
+			fmt.Sprintf("proof_signing_keys[%d].public_key_sha256", index),
+			value.PublicKeySHA256,
+		); err != nil {
+			return err
+		}
+		if _, duplicate := references[value.Reference]; duplicate {
+			return errors.New("TLCP gateway profile contains a duplicate proof-signing key reference")
+		}
+		if _, duplicate := publicKeys[value.PublicKeySHA256]; duplicate {
+			return errors.New("TLCP gateway profile contains a duplicate proof-signing public key")
+		}
+		references[value.Reference] = struct{}{}
+		publicKeys[value.PublicKeySHA256] = struct{}{}
+	}
+	return nil
+}
+
+func proofSigningKeyReferences(values []ProofSigningKey) []string {
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		result = append(result, value.Reference)
+	}
+	return result
+}
+
+func proofSigningKeyFingerprints(values []ProofSigningKey) []string {
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		result = append(result, value.PublicKeySHA256)
+	}
+	return result
 }
 
 func requiredBuildParameters() []string {
@@ -288,6 +356,8 @@ func requiredBuildParameters() []string {
 		"--with-stream",
 		"--with-stream_ssl_module",
 		"--with-stream_ssl_preread_module",
+		"CGO_ENABLED=0",
+		"go build -trimpath -buildvcs=false -ldflags=-s -w -buildid=",
 	}
 }
 
@@ -298,8 +368,12 @@ func validateNetwork(value Network) error {
 	if value.HostNetwork {
 		return errors.New("TLCP gateway profile forbids hostNetwork")
 	}
-	if !equalStrings(value.AllowedContainers, []string{"trustdb", "tlcp-gateway"}) {
-		return errors.New("TLCP gateway profile allows exactly the trustdb and tlcp-gateway containers")
+	if !equalStrings(value.AllowedContainers, []string{
+		"trustdb",
+		"tlcp-gateway",
+		"tlcp-gateway-candidate",
+	}) {
+		return errors.New("TLCP gateway profile allows exactly trustdb, the active gateway, and one rotation candidate")
 	}
 	httpUpstream, err := parseAddress("trustdb_http_upstream", value.TrustDBHTTPUpstream)
 	if err != nil {
@@ -443,6 +517,9 @@ func validateRevocationConfig(value Revocation) error {
 	}
 	if len(value.CRLFiles) == 0 || len(value.CRLFiles) > MaxCRLCount {
 		return fmt.Errorf("TLCP gateway profile requires 1..%d CRL files", MaxCRLCount)
+	}
+	if err := validateAbsoluteCleanPath("gateway_crl_bundle_file", value.GatewayCRLBundleFile); err != nil {
+		return err
 	}
 	seen := make(map[string]struct{}, len(value.CRLFiles))
 	for index, path := range value.CRLFiles {

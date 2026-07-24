@@ -86,7 +86,9 @@ func validatePublicTrust(profile Profile, now time.Time) (Report, error) {
 		EncryptionPublicKeySHA256:   publicKeyFingerprint(set.encryptionLeaf),
 		ServerCASHA256:              certificateFingerprints(serverRoots),
 		ClientCASHA256:              certificateFingerprints(clientRoots),
+		ProofSigningPublicKeySHA256: proofSigningKeyFingerprints(profile.ProofSigningKeys),
 	}
+	sort.Strings(report.ProofSigningPublicKeySHA256)
 	if report.SigningPublicKeySHA256 != profile.Certificates.SigningKey.PublicKeySHA256 {
 		return Report{}, errors.New("TLCP signing key fingerprint does not match the signing certificate")
 	}
@@ -452,7 +454,65 @@ func loadAndValidateCRLs(config Revocation, set certificateSet, now time.Time) (
 	if len(seenIssuer) != len(cas) {
 		return nil, errors.New("every TLCP server issuer and client trust anchor requires exactly one current CRL")
 	}
+	bundled, err := loadCRLBundle(config.GatewayCRLBundleFile)
+	if err != nil {
+		return nil, fmt.Errorf("load gateway CRL bundle: %w", err)
+	}
+	if !sameCRLSet(crls, bundled) {
+		return nil, errors.New("gateway CRL bundle does not exactly match the validated CRL files")
+	}
 	return crls, nil
+}
+
+func loadCRLBundle(path string) ([]*smx509.RevocationList, error) {
+	data, err := readBoundedRegularFile(path, MaxCRLBytes*MaxCRLCount)
+	if err != nil {
+		return nil, err
+	}
+	remaining := bytes.TrimSpace(data)
+	result := make([]*smx509.RevocationList, 0, 2)
+	seen := make(map[[sha256.Size]byte]struct{})
+	for len(remaining) != 0 {
+		if len(result) >= MaxCRLCount ||
+			!bytes.HasPrefix(remaining, []byte("-----BEGIN X509 CRL-----")) {
+			return nil, errors.New("gateway CRL bundle contains malformed, trailing, or excessive data")
+		}
+		block, rest := pem.Decode(remaining)
+		if block == nil || block.Type != "X509 CRL" || len(block.Headers) != 0 {
+			return nil, errors.New("gateway CRL bundle contains an unsupported PEM block")
+		}
+		crl, err := smx509.ParseRevocationList(block.Bytes)
+		if err != nil || !bytes.Equal(crl.Raw, block.Bytes) {
+			return nil, fmt.Errorf("parse gateway CRL bundle entry %d: malformed DER", len(result))
+		}
+		fingerprint := sha256.Sum256(crl.Raw)
+		if _, duplicate := seen[fingerprint]; duplicate {
+			return nil, errors.New("gateway CRL bundle contains a duplicate CRL")
+		}
+		seen[fingerprint] = struct{}{}
+		result = append(result, crl)
+		remaining = bytes.TrimSpace(rest)
+	}
+	if len(result) == 0 {
+		return nil, errors.New("gateway CRL bundle contains no CRLs")
+	}
+	return result, nil
+}
+
+func sameCRLSet(left, right []*smx509.RevocationList) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	fingerprints := make(map[[sha256.Size]byte]struct{}, len(left))
+	for _, crl := range left {
+		fingerprints[sha256.Sum256(crl.Raw)] = struct{}{}
+	}
+	for _, crl := range right {
+		if _, ok := fingerprints[sha256.Sum256(crl.Raw)]; !ok {
+			return false
+		}
+	}
+	return true
 }
 
 func loadCRL(path string) (*smx509.RevocationList, error) {

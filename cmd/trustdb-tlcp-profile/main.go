@@ -33,8 +33,14 @@ func main() {
 }
 
 func run(args []string, stdout, stderr io.Writer) error {
-	if len(args) == 0 || args[0] != "validate" {
-		return errors.New("usage: trustdb-tlcp-profile validate --profile /absolute/path/profile.json [--forbid-key-ref REF] [--forbid-public-key-sha256 SHA256]")
+	if len(args) == 0 {
+		return errors.New("usage: trustdb-tlcp-profile <validate|prepare-runtime|verify-runtime>")
+	}
+	if args[0] == "prepare-runtime" || args[0] == "verify-runtime" {
+		return runRuntime(args[0], args[1:], stdout, stderr)
+	}
+	if args[0] != "validate" {
+		return fmt.Errorf("unknown command %q", args[0])
 	}
 	flags := flag.NewFlagSet("validate", flag.ContinueOnError)
 	flags.SetOutput(stderr)
@@ -71,4 +77,50 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return fmt.Errorf("encode TLCP gateway validation report: %w", err)
 	}
 	return nil
+}
+
+func runRuntime(command string, args []string, stdout, stderr io.Writer) error {
+	flags := flag.NewFlagSet(command, flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	var profilePath, imageDigest, configurationPath, manifestPath string
+	flags.StringVar(&profilePath, "profile", "", "absolute path to the strict TLCP gateway profile")
+	flags.StringVar(&imageDigest, "expected-image-digest", "", "deployed OCI image manifest digest")
+	flags.StringVar(&configurationPath, "configuration", "", "absolute runtime nginx configuration path")
+	flags.StringVar(&manifestPath, "runtime-manifest", "", "absolute validated runtime manifest path")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 {
+		return errors.New("unexpected positional arguments")
+	}
+	for name, value := range map[string]string{
+		"--profile":               profilePath,
+		"--expected-image-digest": imageDigest,
+		"--configuration":         configurationPath,
+		"--runtime-manifest":      manifestPath,
+	} {
+		if strings.TrimSpace(value) == "" {
+			return fmt.Errorf("%s is required", name)
+		}
+	}
+	options := tlcpprofile.RuntimeOptions{
+		ExpectedGatewayImageDigest: imageDigest,
+		ConfigurationPath:          configurationPath,
+		ManifestPath:               manifestPath,
+	}
+	var (
+		manifest tlcpprofile.RuntimeManifest
+		err      error
+	)
+	if command == "prepare-runtime" {
+		manifest, err = tlcpprofile.PrepareRuntime(profilePath, options)
+	} else {
+		manifest, err = tlcpprofile.VerifyRuntime(profilePath, options)
+	}
+	if err != nil {
+		return err
+	}
+	encoder := json.NewEncoder(stdout)
+	encoder.SetEscapeHTML(false)
+	return encoder.Encode(manifest)
 }

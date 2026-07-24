@@ -73,6 +73,7 @@ func TestBuildRecordBindsArchiveSBOMAndBaseline(t *testing.T) {
   },
   "builder_image": "example.invalid/builder@sha256:5555555555555555555555555555555555555555555555555555555555555555",
   "runtime_image": "example.invalid/runtime@sha256:6666666666666666666666666666666666666666666666666666666666666666",
+  "validator_builder_image": "example.invalid/go@sha256:9999999999999999999999999999999999999999999999999999999999999999",
   "dockerfile_frontend_image": "example.invalid/frontend@sha256:7777777777777777777777777777777777777777777777777777777777777777",
   "debian_snapshot": "20260713T000000Z",
   "builder_packages": ["compiler=1"],
