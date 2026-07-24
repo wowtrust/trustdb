@@ -5,6 +5,7 @@ on:
     paths:
       - ".github/workflows/fisco-bcos-compat.yml"
       - "configs/compatibility/fisco-bcos-v3.16.3.json"
+      - "configs/fisco-bcos-guomi-trust-config.example.json"
       - "docs/integrations/ADR-0012-FISCO-BCOS-3X-COMPATIBILITY-BASELINE.md"
       - "docs/integrations/evidence/fisco-bcos/**"
       - "contracts/fisco-bcos/**"
@@ -24,6 +25,7 @@ on:
     paths:
       - ".github/workflows/fisco-bcos-compat.yml"
       - "configs/compatibility/fisco-bcos-v3.16.3.json"
+      - "configs/fisco-bcos-guomi-trust-config.example.json"
       - "docs/integrations/ADR-0012-FISCO-BCOS-3X-COMPATIBILITY-BASELINE.md"
       - "docs/integrations/evidence/fisco-bcos/**"
       - "contracts/fisco-bcos/**"

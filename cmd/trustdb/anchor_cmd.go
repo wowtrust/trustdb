@@ -26,6 +26,7 @@ func newAnchorCommand(rt *runtimeConfig) *cobra.Command {
 	}
 	cmd.AddCommand(newAnchorExportCommand(rt))
 	cmd.AddCommand(newAnchorUpgradeCommand(rt))
+	cmd.AddCommand(newAnchorFISCOBCOSCommand(rt))
 	return cmd
 }
 
