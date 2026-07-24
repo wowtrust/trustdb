@@ -66,6 +66,17 @@ func TestAnchorPayloadGoldenVectors(t *testing.T) {
 			}
 		})
 	}
+
+	valid := testTrustConfig(t, CryptoModeGuomi)
+	valid.Endpoints = []string{
+		"gm-tls://[::1]:20200",
+		"gm-tls://[2001:db8::1]:20200",
+		"gm-tls://127.1.example.test:20200",
+	}
+	valid.ReadQuorum = 2
+	if _, err := MarshalTrustConfig(valid); err != nil {
+		t.Fatalf("TrustConfig rejected canonical IPv6 or numeric DNS endpoint: %v", err)
+	}
 }
 
 func TestPublishedGoldenVectorFilesMatchImplementation(t *testing.T) {
@@ -328,6 +339,34 @@ func TestTrustConfigRejectsEndpointAliasesAndIgnoredURLComponents(t *testing.T) 
 			endpoints: []string{
 				"gm-tls://bcos.example.test.:20200",
 				"gm-tls://bcos.example.test:20200",
+			},
+		},
+		{
+			name: "abbreviated IPv4 alias",
+			endpoints: []string{
+				"gm-tls://127.0.0.1:20200",
+				"gm-tls://127.1:20200",
+			},
+		},
+		{
+			name: "integer IPv4 alias",
+			endpoints: []string{
+				"gm-tls://127.0.0.1:20200",
+				"gm-tls://2130706433:20200",
+			},
+		},
+		{
+			name: "zero-padded IPv4 alias",
+			endpoints: []string{
+				"gm-tls://127.0.0.1:20200",
+				"gm-tls://127.000.000.001:20200",
+			},
+		},
+		{
+			name: "hexadecimal IPv4 alias",
+			endpoints: []string{
+				"gm-tls://127.0.0.1:20200",
+				"gm-tls://0x7f000001:20200",
 			},
 		},
 	}

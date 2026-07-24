@@ -417,12 +417,50 @@ func validateEndpoint(endpoint, transportMode string) (string, error) {
 	if address, parseErr := netip.ParseAddr(host); parseErr == nil {
 		canonicalHost = address.Unmap().String()
 	} else {
+		if strings.Contains(host, ":") || looksLikeLegacyIPv4Literal(host) {
+			return "", fmt.Errorf(
+				"%w: endpoint %q uses a non-canonical numeric IP address",
+				ErrInvalidTrustConfig,
+				endpoint,
+			)
+		}
 		canonicalHost = strings.ToLower(strings.TrimSuffix(host, "."))
 	}
 	if canonicalHost == "" {
 		return "", fmt.Errorf("%w: endpoint %q has an invalid host", ErrInvalidTrustConfig, endpoint)
 	}
 	return transportMode + "://" + net.JoinHostPort(canonicalHost, strconv.Itoa(port)), nil
+}
+
+func looksLikeLegacyIPv4Literal(host string) bool {
+	parts := strings.Split(host, ".")
+	if len(parts) == 0 || len(parts) > 4 {
+		return false
+	}
+	for _, part := range parts {
+		if part == "" {
+			return false
+		}
+		if strings.HasPrefix(part, "0x") || strings.HasPrefix(part, "0X") {
+			if len(part) == 2 {
+				return false
+			}
+			for _, item := range part[2:] {
+				if (item < '0' || item > '9') &&
+					(item < 'a' || item > 'f') &&
+					(item < 'A' || item > 'F') {
+					return false
+				}
+			}
+			continue
+		}
+		for _, item := range part {
+			if item < '0' || item > '9' {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func hashForMode(mode CryptoMode, data []byte) ([]byte, error) {
