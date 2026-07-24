@@ -18,6 +18,7 @@ import (
 	"math"
 	"math/big"
 	"net"
+	"net/netip"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -1577,11 +1578,46 @@ func parseEndpoint(endpoint, transportMode string) (string, int, error) {
 	if err != nil || strings.TrimSpace(host) == "" {
 		return "", 0, fmt.Errorf("invalid FISCO BCOS endpoint %q", endpoint)
 	}
+	if _, parseErr := netip.ParseAddr(host); parseErr != nil &&
+		(strings.Contains(host, ":") || looksLikeLegacyIPv4Literal(host)) {
+		return "", 0, fmt.Errorf("invalid FISCO BCOS numeric endpoint %q", endpoint)
+	}
 	port, err := strconv.Atoi(portText)
 	if err != nil || port < 1 || port > 65535 {
 		return "", 0, fmt.Errorf("invalid FISCO BCOS endpoint port")
 	}
 	return host, port, nil
+}
+
+func looksLikeLegacyIPv4Literal(host string) bool {
+	parts := strings.Split(host, ".")
+	if len(parts) == 0 || len(parts) > 4 {
+		return false
+	}
+	for _, part := range parts {
+		if part == "" {
+			return false
+		}
+		if strings.HasPrefix(part, "0x") || strings.HasPrefix(part, "0X") {
+			if len(part) == 2 {
+				return false
+			}
+			for _, item := range part[2:] {
+				if (item < '0' || item > '9') &&
+					(item < 'a' || item > 'f') &&
+					(item < 'A' || item > 'F') {
+					return false
+				}
+			}
+			continue
+		}
+		for _, item := range part {
+			if item < '0' || item > '9' {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func localPath(reference string) (string, error) {

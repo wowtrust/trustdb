@@ -57,6 +57,10 @@ func TestParseEndpointRejectsIgnoredURLComponents(t *testing.T) {
 		"gm-tls://127.0.0.1:20200/",
 		"gm-tls://127.0.0.1:20200#second",
 		" gm-tls://127.0.0.1:20200",
+		"gm-tls://127.1:20200",
+		"gm-tls://2130706433:20200",
+		"gm-tls://127.000.000.001:20200",
+		"gm-tls://0x7f000001:20200",
 	} {
 		if _, _, err := parseEndpoint(endpoint, fiscobcos.GuomiTransport); err == nil {
 			t.Fatalf("parseEndpoint(%q) accepted an ignored URL component", endpoint)
