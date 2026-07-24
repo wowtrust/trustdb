@@ -213,6 +213,15 @@ func (r *Registry) Suite() cryptosuite.ID {
 	return r.manifest.CryptoSuite
 }
 
+// RegistryPublicKey returns the externally validated trust root used to
+// verify this registry. Auxiliary signed configuration can reuse it without
+// extending the Key Registry V2 event schema.
+func (r *Registry) RegistryPublicKey() trustcrypto.PublicKeyDescriptor {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.registryPub.Clone()
+}
+
 func (r *Registry) RegisterClientKey(tenantID, clientID string, descriptor keydescriptor.Descriptor, validFrom, validUntil time.Time) (model.KeyEvent, error) {
 	if r.signer == nil {
 		return model.KeyEvent{}, errors.New("keystore: registry signer is required")

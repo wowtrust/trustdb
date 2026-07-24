@@ -70,7 +70,11 @@ func TestKeyLifecycleCLIImportRotateCompromiseAndList(t *testing.T) {
 		"--status-nats-queue-group", "trustdb-status-client-a",
 	)
 	executeKeyCommand(t, importArgs)
-	routeStore, err := statusnotify.OpenRouteStore(statusnotify.RouteStorePath(registryPath))
+	registryPublic, _, err := readPublicKeyDescriptor(filepath.Join(dir, "registry.pub"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	routeStore, err := statusnotify.OpenRouteStore(statusnotify.RouteStorePath(registryPath), nil, registryPublic)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,7 +95,7 @@ func TestKeyLifecycleCLIImportRotateCompromiseAndList(t *testing.T) {
 		"--rotated-at-unix", "200",
 	)
 	executeKeyCommand(t, rotateArgs)
-	routeStore, err = statusnotify.OpenRouteStore(statusnotify.RouteStorePath(registryPath))
+	routeStore, err = statusnotify.OpenRouteStore(statusnotify.RouteStorePath(registryPath), nil, registryPublic)
 	if err != nil {
 		t.Fatal(err)
 	}

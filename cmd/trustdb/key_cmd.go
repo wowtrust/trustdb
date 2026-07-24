@@ -220,7 +220,7 @@ func newKeyRegisterCommand(rt *runtimeConfig, hidden bool) *cobra.Command {
 				WebhookURL:     statusWebhookURL,
 				NATSSubject:    statusNATSSubject,
 				NATSQueueGroup: statusNATSQueueGroup,
-			})
+			}, registrySigner, registryPub)
 			if err != nil {
 				return err
 			}
@@ -398,7 +398,7 @@ func newKeyRotateCommand(rt *runtimeConfig) *cobra.Command {
 			if err := requireKeyID(keyID, descriptor); err != nil {
 				return err
 			}
-			registry, err := openLifecycleRegistry(cmd.Context(), registryPath, registryPrivate, registryPublic, registryKeyID)
+			registry, registrySigner, registryPub, err := openLifecycleRegistryWithSigner(cmd.Context(), registryPath, registryPrivate, registryPublic, registryKeyID)
 			if err != nil {
 				return err
 			}
@@ -406,7 +406,7 @@ func newKeyRotateCommand(rt *runtimeConfig) *cobra.Command {
 				WebhookURL:     statusWebhookURL,
 				NATSSubject:    statusNATSSubject,
 				NATSQueueGroup: statusNATSQueueGroup,
-			})
+			}, registrySigner, registryPub)
 			if err != nil {
 				return err
 			}
@@ -459,12 +459,12 @@ func addStatusNotificationRouteFlags(cmd *cobra.Command, webhookURL, natsSubject
 	cmd.Flags().StringVar(natsQueueGroup, "status-nats-queue-group", "", "fixed NATS queue group shared by this upstream's replicas")
 }
 
-func configureStatusNotificationRoute(registryPath, tenantID, clientID string, route model.UpstreamNotificationRoute) (string, error) {
+func configureStatusNotificationRoute(registryPath, tenantID, clientID string, route model.UpstreamNotificationRoute, signer trustcrypto.Signer, registryPub trustcrypto.PublicKeyDescriptor) (string, error) {
 	if route.Empty() {
 		return "", nil
 	}
 	path := statusnotify.RouteStorePath(registryPath)
-	store, err := statusnotify.OpenRouteStore(path)
+	store, err := statusnotify.OpenRouteStore(path, signer, registryPub)
 	if err != nil {
 		return "", err
 	}
@@ -475,27 +475,36 @@ func configureStatusNotificationRoute(registryPath, tenantID, clientID string, r
 }
 
 func openLifecycleRegistry(ctx context.Context, registryPath, registryPrivate, registryPublic, registryKeyID string) (*keystore.Registry, error) {
+	registry, _, _, err := openLifecycleRegistryWithSigner(ctx, registryPath, registryPrivate, registryPublic, registryKeyID)
+	return registry, err
+}
+
+func openLifecycleRegistryWithSigner(ctx context.Context, registryPath, registryPrivate, registryPublic, registryKeyID string) (*keystore.Registry, trustcrypto.Signer, trustcrypto.PublicKeyDescriptor, error) {
 	registrySigner, registryDescriptor, err := readLifecycleSigner(ctx, registryPrivate)
 	if err != nil {
-		return nil, err
+		return nil, nil, trustcrypto.PublicKeyDescriptor{}, err
 	}
 	if err := requireKeyID(registryKeyID, registryDescriptor); err != nil {
-		return nil, err
+		return nil, nil, trustcrypto.PublicKeyDescriptor{}, err
 	}
 	registryPub, err := registrySigner.PublicKey(ctx)
 	if err != nil {
-		return nil, err
+		return nil, nil, trustcrypto.PublicKeyDescriptor{}, err
 	}
 	if registryPublic != "" {
 		configuredPub, _, err := readPublicKeyDescriptor(registryPublic)
 		if err != nil {
-			return nil, err
+			return nil, nil, trustcrypto.PublicKeyDescriptor{}, err
 		}
 		if configuredPub.Suite != registryPub.Suite || configuredPub.KeyID != registryPub.KeyID || configuredPub.Algorithm != registryPub.Algorithm || configuredPub.Encoding != registryPub.Encoding || !bytes.Equal(configuredPub.Bytes, registryPub.Bytes) {
-			return nil, usageError("registry public descriptor does not match registry signer descriptor")
+			return nil, nil, trustcrypto.PublicKeyDescriptor{}, usageError("registry public descriptor does not match registry signer descriptor")
 		}
 	}
-	return keystore.Open(registryPath, registrySigner, registryPub)
+	registry, err := keystore.Open(registryPath, registrySigner, registryPub)
+	if err != nil {
+		return nil, nil, trustcrypto.PublicKeyDescriptor{}, err
+	}
+	return registry, registrySigner, registryPub, nil
 }
 
 func newKeyListCommand(rt *runtimeConfig, hidden bool) *cobra.Command {

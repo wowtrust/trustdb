@@ -36,11 +36,12 @@ func TestCNSMSignaturePurposesUseRegisteredDomains(t *testing.T) {
 	t.Parallel()
 
 	tests := map[SignaturePurpose]string{
-		SignaturePurposeClientClaim:      "trustdb.client-claim.v2",
-		SignaturePurposeAcceptedReceipt:  "trustdb.accepted-receipt.v2",
-		SignaturePurposeCommittedReceipt: "trustdb.committed-receipt.v2",
-		SignaturePurposeKeyEvent:         "trustdb.key-event.v2",
-		SignaturePurposeSignedTreeHead:   "trustdb.signed-tree-head.v2",
+		SignaturePurposeClientClaim:              "trustdb.client-claim.v2",
+		SignaturePurposeAcceptedReceipt:          "trustdb.accepted-receipt.v2",
+		SignaturePurposeCommittedReceipt:         "trustdb.committed-receipt.v2",
+		SignaturePurposeKeyEvent:                 "trustdb.key-event.v2",
+		SignaturePurposeSignedTreeHead:           "trustdb.signed-tree-head.v2",
+		SignaturePurposeStatusNotificationRoutes: "trustdb.status-notification-routes.v2",
 	}
 	for purpose, domain := range tests {
 		got, err := SignatureInputForSuite(cryptosuite.CNSMV1, purpose, []byte("payload"))

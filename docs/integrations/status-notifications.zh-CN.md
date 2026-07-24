@@ -45,10 +45,11 @@ trustdb key key-register \
 ```
 
 路由写入 `<key-registry>.status-routes.json` 管理员侧文件（权限 `0600`），不改变
-严格的 Key Registry V2 签名证据格式。重复配置相同路由是幂等的，尝试在密钥
-轮换时改成另一目标会被拒绝；需要变更路由时应走独立的受控迁移流程。配置完成后
-重启 TrustDB 使服务加载新路由。Webhook 通知由 TrustDB server key 签名；NATS
-使用同一个签名 CBOR 消息。
+严格的 Key Registry V2 事件格式。整个版本化路由快照由 registry signer 签名；
+TrustDB 启动时使用外部可信 registry 公钥验签，文件、路由或签名被篡改时拒绝
+启动通知模块。重复配置相同路由是幂等的，尝试在密钥轮换时改成另一目标会被拒绝；
+需要变更路由时应走独立的受控迁移流程。配置完成后重启 TrustDB 使服务加载新路由。
+Webhook 通知由 TrustDB server key 签名；NATS 使用同一个签名 CBOR 消息。
 
 ## 创建选择性订阅
 

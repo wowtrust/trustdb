@@ -257,9 +257,9 @@ type RecordStatus struct {
 }
 
 // UpstreamNotificationRoute is administrator-controlled metadata associated
-// with an upstream identity. It is stored separately from signed key-registry
-// evidence; public subscription APIs may select a channel but can never inject
-// or replace its delivery destination.
+// with an upstream identity. It is stored in a registry-signed sidecar rather
+// than the Key Registry V2 event stream; public subscription APIs may select a
+// channel but can never inject or replace its delivery destination.
 type UpstreamNotificationRoute struct {
 	WebhookURL     string `cbor:"webhook_url,omitempty" json:"webhook_url,omitempty"`
 	NATSSubject    string `cbor:"nats_subject,omitempty" json:"nats_subject,omitempty"`

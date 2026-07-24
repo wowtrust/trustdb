@@ -125,6 +125,7 @@ ASCII(domain) || 0x00 || deterministic-CBOR(payload)
 | Accepted receipt signature | `trustdb.accepted-receipt.v2` |
 | Committed receipt signature | `trustdb.committed-receipt.v2` |
 | Key event signature | `trustdb.key-event.v2` |
+| Status notification route snapshot | `trustdb.status-notification-routes.v2` |
 | Key event hash | `trustdb.key-event-hash.v2` |
 | Global Log leaf hash | `trustdb.global-log-leaf.v2` |
 | STH signature | `trustdb.signed-tree-head.v2` |

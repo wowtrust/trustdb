@@ -9,13 +9,14 @@ import (
 type SignaturePurpose string
 
 const (
-	SignaturePurposeClientClaim        SignaturePurpose = "client_claim"
-	SignaturePurposeAcceptedReceipt    SignaturePurpose = "accepted_receipt"
-	SignaturePurposeCommittedReceipt   SignaturePurpose = "committed_receipt"
-	SignaturePurposeKeyEvent           SignaturePurpose = "key_event"
-	SignaturePurposeSignedTreeHead     SignaturePurpose = "signed_tree_head"
-	SignaturePurposeStatusRefresh      SignaturePurpose = "status_refresh"
-	SignaturePurposeStatusSubscription SignaturePurpose = "status_subscription"
+	SignaturePurposeClientClaim              SignaturePurpose = "client_claim"
+	SignaturePurposeAcceptedReceipt          SignaturePurpose = "accepted_receipt"
+	SignaturePurposeCommittedReceipt         SignaturePurpose = "committed_receipt"
+	SignaturePurposeKeyEvent                 SignaturePurpose = "key_event"
+	SignaturePurposeSignedTreeHead           SignaturePurpose = "signed_tree_head"
+	SignaturePurposeStatusRefresh            SignaturePurpose = "status_refresh"
+	SignaturePurposeStatusSubscription       SignaturePurpose = "status_subscription"
+	SignaturePurposeStatusNotificationRoutes SignaturePurpose = "status_notification_routes"
 )
 
 func SignatureInputForSuite(suiteID cryptosuite.ID, purpose SignaturePurpose, payload []byte) ([]byte, error) {
@@ -64,6 +65,8 @@ func signatureDomain(suite cryptosuite.Suite, purpose SignaturePurpose) (string,
 		domain = suite.Domains.StatusRefresh
 	case SignaturePurposeStatusSubscription:
 		domain = suite.Domains.StatusSubscription
+	case SignaturePurposeStatusNotificationRoutes:
+		domain = suite.Domains.StatusNotificationRoutes
 	default:
 		return "", fmt.Errorf("%w: signature purpose %q", ErrUnsupportedEncoding, purpose)
 	}

@@ -28,17 +28,18 @@ func TestRegistryPinsCanonicalSuites(t *testing.T) {
 			DomainSeparator:         0x00,
 		}) ||
 		intl.Domains != (DomainSet{
-			ClientClaimSigning:    "trustdb.client-claim.v1",
-			RecordID:              "trustdb.record-id.v1",
-			AcceptedReceipt:       "trustdb.accepted-receipt.v1",
-			CommittedReceipt:      "trustdb.committed-receipt.v1",
-			KeyEventSigning:       "trustdb.key-event.v1",
-			KeyEventHash:          "trustdb.key-event-hash.v1",
-			GlobalLogLeaf:         "trustdb.global-log-leaf.v1",
-			SignedTreeHead:        "trustdb.signed-tree-head.v1",
-			StatusRefresh:         "trustdb.status-refresh.v1",
-			StatusSubscription:    "trustdb.status-subscription.v1",
-			IdempotencyStorageKey: "trustdb.idempotency-storage-key.v1",
+			ClientClaimSigning:       "trustdb.client-claim.v1",
+			RecordID:                 "trustdb.record-id.v1",
+			AcceptedReceipt:          "trustdb.accepted-receipt.v1",
+			CommittedReceipt:         "trustdb.committed-receipt.v1",
+			KeyEventSigning:          "trustdb.key-event.v1",
+			KeyEventHash:             "trustdb.key-event-hash.v1",
+			GlobalLogLeaf:            "trustdb.global-log-leaf.v1",
+			SignedTreeHead:           "trustdb.signed-tree-head.v1",
+			StatusRefresh:            "trustdb.status-refresh.v1",
+			StatusSubscription:       "trustdb.status-subscription.v1",
+			StatusNotificationRoutes: "trustdb.status-notification-routes.v1",
+			IdempotencyStorageKey:    "trustdb.idempotency-storage-key.v1",
 		}) {
 		t.Fatalf("unexpected INTL_V1 descriptor: %#v", intl)
 	}
@@ -65,17 +66,18 @@ func TestRegistryPinsCanonicalSuites(t *testing.T) {
 			DomainSeparator:         0x00,
 		}) ||
 		cn.Domains != (DomainSet{
-			ClientClaimSigning:    "trustdb.client-claim.v2",
-			RecordID:              "trustdb.record-id.v2",
-			AcceptedReceipt:       "trustdb.accepted-receipt.v2",
-			CommittedReceipt:      "trustdb.committed-receipt.v2",
-			KeyEventSigning:       "trustdb.key-event.v2",
-			KeyEventHash:          "trustdb.key-event-hash.v2",
-			GlobalLogLeaf:         "trustdb.global-log-leaf.v2",
-			SignedTreeHead:        "trustdb.signed-tree-head.v2",
-			StatusRefresh:         "trustdb.status-refresh.v2",
-			StatusSubscription:    "trustdb.status-subscription.v2",
-			IdempotencyStorageKey: "trustdb.idempotency-storage-key.v2",
+			ClientClaimSigning:       "trustdb.client-claim.v2",
+			RecordID:                 "trustdb.record-id.v2",
+			AcceptedReceipt:          "trustdb.accepted-receipt.v2",
+			CommittedReceipt:         "trustdb.committed-receipt.v2",
+			KeyEventSigning:          "trustdb.key-event.v2",
+			KeyEventHash:             "trustdb.key-event-hash.v2",
+			GlobalLogLeaf:            "trustdb.global-log-leaf.v2",
+			SignedTreeHead:           "trustdb.signed-tree-head.v2",
+			StatusRefresh:            "trustdb.status-refresh.v2",
+			StatusSubscription:       "trustdb.status-subscription.v2",
+			StatusNotificationRoutes: "trustdb.status-notification-routes.v2",
+			IdempotencyStorageKey:    "trustdb.idempotency-storage-key.v2",
 		}) {
 		t.Fatalf("unexpected CN_SM_V1 descriptor: %#v", cn)
 	}

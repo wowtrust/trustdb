@@ -455,7 +455,13 @@ func newServeCommand(rt *runtimeConfig) *cobra.Command {
 			}
 			var statusHub *statusnotify.Hub
 			if clientKeys != nil {
-				routeStore, err := statusnotify.OpenRouteStore(statusnotify.RouteStorePath(registryPath))
+				trustRoot, ok := clientKeys.(interface {
+					RegistryPublicKey() trustcrypto.PublicKeyDescriptor
+				})
+				if !ok {
+					return trusterr.New(trusterr.CodeInternal, "key registry does not expose its validated public trust root")
+				}
+				routeStore, err := statusnotify.OpenRouteStore(statusnotify.RouteStorePath(registryPath), nil, trustRoot.RegistryPublicKey())
 				if err != nil {
 					return trusterr.Wrap(trusterr.CodeDataLoss, "open status notification routes", err)
 				}

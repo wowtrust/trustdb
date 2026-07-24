@@ -2,6 +2,7 @@ package statusnotify
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -15,33 +16,57 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/wowtrust/trustdb/internal/cborx"
+	"github.com/wowtrust/trustdb/internal/cryptosuite"
 	"github.com/wowtrust/trustdb/internal/model"
+	"github.com/wowtrust/trustdb/internal/trustcrypto"
 )
 
 const SchemaNotificationRoutes = "trustdb.status-notification-routes.v1"
 
 type routeBinding struct {
-	TenantID string                          `json:"tenant_id"`
-	ClientID string                          `json:"client_id"`
-	Route    model.UpstreamNotificationRoute `json:"route"`
+	TenantID string                          `cbor:"tenant_id" json:"tenant_id"`
+	ClientID string                          `cbor:"client_id" json:"client_id"`
+	Route    model.UpstreamNotificationRoute `cbor:"route" json:"route"`
+}
+
+type routeSnapshot struct {
+	SchemaVersion string         `cbor:"schema_version" json:"schema_version"`
+	CryptoSuite   cryptosuite.ID `cbor:"crypto_suite" json:"crypto_suite"`
+	RegistryKeyID string         `cbor:"registry_key_id" json:"registry_key_id"`
+	Routes        []routeBinding `cbor:"routes" json:"routes"`
 }
 
 type persistedRoutes struct {
-	SchemaVersion string         `json:"schema_version"`
-	Routes        []routeBinding `json:"routes"`
+	SchemaVersion     string          `json:"schema_version"`
+	CryptoSuite       cryptosuite.ID  `json:"crypto_suite"`
+	RegistryKeyID     string          `json:"registry_key_id"`
+	Routes            []routeBinding  `json:"routes"`
+	RegistrySignature model.Signature `json:"registry_signature"`
+}
+
+func (p persistedRoutes) snapshot() routeSnapshot {
+	return routeSnapshot{
+		SchemaVersion: p.SchemaVersion,
+		CryptoSuite:   p.CryptoSuite,
+		RegistryKeyID: p.RegistryKeyID,
+		Routes:        append([]routeBinding(nil), p.Routes...),
+	}
 }
 
 // RouteStore keeps administrator-controlled delivery destinations separate
-// from the signed Key Registry V2 evidence format. A route is scoped to an
-// upstream identity, so every key for the same tenant/client uses the same
-// webhook and NATS queue group.
+// from the Key Registry V2 event format. The registry signer signs the entire
+// sidecar snapshot, and serve verifies it with the same external registry
+// trust root before accepting any route.
 type RouteStore struct {
-	mu     sync.RWMutex
-	path   string
-	routes map[string]model.UpstreamNotificationRoute
+	mu          sync.RWMutex
+	path        string
+	signer      trustcrypto.Signer
+	registryPub trustcrypto.PublicKeyDescriptor
+	routes      map[string]model.UpstreamNotificationRoute
 }
 
-// RouteStorePath derives the operator-only sidecar path for a key registry.
+// RouteStorePath derives the signed sidecar path for a key registry.
 func RouteStorePath(registryPath string) string {
 	registryPath = strings.TrimSpace(registryPath)
 	if registryPath == "" {
@@ -50,14 +75,23 @@ func RouteStorePath(registryPath string) string {
 	return registryPath + ".status-routes.json"
 }
 
-func OpenRouteStore(path string) (*RouteStore, error) {
+// OpenRouteStore opens a route snapshot under the registry trust root. A
+// signer is required only for Configure; read-only serve processes pass nil.
+// Existing sidecars always require a valid registry signature.
+func OpenRouteStore(path string, signer trustcrypto.Signer, trustedRegistryPub trustcrypto.PublicKeyDescriptor) (*RouteStore, error) {
 	path = strings.TrimSpace(path)
 	if path == "" {
 		return nil, errors.New("statusnotify: route store path is required")
 	}
+	registryPub, err := resolveRouteTrustRoot(signer, trustedRegistryPub)
+	if err != nil {
+		return nil, err
+	}
 	store := &RouteStore{
-		path:   path,
-		routes: make(map[string]model.UpstreamNotificationRoute),
+		path:        path,
+		signer:      signer,
+		registryPub: registryPub,
+		routes:      make(map[string]model.UpstreamNotificationRoute),
 	}
 	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
@@ -75,18 +109,23 @@ func OpenRouteStore(path string) (*RouteStore, error) {
 	if err := requireJSONEOF(decoder); err != nil {
 		return nil, fmt.Errorf("statusnotify: decode route store: %w", err)
 	}
-	if persisted.SchemaVersion != SchemaNotificationRoutes {
-		return nil, fmt.Errorf("statusnotify: route store schema must be %s", SchemaNotificationRoutes)
+	if err := verifyRouteSnapshot(persisted, registryPub); err != nil {
+		return nil, err
 	}
+	previousIdentity := ""
 	for _, binding := range persisted.Routes {
 		tenantID, clientID, route, err := normalizeRouteBinding(binding.TenantID, binding.ClientID, binding.Route)
 		if err != nil {
 			return nil, err
 		}
-		key := routeIdentity(tenantID, clientID)
-		if _, exists := store.routes[key]; exists {
-			return nil, fmt.Errorf("statusnotify: duplicate route for %s/%s", tenantID, clientID)
+		if tenantID != binding.TenantID || clientID != binding.ClientID || route != binding.Route {
+			return nil, errors.New("statusnotify: signed route store contains non-canonical values")
 		}
+		key := routeIdentity(tenantID, clientID)
+		if previousIdentity != "" && key <= previousIdentity {
+			return nil, errors.New("statusnotify: signed route store routes must be unique and sorted")
+		}
+		previousIdentity = key
 		store.routes[key] = route
 	}
 	return store, nil
@@ -96,6 +135,9 @@ func OpenRouteStore(path string) (*RouteStore, error) {
 // configuration is idempotent; changing an existing upstream route is
 // rejected so a key rotation cannot silently redirect notifications.
 func (s *RouteStore) Configure(tenantID, clientID string, route model.UpstreamNotificationRoute) error {
+	if s.signer == nil {
+		return errors.New("statusnotify: registry signer is required to configure notification routes")
+	}
 	tenantID, clientID, route, err := normalizeRouteBinding(tenantID, clientID, route)
 	if err != nil {
 		return err
@@ -144,7 +186,23 @@ func (s *RouteStore) persistLocked() error {
 		}
 		return bindings[i].ClientID < bindings[j].ClientID
 	})
-	data, err := json.MarshalIndent(persistedRoutes{SchemaVersion: SchemaNotificationRoutes, Routes: bindings}, "", "  ")
+	snapshot := routeSnapshot{
+		SchemaVersion: SchemaNotificationRoutes,
+		CryptoSuite:   s.registryPub.Suite,
+		RegistryKeyID: s.registryPub.KeyID,
+		Routes:        bindings,
+	}
+	signature, err := signRouteSnapshot(snapshot, s.signer, s.registryPub)
+	if err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(persistedRoutes{
+		SchemaVersion:     snapshot.SchemaVersion,
+		CryptoSuite:       snapshot.CryptoSuite,
+		RegistryKeyID:     snapshot.RegistryKeyID,
+		Routes:            snapshot.Routes,
+		RegistrySignature: signature,
+	}, "", "  ")
 	if err != nil {
 		return fmt.Errorf("statusnotify: encode route store: %w", err)
 	}
@@ -183,6 +241,75 @@ func (s *RouteStore) persistLocked() error {
 		return fmt.Errorf("statusnotify: replace route store: %w", err)
 	}
 	return nil
+}
+
+func resolveRouteTrustRoot(signer trustcrypto.Signer, trusted trustcrypto.PublicKeyDescriptor) (trustcrypto.PublicKeyDescriptor, error) {
+	if signer != nil {
+		signerPub, err := signer.PublicKey(context.Background())
+		if err != nil {
+			return trustcrypto.PublicKeyDescriptor{}, fmt.Errorf("statusnotify: read registry signer public key: %w", err)
+		}
+		if len(trusted.Bytes) == 0 {
+			trusted = signerPub
+		} else if !sameRoutePublicKey(trusted, signerPub) {
+			return trustcrypto.PublicKeyDescriptor{}, errors.New("statusnotify: registry signer does not match trusted registry public key")
+		}
+	}
+	if len(trusted.Bytes) == 0 || strings.TrimSpace(trusted.KeyID) == "" {
+		return trustcrypto.PublicKeyDescriptor{}, errors.New("statusnotify: trusted registry public key is required")
+	}
+	if err := trustcrypto.ValidatePublicKeyForSuite(trusted.Suite, trusted); err != nil {
+		return trustcrypto.PublicKeyDescriptor{}, fmt.Errorf("statusnotify: invalid trusted registry public key: %w", err)
+	}
+	return trusted.Clone(), nil
+}
+
+func sameRoutePublicKey(a, b trustcrypto.PublicKeyDescriptor) bool {
+	return a.Suite == b.Suite && a.KeyID == b.KeyID && a.Algorithm == b.Algorithm && a.Encoding == b.Encoding && bytes.Equal(a.Bytes, b.Bytes)
+}
+
+func signRouteSnapshot(snapshot routeSnapshot, signer trustcrypto.Signer, registryPub trustcrypto.PublicKeyDescriptor) (model.Signature, error) {
+	input, err := routeSnapshotSignatureInput(snapshot)
+	if err != nil {
+		return model.Signature{}, err
+	}
+	signature, err := signer.Sign(context.Background(), input)
+	if err != nil {
+		return model.Signature{}, fmt.Errorf("statusnotify: sign route store: %w", err)
+	}
+	if err := trustcrypto.VerifySignatureForSuite(context.Background(), snapshot.CryptoSuite, registryPub, input, signature); err != nil {
+		return model.Signature{}, fmt.Errorf("statusnotify: registry signer returned unverifiable route signature: %w", err)
+	}
+	return signature, nil
+}
+
+func verifyRouteSnapshot(persisted persistedRoutes, registryPub trustcrypto.PublicKeyDescriptor) error {
+	if persisted.SchemaVersion != SchemaNotificationRoutes {
+		return fmt.Errorf("statusnotify: route store schema must be %s", SchemaNotificationRoutes)
+	}
+	if persisted.CryptoSuite != registryPub.Suite || persisted.RegistryKeyID != registryPub.KeyID {
+		return errors.New("statusnotify: route store registry trust root does not match configured registry")
+	}
+	input, err := routeSnapshotSignatureInput(persisted.snapshot())
+	if err != nil {
+		return err
+	}
+	if err := trustcrypto.VerifySignatureForSuite(context.Background(), persisted.CryptoSuite, registryPub, input, persisted.RegistrySignature); err != nil {
+		return fmt.Errorf("statusnotify: verify route store registry signature: %w", err)
+	}
+	return nil
+}
+
+func routeSnapshotSignatureInput(snapshot routeSnapshot) ([]byte, error) {
+	payload, err := cborx.Marshal(snapshot)
+	if err != nil {
+		return nil, fmt.Errorf("statusnotify: encode route signature payload: %w", err)
+	}
+	input, err := trustcrypto.SignatureInputForSuite(snapshot.CryptoSuite, trustcrypto.SignaturePurposeStatusNotificationRoutes, payload)
+	if err != nil {
+		return nil, fmt.Errorf("statusnotify: build route signature input: %w", err)
+	}
+	return input, nil
 }
 
 func normalizeRouteBinding(tenantID, clientID string, route model.UpstreamNotificationRoute) (string, string, model.UpstreamNotificationRoute, error) {
@@ -242,7 +369,7 @@ func requireJSONEOF(decoder *json.Decoder) error {
 }
 
 // StoredRouteResolver combines the signed key registry used for request
-// authentication with the separate operator-controlled route sidecar.
+// authentication with the independently signed route sidecar.
 type StoredRouteResolver struct {
 	keys   ClientKeyResolver
 	routes *RouteStore

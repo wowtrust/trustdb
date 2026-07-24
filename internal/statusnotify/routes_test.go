@@ -1,6 +1,7 @@
 package statusnotify
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/wowtrust/trustdb/internal/model"
+	"github.com/wowtrust/trustdb/internal/trustcrypto"
 )
 
 type storedRouteKeyResolver struct {
@@ -29,8 +31,9 @@ func (r storedRouteKeyResolver) LookupClientKeyAt(tenantID, clientID, keyID stri
 
 func TestRouteStorePersistsOneRoutePerUpstream(t *testing.T) {
 	t.Parallel()
+	signer, registryPub := routeTestTrustRoot(t)
 	path := RouteStorePath(filepath.Join(t.TempDir(), "keys.tdkeys"))
-	store, err := OpenRouteStore(path)
+	store, err := OpenRouteStore(path, signer, registryPub)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -49,7 +52,7 @@ func TestRouteStorePersistsOneRoutePerUpstream(t *testing.T) {
 		t.Fatal("conflicting Configure() error = nil")
 	}
 
-	reopened, err := OpenRouteStore(path)
+	reopened, err := OpenRouteStore(path, nil, registryPub)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,6 +77,35 @@ func TestRouteStorePersistsOneRoutePerUpstream(t *testing.T) {
 	}
 }
 
+func TestRouteStoreRejectsTamperingAndWrongTrustRoot(t *testing.T) {
+	t.Parallel()
+	signer, registryPub := routeTestTrustRoot(t)
+	path := filepath.Join(t.TempDir(), "routes.json")
+	store, err := OpenRouteStore(path, signer, registryPub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Configure("tenant", "client", model.UpstreamNotificationRoute{WebhookURL: "https://upstream.example/status"}); err != nil {
+		t.Fatal(err)
+	}
+
+	_, wrongRegistryPub := routeTestTrustRoot(t)
+	if _, err := OpenRouteStore(path, nil, wrongRegistryPub); err == nil {
+		t.Fatal("OpenRouteStore() with wrong trust root error = nil")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tampered := strings.Replace(string(data), "upstream.example", "attacker.example", 1)
+	if err := os.WriteFile(path, []byte(tampered), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := OpenRouteStore(path, nil, registryPub); err == nil || !strings.Contains(err.Error(), "verify route store registry signature") {
+		t.Fatalf("tampered OpenRouteStore() error = %v", err)
+	}
+}
+
 func TestRouteStoreRejectsUnsafeDestinations(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -91,7 +123,8 @@ func TestRouteStoreRejectsUnsafeDestinations(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			store, err := OpenRouteStore(filepath.Join(t.TempDir(), "routes.json"))
+			signer, registryPub := routeTestTrustRoot(t)
+			store, err := OpenRouteStore(filepath.Join(t.TempDir(), "routes.json"), signer, registryPub)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -105,6 +138,7 @@ func TestRouteStoreRejectsUnsafeDestinations(t *testing.T) {
 
 func TestOpenRouteStoreRejectsUnknownOrTrailingJSON(t *testing.T) {
 	t.Parallel()
+	_, registryPub := routeTestTrustRoot(t)
 	tests := []string{
 		`{"schema_version":"trustdb.status-notification-routes.v1","routes":[],"unknown":true}`,
 		`{"schema_version":"trustdb.status-notification-routes.v1","routes":[]} {}`,
@@ -115,7 +149,7 @@ func TestOpenRouteStoreRejectsUnknownOrTrailingJSON(t *testing.T) {
 		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := OpenRouteStore(path); err == nil {
+		if _, err := OpenRouteStore(path, nil, registryPub); err == nil {
 			t.Fatalf("OpenRouteStore(case %d) error = nil", i)
 		}
 	}
@@ -123,7 +157,8 @@ func TestOpenRouteStoreRejectsUnknownOrTrailingJSON(t *testing.T) {
 
 func TestNewStoredRouteResolverRequiresDependencies(t *testing.T) {
 	t.Parallel()
-	store, err := OpenRouteStore(filepath.Join(t.TempDir(), "routes.json"))
+	_, registryPub := routeTestTrustRoot(t)
+	store, err := OpenRouteStore(filepath.Join(t.TempDir(), "routes.json"), nil, registryPub)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -133,4 +168,17 @@ func TestNewStoredRouteResolverRequiresDependencies(t *testing.T) {
 	if _, err := NewStoredRouteResolver(storedRouteKeyResolver{err: errors.New("unavailable")}, nil); err == nil {
 		t.Fatal("nil routes error = nil")
 	}
+	if err := store.Configure("tenant", "client", model.UpstreamNotificationRoute{WebhookURL: "https://upstream.example/status"}); err == nil {
+		t.Fatal("read-only Configure() error = nil")
+	}
+}
+
+func routeTestTrustRoot(t *testing.T) (trustcrypto.Signer, trustcrypto.PublicKeyDescriptor) {
+	t.Helper()
+	signer, _ := testSigner(t)
+	publicKey, err := signer.PublicKey(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return signer, publicKey
 }
