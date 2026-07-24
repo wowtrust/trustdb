@@ -21,14 +21,24 @@ Git Branch         : main
 Git Commit         : 53240138c396c10cb0e1a2b7b4d5c0cdaa0ac539
 `
 
+const linuxAMD64NativeVersionFixture = `FISCO BCOS C SDK Version : 3.6.0
+Build Time         : 20240219 07:49:23
+Build Type         : Linux/g++/MinSizeRel
+Git Branch         :
+Git Commit         : 0
+`
+
 func TestVerifyNativeRuntimeRequiresExactVersionAndArtifact(t *testing.T) {
 	t.Parallel()
 	content := []byte("pinned native fixture")
 	sum := sha256.Sum256(content)
 	pin := nativeArtifactPin{
-		name:   "libbcos-c-sdk-test",
-		size:   int64(len(content)),
-		sha256: hex.EncodeToString(sum[:]),
+		name:           "libbcos-c-sdk-test",
+		size:           int64(len(content)),
+		sha256:         hex.EncodeToString(sum[:]),
+		version:        supportedNativeVersion,
+		commit:         supportedNativeCommit,
+		reportedCommit: supportedNativeCommit,
 	}
 	path := filepath.Join(t.TempDir(), pin.name)
 	if err := os.WriteFile(path, content, 0o600); err != nil {
@@ -73,6 +83,7 @@ func TestVerifyNativeRuntimeRequiresExactVersionAndArtifact(t *testing.T) {
 			path:    path,
 			pin: nativeArtifactPin{
 				name: "different-library", size: pin.size, sha256: pin.sha256,
+				version: pin.version, commit: pin.commit, reportedCommit: pin.reportedCommit,
 			},
 		},
 		{
@@ -81,6 +92,7 @@ func TestVerifyNativeRuntimeRequiresExactVersionAndArtifact(t *testing.T) {
 			path:    path,
 			pin: nativeArtifactPin{
 				name: pin.name, size: pin.size + 1, sha256: pin.sha256,
+				version: pin.version, commit: pin.commit, reportedCommit: pin.reportedCommit,
 			},
 		},
 		{
@@ -89,6 +101,16 @@ func TestVerifyNativeRuntimeRequiresExactVersionAndArtifact(t *testing.T) {
 			path:    path,
 			pin: nativeArtifactPin{
 				name: pin.name, size: pin.size, sha256: strings.Repeat("0", 64),
+				version: pin.version, commit: pin.commit, reportedCommit: pin.reportedCommit,
+			},
+		},
+		{
+			name:    "provenance commit",
+			version: nativeVersionFixture,
+			path:    path,
+			pin: nativeArtifactPin{
+				name: pin.name, size: pin.size, sha256: pin.sha256,
+				version: pin.version, commit: strings.Repeat("0", 40), reportedCommit: pin.reportedCommit,
 			},
 		},
 	} {
@@ -97,6 +119,56 @@ func TestVerifyNativeRuntimeRequiresExactVersionAndArtifact(t *testing.T) {
 			t.Parallel()
 			if _, err := verifyNativeRuntime(test.version, test.path, test.pin); !errors.Is(err, fiscobcos.ErrUnsupportedSDK) {
 				t.Fatalf("mismatched native runtime error = %v, want ErrUnsupportedSDK", err)
+			}
+		})
+	}
+}
+
+func TestVerifyNativeRuntimeAcceptsExactLinuxAMD64ReleaseMetadata(t *testing.T) {
+	t.Parallel()
+	content := []byte("pinned linux/amd64 native fixture")
+	sum := sha256.Sum256(content)
+	path := filepath.Join(t.TempDir(), "libbcos-c-sdk.so")
+	if err := os.WriteFile(path, content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := verifyNativeRuntime(linuxAMD64NativeVersionFixture, path, nativeArtifactPin{
+		name: "libbcos-c-sdk.so", size: int64(len(content)),
+		sha256:  hex.EncodeToString(sum[:]),
+		version: supportedNativeVersion, commit: supportedNativeCommit, reportedCommit: "0",
+	})
+	if err != nil {
+		t.Fatalf("verifyNativeRuntime(linux/amd64): %v", err)
+	}
+	if got != fiscobcos.StandardSDKVersion {
+		t.Fatalf("SDK identity = %q, want %q", got, fiscobcos.StandardSDKVersion)
+	}
+}
+
+func TestParseNativeVersionRejectsEmptyRequiredFields(t *testing.T) {
+	t.Parallel()
+	version, commit, err := parseNativeVersion(linuxAMD64NativeVersionFixture)
+	if err != nil || version != supportedNativeVersion || commit != "0" {
+		t.Fatalf("parse real linux/amd64 output = %q, %q, %v", version, commit, err)
+	}
+	for _, field := range []string{
+		"FISCO BCOS C SDK Version",
+		"Build Time",
+		"Build Type",
+		"Git Commit",
+	} {
+		field := field
+		t.Run(field, func(t *testing.T) {
+			t.Parallel()
+			lines := strings.Split(nativeVersionFixture, "\n")
+			for index, line := range lines {
+				key, _, ok := strings.Cut(line, ":")
+				if ok && strings.TrimSpace(key) == field {
+					lines[index] = key + ":"
+				}
+			}
+			if _, _, err := parseNativeVersion(strings.Join(lines, "\n")); err == nil {
+				t.Fatalf("accepted empty required field %q", field)
 			}
 		})
 	}
@@ -117,7 +189,8 @@ func TestVerifyNativeArtifactRejectsSymlink(t *testing.T) {
 	}
 	if err := verifyNativeArtifact(link, nativeArtifactPin{
 		name: "libbcos-c-sdk-test", size: int64(len(content)),
-		sha256: hex.EncodeToString(sum[:]),
+		sha256: hex.EncodeToString(sum[:]), version: supportedNativeVersion,
+		commit: supportedNativeCommit, reportedCommit: supportedNativeCommit,
 	}); err == nil {
 		t.Fatal("accepted symlinked native artifact")
 	}
@@ -137,7 +210,8 @@ func TestVerifyNativeArtifactSupportsUnicodePath(t *testing.T) {
 	}
 	if err := verifyNativeArtifact(path, nativeArtifactPin{
 		name: "libbcos-c-sdk-test", size: int64(len(content)),
-		sha256: hex.EncodeToString(sum[:]),
+		sha256: hex.EncodeToString(sum[:]), version: supportedNativeVersion,
+		commit: supportedNativeCommit, reportedCommit: supportedNativeCommit,
 	}); err != nil {
 		t.Fatalf("unicode native artifact path rejected: %v", err)
 	}
