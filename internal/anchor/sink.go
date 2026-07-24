@@ -40,6 +40,20 @@ type Sink interface {
 	Publish(ctx context.Context, sth model.SignedTreeHead) (model.STHAnchorResult, error)
 }
 
+// ProviderStateCheckpoint persists opaque, append-only recovery material on
+// the currently leased InFlight generation. expected and next are compared as
+// exact bytes so a stale worker cannot overwrite a concurrent recovery step.
+type ProviderStateCheckpoint func(ctx context.Context, expected, next []byte) error
+
+// DurableSink is implemented by providers that can produce an external side
+// effect only after provider-specific recovery state is durable. The generic
+// worker supplies the immutable InFlight target and a generation/lease-fenced
+// checkpoint callback.
+type DurableSink interface {
+	Sink
+	PublishDurable(ctx context.Context, attempt model.STHAnchorAttempt, checkpoint ProviderStateCheckpoint) (model.STHAnchorResult, error)
+}
+
 // ErrPermanent is a sentinel wrapped by Sink implementations to signal
 // that retrying will not help. The worker only checks it via
 // errors.Is, so callers can wrap it freely with fmt.Errorf("%w: ...",
