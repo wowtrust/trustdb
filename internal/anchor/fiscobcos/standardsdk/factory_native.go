@@ -211,6 +211,9 @@ func (d *nativeDriver) PrepareAnchor(ctx context.Context, request fiscobcos.Subm
 	if height < 0 {
 		return fiscobcos.TransactionSubmission{}, fiscobcos.ErrDriverInvalid
 	}
+	if height > math.MaxInt64-client.BlockLimit {
+		return fiscobcos.TransactionSubmission{}, fiscobcos.ErrDriverInvalid
+	}
 	blockLimit := height + client.BlockLimit
 	address := common.BytesToAddress(d.trust.Contract.Address)
 	txData, digest, err := d.client.CreateEncodedTransactionDataV1(&address, callData, blockLimit, "")

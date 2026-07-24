@@ -31,19 +31,31 @@ func TestClassifyReceiptStatusPinnedV3163(t *testing.T) {
 	}
 }
 
-func TestAttemptJournalAcceptsNonceDuplicateForDeterministicLookup(t *testing.T) {
+func TestAttemptJournalAcceptsRecoverableSubmissionForDeterministicLookup(t *testing.T) {
 	t.Parallel()
 
-	_, _, prepared := testAttemptJournal(t)
-	duplicate := cloneAttemptJournal(t, prepared)
-	duplicate.Revision++
-	duplicate.Attempts[0].Outcome = AttemptOutcomeSubmitUnknown
-	duplicate.Attempts[0].Submission = &SubmissionObservation{
-		Status:          ReceiptStatusNonceCheckFailed,
-		StatusMessage:   "nonce_check_fail",
-		ObservedAtUnixN: 2,
-	}
-	if err := ValidateAttemptJournalTransition(prepared, duplicate); err != nil {
-		t.Fatalf("prepared -> nonce duplicate: %v", err)
+	for _, test := range []struct {
+		name   string
+		status int64
+	}{
+		{name: "nonce duplicate", status: ReceiptStatusNonceCheckFailed},
+		{name: "pool timeout", status: ReceiptStatusPoolTimeout},
+		{name: "unknown response", status: 10099},
+	} {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			_, _, prepared := testAttemptJournal(t)
+			recoverable := cloneAttemptJournal(t, prepared)
+			recoverable.Revision++
+			recoverable.Attempts[0].Outcome = AttemptOutcomeSubmitUnknown
+			recoverable.Attempts[0].Submission = &SubmissionObservation{
+				Status:          test.status,
+				StatusMessage:   "recoverable_response",
+				ObservedAtUnixN: 2,
+			}
+			if err := ValidateAttemptJournalTransition(prepared, recoverable); err != nil {
+				t.Fatalf("prepared -> recoverable response: %v", err)
+			}
+		})
 	}
 }

@@ -34,7 +34,7 @@ var (
 // ReceiptStatusDisposition is the pinned FISCO BCOS v3.16.3 interpretation of
 // a non-success transaction receipt. It is deliberately more precise than the
 // scheduler's three failure classes so block-limit refresh and deterministic
-// duplicate lookup can be implemented by #470 without changing this boundary.
+// duplicate lookup remain explicit without changing this boundary.
 type ReceiptStatusDisposition string
 
 const (

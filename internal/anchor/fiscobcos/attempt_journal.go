@@ -336,7 +336,7 @@ func validateJournalAttempt(attempt JournalAttempt, ordinal uint32, journal Atte
 			if err := validateSubmissionObservation(attempt.Submission, -1); err != nil {
 				return err
 			}
-			if !isDuplicateSubmissionStatus(attempt.Submission.Status) {
+			if !isRecoverableSubmissionStatus(attempt.Submission.Status) {
 				return fmt.Errorf("%w: submit-unknown response status=%d is not recoverable", ErrInvalidAttemptJournal, attempt.Submission.Status)
 			}
 		}
@@ -346,7 +346,7 @@ func validateJournalAttempt(attempt JournalAttempt, ordinal uint32, journal Atte
 				return err
 			}
 			if attempt.Submission.Status != ReceiptStatusOK &&
-				!isDuplicateSubmissionStatus(attempt.Submission.Status) {
+				!isRecoverableSubmissionStatus(attempt.Submission.Status) {
 				return fmt.Errorf("%w: successful attempt has incompatible submission status=%d", ErrInvalidAttemptJournal, attempt.Submission.Status)
 			}
 		}
@@ -409,6 +409,11 @@ func isDuplicateSubmissionStatus(status int64) bool {
 	default:
 		return false
 	}
+}
+
+func isRecoverableSubmissionStatus(status int64) bool {
+	return isDuplicateSubmissionStatus(status) ||
+		ClassifyReceiptStatus(int(status)) == ReceiptStatusAmbiguous
 }
 
 func validateAttemptReceipt(outcome AttemptOutcome, receipt *AttemptReceiptObservation, transactionHash []byte) error {

@@ -40,10 +40,22 @@ type Metrics struct {
 	// convenience counter for rate alerting and is redundant with
 	// AnchorAttempts{outcome="success"} but cheaper to query.
 	AnchorPublished *prometheus.CounterVec
-	// AnchorProviderEndpointHealthy and AnchorProviderEndpointHeight expose
-	// bounded per-endpoint readiness without using endpoint URLs as labels.
+	// AnchorProviderEndpointHealthy, AnchorProviderEndpointStale, and
+	// AnchorProviderEndpointHeight expose bounded per-endpoint readiness
+	// without using endpoint URLs as labels.
 	AnchorProviderEndpointHealthy *prometheus.GaugeVec
+	AnchorProviderEndpointStale   *prometheus.GaugeVec
 	AnchorProviderEndpointHeight  *prometheus.GaugeVec
+	// AnchorProviderQuorumHealthy reports whether the latest provider probe
+	// found enough identity-matched, non-stale endpoints.
+	AnchorProviderQuorumHealthy *prometheus.GaugeVec
+	// AnchorProviderRetryEvents counts bounded retry decisions made by a
+	// durable provider adapter. The reason label is a closed implementation
+	// vocabulary, never a provider error string.
+	AnchorProviderRetryEvents *prometheus.CounterVec
+	// AnchorProviderQuorumFailures counts insufficient and conflicting reads
+	// by a bounded operation/reason vocabulary.
+	AnchorProviderQuorumFailures *prometheus.CounterVec
 	// OtsUpgradeRuns counts every upgrader sweep (one per tick).
 	// Used to confirm the worker is alive and to compare against
 	// the configured interval.
@@ -227,12 +239,28 @@ func NewMetrics() *Metrics {
 		}, []string{"sink"}),
 		AnchorProviderEndpointHealthy: prometheus.NewGaugeVec(prometheus.GaugeOpts{
 			Name: "trustdb_anchor_provider_endpoint_healthy",
-			Help: "Whether a configured anchor provider endpoint passed the latest full identity probe.",
+			Help: "Whether a configured anchor provider endpoint passed the latest identity and stale-height probe.",
+		}, []string{"sink", "endpoint_index"}),
+		AnchorProviderEndpointStale: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "trustdb_anchor_provider_endpoint_stale",
+			Help: "Whether a configured anchor provider endpoint lagged the latest quorum height beyond the bounded allowance.",
 		}, []string{"sink", "endpoint_index"}),
 		AnchorProviderEndpointHeight: prometheus.NewGaugeVec(prometheus.GaugeOpts{
 			Name: "trustdb_anchor_provider_endpoint_height",
 			Help: "Latest observed anchor provider endpoint height by bounded configuration index.",
 		}, []string{"sink", "endpoint_index"}),
+		AnchorProviderQuorumHealthy: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "trustdb_anchor_provider_quorum_healthy",
+			Help: "Whether the latest anchor provider probe found a healthy read quorum.",
+		}, []string{"sink"}),
+		AnchorProviderRetryEvents: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "trustdb_anchor_provider_retry_events_total",
+			Help: "Durable anchor provider retry decisions by bounded reason.",
+		}, []string{"sink", "reason"}),
+		AnchorProviderQuorumFailures: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "trustdb_anchor_provider_quorum_failures_total",
+			Help: "Anchor provider quorum failures by bounded operation and reason.",
+		}, []string{"sink", "operation", "reason"}),
 		OtsUpgradeRuns: prometheus.NewCounter(prometheus.CounterOpts{
 			Name: "trustdb_anchor_ots_upgrade_runs_total",
 			Help: "Number of OTS upgrader sweeps that have run.",
@@ -323,7 +351,11 @@ func (m *Metrics) Collectors() []prometheus.Collector {
 		m.AnchorAttempts,
 		m.AnchorPublished,
 		m.AnchorProviderEndpointHealthy,
+		m.AnchorProviderEndpointStale,
 		m.AnchorProviderEndpointHeight,
+		m.AnchorProviderQuorumHealthy,
+		m.AnchorProviderRetryEvents,
+		m.AnchorProviderQuorumFailures,
 		m.OtsUpgradeRuns,
 		m.OtsUpgradeBatches,
 		m.OtsUpgradeCalendarHits,
