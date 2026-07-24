@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/wowtrust/trustdb/internal/anchor/fiscobcos"
 	"github.com/wowtrust/trustdb/internal/cborx"
 	"github.com/wowtrust/trustdb/internal/cryptosuite"
 	"github.com/wowtrust/trustdb/internal/model"
@@ -586,6 +587,14 @@ func ValidateResult(key model.STHAnchorScheduleKey, result model.STHAnchorResult
 	}
 	if result.TreeSize != result.STH.TreeSize || !bytes.Equal(result.RootHash, result.STH.RootHash) {
 		return trusterr.New(trusterr.CodeInvalidArgument, "anchor result does not bind its signed tree head")
+	}
+	if result.SinkName == fiscobcos.SinkName {
+		if len(result.Proof) == 0 || len(result.Proof) > fiscobcos.MaxProofBytes {
+			return trusterr.New(trusterr.CodeInvalidArgument, "FISCO BCOS anchor proof is empty or oversized")
+		}
+		if err := fiscobcos.ValidateProofContainer(result.STH, result); err != nil {
+			return trusterr.Wrap(trusterr.CodeInvalidArgument, "invalid FISCO BCOS anchor proof container", err)
+		}
 	}
 	return nil
 }
