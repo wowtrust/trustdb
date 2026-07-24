@@ -70,6 +70,21 @@ Recovery applies this order:
 6. If endpoints disagree, the contract contains a different record, or an
    observation cannot be bound exactly, retain the journal and fail closed.
 
+The probe computes a conservative quorum height as the lowest height among
+the highest `read_quorum` identity-matched observations. Endpoints more than
+two blocks behind that height are marked stale; unavailable and stale
+minorities are excluded from submission routing. New preparation and exact
+byte rebroadcast use the lexicographically first healthy configured endpoint,
+so routing is deterministic and a restart cannot change the logical target.
+Block-limit expiry is authorized only by the conservative quorum height.
+
+Readback tolerates missing or unavailable minority observations, but it never
+votes away a positive conflict. Different contract records, receipts, block
+headers, finality snapshots, chain identity, contract code, root, suite, or
+event binding fail closed even when another group reaches quorum. An exact
+duplicate/nonce response only enters deterministic transaction-hash lookup;
+it is not completion evidence by itself.
+
 An unknown submission outcome never allows a newer STH to replace the
 `InFlight` target. Newer STHs continue to coalesce only into the separate
 `Pending` window.

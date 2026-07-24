@@ -35,15 +35,20 @@ type fakeBCOSState struct {
 }
 
 type fakeBCOSDriver struct {
-	endpoint string
-	probe    fiscobcos.ChainProbe
-	state    *fakeBCOSState
-	closed   bool
+	endpoint      string
+	probe         fiscobcos.ChainProbe
+	probeErr      error
+	readErr       error
+	submitErrOnce error
+	mutateReceipt func(*fiscobcos.ReceiptWithProof)
+	receiptCalls  int
+	state         *fakeBCOSState
+	closed        bool
 }
 
 func (d *fakeBCOSDriver) Endpoint() string { return d.endpoint }
 func (d *fakeBCOSDriver) ProbeChain(context.Context) (fiscobcos.ChainProbe, error) {
-	return cloneChainProbe(d.probe), nil
+	return cloneChainProbe(d.probe), d.probeErr
 }
 func (d *fakeBCOSDriver) PrepareAnchor(_ context.Context, request fiscobcos.SubmitRequest) (fiscobcos.TransactionSubmission, error) {
 	d.state.mu.Lock()
@@ -78,6 +83,11 @@ func (d *fakeBCOSDriver) SubmitPreparedAnchor(_ context.Context, attempt fiscobc
 		return fiscobcos.SubmissionOutcome{}, fiscobcos.ErrContractMismatch
 	}
 	d.state.submitCalls++
+	if d.submitErrOnce != nil {
+		err := d.submitErrOnce
+		d.submitErrOnce = nil
+		return fiscobcos.SubmissionOutcome{}, err
+	}
 	status := fiscobcos.ReceiptStatusOK
 	if d.state.submitCalls <= len(d.state.submitStatuses) {
 		status = d.state.submitStatuses[d.state.submitCalls-1]
@@ -171,6 +181,9 @@ func (d *fakeBCOSDriver) SubmitPreparedAnchor(_ context.Context, attempt fiscobc
 	}, nil
 }
 func (d *fakeBCOSDriver) ReadAnchor(context.Context, []byte) (fiscobcos.AnchorRecord, error) {
+	if d.readErr != nil {
+		return fiscobcos.AnchorRecord{}, d.readErr
+	}
 	d.state.mu.Lock()
 	defer d.state.mu.Unlock()
 	if d.state.hideRecordReads > 0 {
@@ -180,18 +193,32 @@ func (d *fakeBCOSDriver) ReadAnchor(context.Context, []byte) (fiscobcos.AnchorRe
 	return cloneAnchorRecord(d.state.record), nil
 }
 func (d *fakeBCOSDriver) GetReceiptWithProof(_ context.Context, attempt fiscobcos.TransactionSubmission) (fiscobcos.ReceiptWithProof, error) {
+	if d.readErr != nil {
+		return fiscobcos.ReceiptWithProof{}, d.readErr
+	}
 	d.state.mu.Lock()
 	defer d.state.mu.Unlock()
+	d.receiptCalls++
 	if !d.state.record.Exists ||
 		!bytes.Equal(d.state.receipt.Evidence.TransactionHash, attempt.TransactionHash) {
 		return fiscobcos.ReceiptWithProof{}, fiscobcos.ErrTransactionNotFound
 	}
-	return cloneReceipt(d.state.receipt), nil
+	receipt := cloneReceipt(d.state.receipt)
+	if d.mutateReceipt != nil {
+		d.mutateReceipt(&receipt)
+	}
+	return receipt, nil
 }
 func (d *fakeBCOSDriver) GetBlockHeader(context.Context, uint64) (fiscobcos.BlockHeader, error) {
+	if d.readErr != nil {
+		return fiscobcos.BlockHeader{}, d.readErr
+	}
 	return fakeBCOSBlockHeader(), nil
 }
 func (d *fakeBCOSDriver) GetConsensusSnapshot(context.Context, uint64) (fiscobcos.ConsensusSnapshot, error) {
+	if d.readErr != nil {
+		return fiscobcos.ConsensusSnapshot{}, d.readErr
+	}
 	return fiscobcos.ConsensusSnapshot{
 		BlockNumber: 500, BlockHash: append([]byte(nil), fakeBCOSBlockHeader().Evidence.BlockHash...),
 		Finality: fiscobcos.FinalityEvidence{Signatures: []fiscobcos.CommitSignature{
@@ -289,6 +316,11 @@ func TestFISCOBCOSStandardSinkSystemHealthAndEndpointMetrics(t *testing.T) {
 	t.Parallel()
 
 	trust, drivers := fakeBCOSFixture(t)
+	trust.Endpoints = append(trust.Endpoints, "127.0.0.1:20202")
+	base := drivers[0].(*fakeBCOSDriver)
+	probe := cloneChainProbe(base.probe)
+	probe.Endpoint = trust.Endpoints[2]
+	drivers = append(drivers, &fakeBCOSDriver{endpoint: probe.Endpoint, probe: probe, state: base.state})
 	metrics := observability.NewMetrics()
 	sink, err := NewFISCOBCOSStandardSink(FISCOBCOSStandardSinkConfig{
 		TrustConfig: trust, Drivers: drivers, Metrics: metrics,
@@ -320,16 +352,28 @@ func TestFISCOBCOSStandardSinkSystemHealthAndEndpointMetrics(t *testing.T) {
 			t.Fatalf("endpoint %d height metric=%v, want 500", index, got)
 		}
 	}
-	drivers[1].(*fakeBCOSDriver).probe.Height = 499
+	drivers[2].(*fakeBCOSDriver).probe.Height = 490
 	status, err = sink.Status(context.Background())
 	if err != nil || status.State != model.AnchorSystemStateDegraded {
 		t.Fatalf("degraded status=%+v err=%v", status, err)
 	}
 	for index := range drivers {
 		label := fmt.Sprintf("%d", index)
-		if got := testutil.ToFloat64(metrics.AnchorProviderEndpointHealthy.WithLabelValues(fiscobcos.SinkName, label)); got != 0 {
-			t.Fatalf("endpoint %d healthy metric=%v after disagreement, want 0", index, got)
+		wantHealthy := float64(1)
+		wantStale := float64(0)
+		if index == 2 {
+			wantHealthy = 0
+			wantStale = 1
 		}
+		if got := testutil.ToFloat64(metrics.AnchorProviderEndpointHealthy.WithLabelValues(fiscobcos.SinkName, label)); got != wantHealthy {
+			t.Fatalf("endpoint %d healthy metric=%v, want %v", index, got, wantHealthy)
+		}
+		if got := testutil.ToFloat64(metrics.AnchorProviderEndpointStale.WithLabelValues(fiscobcos.SinkName, label)); got != wantStale {
+			t.Fatalf("endpoint %d stale metric=%v, want %v", index, got, wantStale)
+		}
+	}
+	if got := testutil.ToFloat64(metrics.AnchorProviderQuorumHealthy.WithLabelValues(fiscobcos.SinkName)); got != 1 {
+		t.Fatalf("quorum healthy metric=%v, want 1", got)
 	}
 }
 
@@ -398,22 +442,233 @@ func TestFISCOBCOSAnchorProofStrictWireFormat(t *testing.T) {
 	}
 }
 
-func TestFISCOBCOSStandardSinkFailsClosedOnEndpointDisagreement(t *testing.T) {
+func TestFISCOBCOSStandardSinkUsesConservativeQuorumHeightAcrossNormalDrift(t *testing.T) {
 	trust, drivers := fakeBCOSFixture(t)
 	drivers[1].(*fakeBCOSDriver).probe.Height++
 	sink, err := NewFISCOBCOSStandardSink(FISCOBCOSStandardSinkConfig{TrustConfig: trust, Drivers: drivers})
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = publishBCOSForTest(t, sink, testSTH(testScheduleKey(fiscobcos.SinkName), 8, 0x18))
-	if errors.Is(err, ErrPermanent) || !errors.Is(err, fiscobcos.ErrEndpointDisagreement) {
-		t.Fatalf("height disagreement error=%v", err)
+	if _, err = publishBCOSForTest(t, sink, testSTH(testScheduleKey(fiscobcos.SinkName), 8, 0x18)); err != nil {
+		t.Fatalf("normal height drift blocked quorum publication: %v", err)
 	}
 	state := drivers[0].(*fakeBCOSDriver).state
 	state.mu.Lock()
 	defer state.mu.Unlock()
-	if state.submitCalls != 0 {
-		t.Fatalf("side effect occurred before quorum probe: calls=%d", state.submitCalls)
+	if state.submitCalls != 1 {
+		t.Fatalf("submit calls=%d, want 1", state.submitCalls)
+	}
+}
+
+func TestFISCOBCOSStandardSinkPublishesWithUnavailableMinority(t *testing.T) {
+	trust, drivers := fakeBCOSFixture(t)
+	trust.Endpoints = append(trust.Endpoints, "127.0.0.1:20202")
+	base := drivers[0].(*fakeBCOSDriver)
+	probe := cloneChainProbe(base.probe)
+	probe.Endpoint = trust.Endpoints[2]
+	drivers = append(drivers, &fakeBCOSDriver{endpoint: probe.Endpoint, probe: probe, state: base.state})
+	base.probeErr = errors.New("endpoint unavailable")
+	base.readErr = errors.New("endpoint unavailable")
+	metrics := observability.NewMetrics()
+	sink, err := NewFISCOBCOSStandardSink(FISCOBCOSStandardSinkConfig{
+		TrustConfig: trust, Drivers: drivers, Metrics: metrics,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := publishBCOSForTest(t, sink, testSTH(testScheduleKey(fiscobcos.SinkName), 8, 0x18)); err != nil {
+		t.Fatalf("unavailable minority blocked publication: %v", err)
+	}
+	base.state.mu.Lock()
+	defer base.state.mu.Unlock()
+	if base.state.prepareCalls != 1 || base.state.submitCalls != 1 {
+		t.Fatalf("prepare calls=%d submit calls=%d, want 1/1", base.state.prepareCalls, base.state.submitCalls)
+	}
+	if got := testutil.ToFloat64(metrics.AnchorProviderEndpointHealthy.WithLabelValues(fiscobcos.SinkName, "0")); got != 0 {
+		t.Fatalf("unavailable endpoint healthy metric=%v, want 0", got)
+	}
+	if got := testutil.ToFloat64(metrics.AnchorProviderQuorumHealthy.WithLabelValues(fiscobcos.SinkName)); got != 1 {
+		t.Fatalf("quorum healthy metric=%v, want 1", got)
+	}
+}
+
+func TestFISCOBCOSStandardSinkDoesNotCountStaleAbsenceTowardSubmissionQuorum(t *testing.T) {
+	trust, drivers := fakeBCOSFixture(t)
+	trust.Endpoints = append(trust.Endpoints, "127.0.0.1:20202")
+	base := drivers[0].(*fakeBCOSDriver)
+	probe := cloneChainProbe(base.probe)
+	probe.Endpoint = trust.Endpoints[2]
+	probe.Height -= maxFISCOBCOSEndpointHeightLag + 1
+	stale := &fakeBCOSDriver{endpoint: probe.Endpoint, probe: probe, state: base.state}
+	drivers = append(drivers, stale)
+	drivers[1].(*fakeBCOSDriver).readErr = errors.New("healthy endpoint read unavailable")
+
+	sink, err := NewFISCOBCOSStandardSink(FISCOBCOSStandardSinkConfig{TrustConfig: trust, Drivers: drivers})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = publishBCOSForTest(t, sink, testSTH(testScheduleKey(fiscobcos.SinkName), 8, 0x18))
+	if err == nil || !errors.Is(err, fiscobcos.ErrIncompleteChainEvidence) {
+		t.Fatalf("stale absence error=%v, want incomplete quorum evidence", err)
+	}
+	base.state.mu.Lock()
+	defer base.state.mu.Unlock()
+	if base.state.prepareCalls != 0 || base.state.submitCalls != 0 {
+		t.Fatalf(
+			"stale absence authorized side effect: prepare=%d submit=%d",
+			base.state.prepareCalls,
+			base.state.submitCalls,
+		)
+	}
+}
+
+func TestFISCOBCOSStandardSinkDoesNotCountStaleNotFoundTowardReceiptQuorum(t *testing.T) {
+	trust, drivers := fakeBCOSFixture(t)
+	trust.Endpoints = append(trust.Endpoints, "127.0.0.1:20202")
+	base := drivers[0].(*fakeBCOSDriver)
+	probe := cloneChainProbe(base.probe)
+	probe.Endpoint = trust.Endpoints[2]
+	probe.Height -= maxFISCOBCOSEndpointHeightLag + 1
+	drivers = append(drivers, &fakeBCOSDriver{endpoint: probe.Endpoint, probe: probe, state: base.state})
+	drivers[1].(*fakeBCOSDriver).readErr = errors.New("healthy endpoint read unavailable")
+
+	sink, err := NewFISCOBCOSStandardSink(FISCOBCOSStandardSinkConfig{TrustConfig: trust, Drivers: drivers})
+	if err != nil {
+		t.Fatal(err)
+	}
+	route, err := sink.probeQuorum(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = sink.readReceiptQuorum(context.Background(), fiscobcos.TransactionSubmission{
+		TransactionHash: bytes.Repeat([]byte{0x91}, 32),
+	}, route)
+	if err == nil || errors.Is(err, fiscobcos.ErrTransactionNotFound) ||
+		!errors.Is(err, fiscobcos.ErrIncompleteChainEvidence) {
+		t.Fatalf("stale not-found error=%v, want ambiguous incomplete quorum evidence", err)
+	}
+}
+
+func TestFISCOBCOSImmediateSuccessInspectsMinorityReceiptConflict(t *testing.T) {
+	trust, drivers := fakeBCOSFixture(t)
+	trust.Endpoints = append(trust.Endpoints, "127.0.0.1:20202")
+	base := drivers[0].(*fakeBCOSDriver)
+	probe := cloneChainProbe(base.probe)
+	probe.Endpoint = trust.Endpoints[2]
+	conflicting := &fakeBCOSDriver{
+		endpoint: probe.Endpoint,
+		probe:    probe,
+		state:    base.state,
+		mutateReceipt: func(receipt *fiscobcos.ReceiptWithProof) {
+			receipt.Observation.NormalizedRPCReceipt = []byte("conflicting-rpc-receipt")
+		},
+	}
+	drivers = append(drivers, conflicting)
+
+	sink, err := NewFISCOBCOSStandardSink(FISCOBCOSStandardSinkConfig{TrustConfig: trust, Drivers: drivers})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = publishBCOSForTest(t, sink, testSTH(testScheduleKey(fiscobcos.SinkName), 8, 0x18))
+	if err == nil || !errors.Is(err, fiscobcos.ErrEndpointDisagreement) || errors.Is(err, ErrPermanent) {
+		t.Fatalf("minority receipt conflict error=%v, want ambiguous endpoint disagreement", err)
+	}
+	base.state.mu.Lock()
+	defer base.state.mu.Unlock()
+	if base.state.submitCalls != 1 {
+		t.Fatalf("submit calls=%d, want exactly one", base.state.submitCalls)
+	}
+	if conflicting.receiptCalls == 0 {
+		t.Fatal("immediate success did not inspect the conflicting minority receipt")
+	}
+}
+
+func TestFISCOBCOSReceiptBindingMismatchIsPermanent(t *testing.T) {
+	trust, drivers := fakeBCOSFixture(t)
+	for _, candidate := range drivers {
+		candidate.(*fakeBCOSDriver).mutateReceipt = func(receipt *fiscobcos.ReceiptWithProof) {
+			receipt.Event.RootHash[0] ^= 0xff
+		}
+	}
+	sink, err := NewFISCOBCOSStandardSink(FISCOBCOSStandardSinkConfig{TrustConfig: trust, Drivers: drivers})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = publishBCOSForTest(t, sink, testSTH(testScheduleKey(fiscobcos.SinkName), 8, 0x18))
+	if !errors.Is(err, ErrPermanent) || !errors.Is(err, fiscobcos.ErrContractMismatch) {
+		t.Fatalf("receipt binding error=%v, want permanent contract mismatch", err)
+	}
+	base := drivers[0].(*fakeBCOSDriver)
+	base.state.mu.Lock()
+	defer base.state.mu.Unlock()
+	if base.state.submitCalls != 1 {
+		t.Fatalf("submit calls=%d, want exactly one before permanent failure", base.state.submitCalls)
+	}
+}
+
+func TestFISCOBCOSStandardSinkRebroadcastsExactPreparedBytesAfterEndpointFailover(t *testing.T) {
+	trust, drivers := fakeBCOSFixture(t)
+	trust.Endpoints = append(trust.Endpoints, "127.0.0.1:20202")
+	base := drivers[0].(*fakeBCOSDriver)
+	probe := cloneChainProbe(base.probe)
+	probe.Endpoint = trust.Endpoints[2]
+	drivers = append(drivers, &fakeBCOSDriver{endpoint: probe.Endpoint, probe: probe, state: base.state})
+	base.submitErrOnce = errors.New("connection lost before response")
+	metrics := observability.NewMetrics()
+	sink, err := NewFISCOBCOSStandardSink(FISCOBCOSStandardSinkConfig{
+		TrustConfig: trust, Drivers: drivers, Metrics: metrics,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	sth := testSTH(testScheduleKey(fiscobcos.SinkName), 9, 0x19)
+	inFlight := model.STHAnchorAttempt{Generation: 9, Target: sth}
+	var providerState []byte
+	checkpoint := func(_ context.Context, expected, next []byte) error {
+		if !bytes.Equal(expected, providerState) {
+			return errors.New("stale provider state")
+		}
+		providerState = append([]byte(nil), next...)
+		return nil
+	}
+	if _, err := sink.PublishDurable(context.Background(), inFlight, checkpoint); err == nil {
+		t.Fatal("ambiguous first endpoint response unexpectedly completed")
+	}
+	journal, err := fiscobcos.UnmarshalAttemptJournal(providerState)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(journal.Attempts) != 1 || journal.Attempts[0].Outcome != fiscobcos.AttemptOutcomeSubmitUnknown {
+		t.Fatalf("journal after ambiguous submit=%+v", journal)
+	}
+	preparedBytes := append([]byte(nil), journal.Attempts[0].Transaction.RawCanonicalTransaction...)
+
+	base.probeErr = errors.New("endpoint unavailable")
+	base.readErr = errors.New("endpoint unavailable")
+	inFlight.ProviderState = append([]byte(nil), providerState...)
+	result, err := sink.PublishDurable(context.Background(), inFlight, checkpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proof, err := fiscobcos.UnmarshalProof(result.Proof)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(proof.TransactionAttempts) != 1 ||
+		!bytes.Equal(proof.TransactionAttempts[0].RawCanonicalTransaction, preparedBytes) {
+		t.Fatal("endpoint failover replaced the immutable prepared transaction")
+	}
+	base.state.mu.Lock()
+	defer base.state.mu.Unlock()
+	if base.state.prepareCalls != 1 || base.state.submitCalls != 2 {
+		t.Fatalf("prepare calls=%d submit calls=%d, want 1/2", base.state.prepareCalls, base.state.submitCalls)
+	}
+	if got := testutil.ToFloat64(metrics.AnchorProviderRetryEvents.WithLabelValues(
+		fiscobcos.SinkName,
+		bcosRetryReasonExactTransaction,
+	)); got != 1 {
+		t.Fatalf("exact-transaction retry metric=%v, want 1", got)
 	}
 }
 
@@ -450,35 +705,89 @@ func TestFISCOBCOSStandardSinkRejectsNonCanonicalV1BindingBeforeSideEffect(t *te
 	}
 }
 
-func TestFISCOBCOSStandardSinkDoesNotMaskConfiguredEndpointReadDisagreement(t *testing.T) {
+func TestFISCOBCOSStandardSinkRejectsConflictingAnchorFromAnyEndpoint(t *testing.T) {
 	trust, drivers := fakeBCOSFixture(t)
 	trust.Endpoints = append(trust.Endpoints, "127.0.0.1:20202")
 	base := drivers[0].(*fakeBCOSDriver)
 	probe := cloneChainProbe(base.probe)
 	probe.Endpoint = trust.Endpoints[2]
+	conflicting := &fakeBCOSState{record: fiscobcos.AnchorRecord{
+		StreamID: bytes.Repeat([]byte{0x31}, 32), TreeSize: 8,
+		RootHash: bytes.Repeat([]byte{0xff}, 32), SignedSTHDigest: bytes.Repeat([]byte{0x41}, 32),
+		Publisher: bytes.Repeat([]byte{0x61}, 20), PayloadVersion: 1, Exists: true,
+	}}
 	drivers = append(drivers, &fakeBCOSDriver{
 		endpoint: probe.Endpoint,
 		probe:    probe,
-		state:    &fakeBCOSState{},
+		state:    conflicting,
 	})
 	sink, err := NewFISCOBCOSStandardSink(FISCOBCOSStandardSinkConfig{TrustConfig: trust, Drivers: drivers})
 	if err != nil {
 		t.Fatal(err)
 	}
 	_, err = publishBCOSForTest(t, sink, testSTH(testScheduleKey(fiscobcos.SinkName), 8, 0x18))
-	if errors.Is(err, ErrPermanent) || !errors.Is(err, fiscobcos.ErrEndpointDisagreement) {
-		t.Fatalf("minority endpoint disagreement error=%v", err)
+	if !errors.Is(err, ErrPermanent) || !errors.Is(err, fiscobcos.ErrContractMismatch) {
+		t.Fatalf("conflicting endpoint error=%v", err)
+	}
+	base.state.mu.Lock()
+	defer base.state.mu.Unlock()
+	if base.state.submitCalls != 0 {
+		t.Fatalf("conflicting existing anchor allowed %d side effects", base.state.submitCalls)
+	}
+}
+
+func TestFISCOBCOSPostSubmitConflictDoesNotAdvanceAnchorResult(t *testing.T) {
+	trust, drivers := fakeBCOSFixture(t)
+	trust.Endpoints = append(trust.Endpoints, "127.0.0.1:20202")
+	base := drivers[0].(*fakeBCOSDriver)
+	probe := cloneChainProbe(base.probe)
+	probe.Endpoint = trust.Endpoints[2]
+	conflicting := &fakeBCOSState{
+		record: fiscobcos.AnchorRecord{
+			StreamID: bytes.Repeat([]byte{0x31}, 32), TreeSize: 8,
+			RootHash: bytes.Repeat([]byte{0xff}, 32), SignedSTHDigest: bytes.Repeat([]byte{0x41}, 32),
+			Publisher: bytes.Repeat([]byte{0x61}, 20), PayloadVersion: 1, Exists: true,
+		},
+		hideRecordReads: 2,
+	}
+	drivers = append(drivers, &fakeBCOSDriver{endpoint: probe.Endpoint, probe: probe, state: conflicting})
+	sink, err := NewFISCOBCOSStandardSink(FISCOBCOSStandardSinkConfig{TrustConfig: trust, Drivers: drivers})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := newBoundTestLocalStore(t, t.TempDir())
+	key := testScheduleKey(fiscobcos.SinkName)
+	sth := testSTH(key, 8, 0x18)
+	offer(t, store, key, sth, 100, 100)
+	now := time.Unix(0, 100)
+	service := newTestService(t, store, sink, key, &now, nil)
+	service.tick(context.Background())
+
+	if _, found, err := store.GetSTHAnchorResult(context.Background(), sth.TreeSize); err != nil || found {
+		t.Fatalf("conflicting readback result found=%v err=%v", found, err)
+	}
+	if latest, found, err := store.LatestSTHAnchorResultForKey(context.Background(), key); err != nil || found {
+		t.Fatalf("conflicting readback latest result=%+v found=%v err=%v", latest, found, err)
+	}
+	schedule, found, err := store.GetSTHAnchorSchedule(context.Background(), key)
+	if err != nil || !found || schedule.InFlight == nil || !schedule.InFlight.TerminalFailure {
+		t.Fatalf("conflicting readback schedule=%+v found=%v err=%v", schedule, found, err)
 	}
 	base.state.mu.Lock()
 	defer base.state.mu.Unlock()
 	if base.state.submitCalls != 1 {
-		t.Fatalf("submit calls=%d, want one side effect before readback disagreement", base.state.submitCalls)
+		t.Fatalf(
+			"submit calls=%d, want exactly one before fail-closed readback; last error=%q",
+			base.state.submitCalls,
+			schedule.InFlight.LastErrorMessage,
+		)
 	}
 }
 
 func TestFISCOBCOSReadbackDisagreementRemainsRecoverOnlyAfterConvergence(t *testing.T) {
 	trust, drivers := fakeBCOSFixture(t)
 	trust.Endpoints = append(trust.Endpoints, "127.0.0.1:20202")
+	trust.ReadQuorum = 3
 	base := drivers[0].(*fakeBCOSDriver)
 	probe := cloneChainProbe(base.probe)
 	probe.Endpoint = trust.Endpoints[2]
@@ -502,9 +811,11 @@ func TestFISCOBCOSReadbackDisagreementRemainsRecoverOnlyAfterConvergence(t *test
 
 	base.state.mu.Lock()
 	converged := cloneAnchorRecord(base.state.record)
+	convergedReceipt := cloneReceipt(base.state.receipt)
 	base.state.mu.Unlock()
 	laggingState.mu.Lock()
 	laggingState.record = converged
+	laggingState.receipt = convergedReceipt
 	laggingState.mu.Unlock()
 
 	now = now.Add(time.Second)
@@ -526,13 +837,10 @@ func TestFISCOBCOSReadbackDisagreementRemainsRecoverOnlyAfterConvergence(t *test
 
 func TestFISCOBCOSStandardSinkRejectsReceiptOnlyResponse(t *testing.T) {
 	trust, drivers := fakeBCOSFixture(t)
-	driver := drivers[0].(*fakeBCOSDriver)
-	sink, err := NewFISCOBCOSStandardSink(FISCOBCOSStandardSinkConfig{TrustConfig: trust, Drivers: drivers})
-	if err != nil {
-		t.Fatal(err)
+	for index := range drivers {
+		drivers[index] = &receiptOnlyDriver{fakeBCOSDriver: drivers[index].(*fakeBCOSDriver)}
 	}
-	drivers[0] = &receiptOnlyDriver{fakeBCOSDriver: driver}
-	sink, err = NewFISCOBCOSStandardSink(FISCOBCOSStandardSinkConfig{TrustConfig: trust, Drivers: drivers})
+	sink, err := NewFISCOBCOSStandardSink(FISCOBCOSStandardSinkConfig{TrustConfig: trust, Drivers: drivers})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -693,7 +1001,10 @@ func TestFISCOBCOSBlockLimitRetryPreservesEverySignedAttempt(t *testing.T) {
 	trust, drivers := fakeBCOSFixture(t)
 	state := drivers[0].(*fakeBCOSDriver).state
 	state.submitStatuses = []int{int(fiscobcos.ReceiptStatusCodeBlockLimit), fiscobcos.ReceiptStatusOK}
-	sink, err := NewFISCOBCOSStandardSink(FISCOBCOSStandardSinkConfig{TrustConfig: trust, Drivers: drivers})
+	metrics := observability.NewMetrics()
+	sink, err := NewFISCOBCOSStandardSink(FISCOBCOSStandardSinkConfig{
+		TrustConfig: trust, Drivers: drivers, Metrics: metrics,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -742,6 +1053,8 @@ func TestFISCOBCOSBlockLimitRetryPreservesEverySignedAttempt(t *testing.T) {
 		proof.TransactionAttempts[0].Submission.Status != fiscobcos.ReceiptStatusCodeBlockLimit ||
 		!bytes.Equal(proof.TransactionAttempts[0].RawCanonicalTransaction, firstTransaction) ||
 		proof.TransactionAttempts[1].Outcome != fiscobcos.AttemptOutcomeReceiptSuccess ||
+		!bytes.Equal(proof.TransactionAttempts[0].Input, proof.TransactionAttempts[1].Input) ||
+		bytes.Equal(proof.TransactionAttempts[0].RawCanonicalTransaction, proof.TransactionAttempts[1].RawCanonicalTransaction) ||
 		proof.SuccessfulAttemptOrdinal != 2 {
 		t.Fatalf("proof attempts=%+v", proof.TransactionAttempts)
 	}
@@ -749,6 +1062,68 @@ func TestFISCOBCOSBlockLimitRetryPreservesEverySignedAttempt(t *testing.T) {
 	defer state.mu.Unlock()
 	if state.prepareCalls != 2 || state.submitCalls != 2 {
 		t.Fatalf("prepare calls=%d submit calls=%d, want 2/2", state.prepareCalls, state.submitCalls)
+	}
+	if got := testutil.ToFloat64(metrics.AnchorProviderRetryEvents.WithLabelValues(
+		fiscobcos.SinkName,
+		bcosRetryReasonBlockLimitRefresh,
+	)); got != 1 {
+		t.Fatalf("block-limit refresh metric=%v, want 1", got)
+	}
+}
+
+func TestFISCOBCOSDuplicateSubmissionCanExpireAndRefreshBlockLimit(t *testing.T) {
+	trust, drivers := fakeBCOSFixture(t)
+	state := drivers[0].(*fakeBCOSDriver).state
+	state.submitStatuses = []int{fiscobcos.ReceiptStatusAlreadyInPool}
+	sink, err := NewFISCOBCOSStandardSink(FISCOBCOSStandardSinkConfig{
+		TrustConfig: trust,
+		Drivers:     drivers,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	inFlight := model.STHAnchorAttempt{
+		Generation: 10,
+		Target:     testSTH(testScheduleKey(fiscobcos.SinkName), 16, 0x20),
+	}
+	var providerState []byte
+	checkpoint := func(_ context.Context, expected, next []byte) error {
+		if !bytes.Equal(expected, providerState) {
+			return errors.New("stale provider state")
+		}
+		providerState = append([]byte(nil), next...)
+		return nil
+	}
+	if _, err := sink.PublishDurable(context.Background(), inFlight, checkpoint); err == nil {
+		t.Fatal("duplicate response without a receipt unexpectedly completed")
+	}
+	journal, err := fiscobcos.UnmarshalAttemptJournal(providerState)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(journal.Attempts) != 1 ||
+		journal.Attempts[0].Outcome != fiscobcos.AttemptOutcomeSubmitUnknown ||
+		journal.Attempts[0].Submission == nil {
+		t.Fatalf("journal after duplicate response=%+v", journal)
+	}
+
+	for _, driver := range drivers {
+		driver.(*fakeBCOSDriver).probe.Height = journal.Attempts[0].Transaction.BlockLimit + 1
+	}
+	inFlight.ProviderState = append([]byte(nil), providerState...)
+	result, err := sink.PublishDurable(context.Background(), inFlight, checkpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proof, err := fiscobcos.UnmarshalProof(result.Proof)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(proof.TransactionAttempts) != 2 ||
+		proof.TransactionAttempts[0].Outcome != fiscobcos.AttemptOutcomeBlockLimitExpired ||
+		proof.TransactionAttempts[0].Submission != nil ||
+		proof.TransactionAttempts[1].Outcome != fiscobcos.AttemptOutcomeReceiptSuccess {
+		t.Fatalf("block-limit refresh proof=%+v", proof.TransactionAttempts)
 	}
 }
 
@@ -859,6 +1234,31 @@ func TestFISCOBCOSSubmissionStatusRecoveryMatrix(t *testing.T) {
 			wantResult: true, wantPrepare: 1, wantSubmit: 2,
 		},
 		{
+			name: "pool timeout retries exact transaction after lookup",
+			statuses: []int{
+				fiscobcos.ReceiptStatusPoolTimeout,
+				fiscobcos.ReceiptStatusOK,
+			},
+			wantResult: true, wantPrepare: 1, wantSubmit: 2,
+		},
+		{
+			name: "unknown pool status remains ambiguous and retries exact transaction",
+			statuses: []int{
+				10099,
+				fiscobcos.ReceiptStatusOK,
+			},
+			wantResult: true, wantPrepare: 1, wantSubmit: 2,
+		},
+		{
+			name: "nonce duplicate recovers receipt without resubmit",
+			statuses: []int{
+				fiscobcos.ReceiptStatusNonceCheckFailed,
+			},
+			effectStatuses: map[int]bool{fiscobcos.ReceiptStatusNonceCheckFailed: true},
+			wantResult:     true, wantPrepare: 1, wantSubmit: 1,
+			wantSubmission: fiscobcos.ReceiptStatusNonceCheckFailed,
+		},
+		{
 			name: "already in chain recovers receipt without resubmit",
 			statuses: []int{
 				fiscobcos.ReceiptStatusAlreadyInChain,
@@ -871,6 +1271,14 @@ func TestFISCOBCOSSubmissionStatusRecoveryMatrix(t *testing.T) {
 			name: "invalid signature is terminal",
 			statuses: []int{
 				10008,
+			},
+			wantTerminal: true, wantPrepare: 1, wantSubmit: 1,
+			wantJournalLast: fiscobcos.AttemptOutcomeReceiptTerminalRejected,
+		},
+		{
+			name: "sender no EOA is terminal",
+			statuses: []int{
+				10014,
 			},
 			wantTerminal: true, wantPrepare: 1, wantSubmit: 1,
 			wantJournalLast: fiscobcos.AttemptOutcomeReceiptTerminalRejected,
@@ -903,7 +1311,8 @@ func TestFISCOBCOSSubmissionStatusRecoveryMatrix(t *testing.T) {
 
 			result, resultFound, err := store.GetSTHAnchorResult(context.Background(), sth.TreeSize)
 			if err != nil || resultFound != test.wantResult {
-				t.Fatalf("result found=%v want=%v err=%v", resultFound, test.wantResult, err)
+				current, _, _ := store.GetSTHAnchorSchedule(context.Background(), key)
+				t.Fatalf("result found=%v want=%v err=%v in_flight=%#v", resultFound, test.wantResult, err, current.InFlight)
 			}
 			if resultFound && test.wantSubmission != 0 {
 				proof, err := fiscobcos.UnmarshalProof(result.Proof)

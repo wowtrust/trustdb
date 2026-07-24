@@ -199,7 +199,7 @@ func ValidateProofStructure(proof AnchorProof) error {
 					return err
 				}
 				if attempt.Submission.Status != ReceiptStatusOK &&
-					!isDuplicateSubmissionStatus(attempt.Submission.Status) {
+					!isRecoverableSubmissionStatus(attempt.Submission.Status) {
 					return fmt.Errorf("%w: successful attempt %d has incompatible submission status", ErrInvalidProof, i+1)
 				}
 			}
