@@ -306,6 +306,20 @@ consumer 管理、stream 更新/删除或 DLQ 权限。
 - Worker 异常退出会让 `trustdb serve` 失败；应先确认 broker 或拓扑原因，
   再重启服务。
 
+TrustDB 通过现有 `/metrics` endpoint 暴露进程内 NATS ingress 指标。所有
+label 都是固定枚举，不包含 message ID、subject、客户端身份或错误文本。
+
+| 指标 | 含义 |
+| --- | --- |
+| `trustdb_nats_ingress_in_flight` | 当前正在执行 worker 状态机的 delivery，不包含 broker backlog。 |
+| `trustdb_nats_ingress_deliveries_total{action}` | 成功完成的 broker 动作：`ack`、`nak`、`term_result` 或 `term_rejection`。 |
+| `trustdb_nats_ingress_outcome_store_retries_total{kind}` | 在确认原 delivery 前，耐久 result 或 rejection 写入失败并准备重试的次数。 |
+| `trustdb_nats_ingress_errors_total{stage}` | `consume`、`process` 或 `ack_progress` 阶段的 worker error。 |
+
+`nak` 速率持续上升通常表示下游暂时性压力；broker 健康但 outcome store
+retry 上升时，应检查 result/DLQ 容量和存储可用性。Error counter 非零时，
+需要结合日志和 JetStream state 确认精确原因。
+
 常见问题：
 
 | 现象 | 处理方式 |

@@ -331,6 +331,22 @@ Monitor both TrustDB and JetStream:
 - An unexpected worker exit is fatal to `trustdb serve`; restart only after the
   broker or topology cause is understood.
 
+TrustDB exports process-local NATS ingress metrics through the existing
+`/metrics` endpoint. Every label is a fixed enumeration; no message ID,
+subject, client identity, or error text is exposed.
+
+| Metric | Interpretation |
+| --- | --- |
+| `trustdb_nats_ingress_in_flight` | Deliveries currently executing the worker state machine; broker backlog is not included. |
+| `trustdb_nats_ingress_deliveries_total{action}` | Successful broker actions: `ack`, `nak`, `term_result`, or `term_rejection`. |
+| `trustdb_nats_ingress_outcome_store_retries_total{kind}` | Failed durable result or rejection writes that will retry before the original delivery is acknowledged. |
+| `trustdb_nats_ingress_errors_total{stage}` | Worker errors from `consume`, `process`, or `ack_progress`. |
+
+A rising `nak` rate indicates downstream transient pressure. Rising outcome
+store retries with stable broker health points at result/DLQ capacity or
+storage availability. A non-zero error rate requires logs and JetStream state
+to identify the exact cause.
+
 Common startup failures:
 
 | Symptom | Action |
