@@ -116,6 +116,36 @@ func TestAttemptJournalPreservesSuccessfulReceiptMaterial(t *testing.T) {
 	}
 }
 
+func TestAttemptJournalPreservesIncludedTerminalReceipt(t *testing.T) {
+	t.Parallel()
+	_, _, journal := testAttemptJournal(t)
+	terminal := cloneAttemptJournal(t, journal)
+	terminal.Revision++
+	terminal.Attempts[0].Outcome = AttemptOutcomeReceiptTerminalRejected
+	terminal.Attempts[0].Submission = &SubmissionObservation{
+		Status: 1, StatusMessage: "reverted", ObservedAtUnixN: 3,
+	}
+	terminal.Attempts[0].Receipt = testAttemptReceipt(terminal.Attempts[0].Transaction.TransactionHash, 1)
+	terminal.Attempts[0].Receipt.StatusMessage = "reverted"
+	terminal.Attempts[0].Receipt.DecodedAnchorEvent = nil
+	if err := ValidateAttemptJournalTransition(journal, terminal); err != nil {
+		t.Fatalf("prepared -> included terminal receipt: %v", err)
+	}
+	data, err := MarshalAttemptJournal(terminal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := UnmarshalAttemptJournal(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decoded.Attempts[0].Receipt == nil ||
+		decoded.Attempts[0].Receipt.Status != 1 ||
+		len(decoded.Attempts[0].Receipt.RawCanonicalReceipt) == 0 {
+		t.Fatalf("terminal receipt was not retained: %+v", decoded.Attempts[0])
+	}
+}
+
 func TestAttemptJournalRejectsConflictAndAggregateOverflow(t *testing.T) {
 	t.Parallel()
 

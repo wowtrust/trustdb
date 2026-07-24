@@ -13,11 +13,12 @@ const (
 	SchemaAttemptJournal   = "trustdb.fisco-bcos-attempt-journal.v1"
 	AttemptJournalVersion  = uint64(1)
 	MaxAttemptJournalBytes = 16 << 20
+	MaxReceiptAggregate    = 4 << 20
 
-	maxJournalArrayElements = 1024
-	maxJournalMapPairs      = 64
-	maxReceiptAggregate     = 4 << 20
-	maxCanonicalLogs        = 512
+	maxJournalArrayElements     = 1024
+	maxJournalMapPairs          = 64
+	maxReceiptAggregate         = MaxReceiptAggregate
+	maxCanonicalLogs            = MaxCanonicalLogs
 	ReceiptStatusCodeBlockLimit = int64(10001)
 )
 
@@ -360,15 +361,24 @@ func validateJournalAttempt(attempt JournalAttempt, ordinal uint32, journal Atte
 			return err
 		}
 	case AttemptOutcomeReceiptTerminalRejected:
-		if attempt.Receipt != nil {
-			return fmt.Errorf("%w: terminal rejection must not claim an included receipt", ErrInvalidAttemptJournal)
-		}
 		if err := validateSubmissionObservation(attempt.Submission, -1); err != nil {
 			return err
 		}
 		if attempt.Submission.Status == ReceiptStatusOK ||
 			attempt.Submission.Status == ReceiptStatusCodeBlockLimit {
 			return fmt.Errorf("%w: terminal submission status=%d is not terminal", ErrInvalidAttemptJournal, attempt.Submission.Status)
+		}
+		if attempt.Submission.Status >= 10000 {
+			if attempt.Receipt != nil {
+				return fmt.Errorf("%w: transaction-pool rejection must not claim an included receipt", ErrInvalidAttemptJournal)
+			}
+		} else {
+			if err := validateAttemptReceipt(attempt.Outcome, attempt.Receipt, transaction.TransactionHash); err != nil {
+				return err
+			}
+			if attempt.Receipt.Status != attempt.Submission.Status {
+				return fmt.Errorf("%w: terminal receipt status differs from submission status", ErrInvalidAttemptJournal)
+			}
 		}
 	default:
 		return fmt.Errorf("%w: unknown attempt outcome %q", ErrInvalidAttemptJournal, attempt.Outcome)
@@ -434,6 +444,12 @@ func validateAttemptReceipt(outcome AttemptOutcome, receipt *AttemptReceiptObser
 			len(receipt.DecodedAnchorEvent) == 0 ||
 			len(receipt.DecodedAnchorEvent) > maxDecodedEventBytes {
 			return fmt.Errorf("%w: successful receipt lacks exact event", ErrInvalidAttemptJournal)
+		}
+	case AttemptOutcomeReceiptTerminalRejected:
+		if receipt.Status == ReceiptStatusOK ||
+			receipt.Status == ReceiptStatusCodeBlockLimit ||
+			len(receipt.DecodedAnchorEvent) != 0 {
+			return fmt.Errorf("%w: terminal receipt carries a non-terminal status or anchor event", ErrInvalidAttemptJournal)
 		}
 	}
 	if err := validateMerklePath("journal transaction", receipt.TransactionProof); err != nil {

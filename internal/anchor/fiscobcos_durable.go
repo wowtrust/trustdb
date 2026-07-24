@@ -1,11 +1,13 @@
 package anchor
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 
 	"github.com/wowtrust/trustdb/internal/anchor/fiscobcos"
+	"github.com/wowtrust/trustdb/internal/cborx"
 	"github.com/wowtrust/trustdb/internal/model"
 )
 
@@ -144,6 +146,18 @@ func (s *FISCOBCOSStandardSink) resumeAttemptJournal(
 				last.Submission.Status,
 			)
 		case fiscobcos.AttemptOutcomeReceiptBlockLimitRejected, fiscobcos.AttemptOutcomeBlockLimitExpired:
+			if index, receipt, found, err := s.recoverRecordedReceipts(ctx, journal); err != nil {
+				return model.STHAnchorResult{}, mapSinkError(err)
+			} else if found {
+				if receipt.Status == fiscobcos.ReceiptStatusOK {
+					return s.completeObservedReceipt(ctx, sth, journal, rawJournal, index, receipt, checkpoint)
+				}
+				return model.STHAnchorResult{}, ambiguousDriverFailure(
+					"recover_closed_attempt_receipt",
+					s.drivers[0].Endpoint(),
+					fiscobcos.ErrEndpointDisagreement,
+				)
+			}
 			if len(journal.Attempts) >= 32 {
 				return model.STHAnchorResult{}, fmt.Errorf("%w: BCOS transaction attempt limit reached", ErrPermanent)
 			}
@@ -173,12 +187,36 @@ func (s *FISCOBCOSStandardSink) resumeAttemptJournal(
 		}
 
 		attempt := submissionFromJournal(last.Transaction)
-		receipt, err := s.drivers[0].GetReceiptWithProof(ctx, attempt)
-		switch {
-		case err == nil:
-			return s.completeObservedReceipt(ctx, sth, journal, rawJournal, lastIndex, receipt, checkpoint)
-		case !errors.Is(err, fiscobcos.ErrTransactionNotFound):
-			return model.STHAnchorResult{}, mapSinkError(ambiguousDriverFailure("recover_receipt", s.drivers[0].Endpoint(), err))
+		recoveredIndex, receipt, found, err := s.recoverRecordedReceipts(ctx, journal)
+		if err != nil {
+			return model.STHAnchorResult{}, mapSinkError(err)
+		}
+		if found {
+			if receipt.Status == fiscobcos.ReceiptStatusOK {
+				return s.completeObservedReceipt(ctx, sth, journal, rawJournal, recoveredIndex, receipt, checkpoint)
+			}
+			if recoveredIndex != lastIndex {
+				return model.STHAnchorResult{}, ambiguousDriverFailure(
+					"recover_nonfinal_terminal_receipt",
+					s.drivers[0].Endpoint(),
+					fiscobcos.ErrEndpointDisagreement,
+				)
+			}
+			next, cloneErr := cloneAttemptJournal(rawJournal)
+			if cloneErr != nil {
+				return model.STHAnchorResult{}, cloneErr
+			}
+			next.Revision++
+			next.Attempts[lastIndex].Outcome = fiscobcos.AttemptOutcomeReceiptTerminalRejected
+			next.Attempts[lastIndex].Submission = &fiscobcos.SubmissionObservation{
+				Status: int64(receipt.Status), StatusMessage: receipt.StatusMessage,
+				ObservedAtUnixN: s.clock().UTC().UnixNano(),
+			}
+			next.Attempts[lastIndex].Receipt = receiptObservation(receipt, next.Attempts[lastIndex].Submission.ObservedAtUnixN)
+			if _, checkpointErr := s.checkpointAttemptJournal(ctx, journal, rawJournal, next, checkpoint); checkpointErr != nil {
+				return model.STHAnchorResult{}, checkpointErr
+			}
+			return model.STHAnchorResult{}, fmt.Errorf("%w: BCOS transaction status %d", ErrPermanent, receipt.Status)
 		}
 
 		existing, err := s.readAnchorStateQuorum(ctx, request.Payload)
@@ -287,6 +325,14 @@ func (s *FISCOBCOSStandardSink) resumeAttemptJournal(
 				outcome.Status,
 			)
 		default:
+			var terminalReceipt *fiscobcos.AttemptReceiptObservation
+			if outcome.Status < 10000 {
+				receipt, receiptErr := s.readReceiptQuorum(ctx, attempt)
+				if receiptErr != nil {
+					return model.STHAnchorResult{}, mapSinkError(receiptErr)
+				}
+				terminalReceipt = receiptObservation(receipt, outcome.ObservedAtUnixN)
+			}
 			next, cloneErr := cloneAttemptJournal(rawJournal)
 			if cloneErr != nil {
 				return model.STHAnchorResult{}, cloneErr
@@ -294,6 +340,7 @@ func (s *FISCOBCOSStandardSink) resumeAttemptJournal(
 			next.Revision++
 			next.Attempts[lastIndex].Outcome = fiscobcos.AttemptOutcomeReceiptTerminalRejected
 			next.Attempts[lastIndex].Submission = submissionObservation(outcome)
+			next.Attempts[lastIndex].Receipt = terminalReceipt
 			if _, checkpointErr := s.checkpointAttemptJournal(ctx, journal, rawJournal, next, checkpoint); checkpointErr != nil {
 				return model.STHAnchorResult{}, checkpointErr
 			}
@@ -539,6 +586,96 @@ func receiptObservation(receipt fiscobcos.ReceiptWithProof, observedAt int64) *f
 		DecodedAnchorEvent:  append([]byte(nil), receipt.Evidence.DecodedAnchorEvent...),
 		ObservedAtUnixN:     observedAt,
 	}
+}
+
+// recoverRecordedReceipts examines every immutable transaction hash. A
+// restart must not let the journal's last element hide an earlier inclusion.
+func (s *FISCOBCOSStandardSink) recoverRecordedReceipts(
+	ctx context.Context,
+	journal fiscobcos.AttemptJournal,
+) (int, fiscobcos.ReceiptWithProof, bool, error) {
+	foundIndex := -1
+	var foundReceipt fiscobcos.ReceiptWithProof
+	for index := range journal.Attempts {
+		receipt, err := s.readReceiptQuorum(ctx, submissionFromJournal(journal.Attempts[index].Transaction))
+		if errors.Is(err, fiscobcos.ErrTransactionNotFound) {
+			continue
+		}
+		if err != nil {
+			return 0, fiscobcos.ReceiptWithProof{}, false, err
+		}
+		if foundIndex >= 0 {
+			return 0, fiscobcos.ReceiptWithProof{}, false, ambiguousDriverFailure(
+				"recover_receipts",
+				s.drivers[0].Endpoint(),
+				fiscobcos.ErrEndpointDisagreement,
+			)
+		}
+		foundIndex, foundReceipt = index, receipt
+	}
+	return foundIndex, foundReceipt, foundIndex >= 0, nil
+}
+
+func (s *FISCOBCOSStandardSink) readReceiptQuorum(
+	ctx context.Context,
+	attempt fiscobcos.TransactionSubmission,
+) (fiscobcos.ReceiptWithProof, error) {
+	quorum := int(s.trust.ReadQuorum)
+	notFound := 0
+	var selected fiscobcos.ReceiptWithProof
+	var selectedKey []byte
+	matches := 0
+	for _, driver := range s.drivers {
+		receipt, err := driver.GetReceiptWithProof(ctx, attempt)
+		if errors.Is(err, fiscobcos.ErrTransactionNotFound) {
+			notFound++
+			continue
+		}
+		if err != nil {
+			continue
+		}
+		key, err := receiptQuorumKey(receipt)
+		if err != nil {
+			return fiscobcos.ReceiptWithProof{}, ambiguousDriverFailure("recover_receipt", driver.Endpoint(), err)
+		}
+		if selectedKey == nil {
+			selected, selectedKey, matches = receipt, key, 1
+			continue
+		}
+		if !bytes.Equal(selectedKey, key) {
+			return fiscobcos.ReceiptWithProof{}, ambiguousDriverFailure(
+				"recover_receipt",
+				driver.Endpoint(),
+				fiscobcos.ErrEndpointDisagreement,
+			)
+		}
+		matches++
+	}
+	if matches >= quorum {
+		return selected, nil
+	}
+	if matches == 0 && notFound >= quorum {
+		return fiscobcos.ReceiptWithProof{}, fiscobcos.ErrTransactionNotFound
+	}
+	return fiscobcos.ReceiptWithProof{}, ambiguousDriverFailure(
+		"recover_receipt_quorum",
+		s.drivers[0].Endpoint(),
+		fiscobcos.ErrIncompleteChainEvidence,
+	)
+}
+
+func receiptQuorumKey(receipt fiscobcos.ReceiptWithProof) ([]byte, error) {
+	return cborx.Marshal(struct {
+		Status        int64                     `cbor:"status"`
+		StatusMessage string                    `cbor:"status_message"`
+		BlockNumber   uint64                    `cbor:"block_number"`
+		BlockHash     []byte                    `cbor:"block_hash"`
+		Evidence      fiscobcos.ReceiptEvidence `cbor:"evidence"`
+	}{
+		Status: int64(receipt.Status), StatusMessage: receipt.StatusMessage,
+		BlockNumber: receipt.BlockNumber, BlockHash: receipt.BlockHash,
+		Evidence: receipt.Evidence,
+	})
 }
 
 func cloneByteSlices(values [][]byte) [][]byte {
