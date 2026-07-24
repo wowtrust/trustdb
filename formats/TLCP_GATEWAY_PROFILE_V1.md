@@ -59,6 +59,27 @@ TrustDB also loads the profile and fails its own startup when its actual active
 proof signer overlaps the gateway server or readiness identities. The runtime
 manifest binds the complete TrustDB identity-manifest digest, proof descriptor,
 registry identity when present, and computed public keys.
+
+Static manifest validation is not an online identity assertion. When the
+boundary is enabled, `trustdb serve` also mounts the loopback-only
+`/.well-known/trustdb/tlcp-active-identities` endpoint. Every readiness
+invocation sends a fresh 256-bit nonce. The running proof signer signs that
+nonce together with the identity-manifest digest, complete proof identity, and
+the registry identity authenticated from the opened V2 registry. The gateway
+verifies the signature and requires every identity field to match its current
+manifest exactly. Certificate-only profile rotations can therefore be staged
+and canaried without changing TrustDB's proof identity. A copied response,
+stale or hand-written manifest, different proof signer, different registry
+root, or TrustDB process started without the TLCP boundary still fails
+readiness. The generated gateway returns `404` for this exact path instead of
+proxying it, so the signing endpoint remains reachable only inside the shared
+loopback namespace.
+
+`single_node_production` with loopback plaintext listeners is the sidecar
+deployment boundary and requires the TLCP profile, identity manifest, server
+public descriptor, and registry public descriptor when registry mode is
+active. Production deployments using TrustDB's native authenticated TLS
+listener do not claim this external TLCP profile.
 Gateway certificates, CAs, CRLs, keys, and readiness results never become
 proof trust roots. Proof, WAL, proofstore, backup, and offline verification
 bytes are unchanged.
@@ -173,14 +194,19 @@ validation, generation, and Tengine checking. It has no environment-controlled
 recursion flag. Machine-readable durations are emitted as whole seconds rounded
 up; any failure or expiry occurs before runtime promotion.
 
-The shipped readiness executable revalidates that manifest and every
-referenced public input on each probe, then performs, within the configured
-canary timeout:
+The shipped readiness executable starts one absolute canary deadline before
+its first runtime/profile read. After the bounded envelope read establishes the
+timeout, full runtime/profile validation runs in a child process owned by that
+deadline; a slow or stuck validator is terminated rather than receiving a new
+timeout afterward. It then performs all of the following before that same
+deadline:
 
-1. a real TLCP mutual-authentication handshake;
-2. an exact `NTLSv1.1` and cipher check;
-3. a proxied HTTP `/healthz` request;
-4. a proxied gRPC HTTP/2 health RPC.
+1. a fresh, signed active-identity challenge against the real loopback
+   `trustdb serve` process;
+2. a real TLCP mutual-authentication handshake;
+3. an exact `NTLSv1.1` and cipher check;
+4. a proxied HTTP `/healthz` request;
+5. a proxied gRPC HTTP/2 health RPC.
 
 It uses a dedicated least-privilege client dual certificate supplied through
 the four `TLCP_READINESS_*` variables. Both certificate paths must exactly

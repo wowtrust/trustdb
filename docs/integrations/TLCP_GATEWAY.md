@@ -41,6 +41,18 @@ registry identity, and normalized SPKI fingerprints into its runtime manifest.
 Pointing a profile at an unrelated `.pub` file can no longer create an
 authoritative proof-signing identity.
 
+The manifest alone is never sufficient for readiness. `trustdb serve` exposes
+a loopback-only active-identity challenge endpoint after completing this
+boundary. On every probe the gateway supplies a fresh random nonce and
+requires the running proof signer to sign the nonce, identity-manifest digest,
+and exact proof/registry identities. The registry value comes from the V2
+registry TrustDB actually opened and authenticated, not from the manifest
+file. Saved challenge responses, stale or hand-written manifests, a TrustDB
+process using another signer or registry, and a process started without TLCP
+binding all fail closed. Certificate-only profile rotations remain independently
+canaried by strict runtime validation. The gateway itself returns `404` for
+the challenge path rather than proxying it to external TLCP clients.
+
 Configure TrustDB with the same absolute paths visible in both containers:
 
 ```yaml
@@ -56,7 +68,9 @@ keys:
 If either `tlcp.*` value is set, both are mandatory. The profile's manifest
 path must be byte-for-byte identical to `tlcp.identity_manifest`. The public
 manifest is mode `0644`; no signer location, credential reference, or private
-key byte is serialized.
+key byte is serialized. A `single_node_production` deployment using the
+explicit loopback-plaintext exception must configure this TLCP boundary;
+native TrustDB mTLS production listeners remain a separate transport mode.
 
 ## Deployment boundary
 
@@ -126,14 +140,19 @@ Do not use a listener-only TCP check. A gateway becomes ready only after a
 credentialed probe has completed all of the following within the profile's
 `canary` bound:
 
-1. revalidate the profile, its exact image digest, generated configuration,
+1. start one absolute `canary` deadline before the first validation and
+   run the full runtime validator in a deadline-owned child process, then
+   revalidate the profile, its exact image digest, generated configuration,
    runtime-manifest digest bindings, certificate roles/chains/SAN/current
    validity, CRL files and exact runtime bundle, provider references, mandatory
    proof-key separation, and public-key fingerprints;
-2. complete TLCP mutual authentication and require `NTLSv1.1`;
-3. require `ECDHE-SM2-SM4-GCM-SM3`;
-4. call TrustDB's HTTP `/healthz` through the gateway;
-5. call `grpc.health.v1.Health/Check` through HTTP/2 and require `SERVING`.
+2. send a fresh 256-bit nonce to the real loopback TrustDB process and verify
+   its signed active proof signer, authenticated registry identity, and
+   identity-manifest digest;
+3. complete TLCP mutual authentication and require `NTLSv1.1`;
+4. require `ECDHE-SM2-SM4-GCM-SM3`;
+5. call TrustDB's HTTP `/healthz` through the gateway;
+6. call `grpc.health.v1.Health/Check` through HTTP/2 and require `SERVING`.
 
 Failure of any step keeps the deployment unready. The probe credential is a
 dedicated least-privilege client dual certificate; it is not a TrustDB
