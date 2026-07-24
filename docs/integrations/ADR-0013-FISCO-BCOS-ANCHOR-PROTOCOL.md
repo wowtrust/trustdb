@@ -154,9 +154,10 @@ Certificate pins remain a local transport control rather than part of offline bl
 - the successful transaction hash;
 - raw canonical receipt, receipt hash, transaction/receipt indexes and Merkle paths, log index, and decoded anchor event;
 - raw canonical block header, block hash, and block number;
-- PBFT view, round, and unique validator-node signatures.
+- unique block validator-node signatures. A live PBFT view is not persisted as
+  block evidence, because the SDK cannot bind that RPC value to the block.
 
-The schema has bounded counts and byte sizes and rejects duplicate transaction hashes and duplicate finality signers. Structural validation reconstructs the official receipt and block-header Hashable preimages and recomputes their Keccak-256 or SM3 hashes. It still does not treat the decoded event, Merkle paths, PBFT signatures, or claimed context as trusted; follow-up issues verify those semantic and finality bindings.
+The schema has bounded counts and byte sizes and rejects duplicate transaction hashes and duplicate finality signers. Structural validation reconstructs the official `data.writeTo(output)` TARS bytes from `TransactionReceipt.tars` and `Block.tars`, then recomputes their Keccak-256 or SM3 hashes. It still does not treat the decoded event, Merkle paths, PBFT signatures, or claimed context as trusted; follow-up issues verify those semantic and finality bindings.
 
 `STHAnchorResult` retains its current outer schema. For the `fisco-bcos` sink:
 

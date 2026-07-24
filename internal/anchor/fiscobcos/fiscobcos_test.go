@@ -570,7 +570,7 @@ func testProof(t *testing.T, config TrustConfig, payload []byte, _ model.SignedT
 			ReceiptProof: [][]byte{sequenceBytes(0x82, 32)}, AnchorLogIndex: 0, DecodedAnchorEvent: []byte("canonical-anchor-event"),
 		},
 		Block: BlockEvidence{Fields: blockFields, RawCanonicalHeader: rawHeader, BlockHash: blockHash, BlockNumber: 4200},
-		Finality: FinalityEvidence{View: 9, Round: 2, Signatures: []CommitSignature{
+		Finality: FinalityEvidence{Signatures: []CommitSignature{
 			{ValidatorNodeID: "validator-a", Signature: sequenceBytes(0xb1, 64)},
 			{ValidatorNodeID: "validator-b", Signature: sequenceBytes(0xb2, 64)},
 			{ValidatorNodeID: "validator-c", Signature: sequenceBytes(0xb3, 64)},

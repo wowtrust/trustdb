@@ -12,15 +12,20 @@ import (
 
 const (
 	MaxProofBytes          = 16 << 20
+	MaxMerklePathNodes     = 512
+	MaxCanonicalLogs       = 512
+	MaxProofNodeBytes      = 128 << 10
+	MaxCommitSignatures    = 1024
+	MaxSignatureBytes      = 1024
 	maxTransactionAttempts = 32
-	maxMerklePathNodes     = 512
-	maxCommitSignatures    = 1024
+	maxMerklePathNodes     = MaxMerklePathNodes
+	maxCommitSignatures    = MaxCommitSignatures
 	maxRawTransactionBytes = 4 << 20
 	maxRawReceiptBytes     = 4 << 20
 	maxRawHeaderBytes      = 2 << 20
 	maxDecodedEventBytes   = 1 << 20
-	maxProofNodeBytes      = 128 << 10
-	maxSignatureBytes      = 1024
+	maxProofNodeBytes      = MaxProofNodeBytes
+	maxSignatureBytes      = MaxSignatureBytes
 )
 
 type TransactionAttempt struct {
@@ -68,8 +73,6 @@ type CommitSignature struct {
 }
 
 type FinalityEvidence struct {
-	View       uint64            `cbor:"view" json:"view"`
-	Round      uint64            `cbor:"round" json:"round"`
 	Signatures []CommitSignature `cbor:"signatures" json:"signatures"`
 }
 

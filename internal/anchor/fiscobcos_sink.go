@@ -174,12 +174,13 @@ func (s *FISCOBCOSStandardSink) Publish(ctx context.Context, sth model.SignedTre
 
 func (s *FISCOBCOSStandardSink) readAnchorStateQuorum(ctx context.Context, payload fiscobcos.AnchorPayload) (bool, error) {
 	var first fiscobcos.AnchorRecord
-	for index, driver := range s.drivers {
+	successes := 0
+	for _, driver := range s.drivers {
 		record, err := driver.ReadAnchor(ctx, payload.AnchorID)
 		if err != nil {
-			return false, classifyDriverFailure("read_anchor_before_submit", driver.Endpoint(), err)
+			continue
 		}
-		if index == 0 {
+		if successes == 0 {
 			first = cloneAnchorRecord(record)
 		} else if !sameAnchorRecord(first, record) {
 			return false, transientDriverFailure("read_anchor_before_submit", driver.Endpoint(), fiscobcos.ErrEndpointDisagreement)
@@ -192,6 +193,10 @@ func (s *FISCOBCOSStandardSink) readAnchorStateQuorum(ctx context.Context, paylo
 			len(record.SignedSTHDigest) != 0 || len(record.Publisher) != 0 || record.PayloadVersion != 0 {
 			return false, permanentDriverFailure("read_anchor_before_submit", driver.Endpoint(), fiscobcos.ErrDriverInvalid)
 		}
+		successes++
+	}
+	if successes < int(s.trust.ReadQuorum) {
+		return false, ambiguousDriverFailure("read_anchor_before_submit", s.drivers[0].Endpoint(), fiscobcos.ErrIncompleteChainEvidence)
 	}
 	return first.Exists, nil
 }
@@ -287,7 +292,7 @@ func (s *FISCOBCOSStandardSink) readAnchorQuorum(ctx context.Context, payload fi
 	for _, driver := range s.drivers {
 		record, err := driver.ReadAnchor(ctx, payload.AnchorID)
 		if err != nil {
-			return nil, ambiguousDriverFailure("read_anchor", driver.Endpoint(), err)
+			continue
 		}
 		if len(records) > 0 && !sameAnchorRecord(records[0], record) {
 			return nil, ambiguousDriverFailure("read_anchor", driver.Endpoint(), fiscobcos.ErrEndpointDisagreement)
@@ -300,32 +305,38 @@ func (s *FISCOBCOSStandardSink) readAnchorQuorum(ctx context.Context, payload fi
 		}
 		records = append(records, cloneAnchorRecord(record))
 	}
+	if len(records) < int(s.trust.ReadQuorum) {
+		return nil, ambiguousDriverFailure("read_anchor", s.drivers[0].Endpoint(), fiscobcos.ErrIncompleteChainEvidence)
+	}
 	return records, nil
 }
 
 func (s *FISCOBCOSStandardSink) readBlockQuorum(ctx context.Context, blockNumber uint64, blockHash []byte) (fiscobcos.BlockHeader, fiscobcos.ConsensusSnapshot, error) {
 	var selectedHeader fiscobcos.BlockHeader
 	var selectedConsensus fiscobcos.ConsensusSnapshot
-	for index, driver := range s.drivers {
+	successes := 0
+	for _, driver := range s.drivers {
 		header, err := driver.GetBlockHeader(ctx, blockNumber)
 		if err != nil {
-			return fiscobcos.BlockHeader{}, fiscobcos.ConsensusSnapshot{}, ambiguousDriverFailure("get_block_header", driver.Endpoint(), err)
+			continue
 		}
 		consensus, err := driver.GetConsensusSnapshot(ctx, blockNumber)
 		if err != nil {
-			return fiscobcos.BlockHeader{}, fiscobcos.ConsensusSnapshot{}, ambiguousDriverFailure("get_consensus_snapshot", driver.Endpoint(), err)
+			continue
 		}
 		if err := validateBlockObservation(blockNumber, blockHash, s.trust.ChainHashAlgorithm, header, consensus); err != nil {
 			return fiscobcos.BlockHeader{}, fiscobcos.ConsensusSnapshot{}, ambiguousDriverFailure("read_block", driver.Endpoint(), err)
 		}
-		if index == 0 {
+		if successes == 0 {
 			selectedHeader = cloneBlockHeader(header)
 			selectedConsensus = cloneConsensus(consensus)
-			continue
-		}
-		if !sameBlockHeader(selectedHeader, header) || !sameConsensusSnapshot(selectedConsensus, consensus) {
+		} else if !sameBlockHeader(selectedHeader, header) || !sameConsensusSnapshot(selectedConsensus, consensus) {
 			return fiscobcos.BlockHeader{}, fiscobcos.ConsensusSnapshot{}, ambiguousDriverFailure("read_block", driver.Endpoint(), fiscobcos.ErrEndpointDisagreement)
 		}
+		successes++
+	}
+	if successes < int(s.trust.ReadQuorum) {
+		return fiscobcos.BlockHeader{}, fiscobcos.ConsensusSnapshot{}, ambiguousDriverFailure("read_block", s.drivers[0].Endpoint(), fiscobcos.ErrIncompleteChainEvidence)
 	}
 	return selectedHeader, selectedConsensus, nil
 }
@@ -500,8 +511,6 @@ func sameByteSlices(left, right [][]byte) bool {
 
 func sameConsensusSnapshot(left, right fiscobcos.ConsensusSnapshot) bool {
 	if left.BlockNumber != right.BlockNumber || !bytes.Equal(left.BlockHash, right.BlockHash) ||
-		left.Finality.View != right.Finality.View ||
-		left.Finality.Round != right.Finality.Round ||
 		len(left.Finality.Signatures) != len(right.Finality.Signatures) {
 		return false
 	}

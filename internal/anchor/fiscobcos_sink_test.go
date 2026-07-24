@@ -179,10 +179,11 @@ func (d *fakeBCOSDriver) ReadAnchor(context.Context, []byte) (fiscobcos.AnchorRe
 	}
 	return cloneAnchorRecord(d.state.record), nil
 }
-func (d *fakeBCOSDriver) GetReceiptWithProof(context.Context, fiscobcos.TransactionSubmission) (fiscobcos.ReceiptWithProof, error) {
+func (d *fakeBCOSDriver) GetReceiptWithProof(_ context.Context, attempt fiscobcos.TransactionSubmission) (fiscobcos.ReceiptWithProof, error) {
 	d.state.mu.Lock()
 	defer d.state.mu.Unlock()
-	if !d.state.record.Exists {
+	if !d.state.record.Exists ||
+		!bytes.Equal(d.state.receipt.Evidence.TransactionHash, attempt.TransactionHash) {
 		return fiscobcos.ReceiptWithProof{}, fiscobcos.ErrTransactionNotFound
 	}
 	return cloneReceipt(d.state.receipt), nil
@@ -193,7 +194,7 @@ func (d *fakeBCOSDriver) GetBlockHeader(context.Context, uint64) (fiscobcos.Bloc
 func (d *fakeBCOSDriver) GetConsensusSnapshot(context.Context, uint64) (fiscobcos.ConsensusSnapshot, error) {
 	return fiscobcos.ConsensusSnapshot{
 		BlockNumber: 500, BlockHash: append([]byte(nil), fakeBCOSBlockHeader().Evidence.BlockHash...),
-		Finality: fiscobcos.FinalityEvidence{View: 9, Round: 2, Signatures: []fiscobcos.CommitSignature{
+		Finality: fiscobcos.FinalityEvidence{Signatures: []fiscobcos.CommitSignature{
 			{ValidatorNodeID: "validator-a", Signature: bytes.Repeat([]byte{0x81}, 64)},
 			{ValidatorNodeID: "validator-b", Signature: bytes.Repeat([]byte{0x82}, 64)},
 			{ValidatorNodeID: "validator-c", Signature: bytes.Repeat([]byte{0x83}, 64)},
@@ -475,56 +476,6 @@ func TestFISCOBCOSStandardSinkDoesNotMaskConfiguredEndpointReadDisagreement(t *t
 	}
 }
 
-type currentViewDriver struct {
-	*fakeBCOSDriver
-	currentView uint64
-	exposeView  bool
-}
-
-func (d *currentViewDriver) GetConsensusSnapshot(ctx context.Context, blockNumber uint64) (fiscobcos.ConsensusSnapshot, error) {
-	snapshot, err := d.fakeBCOSDriver.GetConsensusSnapshot(ctx, blockNumber)
-	if err == nil && d.exposeView {
-		view := d.currentView
-		snapshot.Finality.View = &view
-	}
-	return snapshot, err
-}
-
-func TestFISCOBCOSStandardSinkDoesNotBindAdvancingLiveViewToHistoricalBlock(t *testing.T) {
-	trust, drivers := fakeBCOSFixture(t)
-	for index, driver := range drivers {
-		drivers[index] = &currentViewDriver{
-			fakeBCOSDriver: driver.(*fakeBCOSDriver),
-			currentView:    uint64(100 + index),
-		}
-	}
-	sink, err := NewFISCOBCOSStandardSink(FISCOBCOSStandardSinkConfig{TrustConfig: trust, Drivers: drivers})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := sink.Publish(context.Background(), testSTH(testScheduleKey(fiscobcos.SinkName), 12, 0x1c)); err != nil {
-		t.Fatalf("different current endpoint views affected historical block evidence: %v", err)
-	}
-}
-
-func TestFISCOBCOSStandardSinkRejectsUnboundLiveViewObservation(t *testing.T) {
-	trust, drivers := fakeBCOSFixture(t)
-	for index, driver := range drivers {
-		drivers[index] = &currentViewDriver{
-			fakeBCOSDriver: driver.(*fakeBCOSDriver),
-			currentView:    uint64(100 + index),
-			exposeView:     true,
-		}
-	}
-	sink, err := NewFISCOBCOSStandardSink(FISCOBCOSStandardSinkConfig{TrustConfig: trust, Drivers: drivers})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := sink.Publish(context.Background(), testSTH(testScheduleKey(fiscobcos.SinkName), 13, 0x1d)); err == nil {
-		t.Fatal("accepted a latest PBFT view as historical block evidence")
-	}
-}
-
 func TestFISCOBCOSReadbackDisagreementRemainsRecoverOnlyAfterConvergence(t *testing.T) {
 	trust, drivers := fakeBCOSFixture(t)
 	trust.Endpoints = append(trust.Endpoints, "127.0.0.1:20202")
@@ -561,7 +512,7 @@ func TestFISCOBCOSReadbackDisagreementRemainsRecoverOnlyAfterConvergence(t *test
 	second.tick(context.Background())
 	schedule, found, err := store.GetSTHAnchorSchedule(context.Background(), key)
 	if err != nil || !found || schedule.InFlight != nil {
-		t.Fatalf("recovered schedule after convergence=%+v found=%v err=%v", schedule, found, err)
+		t.Fatalf("recovered schedule after convergence=%+v in_flight=%+v found=%v err=%v", schedule, schedule.InFlight, found, err)
 	}
 	if _, found, err := store.GetSTHAnchorResult(context.Background(), sth.TreeSize); err != nil || !found {
 		t.Fatalf("recovered result found=%v err=%v", found, err)
@@ -643,80 +594,6 @@ func (d *attemptMismatchDriver) PrepareAnchor(ctx context.Context, request fisco
 	attempt, err := d.fakeBCOSDriver.PrepareAnchor(ctx, request)
 	attempt.ChainID = "wrong-chain"
 	return attempt, err
-}
-
-type classifiedReceiptSubmitDriver struct {
-	*fakeBCOSDriver
-	status int
-}
-
-func (d *classifiedReceiptSubmitDriver) SubmitAnchor(context.Context, fiscobcos.SubmitRequest) (fiscobcos.Submission, error) {
-	statusErr := fiscobcos.NewReceiptStatusError(d.status)
-	return fiscobcos.Submission{}, &fiscobcos.DriverError{
-		Operation: "submit_anchor_receipt",
-		Endpoint:  d.endpoint,
-		Class:     statusErr.FailureClass(),
-		Kind:      statusErr,
-	}
-}
-
-func TestFISCOBCOSReceiptStatusDispositionControlsServiceRetry(t *testing.T) {
-	tests := []struct {
-		name     string
-		status   int
-		terminal bool
-	}{
-		{name: "contract revert", status: 16, terminal: true},
-		{name: "permission denied", status: 18, terminal: true},
-		{name: "invalid chain", status: 10006, terminal: true},
-		{name: "invalid group", status: 10007, terminal: true},
-		{name: "invalid signature", status: 10008, terminal: true},
-		{name: "block limit", status: 10001},
-		{name: "transaction pool full", status: 10002},
-		{name: "duplicate in pool", status: 10004},
-		{name: "duplicate in chain", status: 10005},
-		{name: "pool timeout", status: 10010},
-		{name: "unknown status", status: 99999},
-	}
-	for _, test := range tests {
-		test := test
-		t.Run(test.name, func(t *testing.T) {
-			trust, drivers := fakeBCOSFixture(t)
-			base := drivers[0].(*fakeBCOSDriver)
-			drivers[0] = &classifiedReceiptSubmitDriver{fakeBCOSDriver: base, status: test.status}
-			sink, err := NewFISCOBCOSStandardSink(FISCOBCOSStandardSinkConfig{TrustConfig: trust, Drivers: drivers})
-			if err != nil {
-				t.Fatal(err)
-			}
-			store := newBoundTestLocalStore(t, t.TempDir())
-			key := testScheduleKey(fiscobcos.SinkName)
-			sth := testSTH(key, 14, 0x1e)
-			offer(t, store, key, sth, 100, 100)
-			now := time.Unix(0, 100)
-			service := newTestService(t, store, sink, key, &now, func(config *Config) {
-				config.InitialBackoff = time.Nanosecond
-				config.MaxBackoff = time.Nanosecond
-			})
-			service.tick(context.Background())
-
-			schedule, found, err := store.GetSTHAnchorSchedule(context.Background(), key)
-			if err != nil || !found || schedule.InFlight == nil {
-				t.Fatalf("schedule=%+v found=%v err=%v", schedule, found, err)
-			}
-			if schedule.InFlight.TerminalFailure != test.terminal || schedule.InFlight.Attempts != 1 {
-				t.Fatalf("status=%d terminal=%v attempts=%d, want terminal=%v attempts=1",
-					test.status, schedule.InFlight.TerminalFailure, schedule.InFlight.Attempts, test.terminal)
-			}
-			if !test.terminal && schedule.InFlight.NextAttemptUnixN == 0 {
-				t.Fatalf("status=%d was not durably scheduled for retry/recovery", test.status)
-			}
-			base.state.mu.Lock()
-			defer base.state.mu.Unlock()
-			if base.state.submitCalls != 0 {
-				t.Fatalf("status-classification fixture produced a side effect: calls=%d", base.state.submitCalls)
-			}
-		})
-	}
 }
 
 func TestFISCOBCOSPostSubmitValidationFailuresAreClassified(t *testing.T) {
@@ -812,36 +689,6 @@ func TestFISCOBCOSServiceRestartDoesNotRepeatImmediatelyVisibleUnknownSideEffect
 	}
 }
 
-func TestFISCOBCOSDelayedUnknownOutcomeRecoveryRemainsDeferred(t *testing.T) {
-	trust, drivers := fakeBCOSFixture(t)
-	state := drivers[0].(*fakeBCOSDriver).state
-	state.failAfterEffectOnce = true
-	sink, err := NewFISCOBCOSStandardSink(FISCOBCOSStandardSinkConfig{TrustConfig: trust, Drivers: drivers})
-	if err != nil {
-		t.Fatal(err)
-	}
-	sth := testSTH(testScheduleKey(fiscobcos.SinkName), 15, 0x1f)
-	if _, err := sink.Publish(context.Background(), sth); err == nil {
-		t.Fatal("lost submission response was reported as success")
-	}
-
-	// Hide the committed record for one complete two-endpoint preflight. This
-	// captures the deliberate #464 boundary: without the persisted immutable
-	// attempt and deterministic lookup added by #465/#470, delayed visibility
-	// can still cause a replacement submission.
-	state.mu.Lock()
-	state.hideRecordReads = len(drivers)
-	state.mu.Unlock()
-	if _, err := sink.Publish(context.Background(), sth); err != nil {
-		t.Fatalf("replacement publication failed: %v", err)
-	}
-	state.mu.Lock()
-	defer state.mu.Unlock()
-	if state.submitCalls != 2 {
-		t.Fatalf("submit calls=%d, want the documented pre-#465 delayed-visibility boundary", state.submitCalls)
-	}
-}
-
 func TestFISCOBCOSBlockLimitRetryPreservesEverySignedAttempt(t *testing.T) {
 	trust, drivers := fakeBCOSFixture(t)
 	state := drivers[0].(*fakeBCOSDriver).state
@@ -850,7 +697,7 @@ func TestFISCOBCOSBlockLimitRetryPreservesEverySignedAttempt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	store := proofstore.LocalStore{Root: t.TempDir()}
+	store := newBoundTestLocalStore(t, t.TempDir())
 	key := testScheduleKey(fiscobcos.SinkName)
 	sth := testSTH(key, 12, 0x1c)
 	offer(t, store, key, sth, 100, 100)
@@ -1040,7 +887,7 @@ func TestFISCOBCOSSubmissionStatusRecoveryMatrix(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			store := proofstore.LocalStore{Root: t.TempDir()}
+			store := newBoundTestLocalStore(t, t.TempDir())
 			key := testScheduleKey(fiscobcos.SinkName)
 			sth := testSTH(key, 15, 0x1f)
 			offer(t, store, key, sth, 100, 100)

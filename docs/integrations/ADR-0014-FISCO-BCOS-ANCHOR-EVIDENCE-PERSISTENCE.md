@@ -147,7 +147,8 @@ The completed `AnchorProof v2` contains:
 - every canonical receipt log plus the exact decoded `AnchorPublished` event;
 - transaction and receipt indexes and native Merkle proof nodes;
 - canonical block header bytes, block number, and block hash;
-- PBFT view, round, and unique commit signatures.
+- the block's unique validator signatures. The SDK's live PBFT-view RPC is
+  deliberately excluded because it is not a block-specific observation.
 
 The exact event must bind contract address, anchor ID, stream ID, TreeSize,
 RootHash, Signed STH digest, publisher, payload version, log index, and the
@@ -161,8 +162,10 @@ finality from verifier-local trust roots, this proof remains
 ## Canonical encodings
 
 The pinned standard SDK's Go structs and normalized JSON are RPC observations,
-not canonical native evidence. The driver must expose independently named
-native encoders for:
+not canonical native evidence. Receipt and header preimages are the exact
+`data.writeTo(output)` TARS bytes defined by upstream
+`TransactionReceipt.tars` and `Block.tars`; no field concatenation is accepted.
+The driver must expose independently named native encoders for:
 
 - signed transaction bytes;
 - receipt bytes covered by the receipt hash;

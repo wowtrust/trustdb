@@ -305,6 +305,11 @@ func (d *nativeDriver) ReadAnchor(ctx context.Context, anchorID []byte) (fiscobc
 }
 
 func (d *nativeDriver) GetReceiptWithProof(ctx context.Context, attempt fiscobcos.TransactionSubmission) (fiscobcos.ReceiptWithProof, error) {
+	// Recovery consumes persisted, untrusted bytes. Decode the signed
+	// transaction again and rebind every field before using its hash in RPC.
+	if err := validatePreparedSubmission(attempt, d.trust, d.sender, d.publicKey); err != nil {
+		return fiscobcos.ReceiptWithProof{}, err
+	}
 	hash, err := strictHash(attempt.TransactionHash)
 	if err != nil {
 		return fiscobcos.ReceiptWithProof{}, err
@@ -342,23 +347,58 @@ func (d *nativeDriver) GetReceiptWithProof(ctx context.Context, attempt fiscobco
 	if err != nil {
 		return fiscobcos.ReceiptWithProof{}, err
 	}
-	event, err := decodeAnchorEvent(receipt, d.trust.Contract)
-	if err != nil {
-		return fiscobcos.ReceiptWithProof{}, err
+	var event fiscobcos.AnchorPublishedEvent
+	if receipt.Status == types.Success {
+		event, err = decodeAnchorEvent(receipt, d.trust.Contract)
+		if err != nil {
+			return fiscobcos.ReceiptWithProof{}, err
+		}
 	}
 	if receipt.Version > math.MaxInt32 || receipt.Status < math.MinInt32 || receipt.Status > math.MaxInt32 {
+		return fiscobcos.ReceiptWithProof{}, fiscobcos.ErrIncompleteChainEvidence
+	}
+	if !encodedHexFits(receipt.Output, fiscobcos.MaxNativeEvidenceFieldBytes) {
 		return fiscobcos.ReceiptWithProof{}, fiscobcos.ErrIncompleteChainEvidence
 	}
 	output, err := decodeHex(receipt.Output)
 	if err != nil {
 		return fiscobcos.ReceiptWithProof{}, fiscobcos.ErrIncompleteChainEvidence
 	}
+	if len(receipt.Logs) > fiscobcos.MaxCanonicalLogs {
+		return fiscobcos.ReceiptWithProof{}, fiscobcos.ErrIncompleteChainEvidence
+	}
+	receiptAggregate := len(output)
+	for _, log := range receipt.Logs {
+		if log == nil ||
+			!encodedHexFits(log.Address, 20) ||
+			!encodedHexFits(log.Data, fiscobcos.MaxProofNodeBytes) ||
+			len(log.Topics) > fiscobcos.MaxNativeEvidenceItems {
+			return fiscobcos.ReceiptWithProof{}, fiscobcos.ErrIncompleteChainEvidence
+		}
+		receiptAggregate += decodedHexLength(log.Address) + decodedHexLength(log.Data)
+		for _, topic := range log.Topics {
+			if !encodedHexFits(topic, 32) {
+				return fiscobcos.ReceiptWithProof{}, fiscobcos.ErrIncompleteChainEvidence
+			}
+			receiptAggregate += 32
+		}
+		if receiptAggregate > fiscobcos.MaxReceiptAggregate {
+			return fiscobcos.ReceiptWithProof{}, fiscobcos.ErrIncompleteChainEvidence
+		}
+	}
 	nativeLogs := make([]fiscobcos.NativeLogFields, len(receipt.Logs))
 	for index, log := range receipt.Logs {
 		if log == nil {
 			return fiscobcos.ReceiptWithProof{}, fiscobcos.ErrIncompleteChainEvidence
 		}
+		if !encodedHexFits(log.Address, 20) ||
+			!encodedHexFits(log.Data, fiscobcos.MaxNativeEvidenceFieldBytes) {
+			return fiscobcos.ReceiptWithProof{}, fiscobcos.ErrIncompleteChainEvidence
+		}
 		if _, err := strictHexBytes(log.Address, 20); err != nil {
+			return fiscobcos.ReceiptWithProof{}, fiscobcos.ErrIncompleteChainEvidence
+		}
+		if len(log.Topics) > fiscobcos.MaxNativeEvidenceItems {
 			return fiscobcos.ReceiptWithProof{}, fiscobcos.ErrIncompleteChainEvidence
 		}
 		topics := make([][]byte, len(log.Topics))
@@ -397,12 +437,15 @@ func (d *nativeDriver) GetReceiptWithProof(ctx context.Context, attempt fiscobco
 	if err != nil {
 		return fiscobcos.ReceiptWithProof{}, err
 	}
-	record := fiscobcos.AnchorRecord{
-		StreamID: append([]byte(nil), event.StreamID...), TreeSize: event.TreeSize,
-		RootHash:        append([]byte(nil), event.RootHash...),
-		SignedSTHDigest: append([]byte(nil), event.SignedSTHDigest...),
-		Publisher:       append([]byte(nil), event.Publisher...),
-		PayloadVersion:  event.PayloadVersion, Exists: true,
+	var record fiscobcos.AnchorRecord
+	if receipt.Status == types.Success {
+		record = fiscobcos.AnchorRecord{
+			StreamID: append([]byte(nil), event.StreamID...), TreeSize: event.TreeSize,
+			RootHash:        append([]byte(nil), event.RootHash...),
+			SignedSTHDigest: append([]byte(nil), event.SignedSTHDigest...),
+			Publisher:       append([]byte(nil), event.Publisher...),
+			PayloadVersion:  event.PayloadVersion, Exists: true,
+		}
 	}
 	rawReceipt, err := json.Marshal(receipt)
 	if err != nil {
@@ -430,9 +473,12 @@ func (d *nativeDriver) GetReceiptWithProof(ctx context.Context, attempt fiscobco
 	if err != nil {
 		return fiscobcos.ReceiptWithProof{}, err
 	}
-	decodedEvent, err := fiscobcos.MarshalNativeAnchorEvent(event)
-	if err != nil {
-		return fiscobcos.ReceiptWithProof{}, err
+	var decodedEvent []byte
+	if receipt.Status == types.Success {
+		decodedEvent, err = fiscobcos.MarshalNativeAnchorEvent(event)
+		if err != nil {
+			return fiscobcos.ReceiptWithProof{}, err
+		}
 	}
 	return fiscobcos.ReceiptWithProof{
 		Status: receipt.Status, StatusMessage: boundedReceiptStatus(receipt.Status),
@@ -497,6 +543,11 @@ func (d *nativeDriver) GetBlockHeader(ctx context.Context, blockNumber uint64) (
 	if err != nil {
 		return fiscobcos.BlockHeader{}, err
 	}
+	if len(block.ParentInfo) > fiscobcos.MaxNativeEvidenceItems ||
+		len(block.SealerList) > fiscobcos.MaxNativeEvidenceItems ||
+		len(block.ConsensusWeights) > fiscobcos.MaxNativeEvidenceItems {
+		return fiscobcos.BlockHeader{}, fiscobcos.ErrIncompleteChainEvidence
+	}
 	parents := make([]fiscobcos.NativeParentInfo, len(block.ParentInfo))
 	for index, parent := range block.ParentInfo {
 		number, err := fiscobcos.Uint64ToConsensusInt64(parent.BlockNumber)
@@ -523,10 +574,16 @@ func (d *nativeDriver) GetBlockHeader(ctx context.Context, blockNumber uint64) (
 	}
 	sealerList := make([][]byte, len(block.SealerList))
 	for index, nodeID := range block.SealerList {
+		if !encodedHexFits(nodeID, fiscobcos.MaxNativeEvidenceFieldBytes) {
+			return fiscobcos.BlockHeader{}, fiscobcos.ErrIncompleteChainEvidence
+		}
 		sealerList[index], err = decodeHex(nodeID)
 		if err != nil || len(sealerList[index]) == 0 {
 			return fiscobcos.BlockHeader{}, fiscobcos.ErrIncompleteChainEvidence
 		}
+	}
+	if !encodedHexFits(block.ExtraData, fiscobcos.MaxNativeEvidenceFieldBytes) {
+		return fiscobcos.BlockHeader{}, fiscobcos.ErrIncompleteChainEvidence
 	}
 	extraData, err := decodeHex(block.ExtraData)
 	if err != nil {
@@ -611,9 +668,16 @@ func (d *nativeDriver) GetConsensusSnapshot(ctx context.Context, blockNumber uin
 	if err != nil {
 		return fiscobcos.ConsensusSnapshot{}, err
 	}
+	if len(block.SignatureList) > fiscobcos.MaxCommitSignatures ||
+		len(block.SealerList) > fiscobcos.MaxNativeEvidenceItems {
+		return fiscobcos.ConsensusSnapshot{}, fiscobcos.ErrIncompleteChainEvidence
+	}
 	signatures := make([]fiscobcos.CommitSignature, 0, len(block.SignatureList))
 	for _, signature := range block.SignatureList {
 		if signature.SealerIndex >= uint64(len(block.SealerList)) {
+			return fiscobcos.ConsensusSnapshot{}, fiscobcos.ErrIncompleteChainEvidence
+		}
+		if len(block.SealerList[signature.SealerIndex]) > 4096 {
 			return fiscobcos.ConsensusSnapshot{}, fiscobcos.ErrIncompleteChainEvidence
 		}
 		value, err := decodeHexBounded(signature.Signature, maxSDKSignatureBytes)
@@ -1018,6 +1082,17 @@ func decodeProofNodes(values []string) ([][]byte, error) {
 	if values == nil || len(values) > maxSDKProofNodes {
 		return nil, fiscobcos.ErrIncompleteChainEvidence
 	}
+	aggregate := 0
+	for _, value := range values {
+		// Hex expands one proof node to at most twice its decoded size plus 0x.
+		if len(value) > fiscobcos.MaxProofNodeBytes*2+2 {
+			return nil, fiscobcos.ErrIncompleteChainEvidence
+		}
+		aggregate += decodedHexLength(value)
+		if aggregate > fiscobcos.MaxReceiptAggregate {
+			return nil, fiscobcos.ErrIncompleteChainEvidence
+		}
+	}
 	out := make([][]byte, len(values))
 	for i, value := range values {
 		decoded, err := decodeHexBounded(value, maxSDKProofNodeBytes)
@@ -1234,6 +1309,22 @@ func validateHexText(value string, decodedLimit int, allowEmpty bool) error {
 		}
 	}
 	return nil
+}
+
+func encodedHexFits(value string, decodedLimit int) bool {
+	encodedLength := len(value)
+	if strings.HasPrefix(value, "0x") || strings.HasPrefix(value, "0X") {
+		encodedLength -= 2
+	}
+	return encodedLength >= 0 && encodedLength <= decodedLimit*2
+}
+
+func decodedHexLength(value string) int {
+	value = strings.TrimSpace(value)
+	if strings.HasPrefix(value, "0x") || strings.HasPrefix(value, "0X") {
+		value = value[2:]
+	}
+	return len(value) / 2
 }
 
 func parseEndpoint(endpoint string) (string, int, error) {

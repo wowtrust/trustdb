@@ -1,11 +1,11 @@
 package fiscobcos
 
 import (
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"math"
 
+	"github.com/TarsCloud/TarsGo/tars/protocol/codec"
 	"github.com/emmansun/gmsm/sm3"
 	"golang.org/x/crypto/sha3"
 
@@ -15,6 +15,10 @@ import (
 const (
 	maxNativeEvidenceFieldBytes = 4 << 20
 	maxNativeEvidenceItems      = 4096
+	// MaxNativeEvidenceItems is the allocation guard used by SDK adapters
+	// before materializing RPC-provided repeated fields.
+	MaxNativeEvidenceItems      = maxNativeEvidenceItems
+	MaxNativeEvidenceFieldBytes = maxNativeEvidenceFieldBytes
 )
 
 // NativeReceiptFields mirrors the fields consumed by the official
@@ -22,14 +26,13 @@ const (
 // independent of RPC/SDK structs so JSON serialization can never become a
 // consensus preimage by accident.
 type NativeReceiptFields struct {
-	Version           int32             `cbor:"version" json:"version"`
-	GasUsed           string            `cbor:"gas_used" json:"gas_used"`
-	ContractAddress   string            `cbor:"contract_address" json:"contract_address"`
-	Status            int32             `cbor:"status" json:"status"`
-	Output            []byte            `cbor:"output" json:"output"`
-	EffectiveGasPrice *string           `cbor:"effective_gas_price,omitempty" json:"effective_gas_price,omitempty"`
-	Logs              []NativeLogFields `cbor:"logs" json:"logs"`
-	BlockNumber       int64             `cbor:"block_number" json:"block_number"`
+	Version         int32             `cbor:"version" json:"version"`
+	GasUsed         string            `cbor:"gas_used" json:"gas_used"`
+	ContractAddress string            `cbor:"contract_address" json:"contract_address"`
+	Status          int32             `cbor:"status" json:"status"`
+	Output          []byte            `cbor:"output" json:"output"`
+	Logs            []NativeLogFields `cbor:"logs" json:"logs"`
+	BlockNumber     int64             `cbor:"block_number" json:"block_number"`
 }
 
 type NativeLogFields struct {
@@ -96,49 +99,62 @@ func MarshalNativeAnchorEvent(event AnchorPublishedEvent) ([]byte, error) {
 	})
 }
 
-// MarshalNativeReceiptPreimage reconstructs the exact byte concatenation
-// hashed by FISCO BCOS. Receipt version >= 1 requires effectiveGasPrice;
-// callers must fail closed when their SDK cannot prove that field.
+// MarshalNativeReceiptPreimage reconstructs TransactionReceiptData.writeTo.
+// The tags and required/optional rules come from the upstream
+// bcos-tars-protocol TransactionReceipt.tars schema. The consensus hash is
+// over these TARS bytes, not JSON or an ad-hoc field concatenation.
 func MarshalNativeReceiptPreimage(fields NativeReceiptFields) ([]byte, [][]byte, error) {
 	if fields.Version < 0 || fields.BlockNumber < 0 ||
 		len(fields.Output) > maxNativeEvidenceFieldBytes ||
 		len(fields.Logs) > maxNativeEvidenceItems {
 		return nil, nil, ErrIncompleteChainEvidence
 	}
-	if fields.Version >= 1 && fields.EffectiveGasPrice == nil {
-		return nil, nil, fmt.Errorf("%w: receipt version %d lacks effectiveGasPrice", ErrIncompleteChainEvidence, fields.Version)
+	out := codec.NewBuffer()
+	if err := out.WriteInt32(fields.Version, 1); err != nil {
+		return nil, nil, tarsEvidenceError(err)
 	}
-	out := make([]byte, 0, 128+len(fields.Output))
-	out = appendInt32(out, fields.Version)
-	out = append(out, fields.GasUsed...)
-	out = append(out, fields.ContractAddress...)
-	out = appendInt32(out, fields.Status)
-	out = append(out, fields.Output...)
-	if fields.Version >= 1 {
-		out = append(out, (*fields.EffectiveGasPrice)...)
+	if err := out.WriteString(fields.GasUsed, 2); err != nil {
+		return nil, nil, tarsEvidenceError(err)
+	}
+	if fields.ContractAddress != "" {
+		if err := out.WriteString(fields.ContractAddress, 3); err != nil {
+			return nil, nil, tarsEvidenceError(err)
+		}
+	}
+	if err := out.WriteInt32(fields.Status, 4); err != nil {
+		return nil, nil, tarsEvidenceError(err)
+	}
+	if len(fields.Output) != 0 {
+		if err := writeTARSBytes(out, fields.Output, 5); err != nil {
+			return nil, nil, err
+		}
 	}
 	logs := make([][]byte, len(fields.Logs))
-	for index, log := range fields.Logs {
-		if len(log.Data) > maxNativeEvidenceFieldBytes || len(log.Topics) > maxNativeEvidenceItems {
-			return nil, nil, ErrIncompleteChainEvidence
+	if len(fields.Logs) != 0 {
+		if err := out.WriteHead(codec.LIST, 6); err != nil {
+			return nil, nil, tarsEvidenceError(err)
 		}
-		canonical := make([]byte, 0, len(log.Address)+len(log.Data)+32*len(log.Topics))
-		canonical = append(canonical, log.Address...)
-		for _, topic := range log.Topics {
-			if len(topic) != 32 {
-				return nil, nil, fmt.Errorf("%w: receipt log topic is not 32 bytes", ErrIncompleteChainEvidence)
+		if err := out.WriteInt32(int32(len(fields.Logs)), 0); err != nil {
+			return nil, nil, tarsEvidenceError(err)
+		}
+		for index, log := range fields.Logs {
+			canonical, err := marshalNativeLogBlock(log)
+			if err != nil {
+				return nil, nil, err
 			}
-			canonical = append(canonical, topic...)
+			logs[index] = canonical
+			if err := out.WriteSliceUint8(canonical); err != nil {
+				return nil, nil, tarsEvidenceError(err)
+			}
 		}
-		canonical = append(canonical, log.Data...)
-		logs[index] = canonical
-		out = append(out, canonical...)
 	}
-	out = appendInt64(out, fields.BlockNumber)
-	if len(out) > maxRawReceiptBytes {
+	if err := out.WriteInt64(fields.BlockNumber, 7); err != nil {
+		return nil, nil, tarsEvidenceError(err)
+	}
+	if out.Len() > maxRawReceiptBytes {
 		return nil, nil, ErrIncompleteChainEvidence
 	}
-	return out, logs, nil
+	return append([]byte(nil), out.ToBytes()...), logs, nil
 }
 
 func MarshalNativeBlockHeaderPreimage(fields NativeBlockHeaderFields) ([]byte, error) {
@@ -154,39 +170,79 @@ func MarshalNativeBlockHeaderPreimage(fields NativeBlockHeaderFields) ([]byte, e
 			return nil, fmt.Errorf("%w: block header root is not 32 bytes", ErrIncompleteChainEvidence)
 		}
 	}
-	out := make([]byte, 0, 256+len(fields.ExtraData))
-	out = appendInt32(out, fields.Version)
+	out := codec.NewBuffer()
+	if err := out.WriteInt32(fields.Version, 2); err != nil {
+		return nil, tarsEvidenceError(err)
+	}
+	if err := out.WriteHead(codec.LIST, 3); err != nil {
+		return nil, tarsEvidenceError(err)
+	}
+	if err := out.WriteInt32(int32(len(fields.ParentInfo)), 0); err != nil {
+		return nil, tarsEvidenceError(err)
+	}
 	for _, parent := range fields.ParentInfo {
 		if parent.BlockNumber < 0 || len(parent.BlockHash) != identifierBytes {
 			return nil, fmt.Errorf("%w: invalid parent block identity", ErrIncompleteChainEvidence)
 		}
-		out = appendInt64(out, parent.BlockNumber)
-		out = append(out, parent.BlockHash...)
+		if err := out.WriteHead(codec.StructBegin, 0); err != nil {
+			return nil, tarsEvidenceError(err)
+		}
+		if err := out.WriteInt64(parent.BlockNumber, 1); err != nil {
+			return nil, tarsEvidenceError(err)
+		}
+		if err := writeTARSBytes(out, parent.BlockHash, 2); err != nil {
+			return nil, err
+		}
+		if err := out.WriteHead(codec.StructEnd, 0); err != nil {
+			return nil, tarsEvidenceError(err)
+		}
 	}
-	out = append(out, fields.TransactionsRoot...)
-	out = append(out, fields.ReceiptsRoot...)
-	out = append(out, fields.StateRoot...)
-	out = appendInt64(out, fields.BlockNumber)
-	out = append(out, fields.GasUsed...)
-	out = appendInt64(out, fields.Timestamp)
-	out = appendInt64(out, fields.Sealer)
+	for index, value := range [][]byte{fields.TransactionsRoot, fields.ReceiptsRoot, fields.StateRoot} {
+		if err := writeTARSBytes(out, value, byte(index+4)); err != nil {
+			return nil, err
+		}
+	}
+	if err := out.WriteInt64(fields.BlockNumber, 7); err != nil {
+		return nil, tarsEvidenceError(err)
+	}
+	if err := out.WriteString(fields.GasUsed, 8); err != nil {
+		return nil, tarsEvidenceError(err)
+	}
+	if err := out.WriteInt64(fields.Timestamp, 9); err != nil {
+		return nil, tarsEvidenceError(err)
+	}
+	if err := out.WriteInt64(fields.Sealer, 10); err != nil {
+		return nil, tarsEvidenceError(err)
+	}
+	if err := writeTARSBytesList(out, fields.SealerList, 11); err != nil {
+		return nil, err
+	}
 	for _, sealer := range fields.SealerList {
 		if len(sealer) == 0 || len(sealer) > maxNativeEvidenceFieldBytes {
 			return nil, ErrIncompleteChainEvidence
 		}
-		out = append(out, sealer...)
 	}
-	out = append(out, fields.ExtraData...)
+	if err := writeTARSBytes(out, fields.ExtraData, 12); err != nil {
+		return nil, err
+	}
+	if err := out.WriteHead(codec.LIST, 13); err != nil {
+		return nil, tarsEvidenceError(err)
+	}
+	if err := out.WriteInt32(int32(len(fields.ConsensusWeights)), 0); err != nil {
+		return nil, tarsEvidenceError(err)
+	}
 	for _, weight := range fields.ConsensusWeights {
 		if weight < 0 {
 			return nil, ErrIncompleteChainEvidence
 		}
-		out = appendInt64(out, weight)
+		if err := out.WriteInt64(weight, 0); err != nil {
+			return nil, tarsEvidenceError(err)
+		}
 	}
-	if len(out) > maxRawHeaderBytes {
+	if out.Len() > maxRawHeaderBytes {
 		return nil, ErrIncompleteChainEvidence
 	}
-	return out, nil
+	return append([]byte(nil), out.ToBytes()...), nil
 }
 
 func HashNativeEvidence(algorithm string, preimage []byte) ([]byte, error) {
@@ -210,14 +266,77 @@ func Uint64ToConsensusInt64(value uint64) (int64, error) {
 	return int64(value), nil
 }
 
-func appendInt32(out []byte, value int32) []byte {
-	var encoded [4]byte
-	binary.BigEndian.PutUint32(encoded[:], uint32(value))
-	return append(out, encoded[:]...)
+func marshalNativeLogBlock(log NativeLogFields) ([]byte, error) {
+	if len(log.Data) > maxNativeEvidenceFieldBytes || len(log.Topics) > maxNativeEvidenceItems {
+		return nil, ErrIncompleteChainEvidence
+	}
+	out := codec.NewBuffer()
+	if err := out.WriteHead(codec.StructBegin, 0); err != nil {
+		return nil, tarsEvidenceError(err)
+	}
+	if log.Address != "" {
+		if err := out.WriteString(log.Address, 1); err != nil {
+			return nil, tarsEvidenceError(err)
+		}
+	}
+	if len(log.Topics) != 0 {
+		for _, topic := range log.Topics {
+			if len(topic) != identifierBytes {
+				return nil, fmt.Errorf("%w: receipt log topic is not 32 bytes", ErrIncompleteChainEvidence)
+			}
+		}
+		if err := writeTARSBytesList(out, log.Topics, 2); err != nil {
+			return nil, err
+		}
+	}
+	if len(log.Data) != 0 {
+		if err := writeTARSBytes(out, log.Data, 3); err != nil {
+			return nil, err
+		}
+	}
+	if err := out.WriteHead(codec.StructEnd, 0); err != nil {
+		return nil, tarsEvidenceError(err)
+	}
+	return append([]byte(nil), out.ToBytes()...), nil
 }
 
-func appendInt64(out []byte, value int64) []byte {
-	var encoded [8]byte
-	binary.BigEndian.PutUint64(encoded[:], uint64(value))
-	return append(out, encoded[:]...)
+func writeTARSBytes(out *codec.Buffer, value []byte, tag byte) error {
+	if len(value) > maxNativeEvidenceFieldBytes || len(value) > math.MaxInt32 {
+		return ErrIncompleteChainEvidence
+	}
+	if err := out.WriteHead(codec.SimpleList, tag); err != nil {
+		return tarsEvidenceError(err)
+	}
+	if err := out.WriteHead(codec.BYTE, 0); err != nil {
+		return tarsEvidenceError(err)
+	}
+	if err := out.WriteInt32(int32(len(value)), 0); err != nil {
+		return tarsEvidenceError(err)
+	}
+	if err := out.WriteSliceUint8(value); err != nil {
+		return tarsEvidenceError(err)
+	}
+	return nil
+}
+
+func writeTARSBytesList(out *codec.Buffer, values [][]byte, tag byte) error {
+	if len(values) > maxNativeEvidenceItems {
+		return ErrIncompleteChainEvidence
+	}
+	if err := out.WriteHead(codec.LIST, tag); err != nil {
+		return tarsEvidenceError(err)
+	}
+	if err := out.WriteInt32(int32(len(values)), 0); err != nil {
+		return tarsEvidenceError(err)
+	}
+	for _, value := range values {
+		if err := writeTARSBytes(out, value, 0); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func tarsEvidenceError(err error) error {
+	return fmt.Errorf("%w: encode official TARS preimage: %v", ErrIncompleteChainEvidence, err)
 }

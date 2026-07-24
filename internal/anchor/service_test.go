@@ -170,7 +170,7 @@ func TestServiceWaitsForFixedDeadline(t *testing.T) {
 
 func TestServiceDurableSinkCheckpointsProviderStateBeforeRetry(t *testing.T) {
 	t.Parallel()
-	store := proofstore.LocalStore{Root: t.TempDir()}
+	store := newBoundTestLocalStore(t, t.TempDir())
 	key := testScheduleKey("durable")
 	sth := testSTH(key, 1, 0x11)
 	offer(t, store, key, sth, 100, 100)
