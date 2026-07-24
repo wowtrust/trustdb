@@ -20,7 +20,7 @@ const (
 	BuildRecordSchema     = "trustdb.tlcp-gateway-build-record.v1"
 	SPDXVersion           = "SPDX-2.3"
 	DataLicense           = "CC0-1.0"
-	PinnedBaselineSHA256  = "940e27034999e9b6ffbd89666123fb062c0a7384dc183eeabd3eb7eca436aecf"
+	PinnedBaselineSHA256  = "a58cbde4433defa57d021b36cbdb67221388731b2004fa74a6d34926dc898fdc"
 	maxBaselineBytes      = 1 << 20
 	maxBuildRecordBytes   = 1 << 20
 	maxSBOMBytes          = 128 << 20
@@ -37,6 +37,8 @@ type Baseline struct {
 	RuntimeImage            string         `json:"runtime_image"`
 	ValidatorBuilderImage   string         `json:"validator_builder_image"`
 	DockerfileFrontendImage string         `json:"dockerfile_frontend_image"`
+	BuildxVersion           string         `json:"buildx_version"`
+	BuildKitImage           string         `json:"buildkit_image"`
 	DebianSnapshot          string         `json:"debian_snapshot"`
 	BuilderPackages         []string       `json:"builder_packages"`
 	RuntimePackages         []string       `json:"runtime_packages"`
@@ -67,6 +69,8 @@ type BuildRecord struct {
 	RuntimeImage            string         `json:"runtime_image"`
 	ValidatorBuilderImage   string         `json:"validator_builder_image"`
 	DockerfileFrontendImage string         `json:"dockerfile_frontend_image"`
+	BuildxVersion           string         `json:"buildx_version"`
+	BuildKitImage           string         `json:"buildkit_image"`
 	SyftImage               string         `json:"syft_image"`
 }
 
@@ -458,6 +462,8 @@ func CreateBuildRecord(
 		RuntimeImage:            baseline.RuntimeImage,
 		ValidatorBuilderImage:   baseline.ValidatorBuilderImage,
 		DockerfileFrontendImage: baseline.DockerfileFrontendImage,
+		BuildxVersion:           baseline.BuildxVersion,
+		BuildKitImage:           baseline.BuildKitImage,
 		SyftImage:               baseline.SyftImage,
 	}, nil
 }
@@ -531,6 +537,7 @@ func validateBaseline(value Baseline) error {
 		"runtime image":             value.RuntimeImage,
 		"validator builder image":   value.ValidatorBuilderImage,
 		"Dockerfile frontend image": value.DockerfileFrontendImage,
+		"BuildKit image":            value.BuildKitImage,
 		"Syft image":                value.SyftImage,
 	} {
 		separator := strings.LastIndex(image, "@")
@@ -538,11 +545,35 @@ func validateBaseline(value Baseline) error {
 			return fmt.Errorf("%s must use an exact sha256 digest", name)
 		}
 	}
+	if !isExactRelease(value.BuildxVersion) {
+		return errors.New("build baseline buildx_version must be an exact vMAJOR.MINOR.PATCH release")
+	}
 	if len(value.BuilderPackages) == 0 || len(value.RuntimePackages) == 0 ||
 		len(value.BuildParameters) == 0 {
 		return errors.New("build baseline package and parameter lists must not be empty")
 	}
 	return nil
+}
+
+func isExactRelease(value string) bool {
+	if !strings.HasPrefix(value, "v") {
+		return false
+	}
+	parts := strings.Split(strings.TrimPrefix(value, "v"), ".")
+	if len(parts) != 3 {
+		return false
+	}
+	for _, part := range parts {
+		if part == "" {
+			return false
+		}
+		for _, character := range part {
+			if character < '0' || character > '9' {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func sourcePackage(name, license, id string, source BaselineSource) map[string]any {

@@ -5,7 +5,8 @@ Tongsuo 8.4.0, then forwards plaintext only over loopback to the TrustDB
 process in the same restricted network namespace.
 
 All source archives, source licenses, container inputs, Debian snapshot
-packages, build arguments, and the Syft scanner are pinned in `baseline.json`.
+packages, build arguments, the Buildx release, the multi-architecture BuildKit
+image digest, and the Syft scanner are pinned in `baseline.json`.
 The build uses `SOURCE_DATE_EPOCH`, rewrites OCI layer timestamps, disables
 embedded provenance attestations, and compares two complete OCI archives.
 Both passes use `--no-cache`, so the second pass recompiles Tengine, Tongsuo,
@@ -20,7 +21,13 @@ The runtime package layer removes apt/dpkg logs and the regenerated ldconfig
 auxiliary cache because they contain execution-time state and are not required
 to load the pinned runtime library.
 
-Build and independently verify one architecture:
+Build and independently verify one architecture with Buildx `v0.35.0` and the
+reviewed `docker-container` builder from `baseline.json`. The build fails
+before compilation if either active tool differs:
+
+- Buildx: [`v0.35.0`](https://github.com/docker/buildx/releases/tag/v0.35.0)
+- BuildKit: [`v0.31.2`](https://github.com/moby/buildkit/releases/tag/v0.31.2),
+  selected through its reviewed multi-architecture registry digest
 
 ```sh
 PLATFORM=linux/amd64 packaging/tlcp-gateway/build.sh
@@ -30,8 +37,8 @@ PLATFORM=linux/arm64 packaging/tlcp-gateway/build.sh
 Each run produces an OCI archive, a canonical SPDX 2.3 SBOM, an immutable
 build record, and the build-record SHA-256 under `dist/tlcp-gateway`. The
 record binds the archive digest, image manifest digest, SBOM digest, baseline
-digest, source archives, license checksums, base images, frontend image, and
-Syft image.
+digest, source archives, license checksums, base images, frontend image,
+Buildx release, BuildKit image, and Syft image.
 
 The build fails unless both rebuilds are byte-identical and the loaded image:
 

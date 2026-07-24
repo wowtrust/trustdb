@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -51,6 +52,51 @@ func TestRepositoryProductionBaselineHasReviewedDigest(t *testing.T) {
 	}
 }
 
+func TestBuildxReleaseMustBeExactStableSemver(t *testing.T) {
+	for _, invalid := range []string{"", "latest", "v0.35", "v0.35.0-rc1", "v0.x.0"} {
+		if isExactRelease(invalid) {
+			t.Fatalf("accepted non-exact Buildx release %q", invalid)
+		}
+	}
+	if !isExactRelease("v0.35.0") {
+		t.Fatal("rejected exact stable Buildx release")
+	}
+}
+
+func TestRepositoryAutomationPinsReviewedBuildToolchain(t *testing.T) {
+	root := filepath.Join("..", "..")
+	baseline, _, err := LoadPinnedBaseline(
+		filepath.Join(root, "packaging", "tlcp-gateway", "baseline.json"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	workflow, err := os.ReadFile(filepath.Join(root, ".github", "workflows", "tlcp-gateway.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	script, err := os.ReadFile(filepath.Join(root, "packaging", "tlcp-gateway", "build.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, exact := range []string{
+		"version: " + baseline.BuildxVersion,
+		"image=" + baseline.BuildKitImage,
+	} {
+		if !strings.Contains(string(workflow), exact) {
+			t.Fatalf("TLCP workflow does not pin reviewed toolchain value %q", exact)
+		}
+	}
+	for _, exact := range []string{
+		"buildx_version='" + baseline.BuildxVersion + "'",
+		"buildkit_image='" + baseline.BuildKitImage + "'",
+	} {
+		if !strings.Contains(string(script), exact) {
+			t.Fatalf("TLCP build script does not verify reviewed toolchain value %q", exact)
+		}
+	}
+}
+
 func TestBuildRecordBindsArchiveSBOMAndBaseline(t *testing.T) {
 	dir := t.TempDir()
 	baselinePath := filepath.Join(dir, "baseline.json")
@@ -75,6 +121,8 @@ func TestBuildRecordBindsArchiveSBOMAndBaseline(t *testing.T) {
   "runtime_image": "example.invalid/runtime@sha256:6666666666666666666666666666666666666666666666666666666666666666",
   "validator_builder_image": "example.invalid/go@sha256:9999999999999999999999999999999999999999999999999999999999999999",
   "dockerfile_frontend_image": "example.invalid/frontend@sha256:7777777777777777777777777777777777777777777777777777777777777777",
+  "buildx_version": "v0.35.0",
+  "buildkit_image": "example.invalid/buildkit@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
   "debian_snapshot": "20260713T000000Z",
   "builder_packages": ["compiler=1"],
   "runtime_packages": ["runtime=1"],
@@ -101,6 +149,10 @@ func TestBuildRecordBindsArchiveSBOMAndBaseline(t *testing.T) {
 	record, err := CreateBuildRecord(baselinePath, archivePath, sbomPath, testPlatform)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if record.BuildxVersion != baseline.BuildxVersion ||
+		record.BuildKitImage != baseline.BuildKitImage {
+		t.Fatal("build record does not bind the reviewed Buildx and BuildKit toolchain")
 	}
 	recordData, err := EncodeBuildRecord(record)
 	if err != nil {
@@ -152,6 +204,8 @@ func testBaseline() Baseline {
 			ArchiveSHA256: "3333333333333333333333333333333333333333333333333333333333333333",
 			LicenseSHA256: "4444444444444444444444444444444444444444444444444444444444444444",
 		},
+		BuildxVersion: "v0.35.0",
+		BuildKitImage: "example.invalid/buildkit@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 	}
 }
 

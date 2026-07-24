@@ -19,6 +19,8 @@
   "runtime_image": "docker.io/library/debian:bookworm-slim@sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818",
   "validator_builder_image": "docker.io/library/golang:1.26.5-bookworm@sha256:1ecb7edf62a0408027bd5729dfd6b1b8766e578e8df93995b225dfd0944eb651",
   "dockerfile_frontend_image": "docker.io/docker/dockerfile:1.7@sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e",
+  "buildx_version": "v0.35.0",
+  "buildkit_image": "docker.io/moby/buildkit:v0.31.2@sha256:2f5adac4ecd194d9f8c10b7b5d7bceb5186853db1b26e5abd3a657af0b7e26ec",
   "debian_snapshot": "20260713T000000Z",
   "builder_packages": [
     "build-essential=12.9",

@@ -9,12 +9,43 @@ platform=${PLATFORM:-linux/amd64}
 platform_id=$(printf '%s' "$platform" | tr / -)
 source_date_epoch=1702545703
 syft_image='docker.io/anchore/syft:v1.38.2@sha256:63a159108794114992136692c92155c7694f259aca814a92c187a4e025754b00'
+buildx_version='v0.35.0'
+buildkit_image='docker.io/moby/buildkit:v0.31.2@sha256:2f5adac4ecd194d9f8c10b7b5d7bceb5186853db1b26e5abd3a657af0b7e26ec'
 build_progress=${BUILDKIT_PROGRESS:-plain}
 
 case "$platform" in
   linux/amd64|linux/arm64) ;;
   *)
     printf 'unsupported TLCP gateway platform: %s\n' "$platform" >&2
+    exit 1
+    ;;
+esac
+
+actual_buildx_version=$(docker buildx version | awk 'NR == 1 { print $2 }')
+if [ "$actual_buildx_version" != "$buildx_version" ]; then
+  printf 'TLCP gateway requires Docker Buildx %s, got %s\n' \
+    "$buildx_version" "$actual_buildx_version" >&2
+  exit 1
+fi
+builder_details=$(docker buildx inspect --bootstrap)
+case "$builder_details" in
+  *"Driver: docker-container"*) ;;
+  *)
+    printf 'TLCP gateway requires the docker-container Buildx driver\n' >&2
+    exit 1
+    ;;
+esac
+case "$builder_details" in
+  *"$buildkit_image"*) ;;
+  *)
+    printf 'TLCP gateway builder does not use the reviewed BuildKit image\n' >&2
+    exit 1
+    ;;
+esac
+case "$builder_details" in
+  *"BuildKit version:"*"v0.31.2"*) ;;
+  *)
+    printf 'TLCP gateway builder does not run the reviewed BuildKit release\n' >&2
     exit 1
     ;;
 esac

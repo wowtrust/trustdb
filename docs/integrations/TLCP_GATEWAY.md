@@ -262,7 +262,10 @@ PLATFORM=linux/arm64 packaging/tlcp-gateway/build.sh
 
 Each build performs two clean builds and requires byte-identical OCI archives.
 It also emits and verifies a canonical SPDX SBOM and a build record that binds
-the source, base image, frontend, image, manifest, layers, and scanner.
+the source, base image, frontend, exact Buildx release, multi-architecture
+BuildKit image digest, image, manifest, layers, and scanner. The build exits
+before compilation unless the active `docker-container` builder matches the
+reviewed toolchain in `packaging/tlcp-gateway/baseline.json`.
 
 Run the real gateway test on a Linux or Docker Desktop host:
 
