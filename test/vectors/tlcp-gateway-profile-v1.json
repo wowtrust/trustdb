@@ -82,6 +82,7 @@
     }
   },
   "readiness": {
+    "identity_name": "trustdb-readiness.example",
     "signing_chain_file": "${FIXTURE_DIR}/client-signing.pem",
     "encryption_chain_file": "${FIXTURE_DIR}/client-encryption.pem"
   },

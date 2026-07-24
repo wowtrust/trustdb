@@ -40,6 +40,7 @@ import (
 
 const (
 	serverName     = "trustdb.test"
+	readinessName  = "trustdb-readiness.test"
 	httpPort       = "8443"
 	grpcPort       = "9443"
 	canaryHTTPPort = "10443"
@@ -1385,12 +1386,12 @@ func newCertificateFixture(t *testing.T) certificateFixture {
 	)
 	clientSigning, _ := createEndpoint(
 		t, filepath.Join(dir, "client-signing.pem"), filepath.Join(dir, "client-signing.key"),
-		clientCA, clientCAKey, 20, "TLCP Client", smx509.KeyUsageDigitalSignature,
+		clientCA, clientCAKey, 20, readinessName, smx509.KeyUsageDigitalSignature,
 		smx509.ExtKeyUsageClientAuth, now,
 	)
 	clientEncryption, _ := createEndpoint(
 		t, filepath.Join(dir, "client-encryption.pem"), filepath.Join(dir, "client-encryption.key"),
-		clientCA, clientCAKey, 21, "TLCP Client", smx509.KeyUsageKeyEncipherment,
+		clientCA, clientCAKey, 21, readinessName, smx509.KeyUsageKeyEncipherment,
 		smx509.ExtKeyUsageClientAuth, now,
 	)
 	appendCertificate(t, filepath.Join(dir, "client-signing.pem"), clientCA)
@@ -1448,6 +1449,7 @@ func newGatewayProfile(t *testing.T, fixture certificateFixture) tlcpprofile.Pro
 	}
 	profile.ProfileID = "tlcp-e2e"
 	profile.ServerName = serverName
+	profile.Readiness.IdentityName = readinessName
 	profile.Network.TrustDBHTTPUpstream = "127.0.0.1:18080"
 	profile.Network.TrustDBGRPCUpstream = "127.0.0.1:19090"
 	profile.Network.GatewayHTTPBind = "0.0.0.0:" + httpPort
@@ -1561,7 +1563,7 @@ func prepareServerGenerations(
 		secondClientCA,
 		secondClientCAKey,
 		120,
-		"TLCP readiness generation 2",
+		readinessName,
 		smx509.KeyUsageDigitalSignature,
 		smx509.ExtKeyUsageClientAuth,
 		now,
@@ -1573,7 +1575,7 @@ func prepareServerGenerations(
 		secondClientCA,
 		secondClientCAKey,
 		121,
-		"TLCP readiness generation 2",
+		readinessName,
 		smx509.KeyUsageKeyEncipherment,
 		smx509.ExtKeyUsageClientAuth,
 		now,

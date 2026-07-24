@@ -49,6 +49,7 @@ func TestGoldenProfileValidatesStrictSM2DualCertificatesAndCRLs(t *testing.T) {
 	if report.SchemaVersion != SchemaVersion ||
 		report.ProfileID != fixture.profile.ProfileID ||
 		report.ServerName != fixture.profile.ServerName ||
+		report.ReadinessIdentityName != fixture.profile.Readiness.IdentityName ||
 		len(report.SigningCertificateSHA256) != 64 ||
 		len(report.EncryptionCertificateSHA256) != 64 ||
 		len(report.SigningPublicKeySHA256) != 64 ||
@@ -491,6 +492,22 @@ func TestProfileRejectsMissingOrUnsafePublicMaterial(t *testing.T) {
 }
 
 func TestProfileRejectsWrongCertificateModeRoleIdentityAndValidity(t *testing.T) {
+	t.Run("readiness identity equals server identity", func(t *testing.T) {
+		fixture := newTrustFixture(t)
+		fixture.profile.Readiness.IdentityName = strings.ToUpper(fixture.profile.ServerName)
+		if _, err := Validate(fixture.profile, Options{Now: fixtureNow}); err == nil ||
+			!strings.Contains(err.Error(), "must differ from server_name") {
+			t.Fatalf("shared server/readiness identity error = %v", err)
+		}
+	})
+	t.Run("readiness leaf does not cover declared identity", func(t *testing.T) {
+		fixture := newTrustFixture(t)
+		fixture.profile.Readiness.IdentityName = "other-readiness.example"
+		if _, err := Validate(fixture.profile, Options{Now: fixtureNow}); err == nil ||
+			!strings.Contains(err.Error(), "does not cover endpoint identity") {
+			t.Fatalf("readiness identity coverage error = %v", err)
+		}
+	})
 	t.Run("standard CA", func(t *testing.T) {
 		fixture := newTrustFixture(t)
 		fixture.profile.Certificates.ServerCAFile = writeStandardCA(t, fixture.dir)
@@ -704,7 +721,7 @@ func newTrustFixture(t *testing.T) trustFixture {
 		clientCA,
 		clientCAKey,
 		12,
-		"TrustDB Readiness",
+		"trustdb-readiness.example",
 		smx509.KeyUsageDigitalSignature,
 		smx509.ExtKeyUsageClientAuth,
 		fixtureNow.Add(-time.Hour),
@@ -717,7 +734,7 @@ func newTrustFixture(t *testing.T) trustFixture {
 		clientCA,
 		clientCAKey,
 		13,
-		"TrustDB Readiness",
+		"trustdb-readiness.example",
 		smx509.KeyUsageKeyEncipherment,
 		smx509.ExtKeyUsageClientAuth,
 		fixtureNow.Add(-time.Hour),

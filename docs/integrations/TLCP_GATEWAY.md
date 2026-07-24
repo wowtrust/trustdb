@@ -105,6 +105,14 @@ validated against the client CA, and all four gateway/readiness keys must be
 distinct from the active proof signer. Private readiness key references remain
 outside every manifest.
 
+Set `readiness.identity_name` to a dedicated DNS identity for the probe, not to
+`server_name`. Both readiness leaves must cover that exact identity and must
+have identical subjects and SAN sets. Each explicit endpoint chain is
+leaf-first; its final certificate may be the configured trust anchor itself or
+it may be issued directly by exactly one configured trust anchor. The trust
+anchor is still supplied separately through `server_ca_file` or
+`client_ca_file`.
+
 Tengine uses one `ssl_ciphers` directive while constructing both its ordinary
 TLS and NTLS contexts. The generated configuration therefore contains an RSA
 suite as an ordinary-TLS initialization sentinel. It does not configure an

@@ -85,6 +85,8 @@ The following values are exact:
 - `crypto_mode`: `guomi`
 - `cipher_suites`: `[ECDHE-SM2-SM4-GCM-SM3]`
 - `alpn_protocols`: `[h2, http/1.1]`, in that order
+- `readiness.identity_name`: the dedicated DNS identity covered by both
+  readiness leaves; it must differ from `server_name`
 - `revocation.mode`: `crl`
 - `revocation.gateway_crl_bundle_file`: one runtime PEM bundle containing
   exactly the CRLs named by `revocation.crl_files`
@@ -103,13 +105,16 @@ implementation. The validator does not ask Go's standard `crypto/x509` package
 to infer SM2 semantics.
 
 The server and dedicated readiness identities each use separate, strict,
-leaf-first signing and encryption PEM chains. Their leaf certificates:
+leaf-first signing and encryption PEM chains. The two leaf certificates in
+each identity:
 
 - use `sm2p256v1` public keys and `SM2-with-SM3` signatures;
 - are different certificates with different public keys;
 - have byte-identical DER subjects;
 - have identical normalized DNS, IP, email, and URI SAN sets;
-- both cover `server_name`;
+- both gateway server leaves cover `server_name`;
+- both readiness leaves cover `readiness.identity_name`, which is a dedicated
+  probe identity and must not equal `server_name`;
 - are end-entity certificates with no unknown EKU: gateway server leaves use
   exactly `serverAuth`, and readiness leaves use exactly `clientAuth`;
 - use distinct roles:
@@ -121,11 +126,11 @@ leaf-first signing and encryption PEM chains. Their leaf certificates:
 Every intermediate is a current SM2/SM3 CA, has a subject key identifier,
 appears in issue order, and signs the preceding certificate. Every child
 certificate has an authority key identifier that exactly matches its issuer.
-The final certificate in each explicit chain links directly to exactly one
-configured trust anchor. Trust anchors are supplied separately in
-`server_ca_file` and `client_ca_file`; each is a current, self-signed SM2/SM3
-CA authorized for both certificate and CRL signing and has a subject key
-identifier.
+The final certificate in each explicit chain either is exactly one configured
+trust anchor or links directly to exactly one configured trust anchor. Trust
+anchors are supplied separately in `server_ca_file` and `client_ca_file`; each
+is a current, self-signed SM2/SM3 CA authorized for both certificate and CRL
+signing and has a subject key identifier.
 
 ## CRL rules
 

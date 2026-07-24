@@ -119,6 +119,7 @@ type KeyReference struct {
 }
 
 type ReadinessIdentity struct {
+	IdentityName        string `json:"identity_name"`
 	SigningChainFile    string `json:"signing_chain_file"`
 	EncryptionChainFile string `json:"encryption_chain_file"`
 }
@@ -154,6 +155,7 @@ type Report struct {
 	ReadinessEncryptionCertificateSHA256 string    `json:"readiness_encryption_certificate_sha256"`
 	ReadinessSigningPublicKeySHA256      string    `json:"readiness_signing_public_key_sha256"`
 	ReadinessEncryptionPublicKeySHA256   string    `json:"readiness_encryption_public_key_sha256"`
+	ReadinessIdentityName                string    `json:"readiness_identity_name"`
 	TrustDBIdentityManifestSHA256        string    `json:"trustdb_identity_manifest_sha256"`
 	RegistryKeyDescriptorSHA256          string    `json:"registry_key_descriptor_sha256,omitempty"`
 	RegistrySigningPublicKeySHA256       string    `json:"registry_signing_public_key_sha256,omitempty"`
@@ -246,7 +248,7 @@ func validateProfileFields(profile Profile, options Options) error {
 	); err != nil {
 		return err
 	}
-	if err := validateReadinessIdentity(profile.Readiness); err != nil {
+	if err := validateReadinessIdentity(profile.Readiness, profile.ServerName); err != nil {
 		return err
 	}
 	if err := validateAbsoluteCleanPath(
@@ -298,7 +300,13 @@ func validateImplementation(value Implementation) error {
 	return nil
 }
 
-func validateReadinessIdentity(identity ReadinessIdentity) error {
+func validateReadinessIdentity(identity ReadinessIdentity, serverName string) error {
+	if err := validateString("readiness.identity_name", identity.IdentityName); err != nil {
+		return err
+	}
+	if strings.EqualFold(identity.IdentityName, serverName) {
+		return errors.New("TLCP readiness identity_name must differ from server_name")
+	}
 	for name, path := range map[string]string{
 		"readiness.signing_chain_file":    identity.SigningChainFile,
 		"readiness.encryption_chain_file": identity.EncryptionChainFile,

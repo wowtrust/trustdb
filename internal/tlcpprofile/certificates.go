@@ -73,7 +73,7 @@ func validatePublicTrust(profile Profile, now time.Time) (Report, error) {
 	readinessSigningChain, err := loadEndpointChain(
 		profile.Readiness.SigningChainFile,
 		clientRoots,
-		"",
+		profile.Readiness.IdentityName,
 		now,
 		signingCertificateRole,
 		smx509.ExtKeyUsageClientAuth,
@@ -84,7 +84,7 @@ func validatePublicTrust(profile Profile, now time.Time) (Report, error) {
 	readinessEncryptionChain, err := loadEndpointChain(
 		profile.Readiness.EncryptionChainFile,
 		clientRoots,
-		"",
+		profile.Readiness.IdentityName,
 		now,
 		encryptionCertificateRole,
 		smx509.ExtKeyUsageClientAuth,
@@ -135,6 +135,7 @@ func validatePublicTrust(profile Profile, now time.Time) (Report, error) {
 		ReadinessEncryptionCertificateSHA256: certificateFingerprint(set.readinessEncryptionLeaf),
 		ReadinessSigningPublicKeySHA256:      publicKeyFingerprint(set.readinessSigningLeaf),
 		ReadinessEncryptionPublicKeySHA256:   publicKeyFingerprint(set.readinessEncryptionLeaf),
+		ReadinessIdentityName:                profile.Readiness.IdentityName,
 		TrustDBIdentityManifestSHA256:        identityManifestSHA256,
 		ServerCASHA256:                       certificateFingerprints(serverRoots),
 		ClientCASHA256:                       certificateFingerprints(clientRoots),
