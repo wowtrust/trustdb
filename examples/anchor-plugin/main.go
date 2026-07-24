@@ -37,7 +37,7 @@ type exampleProof struct {
 	RootHash      []byte `json:"root_hash"`
 }
 
-func (examplePlugin) Info(context.Context) (anchorplugin.Info, error) {
+func (*examplePlugin) Info(context.Context) (anchorplugin.Info, error) {
 	return anchorplugin.Info{SinkName: sinkName, ProofSchema: proofSchema, System: &anchorplugin.System{
 		SystemID:    "example-evidence-chain",
 		DisplayName: "Example evidence blockchain",
