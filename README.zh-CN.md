@@ -88,6 +88,7 @@ curl --fail http://127.0.0.1:8080/healthz
 - 使用确定性 CBOR 表达 claim、receipt、proof bundle、global-log proof、STH、anchor result、backup 和 `.sproof` 文件。
 - 支持客户端、服务端和 key registry 的 Ed25519 签名。
 - WAL-backed ingest：有界队列、可配置 fsync、replay、checkpoint 和优雅关闭。
+- 可选 NATS JetStream ingress：耐久汇聚、有界 broker 背压、不可变 acceptance result 与重启后结果恢复。
 - Batch Merkle proof、持久化 record index、分页 record/root API。
 - Global Transparency Log：持久化 STH、inclusion proof、consistency proof 和 history tile。
 - L5 STH/global-root 锚定：支持 `off`、`noop`、本地文件、OpenTimestamps 和受监管的外部 gRPC 子进程插件。
@@ -120,6 +121,7 @@ TrustDB 默认按单节点服务运行。多个计算节点可以共享同一个
 
 - Client path：CLI、SDK 或桌面客户端计算文件哈希，签名 claim，并提交到本地或服务端。
 - Ingest path：服务端校验签名和 key 状态，将接受记录追加到 WAL，并返回 accepted receipt。
+- 可选 NATS path：JetStream 耐久缓冲 signed claim，共用 submission service 在确认 broker delivery 前先保存不可变结果。
 - Batch path：accepted records 被聚合成 Merkle batch，存储 proof bundle 和索引。
 - Global log path：committed batch roots 被追加到 global transparency log，生成持久化 STH 和 global proof。
 - Anchor path：STH/global roots 按 `(node_id, log_id, sink)` 合并进常数空间的 Pending/InFlight 调度状态，再由 anchor worker 按固定窗口发布。
@@ -188,7 +190,7 @@ mkdir -p .trustdb-dev
   --client-public-key .trustdb-dev/client.pub
 ```
 
-成功输出包含 `"valid":true` 与 `"proof_level":"L3"`。这里的本地 `commit` 不会把 claim 发给正在运行的服务。服务端提交、异步 L4、`.sproof` 导出和离线验证请继续查看经过编译检查的 [Go SDK 示例](examples/sdk-onboarding)；生产部署与停服逻辑备份见官网[运维指南](https://www.trustdb.ryan-wong.cn/docs/server)。
+成功输出包含 `"valid":true` 与 `"proof_level":"L3"`。这里的本地 `commit` 不会把 claim 发给正在运行的服务。服务端提交、异步 L4、`.sproof` 导出和离线验证请继续查看经过编译检查的 [Go SDK 示例](examples/sdk-onboarding)；需要耐久汇聚和 broker 分流时，查看[可选 NATS / JetStream ingress 指南](docs/integrations/NATS_INGRESS.zh-CN.md)；生产部署与停服逻辑备份见官网[运维指南](https://www.trustdb.ryan-wong.cn/docs/server)。
 
 ## HTTP 和 gRPC
 
@@ -246,6 +248,7 @@ mkdir -p .trustdb-dev
 ## 项目文档
 
 - [ARCHITECTURE.zh-CN.md](ARCHITECTURE.zh-CN.md)：TrustDB 服务端、持久化、Global Log、Anchor、SDK、备份和离线验证的详细架构设计。
+- [docs/integrations/NATS_INGRESS.zh-CN.md](docs/integrations/NATS_INGRESS.zh-CN.md)：可选 JetStream ingress 的拓扑、配置、安全、背压、结果恢复与 Go SDK 接入指南。
 - [docs/compliance/NATIONAL_CRYPTOGRAPHY_THREAT_MODEL_AND_EVIDENCE_MAP.zh-CN.md](docs/compliance/NATIONAL_CRYPTOGRAPHY_THREAT_MODEL_AND_EVIDENCE_MAP.zh-CN.md)：国产密码威胁模型、禁止的信任捷径、tabletop 场景、残余风险与合规证据映射。
 - [docs/compliance/ADR-0004-PROVIDER-NEUTRAL-CRYPTO-CONTRACTS.zh-CN.md](docs/compliance/ADR-0004-PROVIDER-NEUTRAL-CRYPTO-CONTRACTS.zh-CN.md)：suite-aware hash、不可导出 KeyHandle、Signer/Verifier 与 provider fail-closed 契约。
 - [docs/compliance/ADR-0008-VERSIONED-KEY-DESCRIPTORS.zh-CN.md](docs/compliance/ADR-0008-VERSIONED-KEY-DESCRIPTORS.zh-CN.md)：canonical software、PKCS#11、SDF、remote 与证书描述符、脱敏、解析和破坏性迁移规则。

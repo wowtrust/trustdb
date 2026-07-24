@@ -11,6 +11,12 @@ Legacy raw-key files are rejected. See
 
 `anchor.poll_interval` controls the O(1) durable scheduler recovery lookup. Triggered work normally starts immediately; polling resumes pending or in-flight work after missed triggers and restarts. Benchmark profiles use `250ms`, while the default remains `2s` to limit idle store reads.
 
+The optional `nats` section is disabled by default. Enabling, pre-provisioning,
+securing, sizing, and consuming the JetStream ingress is documented in the
+[NATS ingress guide](../docs/integrations/NATS_INGRESS.md). Keep the generated
+configuration as the field reference; the guide explains the operational
+semantics and recovery boundaries.
+
 | File | `run_profile` | Purpose |
 | --- | --- | --- |
 | `development.yaml` | `development` | Local demos: file proofstore, `noop` anchor, debug-friendly logging. |
