@@ -20,7 +20,7 @@ import (
 func storageSupported() bool { return true }
 
 func secureEnvelopeFile(file *os.File, _ fs.FileMode) error {
-	if err := setOwnerOnlyACL(file.Name(), windows.Handle(file.Fd())); err != nil {
+	if err := setOwnerOnlyACL(file.Name(), windows.Handle(file.Fd()), true); err != nil {
 		return secretSafePathError("protect software key envelope", err)
 	}
 	info, err := file.Stat()
@@ -59,10 +59,22 @@ func acquireEnvelopeLock(ctx context.Context, path string) (func() error, error)
 		windows.GENERIC_READ|windows.GENERIC_WRITE,
 		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE,
 		nil,
-		windows.OPEN_ALWAYS,
+		windows.CREATE_NEW,
 		windows.FILE_ATTRIBUTE_HIDDEN|windows.FILE_FLAG_OPEN_REPARSE_POINT,
 		0,
 	)
+	created := err == nil
+	if errors.Is(err, windows.ERROR_FILE_EXISTS) || errors.Is(err, windows.ERROR_ALREADY_EXISTS) {
+		handle, err = windows.CreateFile(
+			name,
+			windows.GENERIC_READ|windows.GENERIC_WRITE,
+			windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE,
+			nil,
+			windows.OPEN_EXISTING,
+			windows.FILE_ATTRIBUTE_HIDDEN|windows.FILE_FLAG_OPEN_REPARSE_POINT,
+			0,
+		)
+	}
 	if err != nil {
 		return nil, secretSafePathError("open software key envelope lock", err)
 	}
@@ -79,7 +91,7 @@ func acquireEnvelopeLock(ctx context.Context, path string) (func() error, error)
 	if info.FileAttributes&(windows.FILE_ATTRIBUTE_REPARSE_POINT|windows.FILE_ATTRIBUTE_DIRECTORY) != 0 {
 		return nil, fmt.Errorf("%w: lock file is a reparse point or directory", ErrUnsafeEnvelopeStorage)
 	}
-	if err := setOwnerOnlyACL(lockPath, handle); err != nil {
+	if err := setOwnerOnlyACL(lockPath, handle, created); err != nil {
 		return nil, secretSafePathError("protect software key envelope lock", err)
 	}
 	if err := validateOwnerOnlyACL(handle); err != nil {
@@ -119,15 +131,17 @@ func acquireEnvelopeLock(ctx context.Context, path string) (func() error, error)
 	}, nil
 }
 
-func setOwnerOnlyACL(path string, handle windows.Handle) error {
+func setOwnerOnlyACL(path string, handle windows.Handle, maySetOwner bool) error {
 	owner, err := currentProcessUserSID()
 	if err != nil {
 		return err
 	}
 	// Data handles do not carry WRITE_DAC. Reopen the same file without
-	// share-delete, prove the file identity is unchanged, and update only the
-	// DACL. Ownership must already belong to the current user; this path never
-	// requests WRITE_OWNER or takes ownership of an attacker-controlled file.
+	// share-delete and prove the file identity is unchanged. Newly created
+	// objects may inherit the token's default owner (for example,
+	// BUILTIN\Administrators) instead of TokenUser, so creation paths may
+	// replace that owner with the current user. Existing lock files must
+	// already have the expected owner and are never taken over.
 	name, err := windows.UTF16PtrFromString(path)
 	if err != nil {
 		return err
@@ -157,7 +171,11 @@ func setOwnerOnlyACL(path string, handle windows.Handle) error {
 		return err
 	}
 	actualOwner, _, err := descriptor.Owner()
-	if err != nil || actualOwner == nil || !actualOwner.Equals(owner) {
+	if err != nil || actualOwner == nil {
+		return errors.New("software key envelope owner is unavailable")
+	}
+	ownerMatches := actualOwner.Equals(owner)
+	if !ownerMatches && !maySetOwner {
 		return errors.New("software key envelope owner is not the current user")
 	}
 	acl, err := windows.ACLFromEntries([]windows.EXPLICIT_ACCESS{{
@@ -173,14 +191,48 @@ func setOwnerOnlyACL(path string, handle windows.Handle) error {
 	if err != nil {
 		return err
 	}
-	return windows.SetSecurityInfo(
+	if err := windows.SetSecurityInfo(
 		securityHandle,
 		windows.SE_FILE_OBJECT,
-		windows.DACL_SECURITY_INFORMATION|
-			windows.PROTECTED_DACL_SECURITY_INFORMATION,
+		windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION,
 		nil,
 		nil,
 		acl,
+		nil,
+	); err != nil {
+		return err
+	}
+	if ownerMatches {
+		return nil
+	}
+
+	// The new protected DACL gives TokenUser the right to reopen the file with
+	// WRITE_OWNER even when the token's default owner was an administrator
+	// group. Keep the first security handle open so the pathname cannot be
+	// replaced between the DACL and ownership updates.
+	ownerHandle, err := windows.CreateFile(
+		name,
+		windows.READ_CONTROL|windows.WRITE_OWNER,
+		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE,
+		nil,
+		windows.OPEN_EXISTING,
+		windows.FILE_FLAG_OPEN_REPARSE_POINT,
+		0,
+	)
+	if err != nil {
+		return err
+	}
+	defer windows.CloseHandle(ownerHandle)
+	if err := requireSameFileHandle(handle, ownerHandle); err != nil {
+		return err
+	}
+	return windows.SetSecurityInfo(
+		ownerHandle,
+		windows.SE_FILE_OBJECT,
+		windows.OWNER_SECURITY_INFORMATION,
+		owner,
+		nil,
+		nil,
 		nil,
 	)
 }
