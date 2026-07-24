@@ -20,6 +20,14 @@ the committed sums before compilation.
 The runtime package layer removes apt/dpkg logs and the regenerated ldconfig
 auxiliary cache because they contain execution-time state and are not required
 to load the pinned runtime library.
+The first solve also exports the identical BuildKit result through the Docker
+exporter for local runtime checks. The retained deliverable remains the
+independently verified OCI archive; it is not passed to `docker image load`,
+whose input contract is a Docker image archive. Both exporters rewrite layer
+timestamps to the reviewed `SOURCE_DATE_EPOCH` and use OCI media types. The
+build requires the
+loaded image identity to match either the retained OCI manifest digest
+(containerd image store) or its config digest (classic image store).
 
 Build and independently verify one architecture with Buildx `v0.35.0` and the
 reviewed `docker-container` builder from `baseline.json`. The build fails

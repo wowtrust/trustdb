@@ -90,10 +90,15 @@ func TestRepositoryAutomationPinsReviewedBuildToolchain(t *testing.T) {
 	for _, exact := range []string{
 		"buildx_version='" + baseline.BuildxVersion + "'",
 		"buildkit_image='" + baseline.BuildKitImage + "'",
+		`--output "type=docker,name=$runtime_image,oci-mediatypes=true,rewrite-timestamp=true"`,
+		`"$image_digest"|"$config_digest"`,
 	} {
 		if !strings.Contains(string(script), exact) {
 			t.Fatalf("TLCP build script does not verify reviewed toolchain value %q", exact)
 		}
+	}
+	if strings.Contains(string(script), "docker load") {
+		t.Fatal("TLCP build script must not pass an OCI layout to docker image load")
 	}
 }
 
@@ -138,6 +143,14 @@ func TestBuildRecordBindsArchiveSBOMAndBaseline(t *testing.T) {
 
 	archivePath := filepath.Join(dir, "gateway.oci.tar")
 	imageDigest := writeOCIArchive(t, archivePath, testPlatform)
+	configDigest, err := OCIConfigDigest(archivePath, testPlatform)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expectedConfig := []byte(`{"architecture":"arm64","os":"linux"}`)
+	if configDigest != "sha256:"+testSHA256(expectedConfig) {
+		t.Fatalf("OCI config digest=%s, want digest of the retained config", configDigest)
+	}
 	raw := testRawSBOM("2026-07-24T00:00:00Z", "urn:random")
 	sbom, err := NormalizeSBOM(raw, baseline, imageDigest)
 	if err != nil {

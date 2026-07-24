@@ -98,12 +98,19 @@ jobs:
         run: |
           set -euo pipefail
           packaging/tlcp-gateway/build.sh | tee "$RUNNER_TEMP/tlcp-build.log"
-          image="$(awk '/^TLCP gateway image:/ {print $4}' "$RUNNER_TEMP/tlcp-build.log")"
-          if ! [[ "$image" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+          digest="$(awk '/^TLCP gateway image:/ {print $4}' "$RUNNER_TEMP/tlcp-build.log")"
+          runtime_image="$(awk '/^TLCP gateway runtime image:/ {print $5}' "$RUNNER_TEMP/tlcp-build.log")"
+          if ! [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
             echo "::error::reproducible build did not emit an image digest"
             exit 1
           fi
-          echo "image=$image" >> "$GITHUB_OUTPUT"
+          expected_runtime_image="trustdb-tlcp-gateway:verified-${PLATFORM//\//-}"
+          if [[ "$runtime_image" != "$expected_runtime_image" ]]; then
+            echo "::error::reproducible build did not load the expected runtime image"
+            exit 1
+          fi
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          echo "image=$runtime_image" >> "$GITHUB_OUTPUT"
 
       - name: Run real HTTP and HTTP/2 gRPC TLCP tests
         env:

@@ -265,9 +265,19 @@ func VerifySBOM(data []byte, baseline Baseline, imageDigest string) error {
 }
 
 func OCIImageDigest(path, platform string) (string, error) {
+	imageDigest, _, err := inspectOCIImage(path, platform)
+	return imageDigest, err
+}
+
+func OCIConfigDigest(path, platform string) (string, error) {
+	_, configDigest, err := inspectOCIImage(path, platform)
+	return configDigest, err
+}
+
+func inspectOCIImage(path, platform string) (string, string, error) {
 	file, err := os.Open(path)
 	if err != nil {
-		return "", fmt.Errorf("open OCI archive: %w", err)
+		return "", "", fmt.Errorf("open OCI archive: %w", err)
 	}
 	defer file.Close()
 	reader := tar.NewReader(file)
@@ -283,25 +293,25 @@ func OCIImageDigest(path, platform string) (string, error) {
 			break
 		}
 		if err != nil {
-			return "", fmt.Errorf("read OCI archive: %w", err)
+			return "", "", fmt.Errorf("read OCI archive: %w", err)
 		}
 		entries++
 		if entries > maxOCIEntries {
-			return "", fmt.Errorf("OCI archive exceeds %d entries", maxOCIEntries)
+			return "", "", fmt.Errorf("OCI archive exceeds %d entries", maxOCIEntries)
 		}
 		if !header.FileInfo().Mode().IsRegular() {
 			continue
 		}
 		if header.Name == "index.json" {
 			if indexData != nil {
-				return "", errors.New("OCI archive contains duplicate index.json entries")
+				return "", "", errors.New("OCI archive contains duplicate index.json entries")
 			}
 			if header.Size > 1<<20 {
-				return "", errors.New("OCI index exceeds 1 MiB")
+				return "", "", errors.New("OCI index exceeds 1 MiB")
 			}
 			indexData, err = io.ReadAll(reader)
 			if err != nil {
-				return "", fmt.Errorf("read OCI index: %w", err)
+				return "", "", fmt.Errorf("read OCI index: %w", err)
 			}
 			continue
 		}
@@ -311,69 +321,69 @@ func OCIImageDigest(path, platform string) (string, error) {
 		}
 		nameDigest := strings.TrimPrefix(header.Name, blobPrefix)
 		if err := validateDigest("OCI blob name", nameDigest, false); err != nil {
-			return "", err
+			return "", "", err
 		}
 		if _, exists := blobHashes[nameDigest]; exists {
-			return "", fmt.Errorf("OCI archive contains duplicate blob %s", nameDigest)
+			return "", "", fmt.Errorf("OCI archive contains duplicate blob %s", nameDigest)
 		}
 		hash := sha256.New()
 		if header.Size <= 4<<20 {
 			storedJSONBytes += header.Size
 			if storedJSONBytes > maxStoredOCIJSONBytes {
-				return "", errors.New("OCI archive contains too many small candidate JSON blobs")
+				return "", "", errors.New("OCI archive contains too many small candidate JSON blobs")
 			}
 			data, err := io.ReadAll(io.TeeReader(reader, hash))
 			if err != nil {
-				return "", fmt.Errorf("read OCI blob %s: %w", nameDigest, err)
+				return "", "", fmt.Errorf("read OCI blob %s: %w", nameDigest, err)
 			}
 			jsonBlobs[nameDigest] = data
 		} else if _, err := io.Copy(hash, reader); err != nil {
-			return "", fmt.Errorf("hash OCI blob %s: %w", nameDigest, err)
+			return "", "", fmt.Errorf("hash OCI blob %s: %w", nameDigest, err)
 		}
 		actualDigest := hex.EncodeToString(hash.Sum(nil))
 		if actualDigest != nameDigest {
-			return "", fmt.Errorf("OCI blob %s content digest is %s", nameDigest, actualDigest)
+			return "", "", fmt.Errorf("OCI blob %s content digest is %s", nameDigest, actualDigest)
 		}
 		blobHashes[nameDigest] = actualDigest
 		blobSizes[nameDigest] = header.Size
 	}
 	if indexData == nil {
-		return "", errors.New("OCI archive has no index.json")
+		return "", "", errors.New("OCI archive has no index.json")
 	}
 	var index ociIndex
 	if err := decodeStrict(indexData, &index); err != nil {
-		return "", fmt.Errorf("decode OCI index: %w", err)
+		return "", "", fmt.Errorf("decode OCI index: %w", err)
 	}
 	if index.SchemaVersion != 2 || len(index.Manifests) != 1 {
-		return "", errors.New("OCI archive must contain exactly one image manifest")
+		return "", "", errors.New("OCI archive must contain exactly one image manifest")
 	}
 	descriptor := index.Manifests[0]
 	actualPlatform := descriptor.Platform.OS + "/" + descriptor.Platform.Architecture
 	if actualPlatform != platform {
-		return "", fmt.Errorf("OCI image platform is %s, expected %s", actualPlatform, platform)
+		return "", "", fmt.Errorf("OCI image platform is %s, expected %s", actualPlatform, platform)
 	}
 	if descriptor.MediaType != "application/vnd.oci.image.manifest.v1+json" {
-		return "", fmt.Errorf("unexpected OCI manifest media type %q", descriptor.MediaType)
+		return "", "", fmt.Errorf("unexpected OCI manifest media type %q", descriptor.MediaType)
 	}
 	if err := validateDigest("OCI image digest", descriptor.Digest, true); err != nil {
-		return "", err
+		return "", "", err
 	}
 	manifestDigest := strings.TrimPrefix(descriptor.Digest, "sha256:")
 	manifestData, ok := jsonBlobs[manifestDigest]
 	if !ok || blobHashes[manifestDigest] == "" {
-		return "", errors.New("OCI image manifest blob is missing")
+		return "", "", errors.New("OCI image manifest blob is missing")
 	}
 	if blobSizes[manifestDigest] != descriptor.Size {
-		return "", errors.New("OCI image manifest descriptor size does not match its blob")
+		return "", "", errors.New("OCI image manifest descriptor size does not match its blob")
 	}
 	var manifest ociManifest
 	if err := decodeStrict(manifestData, &manifest); err != nil {
-		return "", fmt.Errorf("decode OCI image manifest: %w", err)
+		return "", "", fmt.Errorf("decode OCI image manifest: %w", err)
 	}
 	if manifest.SchemaVersion != 2 ||
 		manifest.Config.MediaType != "application/vnd.oci.image.config.v1+json" ||
 		len(manifest.Layers) == 0 {
-		return "", errors.New("OCI image manifest has an unsupported config or no layers")
+		return "", "", errors.New("OCI image manifest has an unsupported config or no layers")
 	}
 	if err := requireOCIBlob(
 		blobHashes,
@@ -382,7 +392,7 @@ func OCIImageDigest(path, platform string) (string, error) {
 		manifest.Config.Size,
 		"config",
 	); err != nil {
-		return "", err
+		return "", "", err
 	}
 	for index, layer := range manifest.Layers {
 		switch layer.MediaType {
@@ -390,7 +400,7 @@ func OCIImageDigest(path, platform string) (string, error) {
 			"application/vnd.oci.image.layer.v1.tar+zstd",
 			"application/vnd.oci.image.layer.v1.tar":
 		default:
-			return "", fmt.Errorf("OCI layer %d has unsupported media type %q", index, layer.MediaType)
+			return "", "", fmt.Errorf("OCI layer %d has unsupported media type %q", index, layer.MediaType)
 		}
 		if err := requireOCIBlob(
 			blobHashes,
@@ -399,10 +409,10 @@ func OCIImageDigest(path, platform string) (string, error) {
 			layer.Size,
 			fmt.Sprintf("layer %d", index),
 		); err != nil {
-			return "", err
+			return "", "", err
 		}
 	}
-	return descriptor.Digest, nil
+	return descriptor.Digest, manifest.Config.Digest, nil
 }
 
 func requireOCIBlob(

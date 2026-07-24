@@ -20,7 +20,7 @@ func main() {
 
 func run(args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
-		return errors.New("usage: trustdb-tlcp-build-record <oci-digest|normalize-sbom|record|verify>")
+		return errors.New("usage: trustdb-tlcp-build-record <oci-digest|oci-config-digest|normalize-sbom|record|verify>")
 	}
 	switch args[0] {
 	case "oci-digest":
@@ -33,6 +33,21 @@ func run(args []string, stdout, stderr io.Writer) error {
 			return err
 		}
 		digest, err := tlcpbuild.OCIImageDigest(archive, platform)
+		if err != nil {
+			return err
+		}
+		_, err = fmt.Fprintln(stdout, digest)
+		return err
+	case "oci-config-digest":
+		flags := flag.NewFlagSet("oci-config-digest", flag.ContinueOnError)
+		flags.SetOutput(stderr)
+		var archive, platform string
+		flags.StringVar(&archive, "oci-archive", "", "path to a single-platform OCI image archive")
+		flags.StringVar(&platform, "platform", "", "expected OS/architecture")
+		if err := parseFlags(flags, args[1:]); err != nil {
+			return err
+		}
+		digest, err := tlcpbuild.OCIConfigDigest(archive, platform)
 		if err != nil {
 			return err
 		}

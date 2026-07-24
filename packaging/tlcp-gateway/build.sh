@@ -12,6 +12,7 @@ syft_image='docker.io/anchore/syft:v1.38.2@sha256:63a159108794114992136692c92155
 buildx_version='v0.35.0'
 buildkit_image='docker.io/moby/buildkit:v0.31.2@sha256:2f5adac4ecd194d9f8c10b7b5d7bceb5186853db1b26e5abd3a657af0b7e26ec'
 build_progress=${BUILDKIT_PROGRESS:-plain}
+runtime_image="trustdb-tlcp-gateway:verified-$platform_id"
 
 case "$platform" in
   linux/amd64|linux/arm64) ;;
@@ -57,19 +58,27 @@ trap 'rm -rf "$work"' EXIT HUP INT TERM
 build_image() {
   destination=$1
   metadata=$2
-  SOURCE_DATE_EPOCH=$source_date_epoch docker buildx build \
+  load_runtime=$3
+  set -- docker buildx build \
     --file "$dockerfile" \
     --metadata-file "$metadata" \
     --no-cache \
     --output "type=oci,dest=$destination,rewrite-timestamp=true" \
     --platform "$platform" \
     --progress "$build_progress" \
-    --provenance=false \
-    "$root"
+    --provenance=false
+  if [ "$load_runtime" = "yes" ]; then
+    # Export the same pinned BuildKit result through the Docker exporter so
+    # the daemon can execute it. docker image load only promises Docker
+    # archives and rejects OCI layouts on some Engine versions.
+    set -- "$@" --output "type=docker,name=$runtime_image,oci-mediatypes=true,rewrite-timestamp=true"
+  fi
+  set -- "$@" "$root"
+  SOURCE_DATE_EPOCH=$source_date_epoch "$@"
 }
 
-build_image "$work/gateway-first.oci.tar" "$work/metadata-first.json"
-build_image "$work/gateway-second.oci.tar" "$work/metadata-second.json"
+build_image "$work/gateway-first.oci.tar" "$work/metadata-first.json" yes
+build_image "$work/gateway-second.oci.tar" "$work/metadata-second.json" no
 if ! cmp -s "$work/gateway-first.oci.tar" "$work/gateway-second.oci.tar"; then
   printf 'TLCP gateway clean rebuild produced a different OCI archive\n' >&2
   exit 1
@@ -81,6 +90,20 @@ image_digest=$(
     --oci-archive "$work/gateway-first.oci.tar" \
     --platform "$platform"
 )
+config_digest=$(
+  cd "$root"
+  go run ./cmd/trustdb-tlcp-build-record oci-config-digest \
+    --oci-archive "$work/gateway-first.oci.tar" \
+    --platform "$platform"
+)
+runtime_id=$(docker image inspect "$runtime_image" --format '{{.Id}}')
+case "$runtime_id" in
+  "$image_digest"|"$config_digest") ;;
+  *)
+    printf 'TLCP gateway runtime image is not bound to the retained OCI image\n' >&2
+    exit 1
+    ;;
+esac
 
 docker run --rm \
   --env SYFT_CHECK_FOR_APP_UPDATE=false \
@@ -112,15 +135,14 @@ docker run --rm \
     --sbom "$work/gateway.sbom.spdx.json"
 )
 
-docker load --input "$work/gateway-first.oci.tar" >/dev/null
-docker run --rm --platform "$platform" --entrypoint /bin/sh "$image_digest" \
+docker run --rm --platform "$platform" --entrypoint /bin/sh "$runtime_image" \
   -c 'cat /usr/share/trustdb/tlcp-gateway/build-baseline.json' \
   >"$work/baseline-from-image.json"
 if ! cmp -s "$baseline" "$work/baseline-from-image.json"; then
   printf 'TLCP gateway image does not contain the reviewed build baseline\n' >&2
   exit 1
 fi
-docker run --rm --platform "$platform" --entrypoint /bin/sh "$image_digest" -c '
+docker run --rm --platform "$platform" --entrypoint /bin/sh "$runtime_image" -c '
   set -eu
   fail() {
     printf "TLCP gateway runtime check failed: %s\n" "$1" >&2
@@ -153,7 +175,7 @@ docker run --rm --platform "$platform" --entrypoint /bin/sh "$image_digest" -c '
     *) fail "Tongsuo version drifted" ;;
   esac
 '
-if docker run --rm --platform "$platform" "$image_digest" >/dev/null 2>&1; then
+if docker run --rm --platform "$platform" "$runtime_image" >/dev/null 2>&1; then
   printf 'TLCP gateway unexpectedly started without a validated profile environment\n' >&2
   exit 1
 fi
@@ -164,4 +186,5 @@ install -m 0644 "$work/gateway.build-record.json" "$output_dir/gateway-$platform
 install -m 0644 "$work/gateway.build-record.json.sha256" "$output_dir/gateway-$platform_id.build-record.json.sha256"
 
 printf 'TLCP gateway image: %s\n' "$image_digest"
+printf 'TLCP gateway runtime image: %s\n' "$runtime_image"
 printf 'Verified artifacts: %s\n' "$output_dir"

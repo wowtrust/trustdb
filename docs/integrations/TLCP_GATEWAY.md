@@ -266,6 +266,11 @@ the source, base image, frontend, exact Buildx release, multi-architecture
 BuildKit image digest, image, manifest, layers, and scanner. The build exits
 before compilation unless the active `docker-container` builder matches the
 reviewed toolchain in `packaging/tlcp-gateway/baseline.json`.
+Runtime checks execute a Docker-exported image from the same first BuildKit
+solve. The retained and byte-compared deliverable remains the OCI archive,
+which is verified directly instead of being passed to `docker image load`.
+Both exporters use the same reviewed timestamp rewrite, and the loaded image
+must match the retained manifest or config digest before any runtime check.
 
 Run the real gateway test on a Linux or Docker Desktop host:
 
