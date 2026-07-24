@@ -325,7 +325,7 @@ func TestTLCPGatewayHTTPAndGRPCMutualAuthentication(t *testing.T) {
 		}
 	})
 
-	t.Run("revoked client certificate", func(t *testing.T) {
+	t.Run("revoked readiness certificate", func(t *testing.T) {
 		revokedBundle, revokedServerCRL, revokedClientCRL := writeRevokedCRLBundle(t, fixture)
 		name := startGatewayContainer(
 			t,
@@ -339,32 +339,11 @@ func TestTLCPGatewayHTTPAndGRPCMutualAuthentication(t *testing.T) {
 				"TLCP_GATEWAY_HTTP_BIND": "0.0.0.0:" + canaryHTTPPort,
 				"TLCP_GATEWAY_GRPC_BIND": "0.0.0.0:" + canaryGRPCPort,
 			},
-			false,
-		)
-		waitForLog(t, name, "start worker processes")
-		waitForUnhealthy(t, name)
-		revokedGateway := runningGateway{
-			gatewayContainer:  name,
-			upstreamContainer: running.upstreamContainer,
-			gatewayImage:      gatewayImage,
-			fixture:           fixture,
-			httpPort:          canaryHTTPPort,
-			grpcPort:          canaryGRPCPort,
-		}
-		result, err := runOpenSSLText(
-			revokedGateway,
-			fixture,
-			"http/1.1",
-			nil,
-			"GET /health HTTP/1.1\r\nHost: "+serverName+"\r\nConnection: close\r\n\r\n",
 			true,
 		)
-		if strings.Contains(result, "HTTP/1.1 200 OK") ||
-			!strings.Contains(result, "400 The SSL certificate error") {
-			t.Fatalf("gateway did not reject a revoked HTTP client: err=%v\n%s", err, result)
-		}
-		if err := runGRPCHealthClient(revokedGateway, fixture); err == nil {
-			t.Fatal("gateway accepted a revoked client for the gRPC health service")
+		logs := dockerOutput(t, "logs", name)
+		if !strings.Contains(logs, "revokes a configured TLCP endpoint certificate") {
+			t.Fatalf("revoked readiness identity did not fail startup:\n%s", logs)
 		}
 	})
 

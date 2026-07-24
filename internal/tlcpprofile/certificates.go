@@ -258,7 +258,8 @@ func loadEndpointChain(
 	top := certificates[len(certificates)-1]
 	matchedRoot := false
 	for _, root := range roots {
-		if validateIssuerLink(top, root) != nil {
+		if !bytes.Equal(top.Raw, root.Raw) &&
+			validateIssuerLink(top, root) != nil {
 			continue
 		}
 		if matchedRoot {

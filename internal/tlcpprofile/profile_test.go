@@ -452,6 +452,23 @@ func TestProfileRejectsReadinessKeyMatchingActiveProofSigner(t *testing.T) {
 	}
 }
 
+func TestProfileAcceptsAnExplicitReadinessTrustAnchorAtChainEnd(t *testing.T) {
+	fixture := newTrustFixture(t)
+	appendCertificatePEM(
+		t,
+		fixture.profile.Readiness.SigningChainFile,
+		fixture.clientCA,
+	)
+	appendCertificatePEM(
+		t,
+		fixture.profile.Readiness.EncryptionChainFile,
+		fixture.clientCA,
+	)
+	if _, err := Validate(fixture.profile, Options{Now: fixtureNow}); err != nil {
+		t.Fatalf("Validate() explicit readiness trust anchor error = %v", err)
+	}
+}
+
 func TestProfileRejectsMissingOrUnsafePublicMaterial(t *testing.T) {
 	fixture := newTrustFixture(t)
 	missing := cloneProfile(t, fixture.profile)
