@@ -223,17 +223,25 @@ else
 fi
 
 export CGO_ENABLED=1
-export CGO_LDFLAGS="-L$(dirname "${CSDK_ARCHIVE}")"
+CSDK_DIR=$(dirname "${CSDK_ARCHIVE}")
+export CGO_LDFLAGS="-L${CSDK_DIR}"
 if [[ ${PLATFORM} == darwin/* ]]; then
-    export DYLD_LIBRARY_PATH="$(dirname "${CSDK_ARCHIVE}")${DYLD_LIBRARY_PATH:+:${DYLD_LIBRARY_PATH}}"
+    # The upstream dylib install name uses @rpath. Embed the verified cache
+    # directory so CI and developer shells do not depend on DYLD_* inheritance.
+    export CGO_LDFLAGS="${CGO_LDFLAGS} -Wl,-rpath,${CSDK_DIR}"
+    export DYLD_LIBRARY_PATH="${CSDK_DIR}${DYLD_LIBRARY_PATH:+:${DYLD_LIBRARY_PATH}}"
 else
-    export LD_LIBRARY_PATH="$(dirname "${CSDK_ARCHIVE}")${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+    export LD_LIBRARY_PATH="${CSDK_DIR}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
 fi
 
-(
+if ! (
     cd "${SCRIPT_DIR}/smoke-client"
     GOWORK=off go build -trimpath -o "${WORK_DIR}/smoke-client" .
-)
+) >"${WORK_DIR}/smoke-client-build.log" 2>&1; then
+    echo "the Go SDK smoke client failed to build" >&2
+    sed 's/^/  /' "${WORK_DIR}/smoke-client-build.log" >&2
+    exit 1
+fi
 
 NODE_PIDS=()
 
@@ -241,6 +249,12 @@ stop_nodes() {
     local pid
     local attempt
     local running
+
+    # Bash 3.2 treats "${empty_array[@]}" as an unbound variable under
+    # `set -u`. The normal path clears this array before the EXIT trap runs.
+    if ((${#NODE_PIDS[@]} == 0)); then
+        return 0
+    fi
 
     for ((index=${#NODE_PIDS[@]} - 1; index >= 0; index--)); do
         pid=${NODE_PIDS[index]}
@@ -271,6 +285,9 @@ cleanup() {
         rm -f "${SMOKE_LOCK}/pid"
         rmdir "${SMOKE_LOCK}" 2>/dev/null || true
     fi
+    # An EXIT trap must not turn an otherwise successful smoke run into a
+    # failure when the normal path has already released and cleared the lock.
+    return 0
 }
 SMOKE_LOCK="${TMPDIR:-/tmp}/trustdb-fisco-bcos-smoke-${PLATFORM//\//-}.lock"
 if ! mkdir "${SMOKE_LOCK}" 2>/dev/null; then
@@ -351,11 +368,15 @@ else
         --bin "${WORK_DIR}/contract/CompatibilityProbe.bin"
     )
 fi
-(
+if ! (
     cd "${WORK_DIR}"
     "${WORK_DIR}/smoke-client" "${CLIENT_ARGS[@]}"
 ) >"${WORK_DIR}/client-evidence.json" \
-  2>"${WORK_DIR}/client-stderr.log"
+  2>"${WORK_DIR}/client-stderr.log"; then
+    echo "the Go SDK smoke client failed" >&2
+    sed 's/^/  /' "${WORK_DIR}/client-stderr.log" >&2
+    exit 1
+fi
 
 if ! stop_nodes; then
     echo "one or more FISCO BCOS nodes required SIGKILL during teardown" >&2
