@@ -193,6 +193,7 @@ func TestHTTPClientGetAnchorMapsImmutableResult(t *testing.T) {
 				TreeSize:      7,
 				SinkName:      "ots",
 				AnchorID:      "anchor-7",
+				EvidenceStage: model.AnchorEvidenceStageOfflineVerified,
 				STH: model.SignedTreeHead{
 					CryptoSuite: cryptosuite.INTLV1,
 				},
