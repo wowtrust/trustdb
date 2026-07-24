@@ -366,7 +366,7 @@ func (d *nativeDriver) GetReceiptWithProof(ctx context.Context, attempt fiscobco
 	if !encodedHexFits(receipt.Output, fiscobcos.MaxNativeEvidenceFieldBytes) {
 		return fiscobcos.ReceiptWithProof{}, fiscobcos.ErrIncompleteChainEvidence
 	}
-	output, err := decodeHex(receipt.Output)
+	output, err := decodeHexBoundedOptional(receipt.Output, fiscobcos.MaxNativeEvidenceFieldBytes)
 	if err != nil {
 		return fiscobcos.ReceiptWithProof{}, fiscobcos.ErrIncompleteChainEvidence
 	}
@@ -417,7 +417,7 @@ func (d *nativeDriver) GetReceiptWithProof(ctx context.Context, attempt fiscobco
 				return fiscobcos.ReceiptWithProof{}, fiscobcos.ErrIncompleteChainEvidence
 			}
 		}
-		data, err := decodeHex(log.Data)
+		data, err := decodeHexBoundedOptional(log.Data, fiscobcos.MaxProofNodeBytes)
 		if err != nil {
 			return fiscobcos.ReceiptWithProof{}, fiscobcos.ErrIncompleteChainEvidence
 		}
@@ -584,7 +584,7 @@ func (d *nativeDriver) GetBlockHeader(ctx context.Context, blockNumber uint64) (
 		if !encodedHexFits(nodeID, fiscobcos.MaxNativeEvidenceFieldBytes) {
 			return fiscobcos.BlockHeader{}, fiscobcos.ErrIncompleteChainEvidence
 		}
-		sealerList[index], err = decodeHex(nodeID)
+		sealerList[index], err = decodeHexBounded(nodeID, fiscobcos.MaxNativeEvidenceFieldBytes)
 		if err != nil || len(sealerList[index]) == 0 {
 			return fiscobcos.BlockHeader{}, fiscobcos.ErrIncompleteChainEvidence
 		}
@@ -592,7 +592,7 @@ func (d *nativeDriver) GetBlockHeader(ctx context.Context, blockNumber uint64) (
 	if !encodedHexFits(block.ExtraData, fiscobcos.MaxNativeEvidenceFieldBytes) {
 		return fiscobcos.BlockHeader{}, fiscobcos.ErrIncompleteChainEvidence
 	}
-	extraData, err := decodeHex(block.ExtraData)
+	extraData, err := decodeHexBoundedOptional(block.ExtraData, fiscobcos.MaxNativeEvidenceFieldBytes)
 	if err != nil {
 		return fiscobcos.BlockHeader{}, fiscobcos.ErrIncompleteChainEvidence
 	}
@@ -1452,10 +1452,21 @@ func strictHexBytes(value string, size int) ([]byte, error) {
 }
 
 func decodeHexBounded(value string, decodedLimit int) ([]byte, error) {
-	if err := validateHexText(value, decodedLimit, false); err != nil {
+	return decodeHexBoundedValue(value, decodedLimit, false)
+}
+
+func decodeHexBoundedOptional(value string, decodedLimit int) ([]byte, error) {
+	return decodeHexBoundedValue(value, decodedLimit, true)
+}
+
+func decodeHexBoundedValue(value string, decodedLimit int, allowEmpty bool) ([]byte, error) {
+	if err := validateHexText(value, decodedLimit, allowEmpty); err != nil {
 		return nil, err
 	}
 	value = strings.TrimPrefix(strings.TrimSpace(value), "0x")
+	if value == "" {
+		return []byte{}, nil
+	}
 	return hex.DecodeString(value)
 }
 

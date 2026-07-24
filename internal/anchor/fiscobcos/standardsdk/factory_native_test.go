@@ -257,3 +257,26 @@ func TestNativeRPCBoundsRejectHostileEndpointValuesBeforeDecode(t *testing.T) {
 		t.Fatal("accepted transaction bodies in a header-only response")
 	}
 }
+
+func TestBoundedHexDecodersPreserveOptionalNativeFields(t *testing.T) {
+	t.Parallel()
+
+	for _, value := range []string{"", "0x"} {
+		decoded, err := decodeHexBoundedOptional(value, 2)
+		if err != nil || len(decoded) != 0 {
+			t.Fatalf("decodeHexBoundedOptional(%q)=%x err=%v", value, decoded, err)
+		}
+	}
+	decoded, err := decodeHexBoundedOptional("0x00ff", 2)
+	if err != nil || !bytes.Equal(decoded, []byte{0x00, 0xff}) {
+		t.Fatalf("decodeHexBoundedOptional(valid)=%x err=%v", decoded, err)
+	}
+	for _, value := range []string{"0x0", "0xzz", "0x000001"} {
+		if _, err := decodeHexBoundedOptional(value, 2); err == nil {
+			t.Fatalf("decodeHexBoundedOptional(%q) accepted invalid or oversized input", value)
+		}
+	}
+	if _, err := decodeHexBounded("", 2); err == nil {
+		t.Fatal("decodeHexBounded accepted an empty required field")
+	}
+}
