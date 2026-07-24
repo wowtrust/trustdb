@@ -275,6 +275,19 @@ func TestVerifyNativeArtifactSupportsUnicodePath(t *testing.T) {
 	}
 }
 
+func TestNativeArtifactNameMatchesPlatformSemantics(t *testing.T) {
+	t.Parallel()
+	if !nativeArtifactNameMatches("windows", "BCOS-C-SDK.DLL", "bcos-c-sdk.dll") {
+		t.Fatal("Windows DLL name comparison rejected a case-only difference")
+	}
+	if nativeArtifactNameMatches("linux", "LIBBCOS-C-SDK.SO", "libbcos-c-sdk.so") {
+		t.Fatal("Linux artifact name comparison accepted a case-only difference")
+	}
+	if nativeArtifactNameMatches("windows", "other.dll", "bcos-c-sdk.dll") {
+		t.Fatal("Windows DLL name comparison accepted a different filename")
+	}
+}
+
 func TestObservedNativeRuntimeMatchesProtocolPin(t *testing.T) {
 	got, err := observeAndVerifyNativeRuntime()
 	if err != nil {

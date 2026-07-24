@@ -148,7 +148,8 @@ func parseNativeVersion(value string) (string, string, error) {
 }
 
 func verifyNativeArtifact(path string, pin nativeArtifactPin) error {
-	if path == "" || !filepath.IsAbs(path) || filepath.Base(path) != pin.name ||
+	if path == "" || !filepath.IsAbs(path) ||
+		!nativeArtifactNameMatches(runtime.GOOS, filepath.Base(path), pin.name) ||
 		pin.size <= 0 || len(pin.sha256) != sha256.Size*2 {
 		return errors.New("FISCO BCOS native SDK artifact identity is invalid")
 	}
@@ -177,4 +178,14 @@ func verifyNativeArtifact(path string, pin nativeArtifactPin) error {
 		return fmt.Errorf("FISCO BCOS native SDK artifact SHA-256 mismatch: got %s", got)
 	}
 	return nil
+}
+
+func nativeArtifactNameMatches(goos, actual, expected string) bool {
+	if goos == "windows" {
+		// Windows resolves DLL names case-insensitively and GetModuleFileNameW
+		// may return a different case from the release asset name. The exact
+		// size and SHA-256 checks below still bind the loaded file's identity.
+		return strings.EqualFold(actual, expected)
+	}
+	return actual == expected
 }
