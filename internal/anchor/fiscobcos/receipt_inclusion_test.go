@@ -70,7 +70,12 @@ func TestVerifyReceiptInclusionRejectsMutationAndWrongMode(t *testing.T) {
 		name   string
 		mutate func(*AnchorProof)
 	}{
+		{name: "transaction_bytes", mutate: func(p *AnchorProof) {
+			last := len(p.TransactionAttempts[0].RawCanonicalTransaction) - 1
+			p.TransactionAttempts[0].RawCanonicalTransaction[last] ^= 1
+		}},
 		{name: "transaction_sender", mutate: func(p *AnchorProof) { p.TransactionAttempts[0].Sender[0] ^= 1 }},
+		{name: "receipt_status_message", mutate: func(p *AnchorProof) { p.Receipt.StatusMessage = "status_0" }},
 		{name: "transaction_index", mutate: func(p *AnchorProof) { p.Receipt.TransactionIndex = 1 }},
 		{name: "receipt_index", mutate: func(p *AnchorProof) { p.Receipt.ReceiptIndex = 1 }},
 		{name: "transaction_path", mutate: func(p *AnchorProof) { p.Receipt.TransactionProof[0][0] ^= 1 }},
@@ -105,6 +110,11 @@ func TestVerifyReceiptInclusionRejectsMutationAndWrongMode(t *testing.T) {
 	wrongMode.Contract = trust.Contract
 	if err := VerifyReceiptInclusion(sth, result, wrongMode); err == nil {
 		t.Fatal("standard evidence verified under local Guomi mode")
+	}
+	wrongContract := cloneTrustConfig(trust)
+	wrongContract.Contract.Address[0] ^= 1
+	if err := VerifyReceiptInclusion(sth, result, wrongContract); err == nil {
+		t.Fatal("evidence verified under the wrong local contract")
 	}
 
 	notRaw := result

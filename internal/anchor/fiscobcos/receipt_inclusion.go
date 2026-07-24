@@ -45,6 +45,10 @@ func VerifyReceiptInclusion(
 	if err != nil {
 		return fmt.Errorf("%w: decode canonical payload: %v", ErrInvalidProof, err)
 	}
+	if proof.Receipt.Status != ReceiptStatusOK ||
+		proof.Receipt.StatusMessage != "success" {
+		return fmt.Errorf("%w: receipt does not carry the exact successful status", ErrInvalidProof)
+	}
 	attempt := proof.TransactionAttempts[proof.SuccessfulAttemptOrdinal-1]
 	if err := verifyCanonicalTransaction(proof.CryptoMode, config.SM2UserID, proof, attempt, payload); err != nil {
 		return err
