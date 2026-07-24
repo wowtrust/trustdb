@@ -7,6 +7,7 @@ on:
       - "configs/compatibility/fisco-bcos-v3.16.3.json"
       - "docs/integrations/ADR-0012-FISCO-BCOS-3X-COMPATIBILITY-BASELINE.md"
       - "docs/integrations/evidence/fisco-bcos/**"
+      - "contracts/fisco-bcos/**"
       - "scripts/fisco-bcos/**"
   push:
     branches:
@@ -16,6 +17,7 @@ on:
       - "configs/compatibility/fisco-bcos-v3.16.3.json"
       - "docs/integrations/ADR-0012-FISCO-BCOS-3X-COMPATIBILITY-BASELINE.md"
       - "docs/integrations/evidence/fisco-bcos/**"
+      - "contracts/fisco-bcos/**"
       - "scripts/fisco-bcos/**"
 
 permissions:
@@ -26,6 +28,46 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  contract-artifacts:
+    name: Contract artifacts and EVM semantics
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: |
+            go.sum
+            scripts/fisco-bcos/contract-test/go.sum
+
+      - name: Verify reproducible standard and Guomi artifacts
+        run: |
+          python3 scripts/fisco-bcos/test_build_anchor_contract.py
+          python3 scripts/fisco-bcos/build_anchor_contract.py \
+            --platform linux/amd64 \
+            --cache-dir "${RUNNER_TEMP}/fisco-cache" \
+            --check
+
+      - name: Run contract unit, authorization, concurrency, and gas tests
+        working-directory: scripts/fisco-bcos/contract-test
+        env:
+          GOWORK: "off"
+        run: go test -count=1 -mod=readonly -v ./...
+
+      - name: Fuzz contract idempotency
+        working-directory: scripts/fisco-bcos/contract-test
+        env:
+          GOWORK: "off"
+        run: >
+          go test -mod=readonly -run '^$'
+          -fuzz '^FuzzExactDuplicateIsIdempotent$'
+          -fuzztime 10s ./...
+
   macos-air:
     name: macOS arm64 Air runtime
     runs-on: macos-15
