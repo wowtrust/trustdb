@@ -645,6 +645,9 @@ func TestFISCOBCOSPostSubmitConflictDoesNotAdvanceAnchorResult(t *testing.T) {
 	if _, found, err := store.GetSTHAnchorResult(context.Background(), sth.TreeSize); err != nil || found {
 		t.Fatalf("conflicting readback result found=%v err=%v", found, err)
 	}
+	if latest, found, err := store.LatestSTHAnchorResultForKey(context.Background(), key); err != nil || found {
+		t.Fatalf("conflicting readback latest result=%+v found=%v err=%v", latest, found, err)
+	}
 	schedule, found, err := store.GetSTHAnchorSchedule(context.Background(), key)
 	if err != nil || !found || schedule.InFlight == nil || !schedule.InFlight.TerminalFailure {
 		t.Fatalf("conflicting readback schedule=%+v found=%v err=%v", schedule, found, err)
