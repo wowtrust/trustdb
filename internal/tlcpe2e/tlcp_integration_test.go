@@ -852,6 +852,10 @@ func runOpenSSLText(
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	command := exec.CommandContext(ctx, "docker", args...)
+	return runTextCommand(command, request)
+}
+
+func runTextCommand(command *exec.Cmd, request string) (string, error) {
 	var stdout, stderr bytes.Buffer
 	command.Stdout = &stdout
 	command.Stderr = &stderr
@@ -860,15 +864,73 @@ func runOpenSSLText(
 		return "", err
 	}
 	if err := command.Start(); err != nil {
-		return "", err
+		return "", errors.Join(err, stdin.Close())
 	}
-	if _, err := io.WriteString(stdin, request); err != nil {
-		_ = command.Process.Kill()
-		_ = command.Wait()
-		return stdout.String() + stderr.String(), err
+	_, writeErr := io.WriteString(stdin, request)
+	closeErr := stdin.Close()
+	waitErr := command.Wait()
+	if writeErr != nil {
+		writeErr = fmt.Errorf("write command stdin: %w", writeErr)
 	}
-	err = command.Wait()
-	return stdout.String() + stderr.String(), err
+	if closeErr != nil {
+		closeErr = fmt.Errorf("close command stdin: %w", closeErr)
+	}
+	if waitErr != nil {
+		waitErr = fmt.Errorf("wait for command: %w", waitErr)
+	}
+	return stdout.String() + stderr.String(), errors.Join(writeErr, closeErr, waitErr)
+}
+
+func TestRunTextCommandClosesStdinBeforeWait(t *testing.T) {
+	command := exec.Command(
+		os.Args[0],
+		"-test.run=^TestRunTextCommandHelperProcess$",
+		"--",
+		"echo-after-eof",
+	)
+	command.Env = append(os.Environ(), "TRUSTDB_RUN_TEXT_COMMAND_HELPER=1")
+	output, err := runTextCommand(command, "request body")
+	if err != nil {
+		t.Fatalf("runTextCommand() error = %v, output = %q", err, output)
+	}
+	if output != "request body" {
+		t.Fatalf("runTextCommand() output = %q, want %q", output, "request body")
+	}
+}
+
+func TestRunTextCommandReportsWaitError(t *testing.T) {
+	command := exec.Command(
+		os.Args[0],
+		"-test.run=^TestRunTextCommandHelperProcess$",
+		"--",
+		"fail-after-eof",
+	)
+	command.Env = append(os.Environ(), "TRUSTDB_RUN_TEXT_COMMAND_HELPER=1")
+	output, err := runTextCommand(command, "request body")
+	if err == nil || !strings.Contains(err.Error(), "wait for command") {
+		t.Fatalf("runTextCommand() error = %v, want wait error", err)
+	}
+	if !strings.Contains(output, "request body") ||
+		!strings.Contains(output, "intentional helper failure") {
+		t.Fatalf("runTextCommand() output = %q, want stdout and stderr", output)
+	}
+}
+
+func TestRunTextCommandHelperProcess(t *testing.T) {
+	if os.Getenv("TRUSTDB_RUN_TEXT_COMMAND_HELPER") != "1" {
+		return
+	}
+	body, err := io.ReadAll(os.Stdin)
+	if err != nil {
+		_, _ = fmt.Fprintln(os.Stderr, err)
+		os.Exit(2)
+	}
+	_, _ = os.Stdout.Write(body)
+	if len(os.Args) > 0 && os.Args[len(os.Args)-1] == "fail-after-eof" {
+		_, _ = fmt.Fprintln(os.Stderr, "intentional helper failure")
+		os.Exit(23)
+	}
+	os.Exit(0)
 }
 
 func runStandardTLSClient(
