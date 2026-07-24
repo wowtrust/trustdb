@@ -69,6 +69,10 @@ server:
       mode: "off"
       serial_file: ""
 
+tlcp:
+  gateway_profile: ""
+  identity_manifest: ""
+
 # Optional JetStream ingress. Disabled means TrustDB does not connect to NATS
 # or create any broker resources; the existing HTTP and gRPC transports remain
 # unchanged. workers=0 lets the future runtime size workers automatically.
@@ -224,6 +228,7 @@ type Config struct {
 	Paths      Paths      `mapstructure:"paths" json:"paths"`
 	Identity   Identity   `mapstructure:"identity" json:"identity"`
 	Server     Server     `mapstructure:"server" json:"server"`
+	TLCP       TLCP       `mapstructure:"tlcp" json:"tlcp"`
 	NATS       NATS       `mapstructure:"nats" json:"nats"`
 	Registry   Registry   `mapstructure:"registry" json:"registry"`
 	Batch      Batch      `mapstructure:"batch" json:"batch"`
@@ -236,6 +241,11 @@ type Config struct {
 	Log        Log        `mapstructure:"log" json:"log"`
 	Keys       Keys       `mapstructure:"keys" json:"keys"`
 	Admin      Admin      `mapstructure:"admin" json:"admin"`
+}
+
+type TLCP struct {
+	GatewayProfile   string `mapstructure:"gateway_profile" json:"gateway_profile"`
+	IdentityManifest string `mapstructure:"identity_manifest" json:"identity_manifest"`
 }
 
 // Admin configures the optional operator web console mounted by trustdb serve.

@@ -6,6 +6,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/wowtrust/trustdb/internal/tlcpprofile"
 )
 
 func TestRunRequiresValidateAndProfile(t *testing.T) {
@@ -54,6 +57,51 @@ func TestPrepareRuntimeScriptCannotBypassDeadlineThroughEnvironment(t *testing.T
 		"trustdb-tlcp-profile activate-runtime",
 	) {
 		t.Fatal("runtime preparation does not use the deadline-owning wrapper")
+	}
+}
+
+func TestInjectedLegacyDeadlineEnvironmentCannotSkipActivationValidation(t *testing.T) {
+	t.Setenv("TLCP_PREPARE_DEADLINE_ACTIVE", "1")
+	var stdout, stderr bytes.Buffer
+	err := run(
+		[]string{"activate-runtime", "--lifecycle", "startup"},
+		&stdout,
+		&stderr,
+	)
+	if err == nil || !strings.Contains(err.Error(), "is required") {
+		t.Fatalf("activate-runtime error = %v", err)
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("activate-runtime wrote success output %q", stdout.String())
+	}
+}
+
+func TestInitialProfileValidationConsumesTheLifecycleDeadline(t *testing.T) {
+	started := time.Unix(100, 0)
+	profile := tlcpprofile.Profile{Timeouts: tlcpprofile.Timeouts{
+		Startup: "1m30s",
+		Reload:  "90s",
+		Canary:  "90s",
+	}}
+	deadline, err := validatedLifecycleDeadline(
+		started,
+		started.Add(89*time.Second),
+		profile,
+		tlcpprofile.LifecycleStartup,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := started.Add(90 * time.Second); !deadline.Equal(want) {
+		t.Fatalf("deadline = %s, want %s", deadline, want)
+	}
+	if _, err := validatedLifecycleDeadline(
+		started,
+		started.Add(90*time.Second),
+		profile,
+		tlcpprofile.LifecycleStartup,
+	); err == nil {
+		t.Fatal("profile validation completing at the deadline was accepted")
 	}
 }
 

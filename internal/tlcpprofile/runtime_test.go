@@ -91,13 +91,13 @@ func TestVerifyRuntimeRejectsEveryBoundInputDrift(t *testing.T) {
 			},
 		},
 		{
-			name: "authoritative proof-key descriptor",
+			name: "TrustDB active identity manifest",
 			mutate: func(t *testing.T, _ string, _ RuntimeOptions, fixture trustFixture) {
 				t.Helper()
-				writeProofDescriptor(
+				writeProofIdentityManifest(
 					t,
-					fixture.profile.ProofKeyDescriptorFiles[0],
-					proofVerifierDescriptor(t, bytes.Repeat([]byte{8}, 32)),
+					fixture.profile.TrustDBIdentityManifestFile,
+					proofVerifierDescriptor(t, reportPublicKey(t)),
 				)
 			},
 		},
@@ -126,16 +126,16 @@ func TestVerifyRuntimeRejectsEveryBoundInputDrift(t *testing.T) {
 	}
 }
 
-func TestProductionRequiresProofSigningIdentities(t *testing.T) {
+func TestProductionRequiresTrustDBIdentityManifest(t *testing.T) {
 	fixture := newTrustFixture(t)
 	fixture.profile.Environment = EnvironmentProduction
 	fixture.profile.Certificates.SigningKey.Provider = KeyProviderSDF
 	fixture.profile.Certificates.SigningKey.Reference = "engine:sdf:gateway-signing"
 	fixture.profile.Certificates.EncryptionKey.Provider = KeyProviderSDF
 	fixture.profile.Certificates.EncryptionKey.Reference = "engine:sdf:gateway-encryption"
-	fixture.profile.ProofKeyDescriptorFiles = nil
+	fixture.profile.TrustDBIdentityManifestFile = ""
 	if _, err := Validate(fixture.profile, Options{Now: fixtureNow}); err == nil ||
-		!strings.Contains(err.Error(), "proof_key_descriptor_files") {
+		!strings.Contains(err.Error(), "trustdb_identity_manifest_file") {
 		t.Fatalf("production profile without proof identities error = %v", err)
 	}
 }

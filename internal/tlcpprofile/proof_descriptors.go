@@ -3,8 +3,6 @@ package tlcpprofile
 import (
 	"bytes"
 	"crypto/ed25519"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 
@@ -49,39 +47,6 @@ type proofPublicKeyMaterial struct {
 type proofKeyInventory struct {
 	descriptorSHA256 string
 	publicKeySHA256  string
-}
-
-// loadProofKeyInventory reads TrustDB's canonical public verifier descriptors
-// directly. The TLCP profile supplies only deployment paths; it cannot declare
-// or override the public-key fingerprints used for separation checks.
-func loadProofKeyInventory(paths []string) ([]proofKeyInventory, error) {
-	inventory := make([]proofKeyInventory, 0, len(paths))
-	seenPublicKeys := make(map[string]struct{}, len(paths))
-	for index, path := range paths {
-		data, err := readBoundedRegularFile(path, maxProofKeyDescriptorBytes)
-		if err != nil {
-			return nil, fmt.Errorf("read proof-key descriptor %d: %w", index, err)
-		}
-		descriptor, err := decodeProofKeyDescriptor(data)
-		if err != nil {
-			return nil, fmt.Errorf("decode proof-key descriptor %d: %w", index, err)
-		}
-		publicKeyDER, err := proofPublicKeyDER(descriptor)
-		if err != nil {
-			return nil, fmt.Errorf("proof-key descriptor %d: %w", index, err)
-		}
-		publicKeySHA256 := digestBytes(publicKeyDER)
-		if _, duplicate := seenPublicKeys[publicKeySHA256]; duplicate {
-			return nil, errors.New("proof-key descriptors contain a duplicate public key")
-		}
-		seenPublicKeys[publicKeySHA256] = struct{}{}
-		descriptorDigest := sha256.Sum256(data)
-		inventory = append(inventory, proofKeyInventory{
-			descriptorSHA256: hex.EncodeToString(descriptorDigest[:]),
-			publicKeySHA256:  publicKeySHA256,
-		})
-	}
-	return inventory, nil
 }
 
 func decodeProofKeyDescriptor(data []byte) (proofKeyDescriptor, error) {

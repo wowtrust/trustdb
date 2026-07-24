@@ -56,24 +56,24 @@ const (
 	MaxCRLCount            = 8
 	MaxStringBytes         = 4096
 	MaxBuildParameterCount = 32
-	MaxProofKeyDescriptors = 32
 )
 
 type Profile struct {
-	SchemaVersion           string         `json:"schema_version"`
-	ProfileID               string         `json:"profile_id"`
-	Environment             string         `json:"environment"`
-	Mode                    string         `json:"mode"`
-	CryptoMode              string         `json:"crypto_mode"`
-	ServerName              string         `json:"server_name"`
-	CipherSuites            []string       `json:"cipher_suites"`
-	ALPNProtocols           []string       `json:"alpn_protocols"`
-	Implementation          Implementation `json:"implementation"`
-	Network                 Network        `json:"network"`
-	Certificates            Certificates   `json:"certificates"`
-	ProofKeyDescriptorFiles []string       `json:"proof_key_descriptor_files"`
-	Revocation              Revocation     `json:"revocation"`
-	Timeouts                Timeouts       `json:"timeouts"`
+	SchemaVersion               string            `json:"schema_version"`
+	ProfileID                   string            `json:"profile_id"`
+	Environment                 string            `json:"environment"`
+	Mode                        string            `json:"mode"`
+	CryptoMode                  string            `json:"crypto_mode"`
+	ServerName                  string            `json:"server_name"`
+	CipherSuites                []string          `json:"cipher_suites"`
+	ALPNProtocols               []string          `json:"alpn_protocols"`
+	Implementation              Implementation    `json:"implementation"`
+	Network                     Network           `json:"network"`
+	Certificates                Certificates      `json:"certificates"`
+	Readiness                   ReadinessIdentity `json:"readiness"`
+	TrustDBIdentityManifestFile string            `json:"trustdb_identity_manifest_file"`
+	Revocation                  Revocation        `json:"revocation"`
+	Timeouts                    Timeouts          `json:"timeouts"`
 }
 
 type Implementation struct {
@@ -118,6 +118,11 @@ type KeyReference struct {
 	PublicKeySHA256 string `json:"public_key_sha256"`
 }
 
+type ReadinessIdentity struct {
+	SigningChainFile    string `json:"signing_chain_file"`
+	EncryptionChainFile string `json:"encryption_chain_file"`
+}
+
 type Revocation struct {
 	Mode                 string   `json:"mode"`
 	CRLFiles             []string `json:"crl_files"`
@@ -138,20 +143,27 @@ type Options struct {
 }
 
 type Report struct {
-	SchemaVersion                 string    `json:"schema_version"`
-	ProfileID                     string    `json:"profile_id"`
-	ServerName                    string    `json:"server_name"`
-	SigningCertificateSHA256      string    `json:"signing_certificate_sha256"`
-	EncryptionCertificateSHA256   string    `json:"encryption_certificate_sha256"`
-	SigningPublicKeySHA256        string    `json:"signing_public_key_sha256"`
-	EncryptionPublicKeySHA256     string    `json:"encryption_public_key_sha256"`
-	ServerCASHA256                []string  `json:"server_ca_sha256"`
-	ClientCASHA256                []string  `json:"client_ca_sha256"`
-	ProofKeyDescriptorSHA256      []string  `json:"proof_key_descriptor_sha256"`
-	ProofSigningPublicKeySHA256   []string  `json:"proof_signing_public_key_sha256"`
-	CRLIssuers                    []string  `json:"crl_issuers"`
-	EarliestCertificateExpiration time.Time `json:"earliest_certificate_expiration"`
-	EarliestCRLExpiration         time.Time `json:"earliest_crl_expiration"`
+	SchemaVersion                        string    `json:"schema_version"`
+	ProfileID                            string    `json:"profile_id"`
+	ServerName                           string    `json:"server_name"`
+	SigningCertificateSHA256             string    `json:"signing_certificate_sha256"`
+	EncryptionCertificateSHA256          string    `json:"encryption_certificate_sha256"`
+	SigningPublicKeySHA256               string    `json:"signing_public_key_sha256"`
+	EncryptionPublicKeySHA256            string    `json:"encryption_public_key_sha256"`
+	ReadinessSigningCertificateSHA256    string    `json:"readiness_signing_certificate_sha256"`
+	ReadinessEncryptionCertificateSHA256 string    `json:"readiness_encryption_certificate_sha256"`
+	ReadinessSigningPublicKeySHA256      string    `json:"readiness_signing_public_key_sha256"`
+	ReadinessEncryptionPublicKeySHA256   string    `json:"readiness_encryption_public_key_sha256"`
+	TrustDBIdentityManifestSHA256        string    `json:"trustdb_identity_manifest_sha256"`
+	RegistryKeyDescriptorSHA256          string    `json:"registry_key_descriptor_sha256,omitempty"`
+	RegistrySigningPublicKeySHA256       string    `json:"registry_signing_public_key_sha256,omitempty"`
+	ServerCASHA256                       []string  `json:"server_ca_sha256"`
+	ClientCASHA256                       []string  `json:"client_ca_sha256"`
+	ProofKeyDescriptorSHA256             []string  `json:"proof_key_descriptor_sha256"`
+	ProofSigningPublicKeySHA256          []string  `json:"proof_signing_public_key_sha256"`
+	CRLIssuers                           []string  `json:"crl_issuers"`
+	EarliestCertificateExpiration        time.Time `json:"earliest_certificate_expiration"`
+	EarliestCRLExpiration                time.Time `json:"earliest_crl_expiration"`
 }
 
 func Decode(data []byte) (Profile, error) {
@@ -234,9 +246,12 @@ func validateProfileFields(profile Profile, options Options) error {
 	); err != nil {
 		return err
 	}
-	if err := validateProofKeyDescriptorFiles(
-		profile.ProofKeyDescriptorFiles,
-		profile.Environment,
+	if err := validateReadinessIdentity(profile.Readiness); err != nil {
+		return err
+	}
+	if err := validateAbsoluteCleanPath(
+		"trustdb_identity_manifest_file",
+		profile.TrustDBIdentityManifestFile,
 	); err != nil {
 		return err
 	}
@@ -283,28 +298,17 @@ func validateImplementation(value Implementation) error {
 	return nil
 }
 
-func validateProofKeyDescriptorFiles(values []string, environment string) error {
-	if environment == EnvironmentProduction && len(values) == 0 {
-		return errors.New("production TLCP gateway profile requires proof_key_descriptor_files")
-	}
-	if len(values) > MaxProofKeyDescriptors {
-		return fmt.Errorf(
-			"TLCP gateway profile proof_key_descriptor_files exceeds %d entries",
-			MaxProofKeyDescriptors,
-		)
-	}
-	paths := make(map[string]struct{}, len(values))
-	for index, path := range values {
-		if err := validateAbsoluteCleanPath(
-			fmt.Sprintf("proof_key_descriptor_files[%d]", index),
-			path,
-		); err != nil {
+func validateReadinessIdentity(identity ReadinessIdentity) error {
+	for name, path := range map[string]string{
+		"readiness.signing_chain_file":    identity.SigningChainFile,
+		"readiness.encryption_chain_file": identity.EncryptionChainFile,
+	} {
+		if err := validateAbsoluteCleanPath(name, path); err != nil {
 			return err
 		}
-		if _, duplicate := paths[path]; duplicate {
-			return errors.New("TLCP gateway profile contains a duplicate proof-key descriptor path")
-		}
-		paths[path] = struct{}{}
+	}
+	if identity.SigningChainFile == identity.EncryptionChainFile {
+		return errors.New("TLCP readiness signing and encryption chains must be distinct")
 	}
 	return nil
 }

@@ -19,18 +19,23 @@ import (
 )
 
 type certificateSet struct {
-	signingLeaf        *smx509.Certificate
-	encryptionLeaf     *smx509.Certificate
-	serverRoots        []*smx509.Certificate
-	clientRoots        []*smx509.Certificate
-	serverCertificates []*smx509.Certificate
-	all                []*smx509.Certificate
+	signingLeaf             *smx509.Certificate
+	encryptionLeaf          *smx509.Certificate
+	readinessSigningLeaf    *smx509.Certificate
+	readinessEncryptionLeaf *smx509.Certificate
+	serverRoots             []*smx509.Certificate
+	clientRoots             []*smx509.Certificate
+	serverCertificates      []*smx509.Certificate
+	clientCertificates      []*smx509.Certificate
+	all                     []*smx509.Certificate
 }
 
 func validatePublicTrust(profile Profile, now time.Time) (Report, error) {
-	proofKeys, err := loadProofKeyInventory(profile.ProofKeyDescriptorFiles)
+	identityManifest, proofKeys, identityManifestSHA256, err := loadTrustDBIdentityManifest(
+		profile.TrustDBIdentityManifestFile,
+	)
 	if err != nil {
-		return Report{}, fmt.Errorf("validate TrustDB proof-key descriptors: %w", err)
+		return Report{}, fmt.Errorf("validate TrustDB active identities: %w", err)
 	}
 	serverRoots, err := loadCABundle(profile.Certificates.ServerCAFile, now)
 	if err != nil {
@@ -46,6 +51,7 @@ func validatePublicTrust(profile Profile, now time.Time) (Report, error) {
 		profile.ServerName,
 		now,
 		signingCertificateRole,
+		smx509.ExtKeyUsageServerAuth,
 	)
 	if err != nil {
 		return Report{}, fmt.Errorf("validate TLCP signing certificate: %w", err)
@@ -56,6 +62,7 @@ func validatePublicTrust(profile Profile, now time.Time) (Report, error) {
 		profile.ServerName,
 		now,
 		encryptionCertificateRole,
+		smx509.ExtKeyUsageServerAuth,
 	)
 	if err != nil {
 		return Report{}, fmt.Errorf("validate TLCP encryption certificate: %w", err)
@@ -63,16 +70,52 @@ func validatePublicTrust(profile Profile, now time.Time) (Report, error) {
 	if err := validateDualCertificateIdentity(signingChain[0], encryptionChain[0]); err != nil {
 		return Report{}, err
 	}
+	readinessSigningChain, err := loadEndpointChain(
+		profile.Readiness.SigningChainFile,
+		clientRoots,
+		"",
+		now,
+		signingCertificateRole,
+		smx509.ExtKeyUsageClientAuth,
+	)
+	if err != nil {
+		return Report{}, fmt.Errorf("validate TLCP readiness signing certificate: %w", err)
+	}
+	readinessEncryptionChain, err := loadEndpointChain(
+		profile.Readiness.EncryptionChainFile,
+		clientRoots,
+		"",
+		now,
+		encryptionCertificateRole,
+		smx509.ExtKeyUsageClientAuth,
+	)
+	if err != nil {
+		return Report{}, fmt.Errorf("validate TLCP readiness encryption certificate: %w", err)
+	}
+	if err := validateDualCertificateIdentity(
+		readinessSigningChain[0],
+		readinessEncryptionChain[0],
+	); err != nil {
+		return Report{}, fmt.Errorf("validate TLCP readiness identity: %w", err)
+	}
 	set := certificateSet{
 		signingLeaf: signingChain[0], encryptionLeaf: encryptionChain[0],
-		serverRoots: serverRoots, clientRoots: clientRoots,
+		readinessSigningLeaf:    readinessSigningChain[0],
+		readinessEncryptionLeaf: readinessEncryptionChain[0],
+		serverRoots:             serverRoots, clientRoots: clientRoots,
 		serverCertificates: append(
 			append([]*smx509.Certificate(nil), signingChain...),
 			encryptionChain...,
 		),
-		all: append(append(append(
+		clientCertificates: append(
+			append([]*smx509.Certificate(nil), readinessSigningChain...),
+			readinessEncryptionChain...,
+		),
+		all: append(append(append(append(append(
 			append([]*smx509.Certificate(nil), signingChain...),
 			encryptionChain...),
+			readinessSigningChain...),
+			readinessEncryptionChain...),
 			serverRoots...),
 			clientRoots...),
 	}
@@ -81,15 +124,26 @@ func validatePublicTrust(profile Profile, now time.Time) (Report, error) {
 		return Report{}, err
 	}
 	report := Report{
-		SchemaVersion:               SchemaVersion,
-		ProfileID:                   profile.ProfileID,
-		ServerName:                  profile.ServerName,
-		SigningCertificateSHA256:    certificateFingerprint(set.signingLeaf),
-		EncryptionCertificateSHA256: certificateFingerprint(set.encryptionLeaf),
-		SigningPublicKeySHA256:      publicKeyFingerprint(set.signingLeaf),
-		EncryptionPublicKeySHA256:   publicKeyFingerprint(set.encryptionLeaf),
-		ServerCASHA256:              certificateFingerprints(serverRoots),
-		ClientCASHA256:              certificateFingerprints(clientRoots),
+		SchemaVersion:                        SchemaVersion,
+		ProfileID:                            profile.ProfileID,
+		ServerName:                           profile.ServerName,
+		SigningCertificateSHA256:             certificateFingerprint(set.signingLeaf),
+		EncryptionCertificateSHA256:          certificateFingerprint(set.encryptionLeaf),
+		SigningPublicKeySHA256:               publicKeyFingerprint(set.signingLeaf),
+		EncryptionPublicKeySHA256:            publicKeyFingerprint(set.encryptionLeaf),
+		ReadinessSigningCertificateSHA256:    certificateFingerprint(set.readinessSigningLeaf),
+		ReadinessEncryptionCertificateSHA256: certificateFingerprint(set.readinessEncryptionLeaf),
+		ReadinessSigningPublicKeySHA256:      publicKeyFingerprint(set.readinessSigningLeaf),
+		ReadinessEncryptionPublicKeySHA256:   publicKeyFingerprint(set.readinessEncryptionLeaf),
+		TrustDBIdentityManifestSHA256:        identityManifestSHA256,
+		ServerCASHA256:                       certificateFingerprints(serverRoots),
+		ClientCASHA256:                       certificateFingerprints(clientRoots),
+	}
+	if identityManifest.RegistrySigner != nil {
+		report.RegistryKeyDescriptorSHA256 =
+			identityManifest.RegistrySigner.DescriptorSHA256
+		report.RegistrySigningPublicKeySHA256 =
+			identityManifest.RegistrySigner.PublicKeySHA256
 	}
 	for _, proofKey := range proofKeys {
 		report.ProofKeyDescriptorSHA256 = append(
@@ -109,11 +163,32 @@ func validatePublicTrust(profile Profile, now time.Time) (Report, error) {
 	if report.EncryptionPublicKeySHA256 != profile.Certificates.EncryptionKey.PublicKeySHA256 {
 		return Report{}, errors.New("TLCP encryption key fingerprint does not match the encryption certificate")
 	}
-	for _, fingerprint := range report.ProofSigningPublicKeySHA256 {
-		if fingerprint == report.SigningPublicKeySHA256 ||
-			fingerprint == report.EncryptionPublicKeySHA256 {
+	transportFingerprints := []string{
+		report.SigningPublicKeySHA256,
+		report.EncryptionPublicKeySHA256,
+		report.ReadinessSigningPublicKeySHA256,
+		report.ReadinessEncryptionPublicKeySHA256,
+	}
+	seenTransport := make(map[string]struct{}, len(transportFingerprints))
+	for _, fingerprint := range transportFingerprints {
+		if _, duplicate := seenTransport[fingerprint]; duplicate {
 			return Report{}, errors.New(
-				"TLCP transport key overlaps an authoritative TrustDB proof-signing public key",
+				"TLCP gateway server and readiness identities must use four distinct public keys",
+			)
+		}
+		seenTransport[fingerprint] = struct{}{}
+	}
+	for _, fingerprint := range report.ProofSigningPublicKeySHA256 {
+		if _, overlap := seenTransport[fingerprint]; overlap {
+			return Report{}, errors.New(
+				"TLCP transport or readiness key overlaps the active TrustDB proof signer",
+			)
+		}
+	}
+	if report.RegistrySigningPublicKeySHA256 != "" {
+		if _, overlap := seenTransport[report.RegistrySigningPublicKeySHA256]; overlap {
+			return Report{}, errors.New(
+				"TLCP transport or readiness key overlaps the active TrustDB registry signer",
 			)
 		}
 	}
@@ -141,7 +216,14 @@ const (
 	encryptionCertificateRole
 )
 
-func loadEndpointChain(path string, roots []*smx509.Certificate, serverName string, now time.Time, role certificateRole) ([]*smx509.Certificate, error) {
+func loadEndpointChain(
+	path string,
+	roots []*smx509.Certificate,
+	identityName string,
+	now time.Time,
+	role certificateRole,
+	extendedUsage smx509.ExtKeyUsage,
+) ([]*smx509.Certificate, error) {
 	certificates, err := loadCertificatePEM(path)
 	if err != nil {
 		return nil, err
@@ -156,11 +238,13 @@ func loadEndpointChain(path string, roots []*smx509.Certificate, serverName stri
 	if err := validateSM2Certificate(leaf); err != nil {
 		return nil, err
 	}
-	if err := validateEndpointRole(leaf, role); err != nil {
+	if err := validateEndpointRole(leaf, role, extendedUsage); err != nil {
 		return nil, err
 	}
-	if err := leaf.VerifyHostname(serverName); err != nil {
-		return nil, fmt.Errorf("certificate does not cover server_name: %w", err)
+	if identityName != "" {
+		if err := leaf.VerifyHostname(identityName); err != nil {
+			return nil, fmt.Errorf("certificate does not cover endpoint identity: %w", err)
+		}
 	}
 	for index := 1; index < len(certificates); index++ {
 		certificate := certificates[index]
@@ -194,11 +278,11 @@ func loadEndpointChain(path string, roots []*smx509.Certificate, serverName stri
 		intermediates.AddCert(certificate)
 	}
 	chains, err := leaf.Verify(smx509.VerifyOptions{
-		DNSName:       serverName,
+		DNSName:       identityName,
 		Roots:         rootPool,
 		Intermediates: intermediates,
 		CurrentTime:   now,
-		KeyUsages:     []smx509.ExtKeyUsage{smx509.ExtKeyUsageServerAuth},
+		KeyUsages:     []smx509.ExtKeyUsage{extendedUsage},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("verify SM2 certificate chain: %w", err)
@@ -339,11 +423,15 @@ func validateCurrentCertificate(certificate *smx509.Certificate, now time.Time) 
 	return nil
 }
 
-func validateEndpointRole(certificate *smx509.Certificate, role certificateRole) error {
+func validateEndpointRole(
+	certificate *smx509.Certificate,
+	role certificateRole,
+	extendedUsage smx509.ExtKeyUsage,
+) error {
 	if len(certificate.UnknownExtKeyUsage) != 0 ||
 		len(certificate.ExtKeyUsage) != 1 ||
-		certificate.ExtKeyUsage[0] != smx509.ExtKeyUsageServerAuth {
-		return errors.New("TLCP endpoint certificate EKU must be exactly serverAuth")
+		certificate.ExtKeyUsage[0] != extendedUsage {
+		return errors.New("TLCP endpoint certificate EKU does not match its declared identity role")
 	}
 	if len(certificateIdentities(certificate)) == 0 {
 		return errors.New("TLCP endpoint certificate must contain at least one SAN identity")
@@ -428,7 +516,11 @@ func loadAndValidateCRLs(config Revocation, set certificateSet, now time.Time) (
 		append([]*smx509.Certificate(nil), set.serverRoots...),
 		set.clientRoots...,
 	)
-	for _, certificate := range set.serverCertificates {
+	endpointCertificates := append(
+		append([]*smx509.Certificate(nil), set.serverCertificates...),
+		set.clientCertificates...,
+	)
+	for _, certificate := range endpointCertificates {
 		if certificate.IsCA {
 			cas = append(cas, certificate)
 		}
@@ -465,10 +557,10 @@ func loadAndValidateCRLs(config Revocation, set certificateSet, now time.Time) (
 		if err := validateRevokedEntries(crl); err != nil {
 			return nil, fmt.Errorf("CRL %d: %w", index, err)
 		}
-		for _, certificate := range set.serverCertificates {
+		for _, certificate := range endpointCertificates {
 			if validateIssuerLink(certificate, issuer) == nil &&
 				crlRevokes(crl, certificate.SerialNumber) {
-				return nil, fmt.Errorf("CRL %d revokes a configured TLCP server certificate", index)
+				return nil, fmt.Errorf("CRL %d revokes a configured TLCP endpoint certificate", index)
 			}
 		}
 		crls = append(crls, crl)

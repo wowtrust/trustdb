@@ -33,6 +33,7 @@ import (
 	"github.com/wowtrust/trustdb/internal/cryptosuite"
 	"github.com/wowtrust/trustdb/internal/keydescriptor"
 	"github.com/wowtrust/trustdb/internal/tlcpprofile"
+	"github.com/wowtrust/trustdb/internal/trustcrypto"
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/hpack"
 )
@@ -776,12 +777,16 @@ func gatewayDockerArgs(
 		case "TLCP_GATEWAY_GRPC_BIND":
 			profile.Network.GatewayGRPCBind = value
 			profileChanged = true
-		case "TLCP_PROOF_KEY_DESCRIPTOR_FILE":
-			profile.ProofKeyDescriptorFiles = []string{value}
+		case "TLCP_TRUSTDB_IDENTITY_MANIFEST_FILE":
+			profile.TrustDBIdentityManifestFile = value
 			profileChanged = true
-		case "TLCP_READINESS_SIGNING_CHAIN_FILE",
-			"TLCP_READINESS_SIGNING_KEY_REFERENCE",
-			"TLCP_READINESS_ENCRYPTION_CHAIN_FILE",
+		case "TLCP_READINESS_SIGNING_CHAIN_FILE":
+			profile.Readiness.SigningChainFile = value
+			profileChanged = true
+		case "TLCP_READINESS_ENCRYPTION_CHAIN_FILE":
+			profile.Readiness.EncryptionChainFile = value
+			profileChanged = true
+		case "TLCP_READINESS_SIGNING_KEY_REFERENCE",
 			"TLCP_READINESS_ENCRYPTION_KEY_REFERENCE":
 		default:
 			t.Fatalf("unsupported TLCP profile test override %q", name)
@@ -1360,7 +1365,10 @@ func newCertificateFixture(t *testing.T) certificateFixture {
 		filepath.Join(dir, "crl-bundle.pem"),
 		append(append([]byte(nil), serverCRLPEM...), clientCRLPEM...),
 	)
-	writeE2EProofDescriptor(t, filepath.Join(dir, "proof-server.pub"))
+	writeE2ETrustDBIdentityManifest(
+		t,
+		filepath.Join(dir, "trustdb-active-identities.json"),
+	)
 	fixture := certificateFixture{
 		dir:                    dir,
 		serverSigningSHA256:    publicKeySHA256(t, serverSigning),
@@ -1452,7 +1460,7 @@ func prepareServerGenerations(
 		"server-ca.crl",
 		"client-ca.crl",
 		"crl-bundle.pem",
-		"proof-server.pub",
+		"trustdb-active-identities.json",
 		"client-signing.pem",
 		"client-signing.key",
 		"client-encryption.pem",
@@ -1533,8 +1541,8 @@ func prepareServerGenerations(
 	appendCertificate(t, filepath.Join(secondDir, "client-encryption.pem"), secondClientCA)
 	copyTestFile(
 		t,
-		filepath.Join(fixture.dir, "proof-server.pub"),
-		filepath.Join(secondDir, "proof-server.pub"),
+		filepath.Join(fixture.dir, "trustdb-active-identities.json"),
+		filepath.Join(secondDir, "trustdb-active-identities.json"),
 	)
 	secondServerCRL := createCRL(
 		t,
@@ -1611,7 +1619,7 @@ func prepareExpiredServerGeneration(
 		"server-ca.crl",
 		"client-ca.crl",
 		"crl-bundle.pem",
-		"proof-server.pub",
+		"trustdb-active-identities.json",
 	} {
 		copyTestFile(t, filepath.Join(fixture.dir, name), filepath.Join(dir, name))
 	}
@@ -1633,20 +1641,20 @@ func generationEnvironment(generation serverGeneration, httpBind, grpcBind strin
 		return environment
 	}
 	for name, value := range map[string]string{
-		"TLCP_SERVER_SIGNING_CHAIN_FILE":    prefix + "/server-signing.pem",
-		"TLCP_SERVER_ENCRYPTION_CHAIN_FILE": prefix + "/server-encryption.pem",
-		"TLCP_SERVER_CA_FILE":               prefix + "/server-ca.pem",
-		"TLCP_CLIENT_CA_FILE":               prefix + "/client-ca.pem",
-		"TLCP_SERVER_CRL_FILE":              prefix + "/server-ca.crl",
-		"TLCP_CLIENT_CRL_FILE":              prefix + "/client-ca.crl",
-		"TLCP_CRL_BUNDLE_FILE":              prefix + "/crl-bundle.pem",
-		"TLCP_PROOF_KEY_DESCRIPTOR_FILE":    prefix + "/proof-server.pub",
-		"TLCP_SIGNING_KEY_REFERENCE":        prefix + "/server-signing.key",
-		"TLCP_SIGNING_PUBLIC_KEY_SHA256":    generation.signingPublicKeySHA256,
-		"TLCP_ENCRYPTION_KEY_REFERENCE":     prefix + "/server-encryption.key",
-		"TLCP_ENCRYPTION_PUBLIC_KEY_SHA256": generation.encryptionPublicKeySHA256,
-		"TLCP_GATEWAY_HTTP_BIND":            "0.0.0.0:" + httpBind,
-		"TLCP_GATEWAY_GRPC_BIND":            "0.0.0.0:" + grpcBind,
+		"TLCP_SERVER_SIGNING_CHAIN_FILE":      prefix + "/server-signing.pem",
+		"TLCP_SERVER_ENCRYPTION_CHAIN_FILE":   prefix + "/server-encryption.pem",
+		"TLCP_SERVER_CA_FILE":                 prefix + "/server-ca.pem",
+		"TLCP_CLIENT_CA_FILE":                 prefix + "/client-ca.pem",
+		"TLCP_SERVER_CRL_FILE":                prefix + "/server-ca.crl",
+		"TLCP_CLIENT_CRL_FILE":                prefix + "/client-ca.crl",
+		"TLCP_CRL_BUNDLE_FILE":                prefix + "/crl-bundle.pem",
+		"TLCP_TRUSTDB_IDENTITY_MANIFEST_FILE": prefix + "/trustdb-active-identities.json",
+		"TLCP_SIGNING_KEY_REFERENCE":          prefix + "/server-signing.key",
+		"TLCP_SIGNING_PUBLIC_KEY_SHA256":      generation.signingPublicKeySHA256,
+		"TLCP_ENCRYPTION_KEY_REFERENCE":       prefix + "/server-encryption.key",
+		"TLCP_ENCRYPTION_PUBLIC_KEY_SHA256":   generation.encryptionPublicKeySHA256,
+		"TLCP_GATEWAY_HTTP_BIND":              "0.0.0.0:" + httpBind,
+		"TLCP_GATEWAY_GRPC_BIND":              "0.0.0.0:" + grpcBind,
 	} {
 		environment[name] = value
 	}
@@ -1689,7 +1697,9 @@ func writeGenerationProfile(
 		prefix + "/client-ca.crl",
 	}
 	profile.Revocation.GatewayCRLBundleFile = prefix + "/crl-bundle.pem"
-	profile.ProofKeyDescriptorFiles = []string{prefix + "/proof-server.pub"}
+	profile.Readiness.SigningChainFile = prefix + "/client-signing.pem"
+	profile.Readiness.EncryptionChainFile = prefix + "/client-encryption.pem"
+	profile.TrustDBIdentityManifestFile = prefix + "/trustdb-active-identities.json"
 	profile.Network.GatewayHTTPBind = "0.0.0.0:" + httpBind
 	profile.Network.GatewayGRPCBind = "0.0.0.0:" + grpcBind
 	data, err := json.MarshalIndent(profile, "", "  ")
@@ -2005,8 +2015,17 @@ func writePEMFile(t *testing.T, path string, data []byte) {
 	}
 }
 
-func writeE2EProofDescriptor(t *testing.T, path string) {
+func writeE2ETrustDBIdentityManifest(t *testing.T, path string) {
 	t.Helper()
+	_, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signer := trustcrypto.MustNewEd25519Signer("e2e-proof-signer", privateKey)
+	activePublicKey, err := signer.PublicKey(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
 	descriptor := keydescriptor.Descriptor{
 		SchemaVersion: keydescriptor.SchemaV1,
 		Kind:          keydescriptor.KindVerifier,
@@ -2016,14 +2035,18 @@ func writeE2EProofDescriptor(t *testing.T, path string) {
 		Algorithm:     cryptosuite.SignatureEd25519,
 		PublicKey: keydescriptor.PublicKeyMaterial{
 			Encoding: cryptosuite.Ed25519PublicKeyEncoding,
-			Bytes:    bytes.Repeat([]byte{7}, ed25519.PublicKeySize),
+			Bytes:    activePublicKey.Bytes,
 		},
 	}
 	data, err := keydescriptor.Marshal(descriptor)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(path, data, 0o644); err != nil {
+	if _, err := tlcpprofile.WriteTrustDBIdentityManifest(
+		path,
+		data,
+		nil,
+	); err != nil {
 		t.Fatal(err)
 	}
 }

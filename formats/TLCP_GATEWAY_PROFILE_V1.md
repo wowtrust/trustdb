@@ -47,16 +47,18 @@ Every production reference uses `engine:<id>:<key-id>`. For the `pkcs11` and
 an opaque provider identifier, not a filesystem path or private-key value.
 
 Proof-signing keys remain under TrustDB's existing `keys.*` and
-`crypto.signer_plugins.*` configuration. Every production profile contains a
-non-empty `proof_key_descriptor_files` array naming the canonical public
-verifier descriptors selected by the same generation as the active TrustDB
-configuration. The gateway reads those real CBOR descriptors, requires
+`crypto.signer_plugins.*` configuration. The profile contains one absolute
+`trustdb_identity_manifest_file`. `trustdb serve` writes that file only after
+resolving the active signer, matching it exactly to both `keys.server_private`
+and `keys.server_public`, and authenticating `keys.registry_public` when a key
+registry is active. The manifest contains canonical public verifier descriptor
+bytes and fingerprints only. The gateway requires
 `trustdb.key-descriptor.v1`, `kind=verifier`, and `provider=public`, rejects
-every private provider union, and computes normalized SPKI fingerprints itself.
-The runtime manifest binds both canonical descriptor bytes and computed public
-keys. Production validation fails when the array is absent, duplicated,
-malformed, changed, or overlaps either gateway key. Optional `--forbid-*` flags
-can add rollout-time identities but do not replace the mandatory files.
+every private provider union, and recomputes normalized SPKI fingerprints.
+TrustDB also loads the profile and fails its own startup when its actual active
+proof signer overlaps the gateway server or readiness identities. The runtime
+manifest binds the complete TrustDB identity-manifest digest, proof descriptor,
+registry identity when present, and computed public keys.
 Gateway certificates, CAs, CRLs, keys, and readiness results never become
 proof trust roots. Proof, WAL, proofstore, backup, and offline verification
 bytes are unchanged.
@@ -100,16 +102,16 @@ All parsing and verification use the pinned `emmansun/gmsm/smx509` SM-aware
 implementation. The validator does not ask Go's standard `crypto/x509` package
 to infer SM2 semantics.
 
-The server signing and encryption inputs are separate, strict, leaf-first PEM
-chains. Their leaf certificates:
+The server and dedicated readiness identities each use separate, strict,
+leaf-first signing and encryption PEM chains. Their leaf certificates:
 
 - use `sm2p256v1` public keys and `SM2-with-SM3` signatures;
 - are different certificates with different public keys;
 - have byte-identical DER subjects;
 - have identical normalized DNS, IP, email, and URI SAN sets;
 - both cover `server_name`;
-- are end-entity certificates with exactly the `serverAuth` EKU and no unknown
-  EKU;
+- are end-entity certificates with no unknown EKU: gateway server leaves use
+  exactly `serverAuth`, and readiness leaves use exactly `clientAuth`;
 - use distinct roles:
   - signing requires `digitalSignature` and forbids encipherment, key agreement,
     CA signing, and CRL signing;
@@ -137,7 +139,7 @@ are issued directly by a configured client trust anchor. Each CRL:
 - has `thisUpdate <= now < nextUpdate`;
 - is no older than `max_staleness`, which cannot exceed 168 hours;
 - contains only positive, unique certificate serial numbers;
-- does not revoke either configured server certificate.
+- does not revoke any configured gateway server or readiness certificate.
 
 The gateway bundle contains the exact same CRL DER objects as the individually
 validated files; missing, extra, duplicate, or substituted CRLs fail before
@@ -158,10 +160,13 @@ The container entrypoint requires `TLCP_PROFILE_FILE` and
 public trust material, renders Nginx configuration only from that profile, and
 writes a canonical `trustdb.tlcp-gateway-runtime-manifest.v1` binding the raw
 profile, rendered configuration, deployed image digest, certificate/public-key
-fingerprints, CA fingerprints, proof-key separation, CRL bundle, and expiry
-bounds. Runtime preparation and `nginx -t` run through the entrypoint's
-`startup` deadline. Any validation failure or timeout exits before Tengine
-starts.
+fingerprints, CA fingerprints, active TrustDB identity manifest, four-way
+transport/readiness separation, CRL bundle, and expiry bounds. Runtime
+preparation and `nginx -t` run through one Go wrapper. Its clock starts before
+the first profile read and one absolute `startup` or `reload` deadline covers
+validation, generation, and Tengine checking. It has no environment-controlled
+recursion flag. Machine-readable durations are emitted as whole seconds rounded
+up; any failure or expiry occurs before runtime promotion.
 
 The shipped readiness executable revalidates that manifest and every
 referenced public input on each probe, then performs, within the configured
@@ -173,9 +178,14 @@ canary timeout:
 4. a proxied gRPC HTTP/2 health RPC.
 
 It uses a dedicated least-privilege client dual certificate supplied through
-the four `TLCP_READINESS_*` variables. Missing credentials, profile/path
-drift, expiry, revocation, an unavailable upstream, or a protocol/cipher
-mismatch keeps the container unhealthy. Kubernetes and similar systems must
+the four `TLCP_READINESS_*` variables. Both certificate paths must exactly
+equal the profile's `readiness` paths, and the runtime manifest includes their
+certificate and public-key fingerprints. The gRPC probe caps OpenSSL
+diagnostics at 64 KiB, individual frames and the cumulative header block at
+16 KiB, the response at exactly 7 bytes, and the exchange at 128 frames.
+Missing credentials, profile/path drift, expiry, revocation, an unavailable
+upstream, or a protocol/cipher mismatch keeps the container unhealthy.
+Kubernetes and similar systems must
 configure `/usr/local/bin/trustdb-tlcp-readiness` as the readiness command
 instead of using a TCP probe and set the outer `timeoutSeconds` to the
 whole-second ceiling of `timeouts.canary`. The executable enforces the exact
@@ -194,9 +204,10 @@ PID, file-descriptor, and restart limits remain mandatory.
 ## Rotation
 
 Signing certificate/reference, encryption certificate/reference, server and
-client CA files, readiness signing/encryption identities, authoritative public
-proof descriptors, every CRL, and the exact gateway CRL bundle form one
-generation. Operators stage a complete generation, run profile validation and
+client CA files, readiness signing/encryption identities, the
+TrustDB-authenticated public identity manifest, every CRL, and the exact
+gateway CRL bundle form one generation. Operators stage a complete generation,
+run profile validation and
 both live canaries in the one admitted candidate, atomically switch the
 generation, invoke the image's `tlcp-gateway-prepare-runtime` helper, and
 request a bounded reload with `tlcp-gateway-prepare-runtime reload`. The helper

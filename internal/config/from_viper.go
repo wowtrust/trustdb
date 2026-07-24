@@ -74,6 +74,10 @@ func FromViper(v *viper.Viper) Config {
 				},
 			},
 		},
+		TLCP: TLCP{
+			GatewayProfile:   v.GetString("tlcp.gateway_profile"),
+			IdentityManifest: v.GetString("tlcp.identity_manifest"),
+		},
 		NATS: NATS{
 			Enabled:         v.GetBool("nats.enabled"),
 			URLs:            splitCSV(strings.Join(v.GetStringSlice("nats.urls"), ",")),

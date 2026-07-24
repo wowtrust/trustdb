@@ -221,6 +221,8 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("keys.server_public", defaults.Keys.ServerPublic)
 	v.SetDefault("keys.registry_private", defaults.Keys.RegistryPrivate)
 	v.SetDefault("keys.registry_public", defaults.Keys.RegistryPublic)
+	v.SetDefault("tlcp.gateway_profile", defaults.TLCP.GatewayProfile)
+	v.SetDefault("tlcp.identity_manifest", defaults.TLCP.IdentityManifest)
 	// Anchor sink defaults: keep "anchor.sink" empty/off so a fresh
 	// install does not silently start reaching out to public OTS
 	// calendars. Callers have to opt in with --anchor-sink=ots.
@@ -367,6 +369,8 @@ func setDefaults(v *viper.Viper) {
 	bindEnv(v, "keys.server_public", "TRUSTDB_KEYS_SERVER_PUBLIC")
 	bindEnv(v, "keys.registry_private", "TRUSTDB_KEYS_REGISTRY_PRIVATE")
 	bindEnv(v, "keys.registry_public", "TRUSTDB_KEYS_REGISTRY_PUBLIC")
+	bindEnv(v, "tlcp.gateway_profile", "TRUSTDB_TLCP_GATEWAY_PROFILE")
+	bindEnv(v, "tlcp.identity_manifest", "TRUSTDB_TLCP_IDENTITY_MANIFEST")
 	bindEnv(v, "anchor.sink", "TRUSTDB_ANCHOR_SINK")
 	bindEnv(v, "anchor.path", "TRUSTDB_ANCHOR_PATH")
 	bindEnv(v, "anchor.plugin.command", "TRUSTDB_ANCHOR_PLUGIN_COMMAND")
@@ -653,6 +657,10 @@ func configString(cfg trustconfig.Config, key string) string {
 		return cfg.Keys.RegistryPrivate
 	case "keys.registry_public":
 		return cfg.Keys.RegistryPublic
+	case "tlcp.gateway_profile":
+		return cfg.TLCP.GatewayProfile
+	case "tlcp.identity_manifest":
+		return cfg.TLCP.IdentityManifest
 	default:
 		return ""
 	}

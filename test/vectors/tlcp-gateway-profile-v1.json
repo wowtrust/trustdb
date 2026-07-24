@@ -81,9 +81,11 @@
       "public_key_sha256": "9999999999999999999999999999999999999999999999999999999999999999"
     }
   },
-  "proof_key_descriptor_files": [
-    "${FIXTURE_DIR}/proof-server.pub"
-  ],
+  "readiness": {
+    "signing_chain_file": "${FIXTURE_DIR}/client-signing.pem",
+    "encryption_chain_file": "${FIXTURE_DIR}/client-encryption.pem"
+  },
+  "trustdb_identity_manifest_file": "${FIXTURE_DIR}/trustdb-active-identities.json",
   "revocation": {
     "mode": "crl",
     "crl_files": [

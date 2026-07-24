@@ -200,16 +200,14 @@ func activateRuntime(
 	if err != nil {
 		return err
 	}
-	timeout, err := tlcpprofile.LifecycleTimeout(profile, options.lifecycle)
+	deadline, err := validatedLifecycleDeadline(
+		started,
+		now(),
+		profile,
+		options.lifecycle,
+	)
 	if err != nil {
 		return err
-	}
-	deadline := started.Add(timeout)
-	if !now().Before(deadline) {
-		return fmt.Errorf(
-			"TLCP %s deadline expired during initial profile validation",
-			options.lifecycle,
-		)
 	}
 	ctx, cancel := context.WithDeadline(context.Background(), deadline)
 	defer cancel()
@@ -250,6 +248,26 @@ func activateRuntime(
 	}
 	_, err = fmt.Fprintf(stdout, "TLCP %s runtime activated\n", options.lifecycle)
 	return err
+}
+
+func validatedLifecycleDeadline(
+	started time.Time,
+	validated time.Time,
+	profile tlcpprofile.Profile,
+	lifecycle string,
+) (time.Time, error) {
+	timeout, err := tlcpprofile.LifecycleTimeout(profile, lifecycle)
+	if err != nil {
+		return time.Time{}, err
+	}
+	deadline := started.Add(timeout)
+	if !validated.Before(deadline) {
+		return time.Time{}, fmt.Errorf(
+			"TLCP %s deadline expired during initial profile validation",
+			lifecycle,
+		)
+	}
+	return deadline, nil
 }
 
 func activationCommandError(ctx context.Context, action string, err error) error {

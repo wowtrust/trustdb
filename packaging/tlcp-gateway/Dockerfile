@@ -138,7 +138,6 @@ RUN mkdir -p /etc/trustdb/tlcp /var/cache/tlcp-gateway/proxy /run/tlcp-gateway \
     && chmod 0755 \
       /usr/local/bin/tlcp-gateway-entrypoint \
       /usr/local/bin/tlcp-gateway-prepare-runtime \
-    && command -v timeout >/dev/null \
     && test "$(sha256sum /usr/share/licenses/trustdb-tlcp-gateway/Tengine-LICENSE | cut -d ' ' -f 1)" = "8444037a744ac508f6c76aa334d73a2f9ca0bf53317d078ddf43626ccfa10deb" \
     && test "$(sha256sum /usr/share/licenses/trustdb-tlcp-gateway/Tongsuo-LICENSE.txt | cut -d ' ' -f 1)" = "7d5450cb2d142651b8afa315b5f238efc805dad827d91ba367d8516bc9d49e7a"
 USER 10001:10001

@@ -28,14 +28,16 @@ import (
 var fixtureNow = time.Date(2026, 7, 24, 8, 0, 0, 0, time.UTC)
 
 type trustFixture struct {
-	dir                   string
-	profile               Profile
-	serverCA              *smx509.Certificate
-	serverCAKey           *sm2.PrivateKey
-	clientCA              *smx509.Certificate
-	clientCAKey           *sm2.PrivateKey
-	signingCertificate    *smx509.Certificate
-	encryptionCertificate *smx509.Certificate
+	dir                            string
+	profile                        Profile
+	serverCA                       *smx509.Certificate
+	serverCAKey                    *sm2.PrivateKey
+	clientCA                       *smx509.Certificate
+	clientCAKey                    *sm2.PrivateKey
+	signingCertificate             *smx509.Certificate
+	encryptionCertificate          *smx509.Certificate
+	readinessSigningCertificate    *smx509.Certificate
+	readinessEncryptionCertificate *smx509.Certificate
 }
 
 func TestGoldenProfileValidatesStrictSM2DualCertificatesAndCRLs(t *testing.T) {
@@ -51,12 +53,54 @@ func TestGoldenProfileValidatesStrictSM2DualCertificatesAndCRLs(t *testing.T) {
 		len(report.EncryptionCertificateSHA256) != 64 ||
 		len(report.SigningPublicKeySHA256) != 64 ||
 		len(report.EncryptionPublicKeySHA256) != 64 ||
+		len(report.ReadinessSigningPublicKeySHA256) != 64 ||
+		len(report.ReadinessEncryptionPublicKeySHA256) != 64 ||
 		report.SigningCertificateSHA256 == report.EncryptionCertificateSHA256 ||
 		report.SigningPublicKeySHA256 == report.EncryptionPublicKeySHA256 ||
 		len(report.ServerCASHA256) != 1 ||
 		len(report.ClientCASHA256) != 1 ||
 		len(report.CRLIssuers) != 2 {
 		t.Fatalf("unexpected validation report: %+v", report)
+	}
+}
+
+func TestTrustDBIdentityManifestContainsOnlyAuthenticatedPublicMaterial(t *testing.T) {
+	fixture := newTrustFixture(t)
+	data, err := os.ReadFile(fixture.profile.TrustDBIdentityManifestFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range []string{
+		"material_path",
+		"credential",
+		"private",
+		"pkcs11",
+		"sdf",
+		"remote",
+	} {
+		if bytes.Contains(bytes.ToLower(data), []byte(forbidden)) {
+			t.Fatalf("public identity manifest leaked %q: %s", forbidden, data)
+		}
+	}
+	var manifest TrustDBIdentityManifest
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	manifest.ProofSigner.PublicKeySHA256 = strings.Repeat("0", 64)
+	tampered, err := encodeTrustDBIdentityManifest(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(
+		fixture.profile.TrustDBIdentityManifestFile,
+		tampered,
+		0o644,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Validate(fixture.profile, Options{Now: fixtureNow}); err == nil ||
+		!strings.Contains(err.Error(), "metadata does not match") {
+		t.Fatalf("tampered identity metadata error = %v", err)
 	}
 }
 
@@ -318,7 +362,7 @@ func TestProfileRejectsDeclaredPublicKeyFingerprintDrift(t *testing.T) {
 	}
 }
 
-func TestProfileReadsAuthoritativeProofKeyDescriptors(t *testing.T) {
+func TestProfileReadsTrustDBAuthenticatedProofIdentity(t *testing.T) {
 	fixture := newTrustFixture(t)
 	report, err := Validate(fixture.profile, Options{Now: fixtureNow})
 	if err != nil {
@@ -329,8 +373,7 @@ func TestProfileReadsAuthoritativeProofKeyDescriptors(t *testing.T) {
 		t.Fatalf("unexpected proof-key inventory: %+v", report)
 	}
 
-	path := fixture.profile.ProofKeyDescriptorFiles[0]
-	signer := proofVerifierDescriptor(t, bytes.Repeat([]byte{7}, ed25519.PublicKeySize))
+	signer := proofVerifierDescriptor(t, reportPublicKey(t))
 	signer.Kind = keydescriptor.KindSigner
 	signer.Provider = keydescriptor.ProviderSoftware
 	signer.Software = &keydescriptor.SoftwareKeyReference{
@@ -338,10 +381,17 @@ func TestProfileReadsAuthoritativeProofKeyDescriptors(t *testing.T) {
 		Encoding:     cryptosuite.Ed25519PrivateKeyEncoding,
 		Protection:   keydescriptor.SoftwareProtectionPlaintextDev,
 	}
-	writeProofDescriptor(t, path, signer)
-	if _, err := Validate(fixture.profile, Options{Now: fixtureNow}); err == nil ||
+	data, err := keydescriptor.Marshal(signer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := WriteTrustDBIdentityManifest(
+		fixture.profile.TrustDBIdentityManifestFile,
+		data,
+		nil,
+	); err == nil ||
 		!strings.Contains(err.Error(), "public verifier") {
-		t.Fatalf("private signer descriptor error = %v", err)
+		t.Fatalf("private signer identity error = %v", err)
 	}
 }
 
@@ -351,7 +401,7 @@ func TestProfileRejectsTransportKeyMatchingAuthoritativeProofDescriptor(t *testi
 	if !ok {
 		t.Fatalf("signing public key type = %T", fixture.signingCertificate.PublicKey)
 	}
-	writeProofDescriptor(t, fixture.profile.ProofKeyDescriptorFiles[0], keydescriptor.Descriptor{
+	writeProofIdentityManifest(t, fixture.profile.TrustDBIdentityManifestFile, keydescriptor.Descriptor{
 		SchemaVersion: keydescriptor.SchemaV1,
 		Kind:          keydescriptor.KindVerifier,
 		Provider:      keydescriptor.ProviderPublic,
@@ -365,8 +415,40 @@ func TestProfileRejectsTransportKeyMatchingAuthoritativeProofDescriptor(t *testi
 		},
 	})
 	if _, err := Validate(fixture.profile, Options{Now: fixtureNow}); err == nil ||
-		!strings.Contains(err.Error(), "overlaps an authoritative") {
+		!strings.Contains(err.Error(), "overlaps the active") {
 		t.Fatalf("transport/proof overlap error = %v", err)
+	}
+}
+
+func TestProfileRejectsReadinessKeyMatchingActiveProofSigner(t *testing.T) {
+	fixture := newTrustFixture(t)
+	publicKey, ok := fixture.readinessSigningCertificate.PublicKey.(*ecdsa.PublicKey)
+	if !ok {
+		t.Fatalf(
+			"readiness signing public key type = %T",
+			fixture.readinessSigningCertificate.PublicKey,
+		)
+	}
+	writeProofIdentityManifest(
+		t,
+		fixture.profile.TrustDBIdentityManifestFile,
+		keydescriptor.Descriptor{
+			SchemaVersion: keydescriptor.SchemaV1,
+			Kind:          keydescriptor.KindVerifier,
+			Provider:      keydescriptor.ProviderPublic,
+			CryptoSuite:   cryptosuite.CNSMV1,
+			KeyID:         "active-proof-signer",
+			Algorithm:     cryptosuite.SignatureSM2SM3,
+			SM2UserID:     cryptosuite.SM2DefaultUserID,
+			PublicKey: keydescriptor.PublicKeyMaterial{
+				Encoding: cryptosuite.SM2PublicKeyEncoding,
+				Bytes:    elliptic.Marshal(sm2.P256(), publicKey.X, publicKey.Y),
+			},
+		},
+	)
+	if _, err := Validate(fixture.profile, Options{Now: fixtureNow}); err == nil ||
+		!strings.Contains(err.Error(), "readiness key overlaps") {
+		t.Fatalf("readiness/proof overlap error = %v", err)
 	}
 }
 
@@ -481,6 +563,22 @@ func TestProfileRejectsStaleMissingAndRevokingCRLs(t *testing.T) {
 			t.Fatalf("revoked certificate error = %v", err)
 		}
 	})
+	t.Run("revoked readiness certificate", func(t *testing.T) {
+		fixture := newTrustFixture(t)
+		writeCRL(
+			t,
+			fixture.profile.Revocation.CRLFiles[1],
+			fixture.clientCA,
+			fixture.clientCAKey,
+			fixtureNow.Add(-time.Hour),
+			fixtureNow.Add(time.Hour),
+			[]*big.Int{fixture.readinessSigningCertificate.SerialNumber},
+		)
+		if _, err := Validate(fixture.profile, Options{Now: fixtureNow}); err == nil ||
+			!strings.Contains(err.Error(), "revokes") {
+			t.Fatalf("revoked readiness certificate error = %v", err)
+		}
+	})
 }
 
 func TestProfileRequiresCRLForEveryServerIntermediate(t *testing.T) {
@@ -583,15 +681,52 @@ func newTrustFixture(t *testing.T) trustFixture {
 	encryption := writeEndpoint(t, filepath.Join(dir, "server-encryption.pem"), serverCA, serverCAKey,
 		11, "trustdb.example", smx509.KeyUsageKeyEncipherment,
 		fixtureNow.Add(-time.Hour), fixtureNow.Add(24*time.Hour), nil)
+	readinessSigning := writeEndpointWithUsage(
+		t,
+		filepath.Join(dir, "client-signing.pem"),
+		clientCA,
+		clientCAKey,
+		12,
+		"TrustDB Readiness",
+		smx509.KeyUsageDigitalSignature,
+		smx509.ExtKeyUsageClientAuth,
+		fixtureNow.Add(-time.Hour),
+		fixtureNow.Add(24*time.Hour),
+		nil,
+	)
+	readinessEncryption := writeEndpointWithUsage(
+		t,
+		filepath.Join(dir, "client-encryption.pem"),
+		clientCA,
+		clientCAKey,
+		13,
+		"TrustDB Readiness",
+		smx509.KeyUsageKeyEncipherment,
+		smx509.ExtKeyUsageClientAuth,
+		fixtureNow.Add(-time.Hour),
+		fixtureNow.Add(24*time.Hour),
+		nil,
+	)
 	writeCRL(t, filepath.Join(dir, "server-ca.crl"), serverCA, serverCAKey,
 		fixtureNow.Add(-time.Hour), fixtureNow.Add(12*time.Hour), nil)
 	writeCRL(t, filepath.Join(dir, "client-ca.crl"), clientCA, clientCAKey,
 		fixtureNow.Add(-time.Hour), fixtureNow.Add(12*time.Hour), nil)
-	writeProofDescriptor(
-		t,
-		filepath.Join(dir, "proof-server.pub"),
-		proofVerifierDescriptor(t, bytes.Repeat([]byte{7}, ed25519.PublicKeySize)),
-	)
+	proofPublic, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proofDescriptor := proofVerifierDescriptor(t, proofPublic)
+	proofDescriptorData, err := keydescriptor.Marshal(proofDescriptor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := WriteTrustDBIdentityManifest(
+		filepath.Join(dir, "trustdb-active-identities.json"),
+		proofDescriptorData,
+		nil,
+	); err != nil {
+		t.Fatal(err)
+	}
 	goldenPath := filepath.Join("..", "..", "test", "vectors", "tlcp-gateway-profile-v1.json")
 	golden, err := os.ReadFile(goldenPath)
 	if err != nil {
@@ -609,6 +744,8 @@ func newTrustFixture(t *testing.T) trustFixture {
 		serverCA: serverCA, serverCAKey: serverCAKey,
 		clientCA: clientCA, clientCAKey: clientCAKey,
 		signingCertificate: signing, encryptionCertificate: encryption,
+		readinessSigningCertificate:    readinessSigning,
+		readinessEncryptionCertificate: readinessEncryption,
 	}
 }
 
@@ -632,13 +769,26 @@ func proofVerifierDescriptor(t *testing.T, publicKey []byte) keydescriptor.Descr
 	return descriptor
 }
 
-func writeProofDescriptor(t *testing.T, path string, descriptor keydescriptor.Descriptor) {
+func reportPublicKey(t *testing.T) ed25519.PublicKey {
+	t.Helper()
+	publicKey, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return publicKey
+}
+
+func writeProofIdentityManifest(
+	t *testing.T,
+	path string,
+	descriptor keydescriptor.Descriptor,
+) {
 	t.Helper()
 	data, err := keydescriptor.Marshal(descriptor)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(path, data, 0o600); err != nil {
+	if _, err := WriteTrustDBIdentityManifest(path, data, nil); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -712,6 +862,33 @@ func writeIntermediateCA(
 func writeEndpoint(t *testing.T, path string, ca *smx509.Certificate, caKey *sm2.PrivateKey,
 	serial int64, commonName string, usage smx509.KeyUsage, notBefore, notAfter time.Time, key *sm2.PrivateKey,
 ) *smx509.Certificate {
+	return writeEndpointWithUsage(
+		t,
+		path,
+		ca,
+		caKey,
+		serial,
+		commonName,
+		usage,
+		smx509.ExtKeyUsageServerAuth,
+		notBefore,
+		notAfter,
+		key,
+	)
+}
+
+func writeEndpointWithUsage(
+	t *testing.T,
+	path string,
+	ca *smx509.Certificate,
+	caKey *sm2.PrivateKey,
+	serial int64,
+	commonName string,
+	usage smx509.KeyUsage,
+	extendedUsage smx509.ExtKeyUsage,
+	notBefore, notAfter time.Time,
+	key *sm2.PrivateKey,
+) *smx509.Certificate {
 	t.Helper()
 	if key == nil {
 		key = certificatePrivateKey(t, filepath.Dir(path), filepath.Base(path))
@@ -724,7 +901,7 @@ func writeEndpoint(t *testing.T, path string, ca *smx509.Certificate, caKey *sm2
 		NotAfter:              notAfter,
 		SignatureAlgorithm:    smx509.SM2WithSM3,
 		KeyUsage:              usage,
-		ExtKeyUsage:           []smx509.ExtKeyUsage{smx509.ExtKeyUsageServerAuth},
+		ExtKeyUsage:           []smx509.ExtKeyUsage{extendedUsage},
 		BasicConstraintsValid: true,
 		AuthorityKeyId:        ca.SubjectKeyId,
 	}

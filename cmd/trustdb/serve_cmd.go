@@ -54,7 +54,8 @@ import (
 )
 
 func newServeCommand(rt *runtimeConfig) *cobra.Command {
-	var listen, grpcListen, serverKeyPath, walPath, proofDir, clientPubPath, registryPath, registryPubPath string
+	var listen, grpcListen, serverKeyPath, serverPubPath, walPath, proofDir, clientPubPath, registryPath, registryPubPath string
+	var tlcpProfilePath, tlcpIdentityManifestPath string
 	var queueSize, workers, batchQueueSize, batchMaxRecords int
 	var batchMaterializerWorkers, batchMaterializerQueueSize, batchProofWorkers int
 	var walMaxSegmentBytes int64
@@ -88,6 +89,9 @@ func newServeCommand(rt *runtimeConfig) *cobra.Command {
 				return usageError(err.Error())
 			}
 			serverKeyPath = stringOrConfig(cmd, rt, "server-private-key", serverKeyPath, "keys.server_private")
+			serverPubPath = stringOrConfig(cmd, rt, "server-public-key", serverPubPath, "keys.server_public")
+			tlcpProfilePath = stringOrConfig(cmd, rt, "tlcp-gateway-profile", tlcpProfilePath, "tlcp.gateway_profile")
+			tlcpIdentityManifestPath = stringOrConfig(cmd, rt, "tlcp-identity-manifest", tlcpIdentityManifestPath, "tlcp.identity_manifest")
 			walPath = stringOrConfig(cmd, rt, "wal", walPath, "wal")
 			proofDir = stringOrConfig(cmd, rt, "proof-dir", proofDir, "proof_dir")
 			metastoreKind = stringOrConfig(cmd, rt, "metastore", metastoreKind, "metastore")
@@ -272,6 +276,20 @@ func newServeCommand(rt *runtimeConfig) *cobra.Command {
 				return err
 			}
 			if err := requireClientKeySuite(serverKey.CryptoSuite, clientPub, clientKeys); err != nil {
+				return err
+			}
+			registryActive := registryPath != "" &&
+				(cmd.Flags().Changed("key-registry") || clientPubPath == "")
+			if err := configureTLCPIdentityBoundary(
+				cmd.Context(),
+				tlcpProfilePath,
+				tlcpIdentityManifestPath,
+				serverPubPath,
+				registryPubPath,
+				registryActive,
+				serverSigner,
+				serverKey,
+			); err != nil {
 				return err
 			}
 			cryptoProvider, err := trustcrypto.ProviderForSuite(serverKey.CryptoSuite)
@@ -857,6 +875,9 @@ func newServeCommand(rt *runtimeConfig) *cobra.Command {
 	cmd.Flags().StringVar(&listen, "listen", "", "listen address")
 	cmd.Flags().StringVar(&grpcListen, "grpc-listen", "", "optional gRPC listen address; empty disables gRPC")
 	cmd.Flags().StringVar(&serverKeyPath, "server-private-key", "", "server signer descriptor")
+	cmd.Flags().StringVar(&serverPubPath, "server-public-key", "", "server verifier descriptor")
+	cmd.Flags().StringVar(&tlcpProfilePath, "tlcp-gateway-profile", "", "strict TLCP gateway profile authenticated by this TrustDB process")
+	cmd.Flags().StringVar(&tlcpIdentityManifestPath, "tlcp-identity-manifest", "", "public active identity manifest written for the TLCP gateway")
 	cmd.Flags().StringVar(&walPath, "wal", "", "wal path")
 	cmd.Flags().StringVar(&proofDir, "proof-dir", "", "proof bundle and root directory")
 	cmd.Flags().StringVar(&clientPubPath, "client-public-key", "", "client verifier descriptor")

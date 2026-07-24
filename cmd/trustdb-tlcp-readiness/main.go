@@ -53,6 +53,18 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	readinessSigningChain := requiredEnvironment(
+		"TLCP_READINESS_SIGNING_CHAIN_FILE",
+	)
+	readinessEncryptionChain := requiredEnvironment(
+		"TLCP_READINESS_ENCRYPTION_CHAIN_FILE",
+	)
+	if readinessSigningChain != profile.Readiness.SigningChainFile ||
+		readinessEncryptionChain != profile.Readiness.EncryptionChainFile {
+		return errors.New(
+			"TLCP readiness certificate paths do not exactly match the authenticated profile identities",
+		)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	return tlcpready.Check(ctx, tlcpready.Config{
@@ -61,9 +73,9 @@ func run() error {
 		ServerCAFile:              profile.Certificates.ServerCAFile,
 		HTTPAddress:               httpAddress,
 		GRPCAddress:               grpcAddress,
-		ClientSigningChainFile:    requiredEnvironment("TLCP_READINESS_SIGNING_CHAIN_FILE"),
+		ClientSigningChainFile:    readinessSigningChain,
 		ClientSigningKey:          requiredEnvironment("TLCP_READINESS_SIGNING_KEY_REFERENCE"),
-		ClientEncryptionChainFile: requiredEnvironment("TLCP_READINESS_ENCRYPTION_CHAIN_FILE"),
+		ClientEncryptionChainFile: readinessEncryptionChain,
 		ClientEncryptionKey:       requiredEnvironment("TLCP_READINESS_ENCRYPTION_KEY_REFERENCE"),
 	})
 }
