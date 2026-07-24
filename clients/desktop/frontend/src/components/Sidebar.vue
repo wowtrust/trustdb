@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { RouterLink, useRoute } from 'vue-router'
 import { computed } from 'vue'
-import { LayoutGrid, CirclePlus, FileText, ShieldCheck, Activity, KeyRound, Settings as SettingsIcon, Copy } from 'lucide-vue-next'
+import { LayoutGrid, CirclePlus, FileText, ShieldCheck, Activity, KeyRound, Settings as SettingsIcon, Copy, Network } from 'lucide-vue-next'
 import { useSettings } from '@/stores/settings'
 import { storeToRefs } from 'pinia'
 import TrustDBLogo from './TrustDBLogo.vue'
@@ -15,6 +15,7 @@ const items = [
   { to: '/attest', label: '新建存证', icon: CirclePlus },
   { to: '/records', label: '存证记录', icon: FileText },
   { to: '/verify', label: '验证证据', icon: ShieldCheck },
+  { to: '/anchors', label: '锚系统', icon: Network },
   { to: '/metrics', label: '指标面板', icon: Activity },
   { to: '/keys', label: '身份密钥', icon: KeyRound },
   { to: '/settings', label: '设置', icon: SettingsIcon },

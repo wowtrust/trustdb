@@ -56,6 +56,14 @@ type statusSubscriptionTransport interface {
 	SubscribeStatusRefresh(context.Context, string) (<-chan StatusRefresh, <-chan error, error)
 }
 
+type anchorSystemTransport interface {
+	ListAnchorSystems(context.Context) ([]AnchorSystem, error)
+	GetAnchorSystem(context.Context, string) (AnchorSystem, error)
+	GetAnchorSystemStatus(context.Context, string) (AnchorSystemStatus, error)
+	ListAnchorSystemResources(context.Context, string, AnchorResourceListOptions) (AnchorSystemResourcePage, error)
+	GetAnchorSystemResource(context.Context, string, string, string) (AnchorSystemResource, error)
+}
+
 type signedClaimStreamTransport interface {
 	SubmitSignedClaimStream(context.Context, <-chan signedClaimStreamItem) (<-chan signedClaimStreamItemResult, error)
 }
@@ -306,6 +314,46 @@ func (c *Client) ListAnchors(ctx context.Context, opts ListPageOptions) (AnchorP
 
 func (c *Client) GetAnchor(ctx context.Context, treeSize uint64) (AnchorStatus, error) {
 	return c.transport.GetAnchor(ctx, treeSize)
+}
+
+func (c *Client) ListAnchorSystems(ctx context.Context) ([]AnchorSystem, error) {
+	transport, ok := c.transport.(anchorSystemTransport)
+	if !ok {
+		return nil, &Error{Op: "list anchor systems", Message: "transport does not support anchor systems"}
+	}
+	return transport.ListAnchorSystems(ctx)
+}
+
+func (c *Client) GetAnchorSystem(ctx context.Context, systemID string) (AnchorSystem, error) {
+	transport, ok := c.transport.(anchorSystemTransport)
+	if !ok {
+		return AnchorSystem{}, &Error{Op: "get anchor system", Message: "transport does not support anchor systems"}
+	}
+	return transport.GetAnchorSystem(ctx, systemID)
+}
+
+func (c *Client) GetAnchorSystemStatus(ctx context.Context, systemID string) (AnchorSystemStatus, error) {
+	transport, ok := c.transport.(anchorSystemTransport)
+	if !ok {
+		return AnchorSystemStatus{}, &Error{Op: "get anchor system status", Message: "transport does not support anchor systems"}
+	}
+	return transport.GetAnchorSystemStatus(ctx, systemID)
+}
+
+func (c *Client) ListAnchorSystemResources(ctx context.Context, systemID string, opts AnchorResourceListOptions) (AnchorSystemResourcePage, error) {
+	transport, ok := c.transport.(anchorSystemTransport)
+	if !ok {
+		return AnchorSystemResourcePage{}, &Error{Op: "list anchor system resources", Message: "transport does not support anchor systems"}
+	}
+	return transport.ListAnchorSystemResources(ctx, systemID, opts)
+}
+
+func (c *Client) GetAnchorSystemResource(ctx context.Context, systemID, kind, resourceID string) (AnchorSystemResource, error) {
+	transport, ok := c.transport.(anchorSystemTransport)
+	if !ok {
+		return AnchorSystemResource{}, &Error{Op: "get anchor system resource", Message: "transport does not support anchor systems"}
+	}
+	return transport.GetAnchorSystemResource(ctx, systemID, kind, resourceID)
 }
 
 func (c *Client) LatestSTH(ctx context.Context) (SignedTreeHead, error) {

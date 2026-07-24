@@ -628,6 +628,42 @@ func (a *App) ListRoots(limit int) ([]model.BatchRoot, error) {
 	return c.listRoots(a.ensureCtx(), limit)
 }
 
+func (a *App) ListAnchorSystems() ([]model.AnchorSystem, error) {
+	c, err := a.serverClient()
+	if err != nil {
+		return nil, err
+	}
+	defer c.close()
+	return c.listAnchorSystems(a.ensureCtx())
+}
+
+func (a *App) GetAnchorSystemStatus(systemID string) (model.AnchorSystemStatus, error) {
+	c, err := a.serverClient()
+	if err != nil {
+		return model.AnchorSystemStatus{}, err
+	}
+	defer c.close()
+	return c.getAnchorSystemStatus(a.ensureCtx(), systemID)
+}
+
+func (a *App) ListAnchorSystemResources(systemID, kind string, limit int, cursor string) (model.AnchorSystemResourcePage, error) {
+	c, err := a.serverClient()
+	if err != nil {
+		return model.AnchorSystemResourcePage{}, err
+	}
+	defer c.close()
+	return c.listAnchorSystemResources(a.ensureCtx(), systemID, kind, limit, cursor)
+}
+
+func (a *App) GetAnchorSystemResource(systemID, kind, resourceID string) (model.AnchorSystemResource, error) {
+	c, err := a.serverClient()
+	if err != nil {
+		return model.AnchorSystemResource{}, err
+	}
+	defer c.close()
+	return c.getAnchorSystemResource(a.ensureCtx(), systemID, kind, resourceID)
+}
+
 // --- Metrics --------------------------------------------------------
 
 func (a *App) ServerMetrics() ([]Metric, error) {

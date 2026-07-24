@@ -59,6 +59,10 @@ export type BatchRoot          = model.BatchRoot
 export type ProofBundle        = model.ProofBundle
 export type GlobalLogProof     = model.GlobalLogProof
 export type AnchorResult       = model.STHAnchorResult
+export type AnchorSystem       = model.AnchorSystem
+export type AnchorSystemStatus = model.AnchorSystemStatus
+export type AnchorSystemResource = model.AnchorSystemResource
+export type AnchorSystemResourcePage = model.AnchorSystemResourcePage
 export type OtsUpgradeSummary  = anchor.OtsUpgradeSummary
 export type OtsUpgradeResult   = anchor.OtsUpgradeResult
 
@@ -115,6 +119,10 @@ export const api = {
   exportGlobalProof:   (id: string, outPath: string) => App.ExportGlobalProof(id, outPath),
   exportAnchorResult:  (id: string, outPath: string) => App.ExportAnchorResult(id, outPath),
   upgradeOtsAnchor:    (id: string) => App.UpgradeOtsAnchor(id),
+  listAnchorSystems:   () => App.ListAnchorSystems(),
+  getAnchorSystemStatus: (systemID: string) => App.GetAnchorSystemStatus(systemID),
+  listAnchorSystemResources: (systemID: string, kind: string, limit = 100, cursor = '') => App.ListAnchorSystemResources(systemID, kind, limit, cursor),
+  getAnchorSystemResource: (systemID: string, kind: string, resourceID: string) => App.GetAnchorSystemResource(systemID, kind, resourceID),
   // server / verify
   serverHealth:        () => App.ServerHealth(),
   latestRoot:          () => App.LatestRoot(),

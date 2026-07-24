@@ -7,23 +7,28 @@ const MaxMessageBytes = 16 << 20
 const ServiceName = "trustdb.v1.TrustDB"
 
 const (
-	FullMethodHealth            = "/" + ServiceName + "/Health"
-	FullMethodSubmitClaim       = "/" + ServiceName + "/SubmitClaim"
-	FullMethodSubmitClaimStream = "/" + ServiceName + "/SubmitClaimStream"
-	FullMethodGetRecord         = "/" + ServiceName + "/GetRecord"
-	FullMethodListRecords       = "/" + ServiceName + "/ListRecords"
-	FullMethodGetProofBundle    = "/" + ServiceName + "/GetProofBundle"
-	FullMethodListRoots         = "/" + ServiceName + "/ListRoots"
-	FullMethodLatestRoot        = "/" + ServiceName + "/LatestRoot"
-	FullMethodListSTHs          = "/" + ServiceName + "/ListSTHs"
-	FullMethodLatestSTH         = "/" + ServiceName + "/LatestSTH"
-	FullMethodGetSTH            = "/" + ServiceName + "/GetSTH"
-	FullMethodListGlobalLeaves  = "/" + ServiceName + "/ListGlobalLeaves"
-	FullMethodGetGlobalProof    = "/" + ServiceName + "/GetGlobalProof"
-	FullMethodGetGlobalEvidence = "/" + ServiceName + "/GetGlobalEvidence"
-	FullMethodListAnchors       = "/" + ServiceName + "/ListAnchors"
-	FullMethodGetAnchor         = "/" + ServiceName + "/GetAnchor"
-	FullMethodMetrics           = "/" + ServiceName + "/Metrics"
+	FullMethodHealth                    = "/" + ServiceName + "/Health"
+	FullMethodSubmitClaim               = "/" + ServiceName + "/SubmitClaim"
+	FullMethodSubmitClaimStream         = "/" + ServiceName + "/SubmitClaimStream"
+	FullMethodGetRecord                 = "/" + ServiceName + "/GetRecord"
+	FullMethodListRecords               = "/" + ServiceName + "/ListRecords"
+	FullMethodGetProofBundle            = "/" + ServiceName + "/GetProofBundle"
+	FullMethodListRoots                 = "/" + ServiceName + "/ListRoots"
+	FullMethodLatestRoot                = "/" + ServiceName + "/LatestRoot"
+	FullMethodListSTHs                  = "/" + ServiceName + "/ListSTHs"
+	FullMethodLatestSTH                 = "/" + ServiceName + "/LatestSTH"
+	FullMethodGetSTH                    = "/" + ServiceName + "/GetSTH"
+	FullMethodListGlobalLeaves          = "/" + ServiceName + "/ListGlobalLeaves"
+	FullMethodGetGlobalProof            = "/" + ServiceName + "/GetGlobalProof"
+	FullMethodGetGlobalEvidence         = "/" + ServiceName + "/GetGlobalEvidence"
+	FullMethodListAnchors               = "/" + ServiceName + "/ListAnchors"
+	FullMethodGetAnchor                 = "/" + ServiceName + "/GetAnchor"
+	FullMethodListAnchorSystems         = "/" + ServiceName + "/ListAnchorSystems"
+	FullMethodGetAnchorSystem           = "/" + ServiceName + "/GetAnchorSystem"
+	FullMethodGetAnchorSystemStatus     = "/" + ServiceName + "/GetAnchorSystemStatus"
+	FullMethodListAnchorSystemResources = "/" + ServiceName + "/ListAnchorSystemResources"
+	FullMethodGetAnchorSystemResource   = "/" + ServiceName + "/GetAnchorSystemResource"
+	FullMethodMetrics                   = "/" + ServiceName + "/Metrics"
 )
 
 type HealthRequest struct{}
@@ -201,6 +206,49 @@ type ListAnchorsResponse struct {
 	Limit      int                 `cbor:"limit" json:"limit"`
 	Direction  string              `cbor:"direction" json:"direction"`
 	NextCursor string              `cbor:"next_cursor,omitempty" json:"next_cursor,omitempty"`
+}
+
+type ListAnchorSystemsRequest struct{}
+
+type ListAnchorSystemsResponse struct {
+	Systems []model.AnchorSystem `cbor:"systems" json:"systems"`
+}
+
+type GetAnchorSystemRequest struct {
+	SystemID string `cbor:"system_id" json:"system_id"`
+}
+
+type GetAnchorSystemResponse struct {
+	System model.AnchorSystem `cbor:"system" json:"system"`
+}
+
+type GetAnchorSystemStatusRequest struct {
+	SystemID string `cbor:"system_id" json:"system_id"`
+}
+
+type GetAnchorSystemStatusResponse struct {
+	Status model.AnchorSystemStatus `cbor:"status" json:"status"`
+}
+
+type ListAnchorSystemResourcesRequest struct {
+	SystemID string `cbor:"system_id" json:"system_id"`
+	Kind     string `cbor:"kind" json:"kind"`
+	Limit    int    `cbor:"limit" json:"limit"`
+	Cursor   string `cbor:"cursor,omitempty" json:"cursor,omitempty"`
+}
+
+type ListAnchorSystemResourcesResponse struct {
+	Page model.AnchorSystemResourcePage `cbor:"page" json:"page"`
+}
+
+type GetAnchorSystemResourceRequest struct {
+	SystemID   string `cbor:"system_id" json:"system_id"`
+	Kind       string `cbor:"kind" json:"kind"`
+	ResourceID string `cbor:"resource_id" json:"resource_id"`
+}
+
+type GetAnchorSystemResourceResponse struct {
+	Resource model.AnchorSystemResource `cbor:"resource" json:"resource"`
 }
 
 type MetricsRequest struct{}

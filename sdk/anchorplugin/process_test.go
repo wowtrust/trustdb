@@ -21,7 +21,10 @@ const helperEnv = "TRUSTDB_ANCHOR_PLUGIN_TEST_HELPER"
 type helperPlugin struct{}
 
 func (helperPlugin) Info(context.Context) (Info, error) {
-	return Info{SinkName: "test-go", ProofSchema: "test-proof.v1"}, nil
+	return Info{SinkName: "test-go", ProofSchema: "test-proof.v1", System: &System{
+		SystemID: "test-chain", DisplayName: "Test chain", Kind: SystemKindEvidenceBlockchain,
+		Capabilities: []string{CapabilitySystemStatusRead, CapabilityNodeRead},
+	}}, nil
 }
 
 func (helperPlugin) Publish(_ context.Context, sth SignedTreeHead) (AnchorResult, error) {
@@ -35,6 +38,21 @@ func (helperPlugin) Verify(_ context.Context, sth SignedTreeHead, result AnchorR
 		return Permanent(fmt.Errorf("invalid test proof"))
 	}
 	return nil
+}
+
+func (helperPlugin) Status(context.Context) (SystemStatus, error) {
+	return SystemStatus{State: "healthy", ObservedAtUnixN: 2, Details: map[string]string{"node_count": "1"}}, nil
+}
+
+func (helperPlugin) ListResources(_ context.Context, req ListResourcesRequest) (ListResourcesResponse, error) {
+	return ListResourcesResponse{Resources: []Resource{{Kind: req.Kind, ResourceID: "node-1", Status: "online"}}, Limit: req.Limit}, nil
+}
+
+func (helperPlugin) Resource(_ context.Context, kind, id string) (Resource, bool, error) {
+	if kind == "node" && id == "node-1" {
+		return Resource{Kind: kind, ResourceID: id, Status: "online"}, true, nil
+	}
+	return Resource{}, false, nil
 }
 
 func TestAnchorPluginHelperProcess(t *testing.T) {
@@ -64,6 +82,9 @@ func TestProcessPublishAndVerify(t *testing.T) {
 	if got := process.Info().SinkName; got != "test-go" {
 		t.Fatalf("sink name = %q", got)
 	}
+	if process.Info().System == nil || process.Info().System.SystemID != "test-chain" {
+		t.Fatalf("system info = %+v", process.Info().System)
+	}
 	sth := SignedTreeHead{SchemaVersion: "sth.v1", TreeSize: 7, RootHash: bytes.Repeat([]byte{0x23}, 32)}
 	result, err := process.Publish(context.Background(), sth)
 	if err != nil {
@@ -76,6 +97,18 @@ func TestProcessPublishAndVerify(t *testing.T) {
 	err = process.Verify(context.Background(), sth, result)
 	if err == nil || !IsPermanentRPC(err) {
 		t.Fatalf("tampered Verify() error = %v, want permanent RPC error", err)
+	}
+	status, err := process.Status(context.Background())
+	if err != nil || status.State != "healthy" {
+		t.Fatalf("Status() = %+v err=%v", status, err)
+	}
+	page, err := process.ListResources(context.Background(), ListResourcesRequest{Kind: "node", Limit: 10})
+	if err != nil || len(page.Resources) != 1 || page.Resources[0].ResourceID != "node-1" {
+		t.Fatalf("ListResources() = %+v err=%v", page, err)
+	}
+	resource, found, err := process.Resource(context.Background(), "node", "node-1")
+	if err != nil || !found || resource.Status != "online" {
+		t.Fatalf("Resource() = %+v found=%v err=%v", resource, found, err)
 	}
 }
 

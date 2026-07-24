@@ -32,6 +32,10 @@ export function GenerateIdentity(arg1:string,arg2:string,arg3:string):Promise<ma
 
 export function GetIdentity():Promise<main.IdentityView>;
 
+export function GetAnchorSystemResource(arg1:string,arg2:string,arg3:string):Promise<model.AnchorSystemResource>;
+
+export function GetAnchorSystemStatus(arg1:string):Promise<model.AnchorSystemStatus>;
+
 export function GetProofBundle(arg1:string):Promise<model.ProofBundle>;
 
 export function GetSettings():Promise<main.Settings>;
@@ -41,6 +45,10 @@ export function ImportIdentity(arg1:string,arg2:string,arg3:string,arg4:string):
 export function LatestRoot():Promise<model.BatchRoot>;
 
 export function ListRecords():Promise<Array<main.LocalRecord>>;
+
+export function ListAnchorSystems():Promise<Array<model.AnchorSystem>>;
+
+export function ListAnchorSystemResources(arg1:string,arg2:string,arg3:number,arg4:string):Promise<model.AnchorSystemResourcePage>;
 
 export function ListRecordsPage(arg1:main.RecordPageOptions):Promise<main.RecordPage>;
 

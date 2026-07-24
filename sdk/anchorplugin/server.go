@@ -30,9 +30,19 @@ type Plugin interface {
 	Verify(context.Context, SignedTreeHead, AnchorResult) error
 }
 
+// Explorer is optional. Implementing it lets TrustDB expose provider status
+// and read-only node/block/transaction/account/contract resources without
+// changing the immutable Publish/Verify proof contract.
+type Explorer interface {
+	Status(context.Context) (SystemStatus, error)
+	ListResources(context.Context, ListResourcesRequest) (ListResourcesResponse, error)
+	Resource(context.Context, string, string) (Resource, bool, error)
+}
+
 type Info struct {
 	SinkName    string
 	ProofSchema string
+	System      *System
 }
 
 type permanentError struct{ err error }
@@ -61,11 +71,16 @@ func (s pluginServer) GetInfo(ctx context.Context, _ *GetInfoRequest) (*GetInfoR
 	if err != nil {
 		return nil, rpcError(err)
 	}
+	capabilities := []string{CapabilityPublish, CapabilityVerify}
+	if info.System != nil {
+		capabilities = append(capabilities, info.System.Capabilities...)
+	}
 	return &GetInfoResponse{
 		ProtocolVersion: ProtocolVersion,
 		SinkName:        info.SinkName,
-		Capabilities:    []string{CapabilityPublish, CapabilityVerify},
+		Capabilities:    capabilities,
 		ProofSchema:     info.ProofSchema,
+		System:          info.System,
 	}, nil
 }
 
@@ -88,6 +103,48 @@ func (s pluginServer) Verify(ctx context.Context, req *VerifyRequest) (*VerifyRe
 		return nil, rpcError(err)
 	}
 	return &VerifyResponse{Valid: true}, nil
+}
+
+func (s pluginServer) GetStatus(ctx context.Context, _ *GetStatusRequest) (*GetStatusResponse, error) {
+	explorer, ok := s.plugin.(Explorer)
+	if !ok {
+		return nil, status.Error(codes.Unimplemented, "anchor plugin does not expose system status")
+	}
+	value, err := explorer.Status(ctx)
+	if err != nil {
+		return nil, rpcError(err)
+	}
+	return &GetStatusResponse{Status: value}, nil
+}
+
+func (s pluginServer) ListResources(ctx context.Context, req *ListResourcesRequest) (*ListResourcesResponse, error) {
+	explorer, ok := s.plugin.(Explorer)
+	if !ok {
+		return nil, status.Error(codes.Unimplemented, "anchor plugin does not expose explorer resources")
+	}
+	if req == nil || strings.TrimSpace(req.Kind) == "" || req.Limit < 1 || req.Limit > 1000 {
+		return nil, status.Error(codes.InvalidArgument, "resource kind and limit between 1 and 1000 are required")
+	}
+	response, err := explorer.ListResources(ctx, *req)
+	if err != nil {
+		return nil, rpcError(err)
+	}
+	return &response, nil
+}
+
+func (s pluginServer) GetResource(ctx context.Context, req *GetResourceRequest) (*GetResourceResponse, error) {
+	explorer, ok := s.plugin.(Explorer)
+	if !ok {
+		return nil, status.Error(codes.Unimplemented, "anchor plugin does not expose explorer resources")
+	}
+	if req == nil || strings.TrimSpace(req.Kind) == "" || strings.TrimSpace(req.ResourceID) == "" {
+		return nil, status.Error(codes.InvalidArgument, "resource kind and resource_id are required")
+	}
+	resource, found, err := explorer.Resource(ctx, req.Kind, req.ResourceID)
+	if err != nil {
+		return nil, rpcError(err)
+	}
+	return &GetResourceResponse{Resource: resource, Found: found}, nil
 }
 
 func rpcError(err error) error {

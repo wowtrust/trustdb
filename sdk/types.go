@@ -24,6 +24,10 @@ type SignedTreeHead = model.SignedTreeHead
 type GlobalLogProof = model.GlobalLogProof
 type GlobalLogEvidence = model.GlobalLogEvidence
 type STHAnchorResult = model.STHAnchorResult
+type AnchorSystem = model.AnchorSystem
+type AnchorSystemStatus = model.AnchorSystemStatus
+type AnchorSystemResource = model.AnchorSystemResource
+type AnchorSystemResourcePage = model.AnchorSystemResourcePage
 type SingleProof = model.SingleProof
 type RecordStatus = model.RecordStatus
 type StatusRefresh = model.StatusRefresh
@@ -102,6 +106,12 @@ type ListPageOptions struct {
 	Limit     int
 	Direction string
 	Cursor    string
+}
+
+type AnchorResourceListOptions struct {
+	Kind   string
+	Limit  int
+	Cursor string
 }
 
 type RecordPage struct {

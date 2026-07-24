@@ -513,6 +513,111 @@ export namespace main {
 }
 
 export namespace model {
+	export class AnchorAssurance {
+	    independent_time: boolean;
+	    publicly_verifiable: boolean;
+	    decentralized: boolean;
+	    finality?: string;
+	    custody?: string;
+
+	    static createFrom(source: any = {}) { return new AnchorAssurance(source); }
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.independent_time = source["independent_time"];
+	        this.publicly_verifiable = source["publicly_verifiable"];
+	        this.decentralized = source["decentralized"];
+	        this.finality = source["finality"];
+	        this.custody = source["custody"];
+	    }
+	}
+	export class AnchorSystem {
+	    schema_version: string;
+	    system_id: string;
+	    sink_name: string;
+	    display_name: string;
+	    kind: string;
+	    network?: string;
+	    provider?: string;
+	    capabilities: string[];
+	    assurance: AnchorAssurance;
+	    metadata?: Record<string, string>;
+
+	    static createFrom(source: any = {}) { return new AnchorSystem(source); }
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.schema_version = source["schema_version"];
+	        this.system_id = source["system_id"];
+	        this.sink_name = source["sink_name"];
+	        this.display_name = source["display_name"];
+	        this.kind = source["kind"];
+	        this.network = source["network"];
+	        this.provider = source["provider"];
+	        this.capabilities = source["capabilities"];
+	        this.assurance = new AnchorAssurance(source["assurance"] || {});
+	        this.metadata = source["metadata"];
+	    }
+	}
+	export class AnchorSystemStatus {
+	    schema_version: string;
+	    system_id: string;
+	    state: string;
+	    observed_at_unix_nano: number;
+	    message?: string;
+	    details?: Record<string, string>;
+
+	    static createFrom(source: any = {}) { return new AnchorSystemStatus(source); }
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.schema_version = source["schema_version"];
+	        this.system_id = source["system_id"];
+	        this.state = source["state"];
+	        this.observed_at_unix_nano = source["observed_at_unix_nano"];
+	        this.message = source["message"];
+	        this.details = source["details"];
+	    }
+	}
+	export class AnchorSystemResource {
+	    schema_version: string;
+	    system_id: string;
+	    kind: string;
+	    resource_id: string;
+	    parent_id?: string;
+	    hash?: string;
+	    status?: string;
+	    height?: number;
+	    timestamp_unix_nano?: number;
+	    summary?: string;
+	    attributes?: Record<string, string>;
+
+	    static createFrom(source: any = {}) { return new AnchorSystemResource(source); }
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.schema_version = source["schema_version"];
+	        this.system_id = source["system_id"];
+	        this.kind = source["kind"];
+	        this.resource_id = source["resource_id"];
+	        this.parent_id = source["parent_id"];
+	        this.hash = source["hash"];
+	        this.status = source["status"];
+	        this.height = source["height"];
+	        this.timestamp_unix_nano = source["timestamp_unix_nano"];
+	        this.summary = source["summary"];
+	        this.attributes = source["attributes"];
+	    }
+	}
+	export class AnchorSystemResourcePage {
+	    resources: AnchorSystemResource[];
+	    limit: number;
+	    next_cursor?: string;
+
+	    static createFrom(source: any = {}) { return new AnchorSystemResourcePage(source); }
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.resources = (source["resources"] || []).map((item: any) => new AnchorSystemResource(item));
+	        this.limit = source["limit"];
+	        this.next_cursor = source["next_cursor"];
+	    }
+	}
 	
 	export class Signature {
 	    alg: string;

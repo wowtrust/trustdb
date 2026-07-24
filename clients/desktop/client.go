@@ -312,6 +312,22 @@ func (c *serverClient) getAnchor(ctx context.Context, treeSize uint64) (anchorEn
 	return anchorEnvelope{TreeSize: status.TreeSize, Status: status.Status, Result: status.Result}, nil
 }
 
+func (c *serverClient) listAnchorSystems(ctx context.Context) ([]model.AnchorSystem, error) {
+	return c.sdk.ListAnchorSystems(ctx)
+}
+
+func (c *serverClient) getAnchorSystemStatus(ctx context.Context, systemID string) (model.AnchorSystemStatus, error) {
+	return c.sdk.GetAnchorSystemStatus(ctx, systemID)
+}
+
+func (c *serverClient) listAnchorSystemResources(ctx context.Context, systemID, kind string, limit int, cursor string) (model.AnchorSystemResourcePage, error) {
+	return c.sdk.ListAnchorSystemResources(ctx, systemID, sdk.AnchorResourceListOptions{Kind: kind, Limit: limit, Cursor: cursor})
+}
+
+func (c *serverClient) getAnchorSystemResource(ctx context.Context, systemID, kind, resourceID string) (model.AnchorSystemResource, error) {
+	return c.sdk.GetAnchorSystemResource(ctx, systemID, kind, resourceID)
+}
+
 func (c *serverClient) listRoots(ctx context.Context, limit int) ([]model.BatchRoot, error) {
 	return c.sdk.ListRoots(ctx, limit)
 }

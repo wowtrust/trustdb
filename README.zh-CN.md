@@ -221,6 +221,11 @@ mkdir -p .trustdb-dev
 | `GET /v1/global-log/evidence/{batch_id}` | 获取覆盖该 batch 的 Global Log 组合证据，并在可用时返回精确匹配的已发布 anchor result。 |
 | `GET /v1/global-log/consistency?from=&to=` | 获取 global-log consistency proof。 |
 | `GET /v1/anchors/sth/{tree_size}` | 获取已发布的 immutable STH anchor result。 |
+| `GET /v1/anchor-systems` | 列出配置的下游锚系统、种类、可信属性和 capabilities。 |
+| `GET /v1/anchor-systems/{system_id}` | 获取一个锚系统的稳定语义描述。 |
+| `GET /v1/anchor-systems/{system_id}/status` | 获取 provider 实时状态快照。 |
+| `GET /v1/anchor-systems/{system_id}/resources` | 按 capability 分页查看节点、区块、交易、账户或合约。 |
+| `GET /v1/anchor-systems/{system_id}/resources/{kind}/{resource_id}` | 获取一项 provider 资源详情。 |
 | `GET /metrics` | Prometheus metrics。 |
 
 可选 gRPC listener 通过 `--grpc-listen` 或 `server.grpc_listen` 开启。gRPC 复用 TrustDB 确定性 CBOR payload model，因此 HTTP 和 gRPC transport 不改变证明语义。
@@ -245,12 +250,13 @@ mkdir -p .trustdb-dev
 
 `run_profile` 语义和启动提示见 [configs/README.md](configs/README.md)。
 自定义 provider 的开发、部署和验证方式见 [L5 外部锚定插件](formats/ANCHOR_PLUGIN_V1.md)。
+锚系统种类、可信属性、能力发现与只读 Explorer API 见 [Anchor System Provider v1](formats/ANCHOR_SYSTEM_PROVIDER_V1.md)。
 
 ## Admin Web 和桌面客户端
 
 可选 Admin Web（`clients/web`）由 `trustdb serve` 挂载到 `/admin`，用于 metrics、只读 API 浏览和 YAML 配置维护。写回配置需要服务端使用 `--config` 启动。
 
-桌面客户端（`clients/desktop`）是 Wails + Vue 应用，覆盖本地身份、文件存证、服务端设置、本地 record index、proof refresh、proof 导出和离线验证。
+桌面客户端（`clients/desktop`）是 Wails + Vue 应用，覆盖本地身份、文件存证、服务端设置、本地 record index、proof refresh、proof 导出、离线验证和下游锚系统能力/状态/资源浏览。
 
 ![TrustDB 桌面客户端概览](assets/readme/desktop-overview.png)
 

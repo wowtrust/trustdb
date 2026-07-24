@@ -23,7 +23,7 @@ import (
 func TestGRPCTransportOperationalEndpoints(t *testing.T) {
 	t.Parallel()
 
-	client := newBufconnClient(t, grpcapi.NewServer(nil, grpcTestBatch{}, nil, grpcTestAnchors{}, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	client := newBufconnClient(t, grpcapi.NewServerWithSubmitterAndAnchorSystems(nil, grpcTestBatch{}, nil, grpcTestAnchors{}, grpcTestAnchorSystems{}, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte("trustdb_ingest_total 1\n"))
 	})))
 
@@ -72,6 +72,18 @@ func TestGRPCTransportOperationalEndpoints(t *testing.T) {
 	if anchorStatus.Status != model.AnchorStatePublished || anchorStatus.Result == nil || anchorStatus.Result.AnchorID != "anchor-4" {
 		t.Fatalf("anchor status = %+v", anchorStatus)
 	}
+	systems, err := client.ListAnchorSystems(context.Background())
+	if err != nil || len(systems) != 1 || systems[0].SystemID != "chain-a" {
+		t.Fatalf("ListAnchorSystems()=%+v err=%v", systems, err)
+	}
+	systemStatus, err := client.GetAnchorSystemStatus(context.Background(), "chain-a")
+	if err != nil || systemStatus.State != model.AnchorSystemStateHealthy {
+		t.Fatalf("GetAnchorSystemStatus()=%+v err=%v", systemStatus, err)
+	}
+	resources, err := client.ListAnchorSystemResources(context.Background(), "chain-a", AnchorResourceListOptions{Kind: model.AnchorResourceKindNode, Limit: 5})
+	if err != nil || len(resources.Resources) != 1 || resources.Resources[0].ResourceID != "node-1" {
+		t.Fatalf("ListAnchorSystemResources()=%+v err=%v", resources, err)
+	}
 	bundle, err := client.GetProofBundle(context.Background(), "tr1record")
 	if err != nil {
 		t.Fatalf("GetProofBundle: %v", err)
@@ -86,6 +98,27 @@ func TestGRPCTransportOperationalEndpoints(t *testing.T) {
 	if !strings.Contains(metrics, "trustdb_ingest_total") {
 		t.Fatalf("metrics = %q", metrics)
 	}
+}
+
+type grpcTestAnchorSystems struct{}
+
+func (grpcTestAnchorSystems) Systems(context.Context) ([]model.AnchorSystem, error) {
+	return []model.AnchorSystem{grpcSDKTestSystem()}, nil
+}
+func (grpcTestAnchorSystems) System(_ context.Context, id string) (model.AnchorSystem, bool, error) {
+	return grpcSDKTestSystem(), id == "chain-a", nil
+}
+func (grpcTestAnchorSystems) Status(_ context.Context, id string) (model.AnchorSystemStatus, bool, error) {
+	return model.AnchorSystemStatus{SchemaVersion: model.SchemaAnchorSystemStatus, SystemID: "chain-a", State: model.AnchorSystemStateHealthy, ObservedAtUnixN: 1}, id == "chain-a", nil
+}
+func (grpcTestAnchorSystems) Resources(_ context.Context, id string, opts model.AnchorResourceListOptions) (model.AnchorSystemResourcePage, bool, error) {
+	return model.AnchorSystemResourcePage{Resources: []model.AnchorSystemResource{{SchemaVersion: model.SchemaAnchorSystemResource, SystemID: "chain-a", Kind: opts.Kind, ResourceID: "node-1"}}, Limit: opts.Limit}, id == "chain-a", nil
+}
+func (grpcTestAnchorSystems) Resource(_ context.Context, id, kind, resourceID string) (model.AnchorSystemResource, bool, error) {
+	return model.AnchorSystemResource{SchemaVersion: model.SchemaAnchorSystemResource, SystemID: "chain-a", Kind: kind, ResourceID: resourceID}, id == "chain-a", nil
+}
+func grpcSDKTestSystem() model.AnchorSystem {
+	return model.AnchorSystem{SchemaVersion: model.SchemaAnchorSystem, SystemID: "chain-a", SinkName: "chain", DisplayName: "Chain A", Kind: model.AnchorSystemKindEvidenceBlockchain, Capabilities: []string{model.AnchorCapabilityNodeRead}}
 }
 
 func TestGRPCTransportMapsNotFound(t *testing.T) {

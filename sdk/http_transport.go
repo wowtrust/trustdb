@@ -391,6 +391,96 @@ func (t *httpTransport) GetAnchor(ctx context.Context, treeSize uint64) (AnchorS
 	return AnchorStatus{TreeSize: env.TreeSize, Status: env.Status, Result: env.Result}, nil
 }
 
+func (t *httpTransport) ListAnchorSystems(ctx context.Context) ([]AnchorSystem, error) {
+	var response struct {
+		Systems []model.AnchorSystem `json:"systems"`
+	}
+	if err := t.getStrictJSON(ctx, "/v1/anchor-systems", nil, &response); err != nil {
+		return nil, err
+	}
+	if response.Systems == nil {
+		response.Systems = []model.AnchorSystem{}
+	}
+	for _, system := range response.Systems {
+		if err := validateAnchorSystem(system); err != nil {
+			return nil, err
+		}
+	}
+	return response.Systems, nil
+}
+
+func (t *httpTransport) GetAnchorSystem(ctx context.Context, systemID string) (AnchorSystem, error) {
+	var system model.AnchorSystem
+	path := "/v1/anchor-systems/" + url.PathEscape(systemID)
+	if err := t.getStrictJSON(ctx, path, nil, &system); err != nil {
+		return AnchorSystem{}, err
+	}
+	if err := validateAnchorSystem(system); err != nil {
+		return AnchorSystem{}, err
+	}
+	return system, nil
+}
+
+func (t *httpTransport) GetAnchorSystemStatus(ctx context.Context, systemID string) (AnchorSystemStatus, error) {
+	var status model.AnchorSystemStatus
+	path := "/v1/anchor-systems/" + url.PathEscape(systemID) + "/status"
+	if err := t.getStrictJSON(ctx, path, nil, &status); err != nil {
+		return AnchorSystemStatus{}, err
+	}
+	if status.SchemaVersion != model.SchemaAnchorSystemStatus || status.SystemID != systemID {
+		return AnchorSystemStatus{}, &Error{Op: "get anchor system status", URL: t.endpoint(path, nil), Message: "server returned mismatched anchor system status"}
+	}
+	return status, nil
+}
+
+func (t *httpTransport) ListAnchorSystemResources(ctx context.Context, systemID string, opts AnchorResourceListOptions) (AnchorSystemResourcePage, error) {
+	values := url.Values{}
+	values.Set("kind", opts.Kind)
+	limit := opts.Limit
+	if limit <= 0 {
+		limit = 100
+	}
+	values.Set("limit", strconv.Itoa(limit))
+	setQuery(values, "cursor", opts.Cursor)
+	var page model.AnchorSystemResourcePage
+	path := "/v1/anchor-systems/" + url.PathEscape(systemID) + "/resources"
+	if err := t.getStrictJSON(ctx, path, values, &page); err != nil {
+		return AnchorSystemResourcePage{}, err
+	}
+	for _, resource := range page.Resources {
+		if err := validateAnchorResource(systemID, opts.Kind, resource); err != nil {
+			return AnchorSystemResourcePage{}, err
+		}
+	}
+	return page, nil
+}
+
+func (t *httpTransport) GetAnchorSystemResource(ctx context.Context, systemID, kind, resourceID string) (AnchorSystemResource, error) {
+	var resource model.AnchorSystemResource
+	path := "/v1/anchor-systems/" + url.PathEscape(systemID) + "/resources/" + url.PathEscape(kind) + "/" + url.PathEscape(resourceID)
+	if err := t.getStrictJSON(ctx, path, nil, &resource); err != nil {
+		return AnchorSystemResource{}, err
+	}
+	if err := validateAnchorResource(systemID, kind, resource); err != nil {
+		return AnchorSystemResource{}, err
+	}
+	return resource, nil
+}
+
+func validateAnchorSystem(system model.AnchorSystem) error {
+	if system.SchemaVersion != model.SchemaAnchorSystem || system.SystemID == "" || system.SinkName == "" || system.Kind == "" {
+		return &Error{Op: "decode anchor system", Message: "server returned invalid anchor system descriptor"}
+	}
+	return nil
+}
+
+func validateAnchorResource(systemID, kind string, resource model.AnchorSystemResource) error {
+	if resource.SchemaVersion != model.SchemaAnchorSystemResource || resource.SystemID != systemID || resource.Kind != kind || resource.ResourceID == "" {
+		return &Error{Op: "decode anchor system resource", Message: "server returned mismatched anchor system resource"}
+	}
+	return nil
+}
+
 func (t *httpTransport) LatestSTH(ctx context.Context) (SignedTreeHead, error) {
 	var sth model.SignedTreeHead
 	if err := t.getJSON(ctx, "/v1/sth/latest", nil, &sth); err != nil {

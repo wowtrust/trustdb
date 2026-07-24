@@ -405,6 +405,48 @@ func (t *grpcTransport) GetAnchor(ctx context.Context, treeSize uint64) (AnchorS
 	return AnchorStatus{TreeSize: out.TreeSize, Status: out.Status, Result: out.Result}, nil
 }
 
+func (t *grpcTransport) ListAnchorSystems(ctx context.Context) ([]AnchorSystem, error) {
+	var out grpcapi.ListAnchorSystemsResponse
+	if err := t.invoke(ctx, grpcapi.FullMethodListAnchorSystems, &grpcapi.ListAnchorSystemsRequest{}, &out); err != nil {
+		return nil, err
+	}
+	return out.Systems, nil
+}
+
+func (t *grpcTransport) GetAnchorSystem(ctx context.Context, systemID string) (AnchorSystem, error) {
+	var out grpcapi.GetAnchorSystemResponse
+	if err := t.invoke(ctx, grpcapi.FullMethodGetAnchorSystem, &grpcapi.GetAnchorSystemRequest{SystemID: systemID}, &out); err != nil {
+		return AnchorSystem{}, err
+	}
+	return out.System, nil
+}
+
+func (t *grpcTransport) GetAnchorSystemStatus(ctx context.Context, systemID string) (AnchorSystemStatus, error) {
+	var out grpcapi.GetAnchorSystemStatusResponse
+	if err := t.invoke(ctx, grpcapi.FullMethodGetAnchorSystemStatus, &grpcapi.GetAnchorSystemStatusRequest{SystemID: systemID}, &out); err != nil {
+		return AnchorSystemStatus{}, err
+	}
+	return out.Status, nil
+}
+
+func (t *grpcTransport) ListAnchorSystemResources(ctx context.Context, systemID string, opts AnchorResourceListOptions) (AnchorSystemResourcePage, error) {
+	var out grpcapi.ListAnchorSystemResourcesResponse
+	request := grpcapi.ListAnchorSystemResourcesRequest{SystemID: systemID, Kind: opts.Kind, Limit: opts.Limit, Cursor: opts.Cursor}
+	if err := t.invoke(ctx, grpcapi.FullMethodListAnchorSystemResources, &request, &out); err != nil {
+		return AnchorSystemResourcePage{}, err
+	}
+	return out.Page, nil
+}
+
+func (t *grpcTransport) GetAnchorSystemResource(ctx context.Context, systemID, kind, resourceID string) (AnchorSystemResource, error) {
+	var out grpcapi.GetAnchorSystemResourceResponse
+	request := grpcapi.GetAnchorSystemResourceRequest{SystemID: systemID, Kind: kind, ResourceID: resourceID}
+	if err := t.invoke(ctx, grpcapi.FullMethodGetAnchorSystemResource, &request, &out); err != nil {
+		return AnchorSystemResource{}, err
+	}
+	return out.Resource, nil
+}
+
 func (t *grpcTransport) LatestSTH(ctx context.Context) (SignedTreeHead, error) {
 	var out grpcapi.LatestSTHResponse
 	if err := t.invoke(ctx, grpcapi.FullMethodLatestSTH, &grpcapi.LatestSTHRequest{}, &out); err != nil {

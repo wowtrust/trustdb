@@ -786,6 +786,29 @@ func TestBatchTreeEndpoints(t *testing.T) {
 	}
 }
 
+func TestAnchorSystemEndpoints(t *testing.T) {
+	t.Parallel()
+	handler := buildMux(Handler{AnchorSystems: fakeAnchorSystemService{}})
+
+	for _, tc := range []struct {
+		path string
+		want string
+	}{
+		{"/v1/anchor-systems", `"system_id":"chain-a"`},
+		{"/v1/anchor-systems/chain-a", `"kind":"evidence_blockchain"`},
+		{"/v1/anchor-systems/chain-a/status", `"state":"healthy"`},
+		{"/v1/anchor-systems/chain-a/resources?kind=node&limit=10", `"resource_id":"node-1"`},
+		{"/v1/anchor-systems/chain-a/resources/node/node-1", `"status":"online"`},
+	} {
+		req := httptest.NewRequest(http.MethodGet, tc.path, nil)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), tc.want) {
+			t.Fatalf("GET %s status=%d body=%s", tc.path, rec.Code, rec.Body.String())
+		}
+	}
+}
+
 func TestBatchTreeEndpointReportsMissingIndex(t *testing.T) {
 	t.Parallel()
 
@@ -1302,6 +1325,32 @@ func (f fakeGlobalService) Evidence(context.Context, string) (model.GlobalLogEvi
 
 type fakeAnchorService struct {
 	results []model.STHAnchorResult
+}
+
+type fakeAnchorSystemService struct{}
+
+func (fakeAnchorSystemService) Systems(context.Context) ([]model.AnchorSystem, error) {
+	return []model.AnchorSystem{testAnchorSystem()}, nil
+}
+
+func (fakeAnchorSystemService) System(_ context.Context, id string) (model.AnchorSystem, bool, error) {
+	return testAnchorSystem(), id == "chain-a", nil
+}
+
+func (fakeAnchorSystemService) Status(_ context.Context, id string) (model.AnchorSystemStatus, bool, error) {
+	return model.AnchorSystemStatus{SchemaVersion: model.SchemaAnchorSystemStatus, SystemID: "chain-a", State: model.AnchorSystemStateHealthy, ObservedAtUnixN: 1}, id == "chain-a", nil
+}
+
+func (fakeAnchorSystemService) Resources(_ context.Context, id string, opts model.AnchorResourceListOptions) (model.AnchorSystemResourcePage, bool, error) {
+	return model.AnchorSystemResourcePage{Resources: []model.AnchorSystemResource{{SchemaVersion: model.SchemaAnchorSystemResource, SystemID: "chain-a", Kind: opts.Kind, ResourceID: "node-1", Status: "online"}}, Limit: opts.Limit}, id == "chain-a", nil
+}
+
+func (fakeAnchorSystemService) Resource(_ context.Context, id, kind, resourceID string) (model.AnchorSystemResource, bool, error) {
+	return model.AnchorSystemResource{SchemaVersion: model.SchemaAnchorSystemResource, SystemID: "chain-a", Kind: kind, ResourceID: resourceID, Status: "online"}, id == "chain-a" && resourceID == "node-1", nil
+}
+
+func testAnchorSystem() model.AnchorSystem {
+	return model.AnchorSystem{SchemaVersion: model.SchemaAnchorSystem, SystemID: "chain-a", SinkName: "chain", DisplayName: "Chain A", Kind: model.AnchorSystemKindEvidenceBlockchain, Capabilities: []string{model.AnchorCapabilityNodeRead}}
 }
 
 func (f fakeAnchorService) AnchorResult(_ context.Context, treeSize uint64) (model.STHAnchorResult, bool, error) {

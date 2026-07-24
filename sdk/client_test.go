@@ -279,6 +279,19 @@ func TestClientOperationalEndpoints(t *testing.T) {
 				ProofLevel: ProofLevelL5,
 				Result:     &STHAnchorResult{SchemaVersion: model.SchemaSTHAnchorResult, TreeSize: 4, AnchorID: "anchor-4"},
 			})
+		case "/v1/anchor-systems":
+			writeJSONForTest(t, w, http.StatusOK, map[string]any{"systems": []model.AnchorSystem{sdkHTTPTestAnchorSystem()}})
+		case "/v1/anchor-systems/chain-a":
+			writeJSONForTest(t, w, http.StatusOK, sdkHTTPTestAnchorSystem())
+		case "/v1/anchor-systems/chain-a/status":
+			writeJSONForTest(t, w, http.StatusOK, model.AnchorSystemStatus{SchemaVersion: model.SchemaAnchorSystemStatus, SystemID: "chain-a", State: model.AnchorSystemStateHealthy, ObservedAtUnixN: 1})
+		case "/v1/anchor-systems/chain-a/resources":
+			if r.URL.Query().Get("kind") != model.AnchorResourceKindNode || r.URL.Query().Get("limit") != "5" {
+				t.Fatalf("anchor resources query = %s", r.URL.RawQuery)
+			}
+			writeJSONForTest(t, w, http.StatusOK, model.AnchorSystemResourcePage{Resources: []model.AnchorSystemResource{{SchemaVersion: model.SchemaAnchorSystemResource, SystemID: "chain-a", Kind: model.AnchorResourceKindNode, ResourceID: "node-1", Status: "online"}}, Limit: 5})
+		case "/v1/anchor-systems/chain-a/resources/node/node-1":
+			writeJSONForTest(t, w, http.StatusOK, model.AnchorSystemResource{SchemaVersion: model.SchemaAnchorSystemResource, SystemID: "chain-a", Kind: model.AnchorResourceKindNode, ResourceID: "node-1", Status: "online"})
 		case "/v1/roots/latest":
 			writeJSONForTest(t, w, http.StatusOK, BatchRoot{
 				SchemaVersion: model.SchemaBatchRoot,
@@ -350,6 +363,26 @@ func TestClientOperationalEndpoints(t *testing.T) {
 	if anchorStatus.TreeSize != 4 || anchorStatus.Status != model.AnchorStatePublished || anchorStatus.Result == nil || anchorStatus.Result.AnchorID != "anchor-4" {
 		t.Fatalf("anchor status = %+v", anchorStatus)
 	}
+	systems, err := client.ListAnchorSystems(context.Background())
+	if err != nil || len(systems) != 1 || systems[0].SystemID != "chain-a" {
+		t.Fatalf("ListAnchorSystems()=%+v err=%v", systems, err)
+	}
+	system, err := client.GetAnchorSystem(context.Background(), "chain-a")
+	if err != nil || system.Kind != model.AnchorSystemKindEvidenceBlockchain {
+		t.Fatalf("GetAnchorSystem()=%+v err=%v", system, err)
+	}
+	systemStatus, err := client.GetAnchorSystemStatus(context.Background(), "chain-a")
+	if err != nil || systemStatus.State != model.AnchorSystemStateHealthy {
+		t.Fatalf("GetAnchorSystemStatus()=%+v err=%v", systemStatus, err)
+	}
+	resourcePage, err := client.ListAnchorSystemResources(context.Background(), "chain-a", AnchorResourceListOptions{Kind: model.AnchorResourceKindNode, Limit: 5})
+	if err != nil || len(resourcePage.Resources) != 1 || resourcePage.Resources[0].ResourceID != "node-1" {
+		t.Fatalf("ListAnchorSystemResources()=%+v err=%v", resourcePage, err)
+	}
+	resource, err := client.GetAnchorSystemResource(context.Background(), "chain-a", model.AnchorResourceKindNode, "node-1")
+	if err != nil || resource.Status != "online" {
+		t.Fatalf("GetAnchorSystemResource()=%+v err=%v", resource, err)
+	}
 	metrics, err := client.MetricsRaw(context.Background())
 	if err != nil {
 		t.Fatalf("MetricsRaw: %v", err)
@@ -357,6 +390,10 @@ func TestClientOperationalEndpoints(t *testing.T) {
 	if !strings.Contains(metrics, "trustdb_ingest_total") {
 		t.Fatalf("metrics = %q", metrics)
 	}
+}
+
+func sdkHTTPTestAnchorSystem() model.AnchorSystem {
+	return model.AnchorSystem{SchemaVersion: model.SchemaAnchorSystem, SystemID: "chain-a", SinkName: "chain", DisplayName: "Chain A", Kind: model.AnchorSystemKindEvidenceBlockchain, Capabilities: []string{model.AnchorCapabilityNodeRead}}
 }
 
 func TestHTTPTransportRejectsLegacyAnchorQueueEnvelope(t *testing.T) {

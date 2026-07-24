@@ -62,6 +62,22 @@ func TestExamplePluginExecutablePublishAndVerify(t *testing.T) {
 	if err := sink.VerifyAnchor(sth, result); err != nil {
 		t.Fatalf("VerifyAnchor() error = %v", err)
 	}
+	system, err := sink.System(context.Background())
+	if err != nil || system.SystemID != "example-evidence-chain" || system.Kind != model.AnchorSystemKindEvidenceBlockchain {
+		t.Fatalf("System() = %+v err=%v", system, err)
+	}
+	status, err := sink.Status(context.Background())
+	if err != nil || status.State != model.AnchorSystemStateHealthy || status.Details["block_count"] != "1" {
+		t.Fatalf("Status() = %+v err=%v", status, err)
+	}
+	blocks, err := sink.ListResources(context.Background(), model.AnchorResourceListOptions{Kind: model.AnchorResourceKindBlock, Limit: 10})
+	if err != nil || len(blocks.Resources) != 1 || blocks.Resources[0].Height != sth.TreeSize {
+		t.Fatalf("ListResources(block) = %+v err=%v", blocks, err)
+	}
+	transaction, found, err := sink.Resource(context.Background(), model.AnchorResourceKindTransaction, result.AnchorID)
+	if err != nil || !found || transaction.ParentID != "3" {
+		t.Fatalf("Resource(transaction) = %+v found=%v err=%v", transaction, found, err)
+	}
 	result.Proof[0] ^= 0xff
 	if err := sink.VerifyAnchor(sth, result); err == nil {
 		t.Fatal("VerifyAnchor() accepted tampered proof")

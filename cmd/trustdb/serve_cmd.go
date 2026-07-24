@@ -19,6 +19,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/wowtrust/trustdb/internal/adminweb"
 	"github.com/wowtrust/trustdb/internal/anchor"
+	"github.com/wowtrust/trustdb/internal/anchorsystem"
 	"github.com/wowtrust/trustdb/internal/app"
 	"github.com/wowtrust/trustdb/internal/batch"
 	"github.com/wowtrust/trustdb/internal/claim"
@@ -552,6 +553,19 @@ func newServeCommand(rt *runtimeConfig) *cobra.Command {
 				return err
 			}
 			defer anchorShutdown()
+			var anchorSystems *anchorsystem.Service
+			if anchorSvc != nil {
+				var provider anchorsystem.Provider
+				if explorer, ok := anchorSvc.Sink().(anchorsystem.Provider); ok {
+					provider = explorer
+				} else {
+					provider = anchorsystem.StaticProvider{Descriptor: anchorsystem.BuiltInDescriptor(anchorSvc.SinkName())}
+				}
+				anchorSystems, err = anchorsystem.New(provider)
+				if err != nil {
+					return trusterr.Wrap(trusterr.CodeFailedPrecondition, "build anchor system facade", err)
+				}
+			}
 			var coverageProjector *l5projector.Service
 			if anchorSvc != nil {
 				coverageStore, ok := proofStore.(l5projector.Store)
@@ -681,12 +695,7 @@ func newServeCommand(rt *runtimeConfig) *cobra.Command {
 			}
 
 			metricsHandler := observability.Handler(reg)
-			var publicHandler http.Handler
-			if anchorAPI != nil {
-				publicHandler = httpapi.NewWithSubmitterAndGlobalAndAnchors(submissionSvc, metricsHandler, batchSvc, globalSvc, anchorAPI, statusHub)
-			} else {
-				publicHandler = httpapi.NewWithSubmitterAndGlobalAndAnchors(submissionSvc, metricsHandler, batchSvc, globalSvc, nil, statusHub)
-			}
+			publicHandler := httpapi.NewWithSubmitterGlobalAnchorsAndSystems(submissionSvc, metricsHandler, batchSvc, globalSvc, anchorAPI, anchorSystems, statusHub)
 			handler := http.Handler(publicHandler)
 			if rt.cfg.Admin.Enabled {
 				ah, err := adminweb.New(adminweb.Options{
@@ -731,7 +740,7 @@ func newServeCommand(rt *runtimeConfig) *cobra.Command {
 				healthSvc.SetServingStatus("", healthpb.HealthCheckResponse_SERVING)
 				healthpb.RegisterHealthServer(grpcServer, healthSvc)
 				defer healthSvc.Shutdown()
-				grpcapi.RegisterTrustDBServiceServer(grpcServer, grpcapi.NewServerWithSubmitter(submissionSvc, batchSvc, globalSvc, anchorAPI, metricsHandler))
+				grpcapi.RegisterTrustDBServiceServer(grpcServer, grpcapi.NewServerWithSubmitterAndAnchorSystems(submissionSvc, batchSvc, globalSvc, anchorAPI, anchorSystems, metricsHandler))
 				defer grpcServer.Stop()
 				go func() {
 					rt.logger.Info().Str("listen", grpcListen).Msg("starting trustdb grpc server")

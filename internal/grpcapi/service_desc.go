@@ -23,6 +23,11 @@ type TrustDBServiceServer interface {
 	GetGlobalEvidence(context.Context, *GetGlobalEvidenceRequest) (*GetGlobalEvidenceResponse, error)
 	ListAnchors(context.Context, *ListAnchorsRequest) (*ListAnchorsResponse, error)
 	GetAnchor(context.Context, *GetAnchorRequest) (*GetAnchorResponse, error)
+	ListAnchorSystems(context.Context, *ListAnchorSystemsRequest) (*ListAnchorSystemsResponse, error)
+	GetAnchorSystem(context.Context, *GetAnchorSystemRequest) (*GetAnchorSystemResponse, error)
+	GetAnchorSystemStatus(context.Context, *GetAnchorSystemStatusRequest) (*GetAnchorSystemStatusResponse, error)
+	ListAnchorSystemResources(context.Context, *ListAnchorSystemResourcesRequest) (*ListAnchorSystemResourcesResponse, error)
+	GetAnchorSystemResource(context.Context, *GetAnchorSystemResourceRequest) (*GetAnchorSystemResourceResponse, error)
 	Metrics(context.Context, *MetricsRequest) (*MetricsResponse, error)
 }
 
@@ -49,6 +54,11 @@ var TrustDBService_ServiceDesc = grpc.ServiceDesc{
 		{MethodName: "GetGlobalEvidence", Handler: _TrustDB_GetGlobalEvidence_Handler},
 		{MethodName: "ListAnchors", Handler: _TrustDB_ListAnchors_Handler},
 		{MethodName: "GetAnchor", Handler: _TrustDB_GetAnchor_Handler},
+		{MethodName: "ListAnchorSystems", Handler: _TrustDB_ListAnchorSystems_Handler},
+		{MethodName: "GetAnchorSystem", Handler: _TrustDB_GetAnchorSystem_Handler},
+		{MethodName: "GetAnchorSystemStatus", Handler: _TrustDB_GetAnchorSystemStatus_Handler},
+		{MethodName: "ListAnchorSystemResources", Handler: _TrustDB_ListAnchorSystemResources_Handler},
+		{MethodName: "GetAnchorSystemResource", Handler: _TrustDB_GetAnchorSystemResource_Handler},
 		{MethodName: "Metrics", Handler: _TrustDB_Metrics_Handler},
 	},
 	Streams: []grpc.StreamDesc{
@@ -197,6 +207,36 @@ func _TrustDB_ListAnchors_Handler(srv any, ctx context.Context, dec func(any) er
 func _TrustDB_GetAnchor_Handler(srv any, ctx context.Context, dec func(any) error, interceptor grpc.UnaryServerInterceptor) (any, error) {
 	return unaryHandler[GetAnchorRequest](srv, ctx, dec, interceptor, "GetAnchor", func(s TrustDBServiceServer, ctx context.Context, req *GetAnchorRequest) (any, error) {
 		return s.GetAnchor(ctx, req)
+	})
+}
+
+func _TrustDB_ListAnchorSystems_Handler(srv any, ctx context.Context, dec func(any) error, interceptor grpc.UnaryServerInterceptor) (any, error) {
+	return unaryHandler[ListAnchorSystemsRequest](srv, ctx, dec, interceptor, "ListAnchorSystems", func(s TrustDBServiceServer, ctx context.Context, req *ListAnchorSystemsRequest) (any, error) {
+		return s.ListAnchorSystems(ctx, req)
+	})
+}
+
+func _TrustDB_GetAnchorSystem_Handler(srv any, ctx context.Context, dec func(any) error, interceptor grpc.UnaryServerInterceptor) (any, error) {
+	return unaryHandler[GetAnchorSystemRequest](srv, ctx, dec, interceptor, "GetAnchorSystem", func(s TrustDBServiceServer, ctx context.Context, req *GetAnchorSystemRequest) (any, error) {
+		return s.GetAnchorSystem(ctx, req)
+	})
+}
+
+func _TrustDB_GetAnchorSystemStatus_Handler(srv any, ctx context.Context, dec func(any) error, interceptor grpc.UnaryServerInterceptor) (any, error) {
+	return unaryHandler[GetAnchorSystemStatusRequest](srv, ctx, dec, interceptor, "GetAnchorSystemStatus", func(s TrustDBServiceServer, ctx context.Context, req *GetAnchorSystemStatusRequest) (any, error) {
+		return s.GetAnchorSystemStatus(ctx, req)
+	})
+}
+
+func _TrustDB_ListAnchorSystemResources_Handler(srv any, ctx context.Context, dec func(any) error, interceptor grpc.UnaryServerInterceptor) (any, error) {
+	return unaryHandler[ListAnchorSystemResourcesRequest](srv, ctx, dec, interceptor, "ListAnchorSystemResources", func(s TrustDBServiceServer, ctx context.Context, req *ListAnchorSystemResourcesRequest) (any, error) {
+		return s.ListAnchorSystemResources(ctx, req)
+	})
+}
+
+func _TrustDB_GetAnchorSystemResource_Handler(srv any, ctx context.Context, dec func(any) error, interceptor grpc.UnaryServerInterceptor) (any, error) {
+	return unaryHandler[GetAnchorSystemResourceRequest](srv, ctx, dec, interceptor, "GetAnchorSystemResource", func(s TrustDBServiceServer, ctx context.Context, req *GetAnchorSystemResourceRequest) (any, error) {
+		return s.GetAnchorSystemResource(ctx, req)
 	})
 }
 

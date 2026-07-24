@@ -341,6 +341,56 @@ func (t *loadBalancedTransport) GetAnchor(ctx context.Context, treeSize uint64) 
 	})
 }
 
+func (t *loadBalancedTransport) ListAnchorSystems(ctx context.Context) ([]AnchorSystem, error) {
+	return tryEndpoints(ctx, t, "list anchor systems", func(ctx context.Context, transport Transport) ([]AnchorSystem, error) {
+		provider, ok := transport.(anchorSystemTransport)
+		if !ok {
+			return nil, &Error{Op: "list anchor systems", Message: "transport does not support anchor systems"}
+		}
+		return provider.ListAnchorSystems(ctx)
+	})
+}
+
+func (t *loadBalancedTransport) GetAnchorSystem(ctx context.Context, systemID string) (AnchorSystem, error) {
+	return tryEndpoints(ctx, t, "get anchor system", func(ctx context.Context, transport Transport) (AnchorSystem, error) {
+		provider, ok := transport.(anchorSystemTransport)
+		if !ok {
+			return AnchorSystem{}, &Error{Op: "get anchor system", Message: "transport does not support anchor systems"}
+		}
+		return provider.GetAnchorSystem(ctx, systemID)
+	})
+}
+
+func (t *loadBalancedTransport) GetAnchorSystemStatus(ctx context.Context, systemID string) (AnchorSystemStatus, error) {
+	return tryEndpoints(ctx, t, "get anchor system status", func(ctx context.Context, transport Transport) (AnchorSystemStatus, error) {
+		provider, ok := transport.(anchorSystemTransport)
+		if !ok {
+			return AnchorSystemStatus{}, &Error{Op: "get anchor system status", Message: "transport does not support anchor systems"}
+		}
+		return provider.GetAnchorSystemStatus(ctx, systemID)
+	})
+}
+
+func (t *loadBalancedTransport) ListAnchorSystemResources(ctx context.Context, systemID string, opts AnchorResourceListOptions) (AnchorSystemResourcePage, error) {
+	return tryEndpoints(ctx, t, "list anchor system resources", func(ctx context.Context, transport Transport) (AnchorSystemResourcePage, error) {
+		provider, ok := transport.(anchorSystemTransport)
+		if !ok {
+			return AnchorSystemResourcePage{}, &Error{Op: "list anchor system resources", Message: "transport does not support anchor systems"}
+		}
+		return provider.ListAnchorSystemResources(ctx, systemID, opts)
+	})
+}
+
+func (t *loadBalancedTransport) GetAnchorSystemResource(ctx context.Context, systemID, kind, resourceID string) (AnchorSystemResource, error) {
+	return tryEndpoints(ctx, t, "get anchor system resource", func(ctx context.Context, transport Transport) (AnchorSystemResource, error) {
+		provider, ok := transport.(anchorSystemTransport)
+		if !ok {
+			return AnchorSystemResource{}, &Error{Op: "get anchor system resource", Message: "transport does not support anchor systems"}
+		}
+		return provider.GetAnchorSystemResource(ctx, systemID, kind, resourceID)
+	})
+}
+
 func (t *loadBalancedTransport) LatestSTH(ctx context.Context) (SignedTreeHead, error) {
 	return tryEndpoints(ctx, t, "latest sth", func(ctx context.Context, transport Transport) (SignedTreeHead, error) {
 		return transport.LatestSTH(ctx)

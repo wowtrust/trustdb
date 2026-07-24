@@ -7,15 +7,21 @@ import (
 )
 
 const (
-	FullMethodGetInfo = "/" + ServiceName + "/GetInfo"
-	FullMethodPublish = "/" + ServiceName + "/Publish"
-	FullMethodVerify  = "/" + ServiceName + "/Verify"
+	FullMethodGetInfo       = "/" + ServiceName + "/GetInfo"
+	FullMethodPublish       = "/" + ServiceName + "/Publish"
+	FullMethodVerify        = "/" + ServiceName + "/Verify"
+	FullMethodGetStatus     = "/" + ServiceName + "/GetStatus"
+	FullMethodListResources = "/" + ServiceName + "/ListResources"
+	FullMethodGetResource   = "/" + ServiceName + "/GetResource"
 )
 
 type RPCClient interface {
 	GetInfo(context.Context, *GetInfoRequest, ...grpc.CallOption) (*GetInfoResponse, error)
 	Publish(context.Context, *PublishRequest, ...grpc.CallOption) (*PublishResponse, error)
 	Verify(context.Context, *VerifyRequest, ...grpc.CallOption) (*VerifyResponse, error)
+	GetStatus(context.Context, *GetStatusRequest, ...grpc.CallOption) (*GetStatusResponse, error)
+	ListResources(context.Context, *ListResourcesRequest, ...grpc.CallOption) (*ListResourcesResponse, error)
+	GetResource(context.Context, *GetResourceRequest, ...grpc.CallOption) (*GetResourceResponse, error)
 }
 
 type rpcClient struct{ cc grpc.ClientConnInterface }
@@ -46,10 +52,37 @@ func (c *rpcClient) Verify(ctx context.Context, in *VerifyRequest, opts ...grpc.
 	return out, nil
 }
 
+func (c *rpcClient) GetStatus(ctx context.Context, in *GetStatusRequest, opts ...grpc.CallOption) (*GetStatusResponse, error) {
+	out := new(GetStatusResponse)
+	if err := c.cc.Invoke(ctx, FullMethodGetStatus, in, out, opts...); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *rpcClient) ListResources(ctx context.Context, in *ListResourcesRequest, opts ...grpc.CallOption) (*ListResourcesResponse, error) {
+	out := new(ListResourcesResponse)
+	if err := c.cc.Invoke(ctx, FullMethodListResources, in, out, opts...); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *rpcClient) GetResource(ctx context.Context, in *GetResourceRequest, opts ...grpc.CallOption) (*GetResourceResponse, error) {
+	out := new(GetResourceResponse)
+	if err := c.cc.Invoke(ctx, FullMethodGetResource, in, out, opts...); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 type RPCServer interface {
 	GetInfo(context.Context, *GetInfoRequest) (*GetInfoResponse, error)
 	Publish(context.Context, *PublishRequest) (*PublishResponse, error)
 	Verify(context.Context, *VerifyRequest) (*VerifyResponse, error)
+	GetStatus(context.Context, *GetStatusRequest) (*GetStatusResponse, error)
+	ListResources(context.Context, *ListResourcesRequest) (*ListResourcesResponse, error)
+	GetResource(context.Context, *GetResourceRequest) (*GetResourceResponse, error)
 }
 
 func RegisterRPCServer(registrar grpc.ServiceRegistrar, server RPCServer) {
@@ -63,6 +96,9 @@ var ServiceDesc = grpc.ServiceDesc{
 		{MethodName: "GetInfo", Handler: getInfoHandler},
 		{MethodName: "Publish", Handler: publishHandler},
 		{MethodName: "Verify", Handler: verifyHandler},
+		{MethodName: "GetStatus", Handler: getStatusHandler},
+		{MethodName: "ListResources", Handler: listResourcesHandler},
+		{MethodName: "GetResource", Handler: getResourceHandler},
 	},
 	Metadata: ProtocolVersion,
 }
@@ -104,5 +140,23 @@ func publishHandler(srv any, ctx context.Context, dec func(any) error, intercept
 func verifyHandler(srv any, ctx context.Context, dec func(any) error, interceptor grpc.UnaryServerInterceptor) (any, error) {
 	return unaryHandler[VerifyRequest](srv, ctx, dec, interceptor, "Verify", func(server RPCServer, ctx context.Context, req *VerifyRequest) (any, error) {
 		return server.Verify(ctx, req)
+	})
+}
+
+func getStatusHandler(srv any, ctx context.Context, dec func(any) error, interceptor grpc.UnaryServerInterceptor) (any, error) {
+	return unaryHandler[GetStatusRequest](srv, ctx, dec, interceptor, "GetStatus", func(server RPCServer, ctx context.Context, req *GetStatusRequest) (any, error) {
+		return server.GetStatus(ctx, req)
+	})
+}
+
+func listResourcesHandler(srv any, ctx context.Context, dec func(any) error, interceptor grpc.UnaryServerInterceptor) (any, error) {
+	return unaryHandler[ListResourcesRequest](srv, ctx, dec, interceptor, "ListResources", func(server RPCServer, ctx context.Context, req *ListResourcesRequest) (any, error) {
+		return server.ListResources(ctx, req)
+	})
+}
+
+func getResourceHandler(srv any, ctx context.Context, dec func(any) error, interceptor grpc.UnaryServerInterceptor) (any, error) {
+	return unaryHandler[GetResourceRequest](srv, ctx, dec, interceptor, "GetResource", func(server RPCServer, ctx context.Context, req *GetResourceRequest) (any, error) {
+		return server.GetResource(ctx, req)
 	})
 }

@@ -36,13 +36,14 @@ const (
 var requestBodyBufferPool = sync.Pool{New: func() any { return new([]byte) }}
 
 type Handler struct {
-	Submitter submission.Submitter
-	Batch     BatchService
-	Global    GlobalLogService
-	Anchors   AnchorService
-	Metrics   http.Handler
-	Statuses  RecordStatusService
-	StatusHub *statusnotify.Hub
+	Submitter     submission.Submitter
+	Batch         BatchService
+	Global        GlobalLogService
+	Anchors       AnchorService
+	AnchorSystems AnchorSystemService
+	Metrics       http.Handler
+	Statuses      RecordStatusService
+	StatusHub     *statusnotify.Hub
 }
 
 type BatchService interface {
@@ -69,6 +70,16 @@ type RecordStatusService interface {
 type AnchorService interface {
 	AnchorResult(context.Context, uint64) (model.STHAnchorResult, bool, error)
 	Anchors(context.Context, model.AnchorListOptions) ([]model.STHAnchorResult, error)
+}
+
+// AnchorSystemService exposes mutable discovery and read-only explorer data.
+// It is deliberately separate from AnchorService's immutable L5 evidence.
+type AnchorSystemService interface {
+	Systems(context.Context) ([]model.AnchorSystem, error)
+	System(context.Context, string) (model.AnchorSystem, bool, error)
+	Status(context.Context, string) (model.AnchorSystemStatus, bool, error)
+	Resources(context.Context, string, model.AnchorResourceListOptions) (model.AnchorSystemResourcePage, bool, error)
+	Resource(context.Context, string, string, string) (model.AnchorSystemResource, bool, error)
 }
 
 type GlobalLogService interface {
@@ -205,6 +216,10 @@ type anchorResponse struct {
 	Result     *model.STHAnchorResult `json:"result,omitempty"`
 }
 
+type anchorSystemsResponse struct {
+	Systems []model.AnchorSystem `json:"systems"`
+}
+
 type errorResponse struct {
 	Code    trusterr.Code `json:"code"`
 	Message string        `json:"message"`
@@ -259,12 +274,25 @@ func NewWithSubmitterAndGlobalAndAnchors(
 	anchorSvc AnchorService,
 	statusHub ...*statusnotify.Hub,
 ) http.Handler {
+	return NewWithSubmitterGlobalAnchorsAndSystems(submitter, metrics, batchSvc, globalSvc, anchorSvc, nil, statusHub...)
+}
+
+func NewWithSubmitterGlobalAnchorsAndSystems(
+	submitter submission.Submitter,
+	metrics http.Handler,
+	batchSvc BatchService,
+	globalSvc GlobalLogService,
+	anchorSvc AnchorService,
+	anchorSystems AnchorSystemService,
+	statusHub ...*statusnotify.Hub,
+) http.Handler {
 	h := Handler{
-		Submitter: submitter,
-		Batch:     batchSvc,
-		Global:    globalSvc,
-		Anchors:   anchorSvc,
-		Metrics:   metrics,
+		Submitter:     submitter,
+		Batch:         batchSvc,
+		Global:        globalSvc,
+		Anchors:       anchorSvc,
+		AnchorSystems: anchorSystems,
+		Metrics:       metrics,
 	}
 	if statuses, ok := batchSvc.(RecordStatusService); ok {
 		h.Statuses = statuses
@@ -316,6 +344,13 @@ func buildMux(h Handler) http.Handler {
 		mux.HandleFunc("GET /v1/anchors/sth", h.listAnchors)
 		mux.HandleFunc("GET /v1/anchors/sth/{tree_size}", h.getAnchor)
 	}
+	if h.AnchorSystems != nil {
+		mux.HandleFunc("GET /v1/anchor-systems", h.listAnchorSystems)
+		mux.HandleFunc("GET /v1/anchor-systems/{system_id}", h.getAnchorSystem)
+		mux.HandleFunc("GET /v1/anchor-systems/{system_id}/status", h.getAnchorSystemStatus)
+		mux.HandleFunc("GET /v1/anchor-systems/{system_id}/resources", h.listAnchorSystemResources)
+		mux.HandleFunc("GET /v1/anchor-systems/{system_id}/resources/{kind}/{resource_id}", h.getAnchorSystemResource)
+	}
 	if h.Metrics != nil {
 		mux.Handle("GET /metrics", h.Metrics)
 	}
@@ -334,6 +369,9 @@ func normalizeHandler(h Handler) Handler {
 	}
 	if isTypedNil(h.Anchors) {
 		h.Anchors = nil
+	}
+	if isTypedNil(h.AnchorSystems) {
+		h.AnchorSystems = nil
 	}
 	if isTypedNil(h.Statuses) {
 		h.Statuses = nil
@@ -1679,6 +1717,76 @@ func (h Handler) listAnchors(w http.ResponseWriter, r *http.Request) {
 		Direction:  opts.Direction,
 		NextCursor: next,
 	})
+}
+
+func (h Handler) listAnchorSystems(w http.ResponseWriter, r *http.Request) {
+	items, err := h.AnchorSystems.Systems(r.Context())
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, anchorSystemsResponse{Systems: items})
+}
+
+func (h Handler) getAnchorSystem(w http.ResponseWriter, r *http.Request) {
+	item, found, err := h.AnchorSystems.System(r.Context(), r.PathValue("system_id"))
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	if !found {
+		writeError(w, trusterr.New(trusterr.CodeNotFound, "anchor system not found"))
+		return
+	}
+	writeJSON(w, http.StatusOK, item)
+}
+
+func (h Handler) getAnchorSystemStatus(w http.ResponseWriter, r *http.Request) {
+	item, found, err := h.AnchorSystems.Status(r.Context(), r.PathValue("system_id"))
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	if !found {
+		writeError(w, trusterr.New(trusterr.CodeNotFound, "anchor system not found"))
+		return
+	}
+	writeJSON(w, http.StatusOK, item)
+}
+
+func (h Handler) listAnchorSystemResources(w http.ResponseWriter, r *http.Request) {
+	limit, err := parseLimitQuery(r, 100, 1000)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	page, found, err := h.AnchorSystems.Resources(r.Context(), r.PathValue("system_id"), model.AnchorResourceListOptions{
+		Kind:   strings.TrimSpace(r.URL.Query().Get("kind")),
+		Limit:  limit,
+		Cursor: strings.TrimSpace(r.URL.Query().Get("cursor")),
+	})
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	if !found {
+		writeError(w, trusterr.New(trusterr.CodeNotFound, "anchor system not found"))
+		return
+	}
+	writeJSON(w, http.StatusOK, page)
+}
+
+func (h Handler) getAnchorSystemResource(w http.ResponseWriter, r *http.Request) {
+	item, found, err := h.AnchorSystems.Resource(r.Context(), r.PathValue("system_id"), r.PathValue("kind"), r.PathValue("resource_id"))
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	if !found {
+		writeError(w, trusterr.New(trusterr.CodeNotFound, "anchor system resource not found"))
+		return
+	}
+	writeJSON(w, http.StatusOK, item)
 }
 
 func (h Handler) latestRoot(w http.ResponseWriter, r *http.Request) {

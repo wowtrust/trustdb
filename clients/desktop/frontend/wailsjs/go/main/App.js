@@ -58,6 +58,14 @@ export function GetIdentity() {
   return window['go']['main']['App']['GetIdentity']();
 }
 
+export function GetAnchorSystemResource(arg1, arg2, arg3) {
+  return window['go']['main']['App']['GetAnchorSystemResource'](arg1, arg2, arg3);
+}
+
+export function GetAnchorSystemStatus(arg1) {
+  return window['go']['main']['App']['GetAnchorSystemStatus'](arg1);
+}
+
 export function GetProofBundle(arg1) {
   return window['go']['main']['App']['GetProofBundle'](arg1);
 }
@@ -76,6 +84,14 @@ export function LatestRoot() {
 
 export function ListRecords() {
   return window['go']['main']['App']['ListRecords']();
+}
+
+export function ListAnchorSystems() {
+  return window['go']['main']['App']['ListAnchorSystems']();
+}
+
+export function ListAnchorSystemResources(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['ListAnchorSystemResources'](arg1, arg2, arg3, arg4);
 }
 
 export function ListRecordsPage(arg1) {

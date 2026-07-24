@@ -66,6 +66,12 @@ type Plugin interface {
 }
 ```
 
+插件还可以选择实现 `anchorplugin.Explorer`，向 TrustDB SDK/Desktop 暴露
+只读系统状态以及节点、区块、交易、账户或合约资源。`Info.System` 声明稳定
+`system_id`、锚系统种类、可信属性和 capabilities；旧插件不提供该字段时继续
+按只有存取证能力的 provider 运行。完整语义和 API 见
+[Anchor System Provider v1](ANCHOR_SYSTEM_PROVIDER_V1.md)。
+
 入口调用：
 
 ```go

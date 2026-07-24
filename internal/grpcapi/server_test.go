@@ -144,6 +144,44 @@ func TestAnchorEndpointsExposePublishedResultsOnly(t *testing.T) {
 	}
 }
 
+func TestAnchorSystemEndpoints(t *testing.T) {
+	t.Parallel()
+	server := NewServerWithSubmitterAndAnchorSystems(nil, nil, nil, nil, grpcAnchorSystemService{}, nil)
+	list, err := server.ListAnchorSystems(context.Background(), &ListAnchorSystemsRequest{})
+	if err != nil || len(list.Systems) != 1 || list.Systems[0].SystemID != "chain-a" {
+		t.Fatalf("ListAnchorSystems()=%+v err=%v", list, err)
+	}
+	statusResponse, err := server.GetAnchorSystemStatus(context.Background(), &GetAnchorSystemStatusRequest{SystemID: "chain-a"})
+	if err != nil || statusResponse.Status.State != model.AnchorSystemStateHealthy {
+		t.Fatalf("GetAnchorSystemStatus()=%+v err=%v", statusResponse, err)
+	}
+	page, err := server.ListAnchorSystemResources(context.Background(), &ListAnchorSystemResourcesRequest{SystemID: "chain-a", Kind: model.AnchorResourceKindNode, Limit: 10})
+	if err != nil || len(page.Page.Resources) != 1 || page.Page.Resources[0].ResourceID != "node-1" {
+		t.Fatalf("ListAnchorSystemResources()=%+v err=%v", page, err)
+	}
+}
+
+type grpcAnchorSystemService struct{}
+
+func (grpcAnchorSystemService) Systems(context.Context) ([]model.AnchorSystem, error) {
+	return []model.AnchorSystem{grpcTestAnchorSystem()}, nil
+}
+func (grpcAnchorSystemService) System(_ context.Context, id string) (model.AnchorSystem, bool, error) {
+	return grpcTestAnchorSystem(), id == "chain-a", nil
+}
+func (grpcAnchorSystemService) Status(_ context.Context, id string) (model.AnchorSystemStatus, bool, error) {
+	return model.AnchorSystemStatus{SchemaVersion: model.SchemaAnchorSystemStatus, SystemID: "chain-a", State: model.AnchorSystemStateHealthy, ObservedAtUnixN: 1}, id == "chain-a", nil
+}
+func (grpcAnchorSystemService) Resources(_ context.Context, id string, opts model.AnchorResourceListOptions) (model.AnchorSystemResourcePage, bool, error) {
+	return model.AnchorSystemResourcePage{Resources: []model.AnchorSystemResource{{SchemaVersion: model.SchemaAnchorSystemResource, SystemID: "chain-a", Kind: opts.Kind, ResourceID: "node-1"}}, Limit: opts.Limit}, id == "chain-a", nil
+}
+func (grpcAnchorSystemService) Resource(_ context.Context, id, kind, resourceID string) (model.AnchorSystemResource, bool, error) {
+	return model.AnchorSystemResource{SchemaVersion: model.SchemaAnchorSystemResource, SystemID: "chain-a", Kind: kind, ResourceID: resourceID}, id == "chain-a", nil
+}
+func grpcTestAnchorSystem() model.AnchorSystem {
+	return model.AnchorSystem{SchemaVersion: model.SchemaAnchorSystem, SystemID: "chain-a", SinkName: "chain", DisplayName: "Chain A", Kind: model.AnchorSystemKindEvidenceBlockchain, Capabilities: []string{model.AnchorCapabilityNodeRead}}
+}
+
 func TestNewServerNormalizesTypedNilGlobalService(t *testing.T) {
 	t.Parallel()
 

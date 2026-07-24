@@ -191,6 +191,36 @@ func (p *Process) Verify(ctx context.Context, sth SignedTreeHead, result AnchorR
 	return nil
 }
 
+func (p *Process) Status(ctx context.Context) (SystemStatus, error) {
+	callCtx, cancel := p.callContext(ctx)
+	defer cancel()
+	response, err := p.client.GetStatus(callCtx, &GetStatusRequest{})
+	if err != nil {
+		return SystemStatus{}, err
+	}
+	return response.Status, nil
+}
+
+func (p *Process) ListResources(ctx context.Context, req ListResourcesRequest) (ListResourcesResponse, error) {
+	callCtx, cancel := p.callContext(ctx)
+	defer cancel()
+	response, err := p.client.ListResources(callCtx, &req)
+	if err != nil {
+		return ListResourcesResponse{}, err
+	}
+	return *response, nil
+}
+
+func (p *Process) Resource(ctx context.Context, kind, resourceID string) (Resource, bool, error) {
+	callCtx, cancel := p.callContext(ctx)
+	defer cancel()
+	response, err := p.client.GetResource(callCtx, &GetResourceRequest{Kind: kind, ResourceID: resourceID})
+	if err != nil {
+		return Resource{}, false, err
+	}
+	return response.Resource, response.Found, nil
+}
+
 func (p *Process) callContext(ctx context.Context) (context.Context, context.CancelFunc) {
 	if ctx == nil {
 		ctx = context.Background()

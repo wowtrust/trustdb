@@ -133,6 +133,15 @@ func (s *Service) SinkName() string {
 	return s.cfg.Sink.Name()
 }
 
+// Sink returns the configured provider for transport-side capability
+// discovery. Callers must continue to use Service for publication scheduling.
+func (s *Service) Sink() Sink {
+	if s == nil {
+		return nil
+	}
+	return s.cfg.Sink
+}
+
 func (s *Service) ScheduleKey() model.STHAnchorScheduleKey {
 	if s == nil {
 		return model.STHAnchorScheduleKey{}

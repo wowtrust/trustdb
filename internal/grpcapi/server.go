@@ -30,6 +30,7 @@ type Server struct {
 	Batch          httpapi.BatchService
 	Global         httpapi.GlobalLogService
 	Anchors        httpapi.AnchorService
+	AnchorSystems  httpapi.AnchorSystemService
 	MetricsHandler http.Handler
 }
 
@@ -52,6 +53,17 @@ func NewServerWithSubmitter(
 	anchorSvc httpapi.AnchorService,
 	metrics http.Handler,
 ) *Server {
+	return NewServerWithSubmitterAndAnchorSystems(submitter, batchSvc, globalSvc, anchorSvc, nil, metrics)
+}
+
+func NewServerWithSubmitterAndAnchorSystems(
+	submitter submission.Submitter,
+	batchSvc httpapi.BatchService,
+	globalSvc httpapi.GlobalLogService,
+	anchorSvc httpapi.AnchorService,
+	anchorSystems httpapi.AnchorSystemService,
+	metrics http.Handler,
+) *Server {
 	if isTypedNil(submitter) {
 		submitter = nil
 	}
@@ -61,7 +73,10 @@ func NewServerWithSubmitter(
 	if isTypedNil(anchorSvc) {
 		anchorSvc = nil
 	}
-	return &Server{Submitter: submitter, Batch: batchSvc, Global: globalSvc, Anchors: anchorSvc, MetricsHandler: metrics}
+	if isTypedNil(anchorSystems) {
+		anchorSystems = nil
+	}
+	return &Server{Submitter: submitter, Batch: batchSvc, Global: globalSvc, Anchors: anchorSvc, AnchorSystems: anchorSystems, MetricsHandler: metrics}
 }
 
 func isTypedNil(v any) bool {
@@ -442,6 +457,73 @@ func (s *Server) ListAnchors(ctx context.Context, req *ListAnchorsRequest) (*Lis
 		next = encodeAnchorCursor(model.STHAnchorResultKey{NodeID: last.NodeID, LogID: last.LogID, SinkName: last.SinkName, TreeSize: last.TreeSize})
 	}
 	return &ListAnchorsResponse{Anchors: anchors, Limit: opts.Limit, Direction: opts.Direction, NextCursor: next}, nil
+}
+
+func (s *Server) ListAnchorSystems(ctx context.Context, _ *ListAnchorSystemsRequest) (*ListAnchorSystemsResponse, error) {
+	if s.AnchorSystems == nil {
+		return nil, toStatusError(trusterr.New(trusterr.CodeFailedPrecondition, "anchor system service is not configured"))
+	}
+	items, err := s.AnchorSystems.Systems(ctx)
+	if err != nil {
+		return nil, toStatusError(err)
+	}
+	return &ListAnchorSystemsResponse{Systems: items}, nil
+}
+
+func (s *Server) GetAnchorSystem(ctx context.Context, req *GetAnchorSystemRequest) (*GetAnchorSystemResponse, error) {
+	if s.AnchorSystems == nil {
+		return nil, toStatusError(trusterr.New(trusterr.CodeFailedPrecondition, "anchor system service is not configured"))
+	}
+	item, found, err := s.AnchorSystems.System(ctx, req.SystemID)
+	if err != nil {
+		return nil, toStatusError(err)
+	}
+	if !found {
+		return nil, toStatusError(trusterr.New(trusterr.CodeNotFound, "anchor system not found"))
+	}
+	return &GetAnchorSystemResponse{System: item}, nil
+}
+
+func (s *Server) GetAnchorSystemStatus(ctx context.Context, req *GetAnchorSystemStatusRequest) (*GetAnchorSystemStatusResponse, error) {
+	if s.AnchorSystems == nil {
+		return nil, toStatusError(trusterr.New(trusterr.CodeFailedPrecondition, "anchor system service is not configured"))
+	}
+	item, found, err := s.AnchorSystems.Status(ctx, req.SystemID)
+	if err != nil {
+		return nil, toStatusError(err)
+	}
+	if !found {
+		return nil, toStatusError(trusterr.New(trusterr.CodeNotFound, "anchor system not found"))
+	}
+	return &GetAnchorSystemStatusResponse{Status: item}, nil
+}
+
+func (s *Server) ListAnchorSystemResources(ctx context.Context, req *ListAnchorSystemResourcesRequest) (*ListAnchorSystemResourcesResponse, error) {
+	if s.AnchorSystems == nil {
+		return nil, toStatusError(trusterr.New(trusterr.CodeFailedPrecondition, "anchor system service is not configured"))
+	}
+	page, found, err := s.AnchorSystems.Resources(ctx, req.SystemID, model.AnchorResourceListOptions{Kind: req.Kind, Limit: req.Limit, Cursor: req.Cursor})
+	if err != nil {
+		return nil, toStatusError(err)
+	}
+	if !found {
+		return nil, toStatusError(trusterr.New(trusterr.CodeNotFound, "anchor system not found"))
+	}
+	return &ListAnchorSystemResourcesResponse{Page: page}, nil
+}
+
+func (s *Server) GetAnchorSystemResource(ctx context.Context, req *GetAnchorSystemResourceRequest) (*GetAnchorSystemResourceResponse, error) {
+	if s.AnchorSystems == nil {
+		return nil, toStatusError(trusterr.New(trusterr.CodeFailedPrecondition, "anchor system service is not configured"))
+	}
+	item, found, err := s.AnchorSystems.Resource(ctx, req.SystemID, req.Kind, req.ResourceID)
+	if err != nil {
+		return nil, toStatusError(err)
+	}
+	if !found {
+		return nil, toStatusError(trusterr.New(trusterr.CodeNotFound, "anchor system resource not found"))
+	}
+	return &GetAnchorSystemResourceResponse{Resource: item}, nil
 }
 
 func (s *Server) Metrics(ctx context.Context, _ *MetricsRequest) (*MetricsResponse, error) {
