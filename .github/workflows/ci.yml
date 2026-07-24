@@ -328,6 +328,43 @@ jobs:
         working-directory: clients/desktop
         run: go test -mod=readonly ./...
 
+  desktop-windows:
+    name: Desktop Windows security tests
+    runs-on: windows-2025
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: clients/desktop/frontend/package-lock.json
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: clients/desktop/go.mod
+          cache-dependency-path: |
+            go.sum
+            clients/desktop/go.sum
+
+      - name: Build embedded frontend assets
+        working-directory: clients/desktop/frontend
+        run: |
+          npm ci
+          npm run build
+
+      - name: Run Windows key envelope tests
+        run: go test -count=1 -mod=readonly ./internal/keyenvelope
+
+      - name: Run Windows desktop tests
+        working-directory: clients/desktop
+        run: go test -count=1 -mod=readonly ./...
+
   desktop-frontend:
     name: Desktop frontend build
     runs-on: ubuntu-latest
