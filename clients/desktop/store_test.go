@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"testing"
 	"time"
 )
@@ -30,6 +31,7 @@ func TestStoreLoadMissingConfigUsesDefaults(t *testing.T) {
 func TestOpenUserConfigRootCreatesMissingDirectoryUnderHome(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	base := filepath.Join(home, ".config", "trustdb-test")
 	root, err := openUserConfigRoot(base)
 	if err != nil {
@@ -64,7 +66,7 @@ func TestWriteFileAtomicIgnoresStaleFixedTempPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Stat(path) error = %v", err)
 	}
-	if info.Mode().Perm() != 0o644 {
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o644 {
 		t.Fatalf("file mode = %v, want 0644", info.Mode().Perm())
 	}
 	staleInfo, err := os.Stat(staleFixedTmp)
