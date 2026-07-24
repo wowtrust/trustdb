@@ -65,7 +65,7 @@ type OfflineOptions struct {
 // .sproof cannot be decoded far enough to call VerifyOffline.
 func ContainerFailureResult(err error) OfflineResult {
 	result := OfflineResult{
-		Stages: make([]OfflineStageResult, 0, 13),
+		Stages: make([]OfflineStageResult, 0, 14),
 	}
 	result.Stages = append(result.Stages, failedOfflineStage(OfflineStageContainer, err))
 	appendAfterContainerFailure(&result, model.SingleProof{}, OfflineOptions{})
@@ -82,7 +82,7 @@ func VerifyOffline(
 ) (OfflineResult, error) {
 	result := OfflineResult{
 		RecordID: proof.RecordID,
-		Stages:   make([]OfflineStageResult, 0, 13),
+		Stages:   make([]OfflineStageResult, 0, 14),
 	}
 	if err := validateContainer(proof); err != nil {
 		result.Stages = append(result.Stages, failedOfflineStage(OfflineStageContainer, err))

@@ -13,13 +13,17 @@ TrustDB verifies a carried FISCO BCOS block's PBFT proof against the
 verifier-local static validator checkpoint. Offline verification exposes three
 provider stages after the ordinary TrustDB and Global Log stages:
 
-1. `bcos_receipt_inclusion` proves that the transaction and successful receipt
-   belong to the roots of the carried block header;
+1. `bcos_receipt_inclusion` first checks the immutable proof container, exact
+   STH/result envelope, and verifier-local crypto, chain, checkpoint, and
+   contract context, then proves that the canonical transaction and successful
+   receipt belong to the roots of the carried block header. It deliberately
+   does not interpret the call data or event as a TrustDB publication;
 2. `bcos_pbft_finality` proves that the locally trusted static validator quorum
    signed the exact hash of that header; and
-3. `bcos_exact_anchor_binding` independently rechecks the local chain and
-   contract context, exact Signed STH payload, successful contract call, event,
-   publisher, and outer anchor result.
+3. `bcos_exact_anchor_binding` defensively reapplies the common container and
+   local-context checks, then proves that the exact Signed STH payload,
+   successful contract call, event, publisher, and outer anchor result all
+   identify one TrustDB publication.
 
 The raw immutable `STHAnchorResult` remains
 `evidence_stage=external_observation`. A local offline result is promoted from

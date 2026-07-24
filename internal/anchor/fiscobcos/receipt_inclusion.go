@@ -44,10 +44,12 @@ func VerifyReceiptInclusion(
 	return VerifyExactAnchorBinding(sth, result, config)
 }
 
-// VerifyNativeReceiptInclusion verifies the canonical signed transaction,
-// transaction and receipt Merkle paths, successful receipt, and exact block
-// roots. It does not interpret the transaction call or anchor event as a
-// TrustDB binding and does not verify PBFT finality.
+// VerifyNativeReceiptInclusion first applies the common fail-closed container
+// and verifier-local chain/contract/checkpoint pins, then verifies the
+// canonical signed transaction, transaction and receipt Merkle paths,
+// successful receipt, and exact block roots. It does not interpret the
+// transaction call or anchor event as a TrustDB binding and does not verify
+// PBFT finality.
 func VerifyNativeReceiptInclusion(
 	sth model.SignedTreeHead,
 	result model.STHAnchorResult,
@@ -97,11 +99,11 @@ func VerifyNativeReceiptInclusion(
 	return nil
 }
 
-// VerifyExactAnchorBinding independently rechecks that the locally trusted
-// chain context, exact Signed STH payload, contract call, and one receipt event
-// all identify the same TrustDB anchor. Callers must run receipt inclusion
-// first; this function does not establish that the carried receipt belongs to
-// the carried block.
+// VerifyExactAnchorBinding independently reapplies the common container and
+// local context checks, then proves that the exact Signed STH payload,
+// contract call, and one receipt event all identify the same TrustDB anchor.
+// Callers must run receipt inclusion first; this function does not establish
+// that the carried receipt belongs to the carried block.
 func VerifyExactAnchorBinding(
 	sth model.SignedTreeHead,
 	result model.STHAnchorResult,
