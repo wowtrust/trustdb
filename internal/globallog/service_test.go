@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/wowtrust/trustdb/internal/anchor"
+	"github.com/wowtrust/trustdb/internal/anchor/fiscobcos"
 	"github.com/wowtrust/trustdb/internal/anchorschedule"
 	"github.com/wowtrust/trustdb/internal/cryptosuite"
 	"github.com/wowtrust/trustdb/internal/merkle"
@@ -21,6 +22,16 @@ type conflictingBatchStore struct {
 	Store
 	once     sync.Once
 	conflict func() error
+}
+
+type latestResultStore struct {
+	Store
+	result model.STHAnchorResult
+	found  bool
+}
+
+func (s *latestResultStore) LatestSTHAnchorResult(context.Context) (model.STHAnchorResult, bool, error) {
+	return s.result, s.found, nil
 }
 
 func (s *conflictingBatchStore) CommitGlobalLogAppends(ctx context.Context, appends []model.GlobalLogAppend) error {
@@ -219,6 +230,53 @@ func TestEvidenceUsesLatestCoveringAnchoredSTH(t *testing.T) {
 	}
 	if evidence.GlobalProof.TreeSize != latest.TreeSize || !VerifyInclusion(evidence.GlobalProof) {
 		t.Fatalf("Evidence(b4) proof=%+v, want latest L4 proof", evidence.GlobalProof)
+	}
+}
+
+func TestEvidenceExportsCoveringRawBCOSResultWithoutClaimingL5(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	base := newBoundTestLocalStore(t, t.TempDir())
+	store := &latestResultStore{Store: base}
+	svc := newTestServiceForStore(t, store)
+	sths, err := svc.AppendBatchRoots(ctx, []model.BatchRoot{
+		batchRoot("b1", 1),
+		batchRoot("b2", 2),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	anchored := sths[1]
+	store.result = model.STHAnchorResult{
+		SchemaVersion:    model.SchemaSTHAnchorResult,
+		CryptoSuite:      cryptosuite.INTLV1,
+		EvidenceStage:    model.AnchorEvidenceStageRaw,
+		NodeID:           anchored.NodeID,
+		LogID:            anchored.LogID,
+		TreeSize:         anchored.TreeSize,
+		SinkName:         fiscobcos.SinkName,
+		AnchorID:         "raw-bcos-anchor",
+		RootHash:         append([]byte(nil), anchored.RootHash...),
+		STH:              anchored,
+		Proof:            []byte("opaque raw BCOS evidence"),
+		PublishedAtUnixN: time.Unix(101, 0).UnixNano(),
+	}
+	store.found = true
+
+	evidence, err := svc.Evidence(ctx, "b1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if evidence.AnchorResult == nil ||
+		evidence.AnchorResult.EvidenceStage != model.AnchorEvidenceStageRaw ||
+		evidence.GlobalProof.TreeSize != anchored.TreeSize {
+		t.Fatalf("raw BCOS evidence was not exported: %+v", evidence)
+	}
+	if model.AnchorResultProvidesOfflineL5(*evidence.AnchorResult) {
+		t.Fatal("raw BCOS receipt evidence was promoted to L5")
+	}
+	if !VerifyInclusion(evidence.GlobalProof) {
+		t.Fatal("covering global proof is invalid")
 	}
 }
 

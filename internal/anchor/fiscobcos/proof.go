@@ -414,6 +414,7 @@ func sameContractBinding(left, right ContractBinding) bool {
 
 func sameSignedTreeHead(left, right model.SignedTreeHead) bool {
 	return left.SchemaVersion == right.SchemaVersion &&
+		left.CryptoSuite == right.CryptoSuite &&
 		left.TreeAlg == right.TreeAlg &&
 		left.TreeSize == right.TreeSize &&
 		bytes.Equal(left.RootHash, right.RootHash) &&

@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/wowtrust/trustdb/internal/anchor/fiscobcos"
 	"github.com/wowtrust/trustdb/internal/app"
 	"github.com/wowtrust/trustdb/internal/cborx"
 	"github.com/wowtrust/trustdb/internal/claim"
@@ -181,6 +182,197 @@ func TestOfflineV2EndToEndAcrossSuitesAndTampering(t *testing.T) {
 				})
 			}
 		})
+	}
+}
+
+func TestOfflineRawBCOSReceiptInclusionHasDistinctL4Stage(t *testing.T) {
+	t.Parallel()
+
+	fixture := newOfflineE2EFixture(t, cryptosuite.INTLV1)
+	attachStructuralRawBCOSEvidence(t, &fixture.proof)
+	if got := Level(fixture.proof).String(); got != "L4" {
+		t.Fatalf("Level(raw BCOS evidence) = %s, want L4", got)
+	}
+	fixture.proof.ProofLevel = "L4"
+
+	result, err := VerifyOffline(
+		bytes.NewReader(fixture.content),
+		fixture.proof,
+		fixture.trust,
+		OfflineOptions{},
+	)
+	if err == nil || !strings.Contains(err.Error(), "verifier-local FISCO BCOS trust config") {
+		t.Fatalf("VerifyOffline() error = %v", err)
+	}
+	if result.Valid || result.ProofLevel != "L4" {
+		t.Fatalf("VerifyOffline() result = %+v", result)
+	}
+	assertOfflineStage(t, result, string(verify.StageAnchor), OfflineStageNotPresent)
+	assertOfflineStage(t, result, OfflineStageBCOSReceiptInclusion, OfflineStageFailed)
+
+	result, err = VerifyOffline(
+		bytes.NewReader(fixture.content),
+		fixture.proof,
+		fixture.trust,
+		OfflineOptions{SkipAnchor: true},
+	)
+	if err != nil || !result.Valid || result.ProofLevel != "L4" {
+		t.Fatalf("VerifyOffline(skip BCOS) result=%+v error=%v", result, err)
+	}
+	assertOfflineStage(t, result, string(verify.StageAnchor), OfflineStageNotPresent)
+	assertOfflineStage(t, result, OfflineStageBCOSReceiptInclusion, OfflineStageSkipped)
+}
+
+func attachStructuralRawBCOSEvidence(t *testing.T, proof *model.SingleProof) {
+	t.Helper()
+	config, err := fiscobcos.NewTrustConfig(fiscobcos.CryptoModeStandard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config.ChainID = "chain0"
+	config.GroupID = "group0"
+	config.GenesisHash = bytes.Repeat([]byte{0x01}, 32)
+	config.TrustedCheckpoint = fiscobcos.BlockCheckpoint{
+		BlockNumber: 1,
+		BlockHash:   bytes.Repeat([]byte{0x02}, 32),
+	}
+	config.Contract = fiscobcos.ContractBinding{
+		Address:         bytes.Repeat([]byte{0x03}, 20),
+		CodeHash:        bytes.Repeat([]byte{0x04}, 32),
+		ProtocolVersion: fiscobcos.TrustDBAnchorV1ProtocolVersion,
+		EventSignature:  fiscobcos.TrustDBAnchorV1EventSignature,
+	}
+	config.Endpoints = []string{"127.0.0.1:20200"}
+	config.ReadQuorum = 1
+	config.AccountProvider = fiscobcos.AccountProviderConfig{
+		Provider:     "test",
+		KeyID:        "publisher",
+		KeyReference: "missing/publisher",
+		Algorithm:    fiscobcos.StandardAccountAlg,
+	}
+	config.Certificates = fiscobcos.CertificateConfig{
+		TransportMode:               fiscobcos.StandardTransport,
+		TrustedCAReferences:         []string{"missing/root.pem"},
+		TrustedCACertificateHashes:  [][]byte{bytes.Repeat([]byte{0x05}, 32)},
+		ClientSigningCertificateRef: "missing/client.pem",
+		ClientSigningKeyRef:         "missing/client.key",
+	}
+	validatorKey := make([]byte, 65)
+	validatorKey[0] = 0x04
+	config.Validators = []fiscobcos.ValidatorDescriptor{{
+		NodeID:            "validator-1",
+		Algorithm:         fiscobcos.StandardAccountAlg,
+		PublicKeyEncoding: fiscobcos.StandardKeyEncoding,
+		PublicKey:         validatorKey,
+	}}
+	payload, err := fiscobcos.NewAnchorPayload(proof.CryptoSuite, proof.GlobalProof.STH)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payloadBytes, err := fiscobcos.MarshalPayload(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	callData, err := fiscobcos.PublishCallData(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	contextID, err := fiscobcos.ChainContextID(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	txHash := bytes.Repeat([]byte{0x11}, 32)
+	receiptFields := fiscobcos.NativeReceiptFields{
+		Version: 0, GasUsed: "1", Status: fiscobcos.ReceiptStatusOK,
+		Logs:        []fiscobcos.NativeLogFields{{Address: "01", Topics: [][]byte{bytes.Repeat([]byte{0x12}, 32)}}},
+		BlockNumber: 2,
+	}
+	rawReceipt, logs, err := fiscobcos.MarshalNativeReceiptPreimage(receiptFields)
+	if err != nil {
+		t.Fatal(err)
+	}
+	receiptHash, err := fiscobcos.HashNativeEvidence(fiscobcos.HashKeccak256, rawReceipt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	blockFields := fiscobcos.NativeBlockHeaderFields{
+		Version:          0,
+		ParentInfo:       []fiscobcos.NativeParentInfo{{BlockNumber: 1, BlockHash: bytes.Repeat([]byte{0x13}, 32)}},
+		TransactionsRoot: bytes.Repeat([]byte{0x14}, 32),
+		ReceiptsRoot:     bytes.Repeat([]byte{0x15}, 32),
+		StateRoot:        bytes.Repeat([]byte{0x16}, 32),
+		BlockNumber:      2,
+		GasUsed:          "1",
+		Timestamp:        1,
+		SealerList:       [][]byte{[]byte("validator-1")},
+		ConsensusWeights: []int64{1},
+	}
+	rawHeader, err := fiscobcos.MarshalNativeBlockHeaderPreimage(blockFields)
+	if err != nil {
+		t.Fatal(err)
+	}
+	blockHash, err := fiscobcos.HashNativeEvidence(fiscobcos.HashKeccak256, rawHeader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bcosProof := fiscobcos.AnchorProof{
+		SchemaVersion:             fiscobcos.SchemaAnchorProof,
+		FormatVersion:             fiscobcos.ProofVersion,
+		CryptoMode:                fiscobcos.CryptoModeStandard,
+		ProtocolHashAlgorithm:     "sha256",
+		ChainHashAlgorithm:        fiscobcos.HashKeccak256,
+		ChainSignatureAlgorithm:   fiscobcos.StandardAccountAlg,
+		ChainID:                   config.ChainID,
+		GroupID:                   config.GroupID,
+		GenesisHash:               config.GenesisHash,
+		TrustedCheckpoint:         config.TrustedCheckpoint,
+		Contract:                  config.Contract,
+		ChainContextID:            contextID,
+		CanonicalPayload:          payloadBytes,
+		SuccessfulAttemptOrdinal:  1,
+		SuccessfulTransactionHash: txHash,
+		TransactionAttempts: []fiscobcos.TransactionAttempt{{
+			Ordinal: 1, RawCanonicalTransaction: []byte{0x0c},
+			ChainID: config.ChainID, GroupID: config.GroupID,
+			To: config.Contract.Address, Input: callData,
+			Signature: bytes.Repeat([]byte{0x17}, 65),
+			Sender:    bytes.Repeat([]byte{0x18}, 20), TransactionHash: txHash,
+			BlockLimit: 3, SubmittedAtUnixN: 1,
+			Outcome: fiscobcos.AttemptOutcomeReceiptSuccess,
+		}},
+		Receipt: fiscobcos.ReceiptEvidence{
+			Fields: receiptFields, RawCanonicalReceipt: rawReceipt,
+			Status: fiscobcos.ReceiptStatusOK, StatusMessage: "success",
+			CanonicalLogs: logs, ReceiptHash: receiptHash, TransactionHash: txHash,
+			TransactionProof:   [][]byte{bytes.Repeat([]byte{0x19}, 32)},
+			ReceiptProof:       [][]byte{bytes.Repeat([]byte{0x1a}, 32)},
+			DecodedAnchorEvent: []byte{0x01},
+		},
+		Block: fiscobcos.BlockEvidence{
+			Fields: blockFields, RawCanonicalHeader: rawHeader,
+			BlockHash: blockHash, BlockNumber: 2,
+		},
+		Finality: fiscobcos.FinalityEvidence{Signatures: []fiscobcos.CommitSignature{{
+			ValidatorNodeID: "validator-1", Signature: []byte{0x01},
+		}}},
+	}
+	encodedProof, err := fiscobcos.MarshalProof(bcosProof)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proof.AnchorResult = &model.STHAnchorResult{
+		SchemaVersion:    model.SchemaSTHAnchorResult,
+		CryptoSuite:      proof.CryptoSuite,
+		EvidenceStage:    model.AnchorEvidenceStageRaw,
+		NodeID:           proof.NodeID,
+		LogID:            proof.LogID,
+		TreeSize:         proof.GlobalProof.STH.TreeSize,
+		SinkName:         fiscobcos.SinkName,
+		AnchorID:         fiscobcos.AnchorIDString(payload),
+		RootHash:         append([]byte(nil), proof.GlobalProof.STH.RootHash...),
+		STH:              proof.GlobalProof.STH,
+		Proof:            encodedProof,
+		PublishedAtUnixN: 1,
 	}
 }
 

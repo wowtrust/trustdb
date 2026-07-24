@@ -289,11 +289,13 @@ func TestVerifyCmdOfflineContainerFailureEmitsStructuredResult(t *testing.T) {
 	if err := json.Unmarshal(outBuf.Bytes(), &result); err != nil {
 		t.Fatalf("decode structured container failure: %v (raw=%q)", err, outBuf.String())
 	}
-	if len(result.Stages) != 11 ||
+	if len(result.Stages) != 12 ||
 		result.Stages[0].Name != sproof.OfflineStageContainer ||
 		result.Stages[0].Status != sproof.OfflineStageFailed ||
 		result.Stages[1].Name != sproof.OfflineStageIdentity ||
-		result.Stages[1].Status != sproof.OfflineStageNotRun {
+		result.Stages[1].Status != sproof.OfflineStageNotRun ||
+		result.Stages[11].Name != sproof.OfflineStageBCOSReceiptInclusion ||
+		result.Stages[11].Status != sproof.OfflineStageNotPresent {
 		t.Fatalf("structured container stages = %+v", result.Stages)
 	}
 }

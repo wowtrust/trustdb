@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 
+	"github.com/wowtrust/trustdb/internal/anchor/fiscobcos"
 	"github.com/wowtrust/trustdb/internal/cryptosuite"
 	"github.com/wowtrust/trustdb/internal/model"
 	"github.com/wowtrust/trustdb/internal/sproof"
@@ -25,6 +26,8 @@ const (
 	OfflineStageNotPresent = sproof.OfflineStageNotPresent
 	OfflineStageSkipped    = sproof.OfflineStageSkipped
 	OfflineStageNotRun     = sproof.OfflineStageNotRun
+
+	OfflineStageBCOSReceiptInclusion = sproof.OfflineStageBCOSReceiptInclusion
 )
 
 // OfflineIdentityTrust is verifier-local trust. Public keys or certificates
@@ -40,9 +43,15 @@ type OfflineIdentityTrust struct {
 }
 
 type OfflineTrust struct {
-	Proof    TrustedKeys
-	Identity OfflineIdentityTrust
+	Proof     TrustedKeys
+	Identity  OfflineIdentityTrust
+	FISCOBCOS *FISCOBCOSTrustConfig
 }
+
+// FISCOBCOSTrustConfig is verifier-local chain and contract trust. Offline
+// verification compares it to evidence but never opens its endpoints,
+// provider references, keys, or certificates.
+type FISCOBCOSTrustConfig = fiscobcos.TrustConfig
 
 type OfflineVerifyOptions struct {
 	SkipAnchor bool
@@ -114,8 +123,9 @@ func VerifySingleProofOffline(
 		return OfflineVerifyResult{}, err
 	}
 	return sproof.VerifyOffline(raw, proof, sproof.OfflineTrust{
-		Proof:    proofKeys,
-		Identity: identity,
+		Proof:     proofKeys,
+		Identity:  identity,
+		FISCOBCOS: trust.FISCOBCOS,
 	}, sproof.OfflineOptions{SkipAnchor: opts.SkipAnchor})
 }
 
