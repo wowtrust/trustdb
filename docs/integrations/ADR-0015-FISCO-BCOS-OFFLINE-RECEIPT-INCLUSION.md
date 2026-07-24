@@ -98,12 +98,15 @@ re-encoded byte for byte. Before that decoder runs, a bounded TARS preflight
 walks every header, scalar, string, list, map, simple list, and nested struct.
 Every wire length must fit inside the already bounded transaction; nesting and
 element counts are capped. A transaction-schema preflight additionally
-requires the generated reader's fixed-size `dataHash` and `sender` fields to
-use canonical byte SimpleLists of exactly 32 and 20 bytes. This rejects
-malicious LIST counts before they can index the SDK's fixed arrays. The SDK
-decode call has a narrow panic-to-error boundary as defense in depth; it does
-not replace the schema checks. Unknown fields, alternate encodings, trailing
-bytes, oversized allocation claims, and non-canonical round trips fail.
+requires the generated reader's fixed-size `dataHash` field, and the optional
+`sender` field when present, to use canonical byte SimpleLists of exactly 32
+and 20 bytes. This rejects malicious LIST counts before they can index the
+SDK's fixed arrays. The SDK decode call has a narrow panic-to-error boundary as
+defense in depth; it does not replace the schema checks. TrustDB performs the
+canonical re-encoding itself in the pinned field order because the generated
+Go writer dereferences a nil optional sender even though the C SDK legitimately
+omits that field. Unknown fields, alternate encodings, trailing bytes,
+oversized allocation claims, and non-canonical round trips fail.
 
 This proof version admits BCOS transaction-data versions 0 and 1 only. The
 current TrustDB writer generates version 0: its repository-pinned Go wrapper

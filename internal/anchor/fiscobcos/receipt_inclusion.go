@@ -145,13 +145,17 @@ func decodeCanonicalTransaction(raw []byte) (types.Transaction, error) {
 	if err := readCanonicalTransaction(&transaction, raw); err != nil {
 		return types.Transaction{}, err
 	}
-	if transaction.DataHash == nil || transaction.Sender == nil {
+	if transaction.DataHash == nil {
 		return types.Transaction{}, fmt.Errorf(
-			"%w: canonical TARS transaction omits a fixed data hash or sender",
+			"%w: canonical TARS transaction omits its data hash",
 			ErrInvalidProof,
 		)
 	}
-	if !bytes.Equal(transaction.Bytes(), raw) {
+	canonical, err := encodeCanonicalTransaction(transaction)
+	if err != nil {
+		return types.Transaction{}, err
+	}
+	if !bytes.Equal(canonical, raw) {
 		return types.Transaction{}, fmt.Errorf("%w: transaction is not canonical TARS", ErrInvalidProof)
 	}
 	if transaction.Data.Version < minSupportedBCOSTransactionVersion ||
@@ -165,6 +169,84 @@ func decodeCanonicalTransaction(raw []byte) (types.Transaction, error) {
 		)
 	}
 	return transaction, nil
+}
+
+// encodeCanonicalTransaction mirrors the pinned generated Transaction.WriteTo
+// field order while preserving an absent optional sender. The pinned Go SDK's
+// generated writer evaluates len on *common.Address and then dereferences a
+// nil pointer, even though the C SDK's canonical transaction may omit tag 7.
+func encodeCanonicalTransaction(transaction types.Transaction) ([]byte, error) {
+	buffer := codec.NewBuffer()
+	if err := transaction.Data.WriteBlock(buffer, 1); err != nil {
+		return nil, fmt.Errorf("%w: encode canonical transaction data: %v", ErrInvalidProof, err)
+	}
+	if transaction.DataHash != nil {
+		if err := writeCanonicalByteSimpleList(
+			buffer,
+			transactionDataHashTag,
+			transaction.DataHash.Bytes(),
+			"data hash",
+		); err != nil {
+			return nil, err
+		}
+	}
+	if len(transaction.Signature) > 0 {
+		if err := writeCanonicalByteSimpleList(
+			buffer,
+			3,
+			transaction.Signature,
+			"signature",
+		); err != nil {
+			return nil, err
+		}
+	}
+	if transaction.ImportTime != 0 {
+		if err := buffer.WriteInt64(transaction.ImportTime, 4); err != nil {
+			return nil, fmt.Errorf("%w: encode canonical transaction import time: %v", ErrInvalidProof, err)
+		}
+	}
+	if transaction.Attribute != 0 {
+		if err := buffer.WriteInt32(transaction.Attribute, 5); err != nil {
+			return nil, fmt.Errorf("%w: encode canonical transaction attribute: %v", ErrInvalidProof, err)
+		}
+	}
+	if transaction.Sender != nil {
+		if err := writeCanonicalByteSimpleList(
+			buffer,
+			transactionSenderTag,
+			transaction.Sender.Bytes(),
+			"sender",
+		); err != nil {
+			return nil, err
+		}
+	}
+	if transaction.ExtraData != "" {
+		if err := buffer.WriteString(transaction.ExtraData, 8); err != nil {
+			return nil, fmt.Errorf("%w: encode canonical transaction extra data: %v", ErrInvalidProof, err)
+		}
+	}
+	return buffer.ToBytes(), nil
+}
+
+func writeCanonicalByteSimpleList(
+	buffer *codec.Buffer,
+	tag byte,
+	value []byte,
+	name string,
+) error {
+	if err := buffer.WriteHead(codec.SimpleList, tag); err != nil {
+		return fmt.Errorf("%w: encode canonical transaction %s: %v", ErrInvalidProof, name, err)
+	}
+	if err := buffer.WriteHead(codec.BYTE, 0); err != nil {
+		return fmt.Errorf("%w: encode canonical transaction %s: %v", ErrInvalidProof, name, err)
+	}
+	if err := buffer.WriteInt32(int32(len(value)), 0); err != nil {
+		return fmt.Errorf("%w: encode canonical transaction %s: %v", ErrInvalidProof, name, err)
+	}
+	if err := buffer.WriteSliceUint8(value); err != nil {
+		return fmt.Errorf("%w: encode canonical transaction %s: %v", ErrInvalidProof, name, err)
+	}
+	return nil
 }
 
 // readCanonicalTransaction is a narrow defense-in-depth boundary around the

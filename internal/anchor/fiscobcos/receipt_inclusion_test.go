@@ -285,14 +285,65 @@ func TestCanonicalTransactionDecoderVersionGate(t *testing.T) {
 		minSupportedBCOSTransactionVersion,
 		maxSupportedBCOSTransactionVersion,
 	} {
-		if _, err := decodeCanonicalTransaction(canonicalTransactionForVersion(version)); err != nil {
+		transaction, err := decodeCanonicalTransaction(canonicalTransactionForVersion(t, version))
+		if err != nil {
 			t.Fatalf("supported transaction data version %d failed: %v", version, err)
+		}
+		if transaction.Sender != nil {
+			t.Fatalf("supported transaction data version %d unexpectedly requires an encoded sender", version)
 		}
 	}
 	for _, version := range []int32{-1, 2} {
-		if _, err := decodeCanonicalTransaction(canonicalTransactionForVersion(version)); err == nil {
+		if _, err := decodeCanonicalTransaction(canonicalTransactionForVersion(t, version)); err == nil {
 			t.Fatalf("unsupported transaction data version %d was accepted", version)
 		}
+	}
+}
+
+func TestCanonicalTransactionDecoderAcceptsAbsentOptionalSender(t *testing.T) {
+	t.Parallel()
+
+	raw := canonicalTransactionForVersion(t, minSupportedBCOSTransactionVersion)
+	transaction, err := decodeCanonicalTransaction(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if transaction.Sender != nil {
+		t.Fatal("canonical transaction unexpectedly gained an encoded sender")
+	}
+	canonical, err := encodeCanonicalTransaction(transaction)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(canonical, raw) {
+		t.Fatal("canonical transaction without sender did not round-trip byte for byte")
+	}
+}
+
+func TestCanonicalTransactionEncoderMatchesPinnedSDKWithSender(t *testing.T) {
+	t.Parallel()
+
+	transaction, err := decodeCanonicalTransaction(
+		canonicalTransactionForVersion(t, minSupportedBCOSTransactionVersion),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sender := common.BytesToAddress(bytes.Repeat([]byte{0x52}, transactionSenderBytes))
+	transaction.Sender = &sender
+	canonical, err := encodeCanonicalTransaction(transaction)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(canonical, transaction.Bytes()) {
+		t.Fatal("TrustDB canonical encoder differs from the pinned SDK when sender is present")
+	}
+	decoded, err := decodeCanonicalTransaction(canonical)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decoded.Sender == nil || !bytes.Equal(decoded.Sender.Bytes(), sender.Bytes()) {
+		t.Fatal("canonical encoded sender was not preserved exactly")
 	}
 }
 
@@ -339,7 +390,8 @@ func tarsByteSimpleList(t *testing.T, tag byte, length int32) []byte {
 	return buffer.ToBytes()
 }
 
-func canonicalTransactionForVersion(version int32) []byte {
+func canonicalTransactionForVersion(t *testing.T, version int32) []byte {
+	t.Helper()
 	to := common.BytesToAddress(bytes.Repeat([]byte{0x51}, transactionSenderBytes))
 	transaction := types.NewSimpleTx(&to, []byte{0x01, 0x02}, "", "version-gate", "", false)
 	transaction.Data.Version = version
@@ -347,9 +399,11 @@ func canonicalTransactionForVersion(version int32) []byte {
 	transaction.Data.GroupID = "group0"
 	transaction.Data.BlockLimit = 5100
 	transaction.Hash()
-	sender := common.BytesToAddress(bytes.Repeat([]byte{0x52}, transactionSenderBytes))
-	transaction.Sender = &sender
-	return transaction.Bytes()
+	encoded, err := encodeCanonicalTransaction(*transaction)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return encoded
 }
 
 func validReceiptInclusionFixture(
