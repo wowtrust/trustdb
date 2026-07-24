@@ -1,6 +1,7 @@
 # ADR-0013: Versioned FISCO BCOS anchor payload and local trust configuration
 
-- Status: Accepted protocol boundary; publication, receipt verification, and PBFT finality remain follow-up work
+- Status: Accepted protocol boundary; receipt and static PBFT verification are
+  completed by ADR-0015 and ADR-0016
 - Date: 2026-07-24
 - Issue: [#462](https://github.com/wowtrust/trustdb/issues/462)
 - Compatibility baseline: [ADR-0012](ADR-0012-FISCO-BCOS-3X-COMPATIBILITY-BASELINE.md)
@@ -12,11 +13,15 @@ TrustDB defines three independent versioned objects for FISCO BCOS anchoring:
 
 1. `AnchorPayload v1` is a chain-neutral, canonical binary binding to one exact TrustDB Signed STH.
 2. `TrustConfig v1` is local configuration that pins one BCOS chain, group, checkpoint, contract, validator set, certificate configuration, endpoint quorum, and account provider.
-3. `AnchorProof v1` is the immutable evidence envelope carried in `STHAnchorResult.Proof` and therefore in `.sproof`. It combines the canonical payload with untrusted chain claims, all signed transaction attempts, receipt and Merkle material, a block header, and PBFT commit signatures.
+3. `AnchorProof v2` is the immutable evidence envelope carried in `STHAnchorResult.Proof` and therefore in `.sproof`. It combines the canonical payload with untrusted chain claims, all signed transaction attempts, receipt and Merkle material, a block header, and PBFT commit signatures.
 
 The same `AnchorPayload` bytes can be published to a standard or Guomi BCOS network. The proof is not portable across those networks: `ChainContextID` binds the explicit mode and locally pinned chain context. This separation preserves TrustDB cryptographic semantics while allowing BCOS-native transaction and consensus cryptography to vary independently.
 
-This ADR does not implement a BCOS sink, a Solidity contract, native receipt decoding, Merkle verification, or PBFT finality verification. A structurally valid `AnchorProof` is not an L5 success by itself. Offline verification must later pass the separate exact-STH, receipt-inclusion, and finality stages using local trust material.
+This ADR originally defined the boundary without implementing a BCOS sink,
+native receipt verification, or PBFT finality. A structurally valid
+`AnchorProof` is still not an L5 success by itself. ADR-0015 and ADR-0016 now
+require offline verification to pass separate exact-STH, receipt-inclusion,
+static-finality, and exact-anchor-binding stages using local trust material.
 
 ## Cryptographic modes are explicit
 
@@ -165,9 +170,9 @@ commit `274f864e7725fef5b8ed4c6b7a3363ee5396f104`, then recomputes its
 Keccak-256 or SM3 hash. This release hashes ordered field bytes and
 big-endian integers directly; the later upstream implementation that hashes
 `data.writeTo(output)` TARS serialization is not the admitted v3.16.3
-baseline. Validation still does not treat the decoded event, Merkle paths,
-PBFT signatures, or claimed context as trusted; follow-up issues verify those
-semantic and finality bindings.
+baseline. Structural validation still does not treat the decoded event, Merkle
+paths, PBFT signatures, or claimed context as trusted; ADR-0015 and ADR-0016
+verify those semantic and finality bindings in separately reported stages.
 
 `STHAnchorResult` retains its current outer schema. For the `fisco-bcos` sink:
 
@@ -197,7 +202,8 @@ Only success at every stage may produce L5. Transaction existence, receipt exist
 - #465 persists byte-identical transaction, receipt, Merkle, block, and finality material plus every block-limit retry.
 - #470 adds deterministic lookup/rebroadcast, block-limit refresh, duplicate handling, and bounded stale-endpoint/read-quorum retry policy before a replacement transaction may be created.
 - #466 independently verifies transaction/receipt inclusion.
-- #467 independently verifies static-validator PBFT finality.
+- #467 independently verifies static-validator PBFT finality and exact anchor
+  binding as documented in ADR-0016.
 - #468 adds Guomi-native account, dual-certificate, hash, receipt, block, proof, and finality handling without changing the chain-neutral TrustDB payload.
 
 The golden vectors are protocol artifacts. Any intentional byte change requires a new payload/proof/config version and reviewed vector replacement; it must not silently rewrite v1.
