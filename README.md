@@ -312,6 +312,7 @@ Configuration examples live in [configs](configs):
 See [configs/README.md](configs/README.md) for `run_profile` semantics and startup notes.
 Custom provider development and deployment are documented in [L5 external anchor plugins](formats/ANCHOR_PLUGIN_V1.md).
 External private-key custody for `remote`, `pkcs11`, and `sdf` descriptors is documented in [signer plugins](formats/SIGNER_PLUGIN_V1.md); child shutdown is bounded and may end in forced termination, so adapters must be crash-safe.
+The production PKCS#11 path uses an [isolated native signer sidecar](docs/integrations/PKCS11_SIGNER.md) with owner-only PIN-file input, fail-fast mechanism checks, local signature verification, and no private-key export or software fallback.
 Optional JetStream topology, security, flow-control, recovery, and Go SDK usage are documented in the [NATS ingress guide](docs/integrations/NATS_INGRESS.md).
 
 ## Admin Web And Desktop
@@ -330,6 +331,7 @@ The screenshot below is rendered directly from the current desktop client code:
 
 - [ARCHITECTURE.zh-CN.md](ARCHITECTURE.zh-CN.md): detailed TrustDB server, persistence, Global Log, anchoring, SDK, backup, and offline-verification architecture (Chinese).
 - [docs/integrations/NATS_INGRESS.md](docs/integrations/NATS_INGRESS.md): optional JetStream ingress topology, configuration, security, backpressure, result recovery, and Go SDK workflow.
+- [docs/integrations/PKCS11_SIGNER.md](docs/integrations/PKCS11_SIGNER.md): isolated native PKCS#11 signer, PIN-file and mechanism gates, rotation, SoftHSM interoperability, and production-token qualification.
 - [docs/compliance/NATIONAL_CRYPTOGRAPHY_THREAT_MODEL_AND_EVIDENCE_MAP.zh-CN.md](docs/compliance/NATIONAL_CRYPTOGRAPHY_THREAT_MODEL_AND_EVIDENCE_MAP.zh-CN.md): China-cryptography threat model, prohibited trust shortcuts, tabletop scenarios, residual risks, and compliance evidence map (Chinese).
 - [docs/compliance/ADR-0004-PROVIDER-NEUTRAL-CRYPTO-CONTRACTS.zh-CN.md](docs/compliance/ADR-0004-PROVIDER-NEUTRAL-CRYPTO-CONTRACTS.zh-CN.md): suite-aware hashing, non-exportable key handles, signer/verifier contracts, and fail-closed provider rules (Chinese).
 - [docs/compliance/ADR-0005-IMMUTABLE-PROOFSTORE-SUITE-MARKERS.zh-CN.md](docs/compliance/ADR-0005-IMMUTABLE-PROOFSTORE-SUITE-MARKERS.zh-CN.md): immutable suite markers, atomic backend initialization, and backup/migration binding rules (Chinese).

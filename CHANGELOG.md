@@ -8,6 +8,10 @@ TrustDB follows semantic versioning for stable releases. Proof, backup, storage,
 
 ### Added
 
+- Isolated, build-tagged PKCS#11 signer sidecar with non-exportable key-policy
+  enforcement, explicit Ed25519/SM2 mechanisms, certificate/public-key
+  binding, sanitized provider errors, rotation guards, and a SoftHSM
+  interoperability gate.
 - Versioned authenticated SM4-GCM envelopes for software-managed private keys,
   including a provider-neutral KEK interface, development PBKDF2-HMAC-SM3
   passphrase provider, and atomic `key rewrap` operation.

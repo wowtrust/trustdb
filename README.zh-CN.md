@@ -294,6 +294,7 @@ unset TRUSTDB_DEV_KEY_PASSPHRASE_NEW
 
 - [ARCHITECTURE.zh-CN.md](ARCHITECTURE.zh-CN.md)：TrustDB 服务端、持久化、Global Log、Anchor、SDK、备份和离线验证的详细架构设计。
 - [docs/integrations/NATS_INGRESS.zh-CN.md](docs/integrations/NATS_INGRESS.zh-CN.md)：可选 JetStream ingress 的拓扑、配置、安全、背压、结果恢复与 Go SDK 接入指南。
+- [docs/integrations/PKCS11_SIGNER.md](docs/integrations/PKCS11_SIGNER.md)：隔离的原生 PKCS#11 签名 sidecar、PIN 文件、机制检查、轮换、SoftHSM 互操作与生产设备验收要求。
 - [docs/compliance/NATIONAL_CRYPTOGRAPHY_THREAT_MODEL_AND_EVIDENCE_MAP.zh-CN.md](docs/compliance/NATIONAL_CRYPTOGRAPHY_THREAT_MODEL_AND_EVIDENCE_MAP.zh-CN.md)：国产密码威胁模型、禁止的信任捷径、tabletop 场景、残余风险与合规证据映射。
 - [docs/compliance/ADR-0004-PROVIDER-NEUTRAL-CRYPTO-CONTRACTS.zh-CN.md](docs/compliance/ADR-0004-PROVIDER-NEUTRAL-CRYPTO-CONTRACTS.zh-CN.md)：suite-aware hash、不可导出 KeyHandle、Signer/Verifier 与 provider fail-closed 契约。
 - [docs/compliance/ADR-0008-VERSIONED-KEY-DESCRIPTORS.zh-CN.md](docs/compliance/ADR-0008-VERSIONED-KEY-DESCRIPTORS.zh-CN.md)：canonical software、PKCS#11、SDF、remote 与证书描述符、脱敏、解析和破坏性迁移规则。

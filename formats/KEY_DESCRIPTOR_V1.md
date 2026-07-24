@@ -61,8 +61,10 @@ public/private key mismatch.
 ### PKCS#11
 
 `pkcs11.uri` is a canonical PKCS#11 URI identifying a private object. Inline
-`pin-value` is forbidden. Provider login, session handling, and mechanism
-validation are implemented by #452.
+`pin-value` is forbidden. Provider login, session handling, key-policy checks,
+and mechanism validation are implemented by the isolated provider tracked in
+[#452](https://github.com/wowtrust/trustdb/issues/452) and documented in
+[`docs/integrations/PKCS11_SIGNER.md`](../docs/integrations/PKCS11_SIGNER.md).
 
 ### SDF
 

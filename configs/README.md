@@ -39,6 +39,13 @@ selection is exact: if a descriptor names an unconfigured or unavailable
 provider, TrustDB fails instead of falling back to a software key. See
 [`formats/SIGNER_PLUGIN_V1.md`](../formats/SIGNER_PLUGIN_V1.md).
 
+The built-in standalone PKCS#11 sidecar, owner-only PIN file configuration,
+explicit SM2 mechanism gate, SoftHSM interoperability target, rotation rules,
+and production qualification checklist are documented in
+[`docs/integrations/PKCS11_SIGNER.md`](../docs/integrations/PKCS11_SIGNER.md).
+The native module is linked only into the sidecar built with `-tags=pkcs11`,
+not into the TrustDB server.
+
 Signer plugins are trusted executables and run with the TrustDB process's OS
 account; environment filtering is not a filesystem or syscall sandbox. Do not
 put credentials in `args`, because operating-system process listings may expose

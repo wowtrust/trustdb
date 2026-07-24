@@ -132,3 +132,9 @@ The protocol reuses the provider union already defined by
 descriptor schema. Evidence, API, WAL, proofstore, backup, and `.sproof`
 formats are unchanged. Offline verification never starts a signer plugin and
 requires only the existing public trust material.
+
+The repository's production PKCS#11 implementation of this protocol is
+documented in
+[`docs/integrations/PKCS11_SIGNER.md`](../docs/integrations/PKCS11_SIGNER.md).
+Its native Cryptoki dependency is confined to a build-tagged standalone
+sidecar and is not linked into TrustDB core.
