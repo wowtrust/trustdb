@@ -368,6 +368,9 @@ func Create(ctx context.Context, store proofstore.Store, path string, opts Optio
 		if err := anchorschedule.ValidateSchedule(schedule); err != nil {
 			return Manifest{}, trusterr.Wrap(trusterr.CodeDataLoss, "backup invalid STH anchor schedule", err)
 		}
+		if err := validateBCOSScheduleProviderState(schedule); err != nil {
+			return Manifest{}, err
+		}
 		name := fmt.Sprintf("anchors/schedules/%06d.tdanchor-schedule", i)
 		if err := writeCBORTracked(tw, &report, &ordinal, name, "sth_anchor_schedule", schedule); err != nil {
 			return Manifest{}, err
@@ -636,6 +639,9 @@ func RestoreWithOptions(ctx context.Context, store proofstore.Store, path string
 		case strings.HasPrefix(entry.Name, "anchors/schedules/"):
 			var v model.STHAnchorSchedule
 			if err := decodeCBOREntry(entry, &v); err != nil {
+				return err
+			}
+			if err := validateBCOSScheduleProviderState(v); err != nil {
 				return err
 			}
 			v, err := anchorschedule.ClearLeaseForRestore(v)
@@ -928,27 +934,41 @@ func validateStreamEntry(entry archiveEntry) error {
 		if err := anchorschedule.ValidateSchedule(v); err != nil {
 			return trusterr.Wrap(trusterr.CodeDataLoss, "invalid STH anchor schedule", err)
 		}
-		if v.Key.SinkName == fiscobcos.SinkName && v.InFlight != nil && len(v.InFlight.ProviderState) != 0 {
-			if len(v.InFlight.ProviderState) > fiscobcos.MaxAttemptJournalBytes {
-				return trusterr.New(trusterr.CodeDataLoss, "FISCO BCOS attempt journal exceeds nested size limit")
-			}
-			journal, err := fiscobcos.UnmarshalAttemptJournal(v.InFlight.ProviderState)
-			if err != nil {
-				return trusterr.Wrap(trusterr.CodeDataLoss, "invalid nested FISCO BCOS attempt journal", err)
-			}
-			if journal.Generation != v.InFlight.Generation ||
-				journal.NodeID != v.Key.NodeID || journal.LogID != v.Key.LogID ||
-				journal.SinkName != v.Key.SinkName ||
-				journal.TreeSize != v.InFlight.Target.TreeSize ||
-				!bytes.Equal(journal.RootHash, v.InFlight.Target.RootHash) {
-				return trusterr.New(trusterr.CodeDataLoss, "FISCO BCOS attempt journal does not bind restored schedule")
-			}
-		}
-		return nil
+		return validateBCOSScheduleProviderState(v)
 	default:
 		_, _ = io.Copy(io.Discard, entry.Reader)
 		return nil
 	}
+}
+
+func validateBCOSScheduleProviderState(schedule model.STHAnchorSchedule) error {
+	if schedule.Key.SinkName != fiscobcos.SinkName ||
+		schedule.InFlight == nil ||
+		len(schedule.InFlight.ProviderState) == 0 {
+		return nil
+	}
+	if len(schedule.InFlight.ProviderState) > fiscobcos.MaxAttemptJournalBytes {
+		return trusterr.New(trusterr.CodeDataLoss, "FISCO BCOS attempt journal exceeds nested size limit")
+	}
+	journal, err := fiscobcos.UnmarshalAttemptJournal(schedule.InFlight.ProviderState)
+	if err != nil {
+		return trusterr.Wrap(trusterr.CodeDataLoss, "invalid nested FISCO BCOS attempt journal", err)
+	}
+	if journal.Generation != schedule.InFlight.Generation ||
+		journal.NodeID != schedule.Key.NodeID || journal.LogID != schedule.Key.LogID ||
+		journal.SinkName != schedule.Key.SinkName ||
+		journal.TreeSize != schedule.InFlight.Target.TreeSize ||
+		!bytes.Equal(journal.RootHash, schedule.InFlight.Target.RootHash) {
+		return trusterr.New(trusterr.CodeDataLoss, "FISCO BCOS attempt journal does not bind restored schedule")
+	}
+	payload, err := fiscobcos.UnmarshalPayload(journal.CanonicalPayload)
+	if err != nil {
+		return trusterr.Wrap(trusterr.CodeDataLoss, "decode FISCO BCOS attempt journal payload", err)
+	}
+	if err := fiscobcos.ValidatePayloadAgainstSTH(payload, schedule.InFlight.Target); err != nil {
+		return trusterr.Wrap(trusterr.CodeDataLoss, "FISCO BCOS attempt journal payload does not bind complete Signed STH", err)
+	}
+	return nil
 }
 
 func readRestoreCheckpoint(path string) (RestoreCheckpoint, error) {

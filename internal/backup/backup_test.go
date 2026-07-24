@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/wowtrust/trustdb/internal/anchor/fiscobcos"
+	"github.com/wowtrust/trustdb/internal/anchorschedule"
 	"github.com/wowtrust/trustdb/internal/cryptosuite"
 	"github.com/wowtrust/trustdb/internal/globallog"
 	"github.com/wowtrust/trustdb/internal/model"
@@ -360,6 +361,139 @@ func TestBackupRoundTripPreservesAnchorScheduleAndIndependentResult(t *testing.T
 	restoredCoverage := any(dst).(proofstore.L5CoverageCheckpointStore)
 	if checkpoint, found, err := restoredCoverage.GetL5CoverageCheckpoint(ctx, key); err != nil || found {
 		t.Fatalf("restored derived L5 checkpoint=%+v found=%v err=%v, want absent", checkpoint, found, err)
+	}
+}
+
+func TestRestoreRejectsTamperedBCOSJournalBeforeWrites(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	key := model.STHAnchorScheduleKey{NodeID: "node-tamper", LogID: "log-tamper", SinkName: fiscobcos.SinkName}
+	target := backupScheduleSTH(key, 3, 0x33)
+	tamperedSTH := target
+	tamperedSTH.TimestampUnixN++
+	payload, err := fiscobcos.NewAnchorPayload(cryptosuite.INTLV1, tamperedSTH)
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonicalPayload, err := fiscobcos.MarshalPayload(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	callData, err := fiscobcos.PublishCallData(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	journalBytes, err := fiscobcos.MarshalAttemptJournal(fiscobcos.AttemptJournal{
+		SchemaVersion:   fiscobcos.SchemaAttemptJournal,
+		FormatVersion:   fiscobcos.AttemptJournalVersion,
+		Generation:      1,
+		Revision:        1,
+		NodeID:          key.NodeID,
+		LogID:           key.LogID,
+		SinkName:        key.SinkName,
+		TreeSize:        target.TreeSize,
+		RootHash:        append([]byte(nil), target.RootHash...),
+		SignedSTHDigest: append([]byte(nil), payload.SignedSTHDigest...),
+		CryptoMode:      fiscobcos.CryptoModeStandard,
+		ChainID:         "chain0",
+		GroupID:         "group0",
+		Contract: fiscobcos.ContractBinding{
+			Address:         repeatByte(0x41, 20),
+			CodeHash:        repeatByte(0x42, 32),
+			ProtocolVersion: fiscobcos.TrustDBAnchorV1ProtocolVersion,
+			EventSignature:  fiscobcos.TrustDBAnchorV1EventSignature,
+		},
+		ChainContextID:   repeatByte(0x43, 32),
+		CanonicalPayload: canonicalPayload,
+		Attempts: []fiscobcos.JournalAttempt{{
+			Transaction: fiscobcos.SignedTransactionAttempt{
+				Ordinal:                 1,
+				RawCanonicalTransaction: []byte("tampered-signed-bcos-transaction"),
+				ChainID:                 "chain0",
+				GroupID:                 "group0",
+				To:                      repeatByte(0x41, 20),
+				Input:                   callData,
+				Signature:               repeatByte(0x44, 65),
+				Sender:                  repeatByte(0x45, 20),
+				TransactionHash:         repeatByte(0x46, 32),
+				BlockLimit:              700,
+				PreparedAtUnixN:         1,
+			},
+			Outcome: fiscobcos.AttemptOutcomeSubmitUnknown,
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	schedule := model.STHAnchorSchedule{
+		SchemaVersion:  model.SchemaSTHAnchorSchedule,
+		CryptoSuite:    cryptosuite.INTLV1,
+		Key:            key,
+		NextGeneration: 2,
+		Revision:       1,
+		InFlight: &model.STHAnchorAttempt{
+			Generation:       1,
+			Target:           target,
+			OpenedAtUnixN:    1,
+			DueAtUnixN:       1,
+			Attempts:         1,
+			NextAttemptUnixN: 2,
+			LastAttemptUnixN: 1,
+			ProviderState:    journalBytes,
+		},
+	}
+	if err := anchorschedule.ValidateSchedule(schedule); err != nil {
+		t.Fatalf("test schedule: %v", err)
+	}
+
+	path := filepath.Join(t.TempDir(), "tampered-journal.tdbackup")
+	file, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tw := tar.NewWriter(file)
+	manifest := Manifest{
+		SchemaVersion: SchemaManifest,
+		BackupID:      "tampered-journal",
+		CreatedAt:     time.Unix(1, 0).UTC().Format(time.RFC3339Nano),
+		Compression:   "none",
+		CryptoSuite:   cryptosuite.INTLV1,
+	}
+	var ordinal int64
+	root := model.BatchRoot{
+		SchemaVersion: model.SchemaBatchRoot,
+		CryptoSuite:   cryptosuite.INTLV1,
+		BatchID:       "must-not-restore",
+		BatchRoot:     repeatByte(0x55, 32),
+		TreeSize:      1,
+		ClosedAtUnixN: 1,
+	}
+	if err := writeCBORTracked(tw, &manifest, &ordinal, "roots/must-not-restore.tdroot", "batch_root", root); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeCBORTracked(tw, &manifest, &ordinal, "anchors/schedules/000000.tdanchor-schedule", "sth_anchor_schedule", schedule); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeJSONTracked(tw, &manifest, &ordinal, "manifest.json", "manifest", manifest); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeJSONTracked(tw, &manifest, &ordinal, "summary.json", "summary", manifest); err != nil {
+		t.Fatal(err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	dst := newBoundTestLocalStore(t, filepath.Join(t.TempDir(), "dst"))
+	if _, err := Restore(ctx, dst, path); trusterr.CodeOf(err) != trusterr.CodeDataLoss ||
+		!strings.Contains(err.Error(), "complete Signed STH") {
+		t.Fatalf("Restore tampered journal error=%v", err)
+	}
+	if _, err := dst.LatestRoot(ctx); trusterr.CodeOf(err) != trusterr.CodeNotFound {
+		t.Fatalf("restore wrote an entry before rejecting tampered journal: %v", err)
 	}
 }
 
