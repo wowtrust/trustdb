@@ -21,19 +21,45 @@ import (
 )
 
 type smokeEvidence struct {
-	Mode         string         `json:"mode"`
-	EventReceipt *types.Receipt `json:"event_receipt"`
-	Block        *types.Block   `json:"containing_block"`
+	Mode         string                   `json:"mode"`
+	EventReceipt *types.Receipt           `json:"event_receipt"`
+	Block        *types.Block             `json:"containing_block"`
+	Performance  smokePerformanceEvidence `json:"performance"`
+}
+
+type verificationSample struct {
+	Receipt *types.Receipt `json:"receipt"`
+	Block   *types.Block   `json:"block"`
+}
+
+type smokePerformanceEvidence struct {
+	WarmupCount               int                  `json:"warmup_count"`
+	SampleCount               int                  `json:"sample_count"`
+	WarmupVerificationSamples []verificationSample `json:"warmup_verification_samples"`
+	VerificationSamples       []verificationSample `json:"verification_samples"`
+}
+
+type verificationTimingSample struct {
+	ReceiptVerificationNS int64 `json:"receipt_verification_ns"`
+	BlockVerificationNS   int64 `json:"block_verification_ns"`
+	PBFTVerificationNS    int64 `json:"pbft_verification_ns"`
+}
+
+type performanceResult struct {
+	WarmupCount int                        `json:"warmup_count"`
+	SampleCount int                        `json:"sample_count"`
+	Samples     []verificationTimingSample `json:"samples"`
 }
 
 type result struct {
-	ReceiptConsensusHashMatched bool   `json:"receipt_consensus_hash_matched"`
-	BlockConsensusHashMatched   bool   `json:"block_consensus_hash_matched"`
-	PBFTCommitSignaturesValid   bool   `json:"pbft_commit_signatures_valid"`
-	TimingSemantics             string `json:"timing_semantics"`
-	ReceiptVerificationNS       int64  `json:"receipt_verification_ns"`
-	BlockVerificationNS         int64  `json:"block_verification_ns"`
-	PBFTVerificationNS          int64  `json:"pbft_verification_ns"`
+	ReceiptConsensusHashMatched bool              `json:"receipt_consensus_hash_matched"`
+	BlockConsensusHashMatched   bool              `json:"block_consensus_hash_matched"`
+	PBFTCommitSignaturesValid   bool              `json:"pbft_commit_signatures_valid"`
+	TimingSemantics             string            `json:"timing_semantics"`
+	ReceiptVerificationNS       int64             `json:"receipt_verification_ns"`
+	BlockVerificationNS         int64             `json:"block_verification_ns"`
+	PBFTVerificationNS          int64             `json:"pbft_verification_ns"`
+	Performance                 performanceResult `json:"performance"`
 }
 
 func main() {
@@ -86,6 +112,10 @@ func main() {
 		fatalf("verify PBFT commit signatures: %v", err)
 	}
 	pbftElapsed := time.Since(pbftStarted)
+	performance, err := verifyPerformanceSamples(evidence.Performance, evidence.Mode)
+	if err != nil {
+		fatalf("verify performance samples: %v", err)
+	}
 	if err := json.NewEncoder(os.Stdout).Encode(result{
 		ReceiptConsensusHashMatched: true,
 		BlockConsensusHashMatched:   true,
@@ -94,9 +124,66 @@ func main() {
 		ReceiptVerificationNS:       receiptElapsed.Nanoseconds(),
 		BlockVerificationNS:         blockElapsed.Nanoseconds(),
 		PBFTVerificationNS:          pbftElapsed.Nanoseconds(),
+		Performance:                 performance,
 	}); err != nil {
 		fatalf("encode result: %v", err)
 	}
+}
+
+func verifyPerformanceSamples(input smokePerformanceEvidence, mode string) (performanceResult, error) {
+	if input.WarmupCount < 3 || input.WarmupCount > 20 ||
+		input.SampleCount < 20 || input.SampleCount > 100 {
+		return performanceResult{}, errors.New("performance sample bounds are invalid")
+	}
+	if len(input.WarmupVerificationSamples) != input.WarmupCount ||
+		len(input.VerificationSamples) != input.SampleCount {
+		return performanceResult{}, errors.New("performance sample counts do not match their declarations")
+	}
+	for index, sample := range input.WarmupVerificationSamples {
+		if _, err := verifyTimedSample(sample, mode); err != nil {
+			return performanceResult{}, fmt.Errorf("warmup sample %d: %w", index, err)
+		}
+	}
+	result := performanceResult{
+		WarmupCount: input.WarmupCount,
+		SampleCount: input.SampleCount,
+		Samples:     make([]verificationTimingSample, 0, input.SampleCount),
+	}
+	for index, sample := range input.VerificationSamples {
+		timing, err := verifyTimedSample(sample, mode)
+		if err != nil {
+			return performanceResult{}, fmt.Errorf("measured sample %d: %w", index, err)
+		}
+		result.Samples = append(result.Samples, timing)
+	}
+	return result, nil
+}
+
+func verifyTimedSample(sample verificationSample, mode string) (verificationTimingSample, error) {
+	if sample.Receipt == nil || sample.Block == nil ||
+		sample.Receipt.BlockNumber < 0 ||
+		uint64(sample.Receipt.BlockNumber) != sample.Block.Number {
+		return verificationTimingSample{}, errors.New("receipt is not bound to its containing block number")
+	}
+	receiptStarted := time.Now()
+	if err := verifyReceiptConsensusHash(sample.Receipt, mode); err != nil {
+		return verificationTimingSample{}, fmt.Errorf("verify receipt consensus hash: %w", err)
+	}
+	receiptElapsed := time.Since(receiptStarted)
+	blockStarted := time.Now()
+	if err := verifyBlockConsensusHash(sample.Block, mode); err != nil {
+		return verificationTimingSample{}, fmt.Errorf("verify block consensus hash: %w", err)
+	}
+	blockElapsed := time.Since(blockStarted)
+	pbftStarted := time.Now()
+	if err := verifyPBFTCommitSignatures(sample.Block, mode); err != nil {
+		return verificationTimingSample{}, fmt.Errorf("verify PBFT commit signatures: %w", err)
+	}
+	return verificationTimingSample{
+		ReceiptVerificationNS: receiptElapsed.Nanoseconds(),
+		BlockVerificationNS:   blockElapsed.Nanoseconds(),
+		PBFTVerificationNS:    time.Since(pbftStarted).Nanoseconds(),
+	}, nil
 }
 
 func verifyPBFTCommitSignatures(block *types.Block, mode string) error {

@@ -67,6 +67,7 @@ jobs:
 
       - name: Verify reproducible standard and Guomi artifacts
         run: |
+          python3 scripts/fisco-bcos/test_performance.py
           python3 scripts/fisco-bcos/test_build_anchor_contract.py
           python3 scripts/fisco-bcos/build_anchor_contract.py \
             --platform linux/amd64 \
@@ -151,6 +152,7 @@ jobs:
         run: |
           python3 scripts/fisco-bcos/compatibility.py validate
           python3 scripts/fisco-bcos/test_compatibility.py
+          python3 scripts/fisco-bcos/test_performance.py
           bash -n scripts/fisco-bcos/smoke-air.sh
 
       - name: Run TrustDB tests
@@ -238,6 +240,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "compatibility validation failed" }
           python scripts/fisco-bcos/test_compatibility.py
           if ($LASTEXITCODE -ne 0) { throw "compatibility tests failed" }
+          python scripts/fisco-bcos/test_performance.py
+          if ($LASTEXITCODE -ne 0) { throw "performance tests failed" }
 
       - name: Verify and execute pinned Windows tools
         shell: pwsh

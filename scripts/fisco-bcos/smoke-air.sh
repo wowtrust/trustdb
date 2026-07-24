@@ -13,13 +13,15 @@ P2P_PORT=${BCOS_P2P_PORT:-31300}
 RPC_PORT=${BCOS_RPC_PORT:-21200}
 ADMIN_ADDRESS=0x0000000000000000000000000000000000000001
 RAW_EVM_FIXTURE=false
+PERFORMANCE_WARMUP=5
+PERFORMANCE_SAMPLES=20
 ROOT_SM_CERT_WAS_PRESENT=false
 ROOT_SM_PARAM_WAS_PRESENT=false
 [[ -e ${REPO_ROOT}/sm_cert.cnf ]] && ROOT_SM_CERT_WAS_PRESENT=true
 [[ -e ${REPO_ROOT}/sm_sm2.param ]] && ROOT_SM_PARAM_WAS_PRESENT=true
 
 usage() {
-    echo "usage: $0 --mode standard|guomi --work-dir DIR [--cache-dir DIR] [--raw-evm-fixture] [--p2p-port PORT] [--rpc-port PORT]" >&2
+    echo "usage: $0 --mode standard|guomi --work-dir DIR [--cache-dir DIR] [--raw-evm-fixture] [--p2p-port PORT] [--rpc-port PORT] [--performance-warmup 3-20] [--performance-samples 20-100]" >&2
 }
 
 while (($#)); do
@@ -29,6 +31,8 @@ while (($#)); do
         --cache-dir) CACHE_DIR_ARG=$2; shift 2 ;;
         --p2p-port) P2P_PORT=$2; shift 2 ;;
         --rpc-port) RPC_PORT=$2; shift 2 ;;
+        --performance-warmup) PERFORMANCE_WARMUP=$2; shift 2 ;;
+        --performance-samples) PERFORMANCE_SAMPLES=$2; shift 2 ;;
         --raw-evm-fixture) RAW_EVM_FIXTURE=true; shift ;;
         -h|--help) usage; exit 0 ;;
         *) usage; exit 2 ;;
@@ -41,6 +45,16 @@ if [[ ${MODE} != standard && ${MODE} != guomi ]]; then
 fi
 if [[ -z ${WORK_DIR} ]]; then
     echo "--work-dir is required so evidence is not written to an ambiguous temporary path" >&2
+    exit 2
+fi
+if [[ ! ${PERFORMANCE_WARMUP} =~ ^[0-9]+$ ]] || \
+   ((PERFORMANCE_WARMUP < 3 || PERFORMANCE_WARMUP > 20)); then
+    echo "--performance-warmup must be an integer between 3 and 20" >&2
+    exit 2
+fi
+if [[ ! ${PERFORMANCE_SAMPLES} =~ ^[0-9]+$ ]] || \
+   ((PERFORMANCE_SAMPLES < 20 || PERFORMANCE_SAMPLES > 100)); then
+    echo "--performance-samples must be an integer between 20 and 100" >&2
     exit 2
 fi
 
@@ -359,6 +373,8 @@ CLIENT_ARGS=(
     --host 127.0.0.1
     --port "${RPC_PORT}"
     --cert-dir "${SDK_DIR}"
+    --performance-warmup "${PERFORMANCE_WARMUP}"
+    --performance-samples "${PERFORMANCE_SAMPLES}"
 )
 if [[ ${RAW_EVM_FIXTURE} == true ]]; then
     CLIENT_ARGS+=(--raw-evm-fixture)
@@ -375,18 +391,6 @@ if ! (
   2>"${WORK_DIR}/client-stderr.log"; then
     echo "the Go SDK smoke client failed" >&2
     sed 's/^/  /' "${WORK_DIR}/client-stderr.log" >&2
-    exit 1
-fi
-
-if ! (
-    cd "${REPO_ROOT}"
-    GOWORK=off go run -mod=readonly ./scripts/fisco-bcos/evidence-check \
-        --input "${WORK_DIR}/client-evidence.json" \
-        --cert-dir "${SDK_DIR}"
-) >"${WORK_DIR}/consensus-preimage.json" \
-  2>"${WORK_DIR}/consensus-preimage.stderr"; then
-    echo "the production consensus-preimage evidence check failed" >&2
-    sed 's/^/  /' "${WORK_DIR}/consensus-preimage.stderr" >&2
     exit 1
 fi
 
@@ -412,6 +416,27 @@ rm -f "${SMOKE_LOCK}/pid"
 rmdir "${SMOKE_LOCK}"
 SMOKE_LOCK=""
 
+if ! (
+    cd "${REPO_ROOT}"
+    GOWORK=off go run -mod=readonly ./scripts/fisco-bcos/evidence-check \
+        --input "${WORK_DIR}/client-evidence.json" \
+        --cert-dir "${SDK_DIR}"
+) >"${WORK_DIR}/consensus-preimage.json" \
+  2>"${WORK_DIR}/consensus-preimage.stderr"; then
+    echo "the production consensus-preimage evidence check failed" >&2
+    sed 's/^/  /' "${WORK_DIR}/consensus-preimage.stderr" >&2
+    exit 1
+fi
+
+if ! python3 "${SCRIPT_DIR}/performance.py" \
+    --client "${WORK_DIR}/client-evidence.json" \
+    --verification "${WORK_DIR}/consensus-preimage.json" \
+    >"${WORK_DIR}/performance.json" 2>"${WORK_DIR}/performance.stderr"; then
+    echo "the post-warmup performance evidence aggregation failed" >&2
+    sed 's/^/  /' "${WORK_DIR}/performance.stderr" >&2
+    exit 1
+fi
+
 if [[ ${ROOT_SM_CERT_WAS_PRESENT} == false && -e ${REPO_ROOT}/sm_cert.cnf ]] || \
    [[ ${ROOT_SM_PARAM_WAS_PRESENT} == false && -e ${REPO_ROOT}/sm_sm2.param ]]; then
     echo "smoke subprocess polluted the repository root with TASSL helper files" >&2
@@ -419,7 +444,8 @@ if [[ ${ROOT_SM_CERT_WAS_PRESENT} == false && -e ${REPO_ROOT}/sm_cert.cnf ]] || 
 fi
 
 python3 - "${WORK_DIR}" "${BASELINE}" "${MODE}" "${PLATFORM}" "${SOLC_EXECUTABLE}" \
-    "${CACHE_DIR}" "${P2P_PORT}" "${RPC_PORT}" "${RAW_EVM_FIXTURE}" <<'PY'
+    "${CACHE_DIR}" "${P2P_PORT}" "${RPC_PORT}" "${RAW_EVM_FIXTURE}" \
+    "${PERFORMANCE_WARMUP}" "${PERFORMANCE_SAMPLES}" <<'PY'
 import datetime
 import json
 import platform
@@ -438,9 +464,12 @@ work = Path(sys.argv[1])
     p2p_port,
     rpc_port,
     raw_evm_fixture,
+    performance_warmup,
+    performance_samples,
 ) = sys.argv[2:]
 client = json.loads((work / "client-evidence.json").read_text(encoding="utf-8"))
 preimages = json.loads((work / "consensus-preimage.json").read_text(encoding="utf-8"))
+performance = json.loads((work / "performance.json").read_text(encoding="utf-8"))
 if preimages.get("receipt_consensus_hash_matched") is not True:
     raise SystemExit("production receipt consensus preimage did not match the node hash")
 if preimages.get("block_consensus_hash_matched") is not True:
@@ -517,6 +546,8 @@ command = [
     "--cache-dir", cache_dir,
     "--p2p-port", p2p_port,
     "--rpc-port", rpc_port,
+    "--performance-warmup", performance_warmup,
+    "--performance-samples", performance_samples,
 ]
 if raw_fixture:
     command.append("--raw-evm-fixture")
@@ -560,6 +591,7 @@ evidence = {
         "block_verification_ns": preimages["block_verification_ns"],
         "pbft_verification_ns": preimages["pbft_verification_ns"],
     },
+    "performance": performance,
     "cleanup": {
         "node_processes_absent": True,
         "listeners_absent": True,

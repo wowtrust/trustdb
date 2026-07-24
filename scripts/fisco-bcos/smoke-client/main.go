@@ -19,13 +19,15 @@ import (
 )
 
 type config struct {
-	Mode    string
-	Host    string
-	Port    int
-	CertDir string
-	ABIPath string
-	BINPath string
-	RawEVM  bool
+	Mode               string
+	Host               string
+	Port               int
+	CertDir            string
+	ABIPath            string
+	BINPath            string
+	RawEVM             bool
+	PerformanceWarmup  int
+	PerformanceSamples int
 }
 
 type txEvidence struct {
@@ -47,6 +49,29 @@ type txPhaseDurations struct {
 	submitToReceipt   time.Duration
 }
 
+type performanceTimingSample struct {
+	PrepareSignEncodeNS         int64 `json:"prepare_sign_encode_ns"`
+	SubmitToReceiptNS           int64 `json:"submit_to_receipt_ns"`
+	ReceiptProofRetrievalNS     int64 `json:"receipt_proof_retrieval_ns"`
+	TransactionProofRetrievalNS int64 `json:"transaction_proof_retrieval_ns"`
+	BlockRetrievalNS            int64 `json:"block_retrieval_ns"`
+}
+
+type performanceVerificationSample struct {
+	Receipt *types.Receipt `json:"receipt"`
+	Block   *types.Block   `json:"block"`
+}
+
+type performanceEvidence struct {
+	WarmupCount               int                             `json:"warmup_count"`
+	SampleCount               int                             `json:"sample_count"`
+	Payload                   string                          `json:"payload"`
+	DeploymentExcluded        bool                            `json:"deployment_excluded"`
+	TimingSamples             []performanceTimingSample       `json:"timing_samples"`
+	WarmupVerificationSamples []performanceVerificationSample `json:"warmup_verification_samples"`
+	VerificationSamples       []performanceVerificationSample `json:"verification_samples"`
+}
+
 type evidence struct {
 	SchemaVersion       int                        `json:"schema_version"`
 	TimingSemantics     string                     `json:"timing_semantics"`
@@ -65,6 +90,7 @@ type evidence struct {
 	StaleLimitRejected  bool                       `json:"stale_block_limit_rejected"`
 	StaleRejectionError string                     `json:"stale_rejection_error,omitempty"`
 	ProbeSource         string                     `json:"probe_source"`
+	Performance         performanceEvidence        `json:"performance"`
 	CleanTeardown       bool                       `json:"clean_teardown"`
 }
 
@@ -77,6 +103,8 @@ func parseFlags() config {
 	flag.StringVar(&cfg.ABIPath, "abi", "", "compiled contract ABI path")
 	flag.StringVar(&cfg.BINPath, "bin", "", "compiled contract bytecode path")
 	flag.BoolVar(&cfg.RawEVM, "raw-evm-fixture", false, "use a compiler-independent LOG0 EVM fixture")
+	flag.IntVar(&cfg.PerformanceWarmup, "performance-warmup", 5, "discarded full-pipeline performance warmup samples (3-20)")
+	flag.IntVar(&cfg.PerformanceSamples, "performance-samples", 20, "recorded post-warmup performance samples (20-100)")
 	flag.Parse()
 	if cfg.Mode != "standard" && cfg.Mode != "guomi" {
 		fatalf("--mode must be standard or guomi")
@@ -86,6 +114,12 @@ func parseFlags() config {
 	}
 	if !cfg.RawEVM && (cfg.ABIPath == "" || cfg.BINPath == "") {
 		fatalf("--abi and --bin are required unless --raw-evm-fixture is set")
+	}
+	if cfg.PerformanceWarmup < 3 || cfg.PerformanceWarmup > 20 {
+		fatalf("--performance-warmup must be between 3 and 20")
+	}
+	if cfg.PerformanceSamples < 20 || cfg.PerformanceSamples > 100 {
+		fatalf("--performance-samples must be between 20 and 100")
 	}
 	return cfg
 }
@@ -209,11 +243,119 @@ func collectTxEvidence(ctx context.Context, c *client.Client, hash common.Hash, 
 	}, nil
 }
 
+func collectPerformanceEvidence(
+	ctx context.Context,
+	c *client.Client,
+	hash common.Hash,
+	receipt *types.Receipt,
+	phases txPhaseDurations,
+) (performanceTimingSample, performanceVerificationSample, error) {
+	if receipt == nil {
+		return performanceTimingSample{}, performanceVerificationSample{}, errors.New("nil performance receipt")
+	}
+	receiptProofStarted := time.Now()
+	queriedReceipt, err := c.GetTransactionReceipt(ctx, hash, true)
+	receiptProofElapsed := time.Since(receiptProofStarted)
+	if err != nil {
+		return performanceTimingSample{}, performanceVerificationSample{}, fmt.Errorf("get performance receipt with proof: %w", err)
+	}
+	if queriedReceipt == nil || queriedReceipt.Status != types.Success || queriedReceipt.ReceiptProof == nil {
+		return performanceTimingSample{}, performanceVerificationSample{}, errors.New("performance receipt is unsuccessful or lacks its proof field")
+	}
+	transactionProofStarted := time.Now()
+	transaction, err := c.GetTransactionByHash(ctx, hash, true)
+	transactionProofElapsed := time.Since(transactionProofStarted)
+	if err != nil {
+		return performanceTimingSample{}, performanceVerificationSample{}, fmt.Errorf("get performance transaction with proof: %w", err)
+	}
+	if transaction == nil || transaction.TransactionProof == nil {
+		return performanceTimingSample{}, performanceVerificationSample{}, errors.New("performance transaction lacks its proof field")
+	}
+	blockRetrievalStarted := time.Now()
+	block, err := c.GetBlockByNumber(ctx, int64(queriedReceipt.BlockNumber), false, true)
+	blockRetrievalElapsed := time.Since(blockRetrievalStarted)
+	if err != nil {
+		return performanceTimingSample{}, performanceVerificationSample{}, fmt.Errorf("get performance containing block: %w", err)
+	}
+	if block == nil || block.Hash == "" || block.TxsRoot == "" ||
+		block.ReceiptsRoot == "" || len(block.SignatureList) == 0 {
+		return performanceTimingSample{}, performanceVerificationSample{}, errors.New("performance containing block lacks hash, roots, or signatures")
+	}
+	return performanceTimingSample{
+			PrepareSignEncodeNS:         phases.prepareSignEncode.Nanoseconds(),
+			SubmitToReceiptNS:           phases.submitToReceipt.Nanoseconds(),
+			ReceiptProofRetrievalNS:     receiptProofElapsed.Nanoseconds(),
+			TransactionProofRetrievalNS: transactionProofElapsed.Nanoseconds(),
+			BlockRetrievalNS:            blockRetrievalElapsed.Nanoseconds(),
+		}, performanceVerificationSample{
+			Receipt: queriedReceipt,
+			Block:   block,
+		}, nil
+}
+
+func runPerformanceSamples(
+	ctx context.Context,
+	c *client.Client,
+	cfg config,
+	address common.Address,
+	callInput []byte,
+) (performanceEvidence, error) {
+	current, err := c.GetBlockNumber(ctx)
+	if err != nil {
+		return performanceEvidence{}, fmt.Errorf("get performance block limit: %w", err)
+	}
+	result := performanceEvidence{
+		WarmupCount:        cfg.PerformanceWarmup,
+		SampleCount:        cfg.PerformanceSamples,
+		DeploymentExcluded: true,
+		Payload:            "fixed anchor(bytes32) call with one 32-byte digest",
+		TimingSamples:      make([]performanceTimingSample, 0, cfg.PerformanceSamples),
+		WarmupVerificationSamples: make(
+			[]performanceVerificationSample,
+			0,
+			cfg.PerformanceWarmup,
+		),
+		VerificationSamples: make(
+			[]performanceVerificationSample,
+			0,
+			cfg.PerformanceSamples,
+		),
+	}
+	if cfg.RawEVM {
+		result.Payload = "fixed raw-EVM call with one input byte"
+	}
+	total := cfg.PerformanceWarmup + cfg.PerformanceSamples
+	for index := 0; index < total; index++ {
+		hash, receipt, phases, err := sendEncoded(ctx, c, &address, callInput, "", current+600)
+		if err != nil {
+			return performanceEvidence{}, fmt.Errorf("performance transaction %d: %w", index, err)
+		}
+		if receipt == nil || receipt.Status != types.Success {
+			status := -1
+			if receipt != nil {
+				status = receipt.Status
+			}
+			return performanceEvidence{}, fmt.Errorf("performance transaction %d receipt status: %d", index, status)
+		}
+		timing, verification, err := collectPerformanceEvidence(ctx, c, hash, receipt, phases)
+		if err != nil {
+			return performanceEvidence{}, fmt.Errorf("collect performance transaction %d: %w", index, err)
+		}
+		if index < cfg.PerformanceWarmup {
+			result.WarmupVerificationSamples = append(result.WarmupVerificationSamples, verification)
+			continue
+		}
+		result.TimingSamples = append(result.TimingSamples, timing)
+		result.VerificationSamples = append(result.VerificationSamples, verification)
+	}
+	return result, nil
+}
+
 func main() {
 	cfg := parseFlags()
 	parsed, contractBin, abiJSON := readContract(cfg)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
 	defer cancel()
 	sdkCfg, err := sdkConfig(cfg)
 	if err != nil {
@@ -340,6 +482,13 @@ func main() {
 			fatalf("Anchored event unexpectedly contains non-indexed data")
 		}
 	}
+	if err := c.UnSubscribeEventLogs(context.Background(), taskID); err != nil {
+		fatalf("unsubscribe event logs: %v", err)
+	}
+	// The native event unsubscription has no completion callback. Drain it
+	// before sampling so its background work does not contaminate the
+	// post-warmup comparison.
+	time.Sleep(time.Second)
 
 	block, err := c.GetBlockByNumber(ctx, int64(eventReceipt.BlockNumber), false, true)
 	if err != nil {
@@ -358,6 +507,10 @@ func main() {
 	}
 	if len(sealers) != 4 {
 		fatalf("expected four sealers, got %d", len(sealers))
+	}
+	performance, err := runPerformanceSamples(ctx, c, cfg, address, callInput)
+	if err != nil {
+		fatalf("collect post-warmup performance evidence: %v", err)
 	}
 
 	finalBlock, err := c.GetBlockNumber(ctx)
@@ -399,6 +552,7 @@ func main() {
 		StaleBlockLimit:     staleLimit,
 		StaleLimitRejected:  staleRejected,
 		StaleRejectionError: staleError,
+		Performance:         performance,
 		ProbeSource: func() string {
 			if cfg.RawEVM {
 				return "compiler-independent-raw-evm-log0"
@@ -406,12 +560,6 @@ func main() {
 			return "pinned-solidity-compiler"
 		}(),
 	}
-	if err := c.UnSubscribeEventLogs(context.Background(), taskID); err != nil {
-		fatalf("unsubscribe event logs: %v", err)
-	}
-	// The native event unsubscription has no completion callback. Give its
-	// background work a bounded drain window before destroying the C SDK.
-	time.Sleep(time.Second)
 	c.Close()
 	output.CleanTeardown = true
 	encoder := json.NewEncoder(os.Stdout)
