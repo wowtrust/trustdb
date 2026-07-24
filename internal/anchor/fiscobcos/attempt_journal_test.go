@@ -109,8 +109,8 @@ func TestAttemptJournalPreservesSuccessfulReceiptMaterial(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Equal(decoded.Attempts[0].Receipt.RawCanonicalReceipt, []byte("canonical-receipt")) ||
-		!bytes.Equal(decoded.Attempts[0].Receipt.CanonicalLogs[0], []byte("canonical-anchor-log")) ||
+	if !bytes.Equal(decoded.Attempts[0].Receipt.RawCanonicalReceipt, success.Attempts[0].Receipt.RawCanonicalReceipt) ||
+		!bytes.Equal(decoded.Attempts[0].Receipt.CanonicalLogs[0], success.Attempts[0].Receipt.CanonicalLogs[0]) ||
 		!bytes.Equal(decoded.Attempts[0].Receipt.DecodedAnchorEvent, []byte("canonical-decoded-event")) {
 		t.Fatal("successful receipt material changed during round trip")
 	}
@@ -232,12 +232,28 @@ func testSignedTransaction(t *testing.T, journal AttemptJournal, ordinal uint32,
 }
 
 func testAttemptReceipt(transactionHash []byte, status int64) *AttemptReceiptObservation {
+	fields := NativeReceiptFields{
+		Version:     0,
+		GasUsed:     "1",
+		Status:      int32(status),
+		Logs:        []NativeLogFields{{Address: "0x01", Topics: [][]byte{sequenceBytes(0x90, 32)}, Data: []byte{0x01}}},
+		BlockNumber: 7000,
+	}
+	raw, logs, err := MarshalNativeReceiptPreimage(fields)
+	if err != nil {
+		panic(err)
+	}
+	hash, err := HashNativeEvidence(HashKeccak256, raw)
+	if err != nil {
+		panic(err)
+	}
 	return &AttemptReceiptObservation{
-		RawCanonicalReceipt: []byte("canonical-receipt"),
+		Fields:              fields,
+		RawCanonicalReceipt: raw,
 		Status:              status,
 		StatusMessage:       "success",
-		CanonicalLogs:       [][]byte{[]byte("canonical-anchor-log")},
-		ReceiptHash:         sequenceBytes(0xa0, 32),
+		CanonicalLogs:       logs,
+		ReceiptHash:         hash,
 		TransactionHash:     append([]byte(nil), transactionHash...),
 		TransactionProof:    [][]byte{sequenceBytes(0xb0, 32)},
 		ReceiptProof:        [][]byte{sequenceBytes(0xc0, 32)},

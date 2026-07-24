@@ -55,26 +55,34 @@ type SignedTransactionAttempt struct {
 // for one attempt. It is still an untrusted chain observation until the
 // dedicated offline verifier recomputes inclusion and finality.
 type AttemptReceiptObservation struct {
-	RawCanonicalReceipt []byte   `cbor:"raw_canonical_receipt" json:"raw_canonical_receipt"`
-	Status              int64    `cbor:"status" json:"status"`
-	StatusMessage       string   `cbor:"status_message" json:"status_message"`
-	CanonicalLogs       [][]byte `cbor:"canonical_logs" json:"canonical_logs"`
-	ReceiptHash         []byte   `cbor:"receipt_hash" json:"receipt_hash"`
-	TransactionHash     []byte   `cbor:"transaction_hash" json:"transaction_hash"`
-	TransactionIndex    uint64   `cbor:"transaction_index" json:"transaction_index"`
-	TransactionProof    [][]byte `cbor:"transaction_proof" json:"transaction_proof"`
-	ReceiptIndex        uint64   `cbor:"receipt_index" json:"receipt_index"`
-	ReceiptProof        [][]byte `cbor:"receipt_proof" json:"receipt_proof"`
-	BlockNumber         uint64   `cbor:"block_number" json:"block_number"`
-	BlockHash           []byte   `cbor:"block_hash" json:"block_hash"`
-	AnchorLogIndex      uint64   `cbor:"anchor_log_index,omitempty" json:"anchor_log_index,omitempty"`
-	DecodedAnchorEvent  []byte   `cbor:"decoded_anchor_event,omitempty" json:"decoded_anchor_event,omitempty"`
-	ObservedAtUnixN     int64    `cbor:"observed_at_unix_nano" json:"observed_at_unix_nano"`
+	Fields              NativeReceiptFields `cbor:"fields" json:"fields"`
+	RawCanonicalReceipt []byte              `cbor:"raw_canonical_receipt" json:"raw_canonical_receipt"`
+	Status              int64               `cbor:"status" json:"status"`
+	StatusMessage       string              `cbor:"status_message" json:"status_message"`
+	CanonicalLogs       [][]byte            `cbor:"canonical_logs" json:"canonical_logs"`
+	ReceiptHash         []byte              `cbor:"receipt_hash" json:"receipt_hash"`
+	TransactionHash     []byte              `cbor:"transaction_hash" json:"transaction_hash"`
+	TransactionIndex    uint64              `cbor:"transaction_index" json:"transaction_index"`
+	TransactionProof    [][]byte            `cbor:"transaction_proof" json:"transaction_proof"`
+	ReceiptIndex        uint64              `cbor:"receipt_index" json:"receipt_index"`
+	ReceiptProof        [][]byte            `cbor:"receipt_proof" json:"receipt_proof"`
+	BlockNumber         uint64              `cbor:"block_number" json:"block_number"`
+	BlockHash           []byte              `cbor:"block_hash" json:"block_hash"`
+	AnchorLogIndex      uint64              `cbor:"anchor_log_index,omitempty" json:"anchor_log_index,omitempty"`
+	DecodedAnchorEvent  []byte              `cbor:"decoded_anchor_event,omitempty" json:"decoded_anchor_event,omitempty"`
+	ObservedAtUnixN     int64               `cbor:"observed_at_unix_nano" json:"observed_at_unix_nano"`
+}
+
+type SubmissionObservation struct {
+	Status          int64  `cbor:"status" json:"status"`
+	StatusMessage   string `cbor:"status_message" json:"status_message"`
+	ObservedAtUnixN int64  `cbor:"observed_at_unix_nano" json:"observed_at_unix_nano"`
 }
 
 type JournalAttempt struct {
 	Transaction SignedTransactionAttempt   `cbor:"transaction" json:"transaction"`
 	Outcome     AttemptOutcome             `cbor:"outcome" json:"outcome"`
+	Submission  *SubmissionObservation     `cbor:"submission,omitempty" json:"submission,omitempty"`
 	Receipt     *AttemptReceiptObservation `cbor:"receipt,omitempty" json:"receipt,omitempty"`
 }
 
@@ -308,15 +316,51 @@ func validateJournalAttempt(attempt JournalAttempt, ordinal uint32, journal Atte
 	}
 	switch attempt.Outcome {
 	case AttemptOutcomePrepared, AttemptOutcomeSubmitUnknown, AttemptOutcomeBlockLimitExpired:
-		if attempt.Receipt != nil {
-			return fmt.Errorf("%w: outcome %q must not contain a receipt", ErrInvalidAttemptJournal, attempt.Outcome)
+		if attempt.Submission != nil || attempt.Receipt != nil {
+			return fmt.Errorf("%w: outcome %q must not contain submission or receipt evidence", ErrInvalidAttemptJournal, attempt.Outcome)
 		}
-	case AttemptOutcomeReceiptSuccess, AttemptOutcomeReceiptBlockLimitRejected, AttemptOutcomeReceiptTerminalRejected:
+	case AttemptOutcomeReceiptSuccess:
+		if attempt.Submission != nil {
+			if err := validateSubmissionObservation(attempt.Submission, ReceiptStatusOK); err != nil {
+				return err
+			}
+		}
 		if err := validateAttemptReceipt(attempt.Outcome, attempt.Receipt, transaction.TransactionHash); err != nil {
 			return err
 		}
+	case AttemptOutcomeReceiptBlockLimitRejected:
+		if attempt.Receipt != nil {
+			return fmt.Errorf("%w: block-limit rejection must not claim an included receipt", ErrInvalidAttemptJournal)
+		}
+		if err := validateSubmissionObservation(attempt.Submission, ReceiptStatusBlockLimit); err != nil {
+			return err
+		}
+	case AttemptOutcomeReceiptTerminalRejected:
+		if attempt.Receipt != nil {
+			return fmt.Errorf("%w: terminal rejection must not claim an included receipt", ErrInvalidAttemptJournal)
+		}
+		if err := validateSubmissionObservation(attempt.Submission, -1); err != nil {
+			return err
+		}
+		if attempt.Submission.Status == ReceiptStatusOK ||
+			attempt.Submission.Status == ReceiptStatusBlockLimit {
+			return fmt.Errorf("%w: terminal submission status=%d is not terminal", ErrInvalidAttemptJournal, attempt.Submission.Status)
+		}
 	default:
 		return fmt.Errorf("%w: unknown attempt outcome %q", ErrInvalidAttemptJournal, attempt.Outcome)
+	}
+	return nil
+}
+
+func validateSubmissionObservation(observation *SubmissionObservation, expectedStatus int64) error {
+	if observation == nil ||
+		len(observation.StatusMessage) == 0 ||
+		len(observation.StatusMessage) > maxConfigString ||
+		observation.ObservedAtUnixN <= 0 {
+		return fmt.Errorf("%w: submission observation is incomplete or oversized", ErrInvalidAttemptJournal)
+	}
+	if expectedStatus >= 0 && observation.Status != expectedStatus {
+		return fmt.Errorf("%w: submission observation status=%d, want %d", ErrInvalidAttemptJournal, observation.Status, expectedStatus)
 	}
 	return nil
 }
@@ -334,6 +378,19 @@ func validateAttemptReceipt(outcome AttemptOutcome, receipt *AttemptReceiptObser
 		len(receipt.CanonicalLogs) > maxCanonicalLogs {
 		return fmt.Errorf("%w: receipt observation is incomplete or oversized", ErrInvalidAttemptJournal)
 	}
+	canonicalReceipt, canonicalLogs, err := MarshalNativeReceiptPreimage(receipt.Fields)
+	if err != nil ||
+		!bytes.Equal(canonicalReceipt, receipt.RawCanonicalReceipt) ||
+		!sameEvidenceByteSlices(canonicalLogs, receipt.CanonicalLogs) ||
+		int64(receipt.Fields.Status) != receipt.Status ||
+		receipt.Fields.BlockNumber < 0 ||
+		uint64(receipt.Fields.BlockNumber) != receipt.BlockNumber {
+		return fmt.Errorf("%w: receipt fields do not reconstruct exact consensus preimage", ErrInvalidAttemptJournal)
+	}
+	receiptHash, err := HashNativeEvidence(HashKeccak256, canonicalReceipt)
+	if err != nil || !bytes.Equal(receiptHash, receipt.ReceiptHash) {
+		return fmt.Errorf("%w: receipt consensus hash mismatch", ErrInvalidAttemptJournal)
+	}
 	switch outcome {
 	case AttemptOutcomeReceiptSuccess:
 		if receipt.Status != ReceiptStatusOK ||
@@ -342,14 +399,6 @@ func validateAttemptReceipt(outcome AttemptOutcome, receipt *AttemptReceiptObser
 			len(receipt.DecodedAnchorEvent) == 0 ||
 			len(receipt.DecodedAnchorEvent) > maxDecodedEventBytes {
 			return fmt.Errorf("%w: successful receipt lacks exact event", ErrInvalidAttemptJournal)
-		}
-	case AttemptOutcomeReceiptBlockLimitRejected:
-		if receipt.Status != ReceiptStatusBlockLimit {
-			return fmt.Errorf("%w: block-limit outcome has status=%d", ErrInvalidAttemptJournal, receipt.Status)
-		}
-	case AttemptOutcomeReceiptTerminalRejected:
-		if receipt.Status == ReceiptStatusOK || receipt.Status == ReceiptStatusBlockLimit {
-			return fmt.Errorf("%w: terminal receipt status=%d is not terminal", ErrInvalidAttemptJournal, receipt.Status)
 		}
 	}
 	if err := validateMerklePath("journal transaction", receipt.TransactionProof); err != nil {

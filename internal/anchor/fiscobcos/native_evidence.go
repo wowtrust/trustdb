@@ -22,42 +22,42 @@ const (
 // independent of RPC/SDK structs so JSON serialization can never become a
 // consensus preimage by accident.
 type NativeReceiptFields struct {
-	Version           int32
-	GasUsed           string
-	ContractAddress   string
-	Status            int32
-	Output            []byte
-	EffectiveGasPrice *string
-	Logs              []NativeLogFields
-	BlockNumber       int64
+	Version           int32             `cbor:"version" json:"version"`
+	GasUsed           string            `cbor:"gas_used" json:"gas_used"`
+	ContractAddress   string            `cbor:"contract_address" json:"contract_address"`
+	Status            int32             `cbor:"status" json:"status"`
+	Output            []byte            `cbor:"output" json:"output"`
+	EffectiveGasPrice *string           `cbor:"effective_gas_price,omitempty" json:"effective_gas_price,omitempty"`
+	Logs              []NativeLogFields `cbor:"logs" json:"logs"`
+	BlockNumber       int64             `cbor:"block_number" json:"block_number"`
 }
 
 type NativeLogFields struct {
-	Address string
-	Topics  [][]byte
-	Data    []byte
+	Address string   `cbor:"address" json:"address"`
+	Topics  [][]byte `cbor:"topics" json:"topics"`
+	Data    []byte   `cbor:"data" json:"data"`
 }
 
 type NativeParentInfo struct {
-	BlockNumber int64
-	BlockHash   []byte
+	BlockNumber int64  `cbor:"block_number" json:"block_number"`
+	BlockHash   []byte `cbor:"block_hash" json:"block_hash"`
 }
 
 // NativeBlockHeaderFields mirrors the fields and order consumed by the
 // official bcos-tars-protocol BlockHeader Hashable implementation.
 type NativeBlockHeaderFields struct {
-	Version          int32
-	ParentInfo       []NativeParentInfo
-	TransactionsRoot []byte
-	ReceiptsRoot     []byte
-	StateRoot        []byte
-	BlockNumber      int64
-	GasUsed          string
-	Timestamp        int64
-	Sealer           int64
-	SealerList       [][]byte
-	ExtraData        []byte
-	ConsensusWeights []int64
+	Version          int32              `cbor:"version" json:"version"`
+	ParentInfo       []NativeParentInfo `cbor:"parent_info" json:"parent_info"`
+	TransactionsRoot []byte             `cbor:"transactions_root" json:"transactions_root"`
+	ReceiptsRoot     []byte             `cbor:"receipts_root" json:"receipts_root"`
+	StateRoot        []byte             `cbor:"state_root" json:"state_root"`
+	BlockNumber      int64              `cbor:"block_number" json:"block_number"`
+	GasUsed          string             `cbor:"gas_used" json:"gas_used"`
+	Timestamp        int64              `cbor:"timestamp" json:"timestamp"`
+	Sealer           int64              `cbor:"sealer" json:"sealer"`
+	SealerList       [][]byte           `cbor:"sealer_list" json:"sealer_list"`
+	ExtraData        []byte             `cbor:"extra_data" json:"extra_data"`
+	ConsensusWeights []int64            `cbor:"consensus_weights" json:"consensus_weights"`
 }
 
 type nativeAnchorEventEvidence struct {
