@@ -8,7 +8,7 @@ import Button from '@/components/Button.vue'
 import Input from '@/components/Input.vue'
 import Field from '@/components/Field.vue'
 import StatusDot from '@/components/StatusDot.vue'
-import { Save, RotateCcw, PlugZap, Sparkles, FolderOpen } from 'lucide-vue-next'
+import { Save, RotateCcw, PlugZap, Sparkles } from 'lucide-vue-next'
 
 const settings = useSettings()
 const toasts = useToasts()
@@ -40,10 +40,6 @@ const dirty = computed(() => {
     form.server_certificate_roots !== settings.settings.server_certificate_roots ||
     form.require_identity_evidence !== settings.settings.require_identity_evidence ||
     form.require_certificate_status !== settings.settings.require_certificate_status ||
-    form.anchor_plugin_command !== settings.settings.anchor_plugin_command ||
-    form.anchor_plugin_args_text !== settings.settings.anchor_plugin_args_text ||
-    form.anchor_plugin_start_timeout !== settings.settings.anchor_plugin_start_timeout ||
-    form.anchor_plugin_rpc_timeout !== settings.settings.anchor_plugin_rpc_timeout ||
     form.default_media_type !== settings.settings.default_media_type ||
     form.default_event_type !== settings.settings.default_event_type
   )
@@ -114,10 +110,6 @@ function reopenOnboarding() {
   else location.reload()
 }
 
-async function pickAnchorPlugin() {
-  const path = await api.chooseOpenPath('选择 L5 锚定插件')
-  if (path) form.anchor_plugin_command = path
-}
 </script>
 
 <template>
@@ -237,39 +229,6 @@ async function pickAnchorPlugin() {
         </label>
         <p class="text-[11.5px] text-warn">
           证据文件中的 descriptor、证书和 CRL 只参与绑定校验；信任只能来自这里配置的本地 descriptor、registry key 与 CA 根。
-        </p>
-      </div>
-    </Card>
-
-    <Card title="L5 锚定插件" subtitle="验证服务端返回的自定义外部锚定 proof">
-      <div class="space-y-3">
-        <Field label="插件 executable" hint="仅自定义 sink 需要；file / noop / ots 继续使用内置验证器">
-          <div class="flex gap-2">
-            <Input v-model="form.anchor_plugin_command" placeholder="/path/to/trustdb-anchor-plugin" :mono="true" />
-            <Button size="sm" variant="subtle" @click="pickAnchorPlugin">
-              <FolderOpen :size="13" /> 选择
-            </Button>
-          </div>
-        </Field>
-        <Field label="插件参数" hint="每行一个参数；不要在这里填写密钥或 token">
-          <Input
-            v-model="form.anchor_plugin_args_text"
-            placeholder="--network\nconsortium-a"
-            :mono="true"
-            multiline
-            :rows="3"
-          />
-        </Field>
-        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          <Field label="启动超时" hint="启动、握手并连接 loopback gRPC 的最长时间">
-            <Input v-model="form.anchor_plugin_start_timeout" placeholder="10s" :mono="true" />
-          </Field>
-          <Field label="RPC 超时" hint="Publish / Verify 单次调用的最长时间">
-            <Input v-model="form.anchor_plugin_rpc_timeout" placeholder="30s" :mono="true" />
-          </Field>
-        </div>
-        <p class="text-[12px] text-ink-500">
-          自定义 L5 proof 会在验证时启动该子进程；插件缺失、sink 名称不匹配或 proof 被拒绝时均 fail closed。
         </p>
       </div>
     </Card>

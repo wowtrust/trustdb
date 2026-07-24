@@ -587,10 +587,6 @@ export namespace main {
 	    server_certificate_roots: string;
 	    require_identity_evidence: boolean;
 	    require_certificate_status: boolean;
-	    anchor_plugin_command: string;
-	    anchor_plugin_args_text: string;
-	    anchor_plugin_start_timeout: string;
-	    anchor_plugin_rpc_timeout: string;
 	    default_media_type: string;
 	    default_event_type: string;
 	    theme: string;
@@ -618,10 +614,6 @@ export namespace main {
 	        this.server_certificate_roots = source["server_certificate_roots"];
 	        this.require_identity_evidence = source["require_identity_evidence"];
 	        this.require_certificate_status = source["require_certificate_status"];
-	        this.anchor_plugin_command = source["anchor_plugin_command"];
-	        this.anchor_plugin_args_text = source["anchor_plugin_args_text"];
-	        this.anchor_plugin_start_timeout = source["anchor_plugin_start_timeout"];
-	        this.anchor_plugin_rpc_timeout = source["anchor_plugin_rpc_timeout"];
 	        this.default_media_type = source["default_media_type"];
 	        this.default_event_type = source["default_event_type"];
 	        this.theme = source["theme"];

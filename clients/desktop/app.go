@@ -468,7 +468,6 @@ func (a *App) SaveSettings(s Settings) error {
 		// representation regardless of how the user pasted it.
 		s.ServerPubKeyB64 = encodeKey(raw)
 	}
-	s.AnchorPluginCommand = strings.TrimSpace(s.AnchorPluginCommand)
 	s.ServerCAFile = strings.TrimSpace(s.ServerCAFile)
 	s.ServerName = strings.TrimSpace(s.ServerName)
 	s.ServerCAPinsSHA256 = strings.TrimSpace(s.ServerCAPinsSHA256)
@@ -490,21 +489,6 @@ func (a *App) SaveSettings(s Settings) error {
 	}
 	if err := tlsConfigFromSettings(s).Validate(); err != nil && (strings.EqualFold(parsedScheme(s.ServerURL), "https") || hasTLSInputs(tlsConfigFromSettings(s))) {
 		return fmt.Errorf("transport TLS settings: %w", err)
-	}
-	if strings.TrimSpace(s.AnchorPluginStartTimeout) == "" {
-		s.AnchorPluginStartTimeout = "10s"
-	}
-	if strings.TrimSpace(s.AnchorPluginRPCTimeout) == "" {
-		s.AnchorPluginRPCTimeout = "30s"
-	}
-	for name, value := range map[string]string{
-		"anchor plugin start timeout": s.AnchorPluginStartTimeout,
-		"anchor plugin RPC timeout":   s.AnchorPluginRPCTimeout,
-	} {
-		d, err := time.ParseDuration(strings.TrimSpace(value))
-		if err != nil || d <= 0 {
-			return fmt.Errorf("%s must be a positive duration", name)
-		}
 	}
 	return store.setSettings(s)
 }
