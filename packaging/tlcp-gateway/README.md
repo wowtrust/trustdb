@@ -13,6 +13,8 @@ and the embedded Go profile/readiness tools instead of replaying the first
 pass's cached layers. The embedded tools build from
 `validator-go.mod`/`validator-go.sum`, which contain only their four required
 modules rather than downloading TrustDB's unrelated server dependencies.
+Those modules are fetched serially with bounded retries and verified against
+the committed sums before compilation.
 
 Build and independently verify one architecture:
 

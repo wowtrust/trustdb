@@ -73,7 +73,20 @@ ENV CGO_ENABLED=0 \
 WORKDIR /src/trustdb
 COPY packaging/tlcp-gateway/validator-go.mod ./go.mod
 COPY packaging/tlcp-gateway/validator-go.sum ./go.sum
-RUN go mod download
+RUN set -eu; \
+    for module in \
+      github.com/emmansun/gmsm@v0.44.0 \
+      golang.org/x/crypto@v0.53.0 \
+      golang.org/x/net@v0.56.0 \
+      golang.org/x/text@v0.38.0; do \
+      attempt=1; \
+      until go mod download "$module"; do \
+        [ "$attempt" -lt 5 ] || exit 1; \
+        sleep "$attempt"; \
+        attempt=$((attempt + 1)); \
+      done; \
+    done; \
+    go mod verify
 COPY internal/tlcpprofile ./internal/tlcpprofile
 COPY internal/tlcpready ./internal/tlcpready
 COPY cmd/trustdb-tlcp-profile ./cmd/trustdb-tlcp-profile
