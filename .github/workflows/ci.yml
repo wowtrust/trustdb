@@ -224,9 +224,9 @@ jobs:
           cache-dependency-path: go.sum
 
       - name: Run administrative authorization tests
-        run: >
-          go test -count=1 -mod=readonly
-          ./internal/adminauth ./internal/adminweb ./internal/config ./cmd/trustdb
+        run: |
+          go test -count=1 -mod=readonly ./internal/adminauth ./internal/adminweb ./internal/config
+          go test -count=1 -mod=readonly ./cmd/trustdb -run '^(TestPrivilegedCommandPermissionAnnotations|TestCLIAuthorizationAllowsOnlyGrantedRole|TestAdminPolicyBootstrapCommand|TestAdminPolicyOfflineRecoveryRequiresReason)$'
 
   backend-integration:
     name: Backend integration tests
