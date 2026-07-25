@@ -129,6 +129,24 @@ offline-authenticated membership and weight changes, or to
 and explicit checkpoint-advancement procedure are specified in
 [`ADR-0017`](../../docs/integrations/ADR-0017-FISCO-BCOS-VALIDATOR-SET-TRANSITIONS.md).
 
+After an exported `.sproof` has verified a strictly newer finalized block,
+advance the canonical local checkpoint in place. The current digest is
+mandatory CAS input; the command rejects a different output path so two
+successor configurations cannot fork from one local generation:
+
+```bash
+trustdb anchor fisco-bcos trust-config advance \
+  --input /etc/trustdb/fisco/trust-config.guomi.cbor \
+  --evidence /var/lib/trustdb/evidence/latest-anchor.sproof \
+  --expect-current-digest 0xCURRENT_TRUST_CONFIG_DIGEST \
+  --out /etc/trustdb/fisco/trust-config.guomi.cbor
+```
+
+Retain the JSON report in the operator audit log. It records both checkpoint
+identities, both config digests, the incremented generation, and the previous
+config digest. Never remove an `.advance.lock` file until an interrupted
+operation has been investigated.
+
 The resulting config contains:
 
 - `crypto_mode=guomi`, protocol and chain hashes set to SM3, account and

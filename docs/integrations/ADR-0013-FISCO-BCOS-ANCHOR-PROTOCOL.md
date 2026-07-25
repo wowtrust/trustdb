@@ -164,7 +164,8 @@ Certificate pins remain a local transport control rather than part of offline bl
 - the successful transaction hash;
 - raw canonical receipt, receipt hash, transaction/receipt indexes and Merkle paths, log index, and decoded anchor event;
 - raw canonical block header, block hash, and block number;
-- the sparse contiguous validator history defined by [ADR-0017](ADR-0017-FISCO-BCOS-VALIDATOR-SET-TRANSITIONS.md);
+- the contiguous validator history with sparsely included full block contents
+  defined by [ADR-0017](ADR-0017-FISCO-BCOS-VALIDATOR-SET-TRANSITIONS.md);
 - unique block validator-node signatures. A live PBFT view is not persisted as
   block evidence, because the SDK cannot bind that RPC value to the block.
 
