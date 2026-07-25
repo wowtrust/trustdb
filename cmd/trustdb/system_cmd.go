@@ -6,6 +6,7 @@ import (
 	"runtime"
 
 	"github.com/spf13/cobra"
+	"github.com/wowtrust/trustdb/internal/adminauth"
 )
 
 var (
@@ -32,7 +33,7 @@ func newVersionCommand(rt *runtimeConfig) *cobra.Command {
 }
 
 func newDoctorCommand(rt *runtimeConfig) *cobra.Command {
-	return &cobra.Command{
+	return requirePermission(&cobra.Command{
 		Use:   "doctor",
 		Short: "Run local configuration and filesystem diagnostics",
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -56,7 +57,7 @@ func newDoctorCommand(rt *runtimeConfig) *cobra.Command {
 				"checks": checks,
 			})
 		},
-	}
+	}, adminauth.PermissionSystemRead)
 }
 
 func newCompletionCommand(rt *runtimeConfig) *cobra.Command {

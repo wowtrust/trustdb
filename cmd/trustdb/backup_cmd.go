@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+	"github.com/wowtrust/trustdb/internal/adminauth"
 	trustbackup "github.com/wowtrust/trustdb/internal/backup"
 	"github.com/wowtrust/trustdb/internal/cryptosuite"
 	"github.com/wowtrust/trustdb/internal/keyenvelope"
@@ -74,7 +75,7 @@ func newBackupCreateCommand(rt *runtimeConfig) *cobra.Command {
 	cmd.Flags().StringVar(&keyID, "key-id", "", "non-secret KEK key reference stored in the backup header")
 	cmd.Flags().IntVar(&frameBytes, "frame-bytes", 0, "encrypted frame plaintext bytes (65536..16777216)")
 	cmd.Flags().StringVar(&keyRegistryPath, "key-registry", "", "V2 key registry audit file to include; use --key-registry= to omit it (defaults to paths.key_registry)")
-	return cmd
+	return requirePermission(cmd, adminauth.PermissionBackupCreate)
 }
 
 func newBackupVerifyCommand(rt *runtimeConfig) *cobra.Command {
@@ -100,7 +101,7 @@ func newBackupVerifyCommand(rt *runtimeConfig) *cobra.Command {
 	}
 	cmd.Flags().StringVar(&filePath, "file", "", ".tdbackup path")
 	cmd.Flags().StringVar(&keyProvider, "key-provider", "", "KEK provider name (built-in: passphrase-dev-v1)")
-	return cmd
+	return requirePermission(cmd, adminauth.PermissionBackupRead)
 }
 
 func newBackupRestoreCommand(rt *runtimeConfig) *cobra.Command {
@@ -145,7 +146,7 @@ func newBackupRestoreCommand(rt *runtimeConfig) *cobra.Command {
 	cmd.Flags().StringVar(&checkpointPath, "checkpoint", "", "restore checkpoint path (defaults to <file>.restore-checkpoint.json)")
 	cmd.Flags().StringVar(&keyProvider, "key-provider", "", "KEK provider name (built-in: passphrase-dev-v1)")
 	cmd.Flags().StringVar(&recoveryDir, "recovery-dir", "", "directory for restored key registry audit evidence (defaults to <file>.recovery)")
-	return cmd
+	return requirePermission(cmd, adminauth.PermissionBackupRestore)
 }
 
 func backupKEKProvider(name string) (keyenvelope.KEKProvider, error) {

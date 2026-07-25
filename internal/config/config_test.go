@@ -517,13 +517,9 @@ func TestValidateRejectsInvalidDurationBounds(t *testing.T) {
 			mutate: func(c *Config) {
 				webDir := testAdminWebDir(t)
 				c.Admin = Admin{
-					Enabled:       true,
-					BasePath:      "/admin",
-					Username:      "op",
-					PasswordHash:  "$2a$10$xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
-					SessionSecret: strings.Repeat("s", 32),
-					WebDir:        webDir,
-					SessionTTL:    "0s",
+					Enabled: true, BasePath: "/admin", PolicyPath: filepath.Join(t.TempDir(), "admin-policy.json"),
+					SessionSecret: strings.Repeat("s", 32), WebDir: webDir, SessionTTL: "0s",
+					LoginMaxFailures: 5, LoginLockout: "15m",
 				}
 			},
 			want: "admin.session_ttl",
@@ -553,6 +549,40 @@ func TestValidateAllowsZeroServerTimeouts(t *testing.T) {
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("Validate rejected zero server network timeouts: %v", err)
 	}
+}
+
+func TestValidateAdministrativeAuthorizationBoundaries(t *testing.T) {
+	t.Parallel()
+
+	t.Run("CLI enforcement requires policy path", func(t *testing.T) {
+		cfg := Default()
+		cfg.Admin.CLIEnforce = true
+		cfg.Admin.PolicyPath = ""
+		if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "admin.policy_path") {
+			t.Fatalf("Validate() error = %v", err)
+		}
+	})
+
+	t.Run("OIDC gateway pins are canonical", func(t *testing.T) {
+		cfg := Default()
+		cfg.Admin.Enabled = true
+		cfg.Admin.WebDir = testAdminWebDir(t)
+		cfg.Admin.SessionSecret = strings.Repeat("s", 32)
+		cfg.Admin.OIDCGatewayPins = []string{strings.Repeat("A", 64)}
+		if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "lowercase SHA-256") {
+			t.Fatalf("Validate() error = %v", err)
+		}
+	})
+
+	t.Run("CLI-only authorization does not require Web session settings", func(t *testing.T) {
+		cfg := Default()
+		cfg.Admin.CLIEnforce = true
+		cfg.Admin.SessionSecret = ""
+		cfg.Admin.WebDir = ""
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("Validate() error = %v", err)
+		}
+	})
 }
 
 func testAdminWebDir(t *testing.T) string {

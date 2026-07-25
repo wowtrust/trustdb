@@ -87,6 +87,7 @@ async function doLogout() {
       <div class="rounded-[16px] border border-white/10 bg-[#070807]/70 p-3">
         <div class="kicker text-[9px] font-bold">Session</div>
         <div class="mt-1 font-mono text-[11px] text-accent truncate">{{ auth.username || '—' }}</div>
+        <div class="mt-1 text-[9px] text-ink-500 truncate">{{ auth.principal?.roles.join(' · ') || '—' }}</div>
         <button
           type="button"
           class="mt-3 w-full inline-flex items-center justify-center gap-2 rounded-[12px] border border-white/10 bg-white/5 px-3 py-2 text-[11px] font-semibold text-ink-200 hover:border-accent/40 hover:text-accent transition"

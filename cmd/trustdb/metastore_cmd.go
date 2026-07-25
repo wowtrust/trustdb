@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+	"github.com/wowtrust/trustdb/internal/adminauth"
 	"github.com/wowtrust/trustdb/internal/anchorschedule"
 	"github.com/wowtrust/trustdb/internal/cryptosuite"
 	"github.com/wowtrust/trustdb/internal/model"
@@ -408,7 +409,7 @@ func newMetastoreMigrateCommand(rt *runtimeConfig) *cobra.Command {
 	cmd.Flags().StringVar(&toKindStr, "to-kind", "pebble", "destination backend kind: file or pebble (default pebble)")
 	cmd.Flags().StringVar(&suiteText, "crypto-suite", "", "expected source and destination cryptographic suite: INTL_V1 or CN_SM_V1 (required)")
 	cmd.Flags().BoolVar(&overwrite, "overwrite", false, "overwrite existing entries instead of skipping")
-	return cmd
+	return requirePermission(cmd, adminauth.PermissionSystemOperate)
 }
 
 func requireMatchingMigrationSuites(src, dst proofstore.Store) (cryptosuite.ID, error) {

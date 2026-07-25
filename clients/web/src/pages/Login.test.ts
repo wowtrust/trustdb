@@ -29,7 +29,7 @@ describe('Login page', () => {
     await inputs[1].setValue('secret')
     await wrapper.find('form').trigger('submit.prevent')
 
-    expect(login).toHaveBeenCalledWith('ops', 'secret')
+		expect(login).toHaveBeenCalledWith('ops', 'secret', '', '')
     expect(replace).toHaveBeenCalledWith('/metrics')
   })
 

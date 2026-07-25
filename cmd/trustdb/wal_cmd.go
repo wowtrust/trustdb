@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+	"github.com/wowtrust/trustdb/internal/adminauth"
 	"github.com/wowtrust/trustdb/internal/cborx"
 	"github.com/wowtrust/trustdb/internal/claim"
 	"github.com/wowtrust/trustdb/internal/cryptosuite"
@@ -74,7 +75,7 @@ func newWALInspectCommand(rt *runtimeConfig) *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&walPath, "wal", "", "wal path (file or directory)")
-	return cmd
+	return requirePermission(cmd, adminauth.PermissionSystemRead)
 }
 
 func newWALDumpCommand(rt *runtimeConfig) *cobra.Command {
@@ -141,7 +142,7 @@ func newWALDumpCommand(rt *runtimeConfig) *cobra.Command {
 	}
 	cmd.Flags().StringVar(&walPath, "wal", "", "wal path (file or directory)")
 	cmd.Flags().IntVar(&limit, "limit", 0, "maximum records to dump, 0 means all")
-	return cmd
+	return requirePermission(cmd, adminauth.PermissionAuditRead)
 }
 
 func newWALRepairCommand(rt *runtimeConfig) *cobra.Command {
@@ -180,7 +181,7 @@ func newWALRepairCommand(rt *runtimeConfig) *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&walPath, "wal", "", "wal path (file or directory)")
-	return cmd
+	return requirePermission(cmd, adminauth.PermissionSystemOperate)
 }
 
 func walOptionsForCLI(cmd *cobra.Command, rt *runtimeConfig, walPath string) (wal.Options, error) {

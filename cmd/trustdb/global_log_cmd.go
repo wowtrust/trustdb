@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/spf13/cobra"
+	"github.com/wowtrust/trustdb/internal/adminauth"
 	"github.com/wowtrust/trustdb/internal/globallog"
 	"github.com/wowtrust/trustdb/internal/proofstore"
 	"github.com/wowtrust/trustdb/internal/trustcrypto"
@@ -229,7 +230,7 @@ func newGlobalLogCompactCommand(rt *runtimeConfig) *cobra.Command {
 	}
 	addProofStoreFlags(cmd, &metastoreKind, &metastorePath, &proofDir)
 	cmd.Flags().Uint64Var(&tileSize, "tile-size", 0, "history tile size (default from config)")
-	return cmd
+	return requirePermission(cmd, adminauth.PermissionSystemOperate)
 }
 
 func newGlobalLogReaderForStore(store proofstore.Store) (*globallog.Service, error) {

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/hex"
 	"fmt"
 	"net"
 	"net/url"
@@ -213,17 +214,21 @@ keys:
   registry_private: ""
   registry_public: ""
 
-# Admin Web (disabled by default). When enabled, set username, bcrypt
-# password_hash, session_secret, and web_dir to the built SPA assets.
+# Administrative authorization (disabled by default). Bootstrap a versioned
+# RBAC policy with trustdb admin policy bootstrap; the same policy protects
+# the web console and, when cli_enforce is true, privileged local commands.
 # admin:
 #   enabled: false
 #   base_path: "/admin"
-#   username: ""
-#   password_hash: ""
+#   policy_path: ".trustdb/admin-policy.json"
 #   session_secret: ""
 #   web_dir: ""
 #   cookie_secure: false
 #   session_ttl: "8h"
+#   login_max_failures: 5
+#   login_lockout: "15m"
+#   cli_enforce: false
+#   oidc_gateway_spki_sha256: []
 `
 
 type Config struct {
@@ -256,14 +261,17 @@ type TLCP struct {
 
 // Admin configures the optional operator web console mounted by trustdb serve.
 type Admin struct {
-	Enabled       bool   `mapstructure:"enabled" json:"enabled"`
-	BasePath      string `mapstructure:"base_path" json:"base_path"`
-	Username      string `mapstructure:"username" json:"username"`
-	PasswordHash  string `mapstructure:"password_hash" json:"password_hash"`
-	SessionSecret string `mapstructure:"session_secret" json:"session_secret"`
-	WebDir        string `mapstructure:"web_dir" json:"web_dir"`
-	CookieSecure  bool   `mapstructure:"cookie_secure" json:"cookie_secure"`
-	SessionTTL    string `mapstructure:"session_ttl" json:"session_ttl"`
+	Enabled          bool     `mapstructure:"enabled" json:"enabled"`
+	BasePath         string   `mapstructure:"base_path" json:"base_path"`
+	PolicyPath       string   `mapstructure:"policy_path" json:"policy_path"`
+	SessionSecret    string   `mapstructure:"session_secret" json:"session_secret"`
+	WebDir           string   `mapstructure:"web_dir" json:"web_dir"`
+	CookieSecure     bool     `mapstructure:"cookie_secure" json:"cookie_secure"`
+	SessionTTL       string   `mapstructure:"session_ttl" json:"session_ttl"`
+	LoginMaxFailures int      `mapstructure:"login_max_failures" json:"login_max_failures"`
+	LoginLockout     string   `mapstructure:"login_lockout" json:"login_lockout"`
+	CLIEnforce       bool     `mapstructure:"cli_enforce" json:"cli_enforce"`
+	OIDCGatewayPins  []string `mapstructure:"oidc_gateway_spki_sha256" json:"oidc_gateway_spki_sha256"`
 }
 
 type Paths struct {
@@ -623,8 +631,11 @@ func Default() Config {
 			TiKVNamespace:    "default",
 		},
 		Admin: Admin{
-			BasePath:   "/admin",
-			SessionTTL: "8h",
+			BasePath:         "/admin",
+			PolicyPath:       ".trustdb/admin-policy.json",
+			SessionTTL:       "8h",
+			LoginMaxFailures: 5,
+			LoginLockout:     "15m",
 		},
 		Log: Log{
 			Level:  "warn",
@@ -653,7 +664,6 @@ func (c Config) Redacted() Config {
 	c.Keys.RegistryPublic = redact(c.Keys.RegistryPublic)
 	c.NATS.Password = redact(c.NATS.Password)
 	c.NATS.Token = redact(c.NATS.Token)
-	c.Admin.PasswordHash = redact(c.Admin.PasswordHash)
 	c.Admin.SessionSecret = redact(c.Admin.SessionSecret)
 	c.Server.Transport.KeyFile = redact(c.Server.Transport.KeyFile)
 	c.Crypto.SignerPlugins.Remote.Args = redactArgs(c.Crypto.SignerPlugins.Remote.Args)
@@ -1188,18 +1198,14 @@ func validateNATSAuth(n NATS) error {
 }
 
 func validateAdmin(a Admin) error {
-	if !a.Enabled {
+	if !a.Enabled && !a.CLIEnforce {
 		return nil
 	}
-	if strings.TrimSpace(a.Username) == "" {
-		return fmt.Errorf("admin.username is required when admin.enabled is true")
+	if strings.TrimSpace(a.PolicyPath) == "" {
+		return fmt.Errorf("admin.policy_path is required when administrative authorization is enabled")
 	}
-	hash := strings.TrimSpace(a.PasswordHash)
-	if hash == "" {
-		return fmt.Errorf("admin.password_hash is required when admin.enabled is true")
-	}
-	if !strings.HasPrefix(hash, "$2a$") && !strings.HasPrefix(hash, "$2b$") && !strings.HasPrefix(hash, "$2y$") {
-		return fmt.Errorf("admin.password_hash must be a bcrypt hash (use `trustdb admin hash-password`)")
+	if !a.Enabled {
+		return nil
 	}
 	secret := strings.TrimSpace(a.SessionSecret)
 	if len(secret) < 32 {
@@ -1215,6 +1221,23 @@ func validateAdmin(a Admin) error {
 	if a.SessionTTL != "" {
 		if err := validatePositiveDuration("admin.session_ttl", a.SessionTTL); err != nil {
 			return err
+		}
+	}
+	if a.LoginMaxFailures < 1 || a.LoginMaxFailures > 100 {
+		return fmt.Errorf("admin.login_max_failures must be between 1 and 100")
+	}
+	if err := validatePositiveDuration("admin.login_lockout", a.LoginLockout); err != nil {
+		return err
+	}
+	for index, pin := range a.OIDCGatewayPins {
+		if len(pin) != 64 || strings.ToLower(pin) != pin {
+			return fmt.Errorf("admin.oidc_gateway_spki_sha256[%d] must be lowercase SHA-256 hex", index)
+		}
+		if _, err := hex.DecodeString(pin); err != nil {
+			return fmt.Errorf("admin.oidc_gateway_spki_sha256[%d] must be lowercase SHA-256 hex", index)
+		}
+		if index > 0 && a.OIDCGatewayPins[index-1] >= pin {
+			return fmt.Errorf("admin.oidc_gateway_spki_sha256 must be sorted and unique")
 		}
 	}
 	bp := strings.TrimSpace(a.BasePath)

@@ -117,12 +117,15 @@ log:
 admin:
   enabled: false
   base_path: "/admin"
-  username: ""
-  password_hash: ""
+  policy_path: "/var/lib/trustdb/admin-policy.json"
   session_secret: ""
   web_dir: "/opt/trustdb/admin"
   cookie_secure: true
   session_ttl: "12h"
+  login_max_failures: 5
+  login_lockout: "15m"
+  cli_enforce: false
+  oidc_gateway_spki_sha256: []
 
 keys:
   client_private: "/var/lib/trustdb/keys/client.key"

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"github.com/wowtrust/trustdb/internal/adminauth"
 	"github.com/wowtrust/trustdb/internal/anchor"
 	"github.com/wowtrust/trustdb/internal/model"
 	"github.com/wowtrust/trustdb/internal/proofstore"
@@ -80,7 +81,7 @@ func newAnchorExportCommand(rt *runtimeConfig) *cobra.Command {
 	cmd.Flags().Uint64Var(&treeSize, "tree-size", 0, "STH tree size to export (required)")
 	cmd.Flags().StringVar(&outPath, "out", "", "write anchor result to file (default format: cbor when --out is set, json otherwise)")
 	cmd.Flags().StringVar(&format, "format", "", "output format: json or cbor")
-	return cmd
+	return requirePermission(cmd, adminauth.PermissionAnchorRead)
 }
 
 // anchorUpgradeReport is the JSON document emitted by
@@ -206,7 +207,7 @@ are silently skipped, previously-failed calendars are never re-submitted.
 	cmd.Flags().StringVar(&userAgent, "user-agent", "", "override the HTTP User-Agent sent to calendars (empty = default)")
 	cmd.Flags().StringVar(&timeoutText, "timeout", "", "per-calendar GET timeout (default 30s)")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "query calendars but do not persist upgraded bytes")
-	return cmd
+	return requirePermission(cmd, adminauth.PermissionAnchorManage)
 }
 
 // findSTHAnchorResultBySink seeks directly below treeSize+1, then walks only

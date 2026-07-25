@@ -14,6 +14,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/wowtrust/trustdb/internal/adminauth"
 	"github.com/wowtrust/trustdb/internal/anchor/fiscobcos"
 	"github.com/wowtrust/trustdb/internal/sproof"
 	"github.com/wowtrust/trustdb/internal/trusterr"
@@ -219,7 +220,7 @@ func newFISCOBCOSTrustConfigAdvanceCommand(rt *runtimeConfig) *cobra.Command {
 	cmd.Flags().StringVar(&evidencePath, "evidence", "", "complete offline .sproof file carrying the authenticated transition chain")
 	cmd.Flags().StringVar(&outputPath, "out", "", "canonical TrustConfig CBOR path; must name the same file as --input")
 	cmd.Flags().StringVar(&expectedDigestHex, "expect-current-digest", "", "required 32-byte current TrustConfig digest for rollback/concurrency protection")
-	return cmd
+	return requirePermission(cmd, adminauth.PermissionTrustManage)
 }
 
 func pathsNameSameFile(left, right string) (bool, error) {
@@ -282,7 +283,7 @@ func newFISCOBCOSTrustConfigCreateCommand(rt *runtimeConfig) *cobra.Command {
 	}
 	cmd.Flags().StringVar(&inputPath, "input", "", "JSON manifest with hex-encoded hashes, addresses, and validator public keys")
 	cmd.Flags().StringVar(&outputPath, "out", "", "canonical CBOR output path (written atomically with mode 0600)")
-	return cmd
+	return requirePermission(cmd, adminauth.PermissionTrustManage)
 }
 
 func newFISCOBCOSTrustConfigInspectCommand(rt *runtimeConfig) *cobra.Command {
@@ -307,7 +308,7 @@ func newFISCOBCOSTrustConfigInspectCommand(rt *runtimeConfig) *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&inputPath, "input", "", "absolute path to canonical FISCO BCOS TrustConfig CBOR")
-	return cmd
+	return requirePermission(cmd, adminauth.PermissionTrustRead)
 }
 
 func decodeStrictJSON(data []byte, target any) error {

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"github.com/wowtrust/trustdb/internal/adminauth"
 	"github.com/wowtrust/trustdb/internal/cryptosuite"
 	"github.com/wowtrust/trustdb/internal/keydescriptor"
 	"github.com/wowtrust/trustdb/internal/keyenvelope"
@@ -148,7 +149,7 @@ func newKeygenCommand(rt *runtimeConfig, hidden bool) *cobra.Command {
 	cmd.Flags().StringVar(&keyID, "key-id", "", "descriptor key ID (defaults to <prefix>-key)")
 	cmd.Flags().StringVar(&suiteID, "suite", string(cryptosuite.INTLV1), "cryptographic suite (INTL_V1 or CN_SM_V1)")
 	cmd.Flags().StringVar(&protection, "protection", keydescriptor.SoftwareProtectionSM4Envelope, "software key protection (sm4-envelope-v1 or plaintext-dev-v1)")
-	return cmd
+	return requirePermission(cmd, adminauth.PermissionKeyManage)
 }
 
 func newKeyInspectCommand(rt *runtimeConfig) *cobra.Command {
@@ -198,7 +199,7 @@ func newKeyInspectCommand(rt *runtimeConfig) *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&keyPath, "key", "", "key file to inspect")
-	return cmd
+	return requirePermission(cmd, adminauth.PermissionKeyRead)
 }
 
 func newKeyRewrapCommand(rt *runtimeConfig) *cobra.Command {
@@ -232,7 +233,7 @@ func newKeyRewrapCommand(rt *runtimeConfig) *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&descriptorPath, "descriptor", "", "encrypted software signer descriptor")
-	return cmd
+	return requirePermission(cmd, adminauth.PermissionKeyManage)
 }
 
 func descriptorProtection(descriptor keydescriptor.Descriptor) string {
@@ -329,7 +330,7 @@ func newKeyRegisterCommand(rt *runtimeConfig, hidden bool) *cobra.Command {
 	cmd.Flags().Int64Var(&validFromUnix, "valid-from-unix", time.Now().UTC().Unix(), "valid from unix seconds")
 	cmd.Flags().Int64Var(&validUntilUnix, "valid-until-unix", 0, "valid until unix seconds, 0 means no expiry")
 	addStatusNotificationRouteFlags(cmd, &statusWebhookURL, &statusNATSSubject, &statusNATSQueueGroup)
-	return cmd
+	return requirePermission(cmd, adminauth.PermissionKeyManage)
 }
 
 func newKeyRevokeCommand(rt *runtimeConfig, hidden bool) *cobra.Command {
@@ -399,7 +400,7 @@ func newKeyRevokeCommand(rt *runtimeConfig, hidden bool) *cobra.Command {
 	cmd.Flags().StringVar(&registryPrivate, "registry-private-key", "", "registry signer descriptor")
 	cmd.Flags().StringVar(&reason, "reason", "", "revocation reason")
 	cmd.Flags().Int64Var(&revokedAtUnix, "revoked-at-unix", time.Now().UTC().Unix(), "revoked at unix seconds")
-	return cmd
+	return requirePermission(cmd, adminauth.PermissionKeyManage)
 }
 
 func newKeyCompromiseCommand(rt *runtimeConfig) *cobra.Command {
@@ -442,7 +443,7 @@ func newKeyCompromiseCommand(rt *runtimeConfig) *cobra.Command {
 	cmd.Flags().StringVar(&registryPrivate, "registry-private-key", "", "registry signer descriptor")
 	cmd.Flags().StringVar(&reason, "reason", "", "compromise reason")
 	cmd.Flags().Int64Var(&compromisedAtUnix, "compromised-at-unix", time.Now().UTC().Unix(), "compromise effective time in unix seconds")
-	return cmd
+	return requirePermission(cmd, adminauth.PermissionKeyManage)
 }
 
 func newKeyRotateCommand(rt *runtimeConfig) *cobra.Command {
@@ -522,7 +523,7 @@ func newKeyRotateCommand(rt *runtimeConfig) *cobra.Command {
 	cmd.Flags().Int64Var(&rotatedAtUnix, "rotated-at-unix", time.Now().UTC().Unix(), "rotation effective time in unix seconds")
 	cmd.Flags().Int64Var(&validUntilUnix, "valid-until-unix", 0, "replacement validity end in unix seconds, 0 means no expiry")
 	addStatusNotificationRouteFlags(cmd, &statusWebhookURL, &statusNATSSubject, &statusNATSQueueGroup)
-	return cmd
+	return requirePermission(cmd, adminauth.PermissionKeyManage)
 }
 
 func addStatusNotificationRouteFlags(cmd *cobra.Command, webhookURL, natsSubject, natsQueueGroup *string) {
@@ -622,7 +623,7 @@ func newKeyListCommand(rt *runtimeConfig, hidden bool) *cobra.Command {
 		},
 	}
 	addRegistryFlags(cmd)
-	return cmd
+	return requirePermission(cmd, adminauth.PermissionKeyRead)
 }
 
 func registryEventView(event model.KeyEvent) (map[string]any, error) {

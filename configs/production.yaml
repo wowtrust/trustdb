@@ -138,3 +138,18 @@ keys:
   server_public: "/etc/trustdb/keys/server.pub"
   registry_private: ""
   registry_public: "/etc/trustdb/keys/registry.pub"
+
+# Privileged local commands fail closed until a separated v1 policy has been
+# bootstrapped. Admin Web remains opt-in and can be enabled independently.
+admin:
+  enabled: false
+  base_path: "/admin"
+  policy_path: "/etc/trustdb/admin-policy.json"
+  session_secret: ""
+  web_dir: "/opt/trustdb/admin"
+  cookie_secure: true
+  session_ttl: "8h"
+  login_max_failures: 5
+  login_lockout: "15m"
+  cli_enforce: true
+  oidc_gateway_spki_sha256: []
