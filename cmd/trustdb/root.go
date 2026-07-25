@@ -16,6 +16,7 @@ import (
 	trustconfig "github.com/wowtrust/trustdb/internal/config"
 	"github.com/wowtrust/trustdb/internal/keydescriptor"
 	"github.com/wowtrust/trustdb/internal/logx"
+	"github.com/wowtrust/trustdb/internal/securityaudit"
 	"gopkg.in/natefinch/lumberjack.v2"
 )
 
@@ -28,6 +29,11 @@ type runtimeConfig struct {
 	logger         zerolog.Logger
 	logCloser      io.Closer
 	signerResolver *keydescriptor.Resolver
+	auditor        *securityaudit.Writer
+	auditActor     string
+	auditRoles     []string
+	auditPolicy    uint64
+	auditRequestID string
 }
 
 func newRootCommand(out, errOut io.Writer) *cobra.Command {
@@ -47,7 +53,15 @@ func newRootCommand(out, errOut io.Writer) *cobra.Command {
 			if err := rt.load(); err != nil {
 				return err
 			}
-			return rt.authorizeCLI(cmd)
+			if err := rt.initAudit(cmd); err != nil {
+				_ = rt.close()
+				return err
+			}
+			if err := rt.authorizeCLI(cmd); err != nil {
+				_ = rt.close()
+				return err
+			}
+			return nil
 		},
 		PersistentPostRunE: func(cmd *cobra.Command, args []string) error {
 			return rt.close()
@@ -84,6 +98,7 @@ func newRootCommand(out, errOut io.Writer) *cobra.Command {
 
 	root.AddCommand(newConfigCommand(rt))
 	root.AddCommand(newAdminCommand(rt))
+	root.AddCommand(newAuditCommand(rt))
 	root.AddCommand(newServeCommand(rt))
 	root.AddCommand(newKeyCommand(rt))
 	root.AddCommand(newKeygenCommand(rt, false))
@@ -104,6 +119,7 @@ func newRootCommand(out, errOut io.Writer) *cobra.Command {
 	root.AddCommand(newVersionCommand(rt))
 	root.AddCommand(newDoctorCommand(rt))
 	root.AddCommand(newCompletionCommand(rt))
+	wrapAuditedCommandRuns(root, rt)
 	return root
 }
 
@@ -487,6 +503,12 @@ func (rt *runtimeConfig) load() error {
 
 func (rt *runtimeConfig) close() error {
 	var errs []error
+	if rt.auditor != nil {
+		if err := rt.auditor.Close(); err != nil {
+			errs = append(errs, err)
+		}
+		rt.auditor = nil
+	}
 	if err := rt.closeSignerResolver(); err != nil {
 		errs = append(errs, err)
 	}

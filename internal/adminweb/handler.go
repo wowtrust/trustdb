@@ -21,6 +21,7 @@ import (
 	"github.com/spf13/viper"
 	"github.com/wowtrust/trustdb/internal/adminauth"
 	trustconfig "github.com/wowtrust/trustdb/internal/config"
+	"github.com/wowtrust/trustdb/internal/securityaudit"
 )
 
 type MFAVerifier interface {
@@ -50,6 +51,7 @@ type Options struct {
 	PolicyStore  *adminauth.FileStore
 	MFAVerifier  MFAVerifier
 	OIDCVerifier OIDCVerifier
+	Auditor      securityaudit.Recorder
 	Now          func() time.Time
 }
 
@@ -81,6 +83,9 @@ func New(opts Options) (http.Handler, error) {
 	}
 	if opts.Auth == nil || opts.PolicyStore == nil {
 		return nil, errors.New("adminweb.Options.Auth and PolicyStore are required")
+	}
+	if opts.EffectiveCfg.Audit.Required && opts.Auditor == nil {
+		return nil, errors.New("adminweb.Options.Auditor is required by audit policy")
 	}
 	if opts.Now == nil {
 		opts.Now = time.Now
@@ -148,8 +153,19 @@ var errRequestBodyTooLarge = errors.New("request body too large")
 
 func (h *handler) postSession(w http.ResponseWriter, r *http.Request) {
 	setNoStore(w)
+	_, r = h.requestID(w, r)
+	auditLogin := func(principal adminauth.Principal, result, reason string) bool {
+		if err := h.recordHTTPAudit(r, principal, "admin.login", result, map[string]string{"auth_method": "local-password", "reason": reason}); err != nil {
+			writeAuditUnavailable(w, func(err error) { h.opts.Logger.Error().Err(err).Msg("security audit login write failed") }, err)
+			return false
+		}
+		return true
+	}
 	var body loginBody
 	if err := decodeJSONBodyLimit(r.Body, &body, maxLoginBodyBytes); err != nil {
+		if !auditLogin(adminauth.Principal{}, "failure", "invalid-request") {
+			return
+		}
 		if errors.Is(err, errRequestBodyTooLarge) {
 			writeJSON(w, http.StatusRequestEntityTooLarge, map[string]any{"ok": false, "error": "request too large"})
 			return
@@ -160,18 +176,27 @@ func (h *handler) postSession(w http.ResponseWriter, r *http.Request) {
 	now := h.opts.Now()
 	username := strings.TrimSpace(body.Username)
 	if !h.guard.Allow(username, now) {
+		if !auditLogin(adminauth.Principal{AccountID: username}, "denied", "locked") {
+			return
+		}
 		writeJSON(w, http.StatusTooManyRequests, map[string]any{"ok": false, "error": "login temporarily locked"})
 		return
 	}
 	principal, err := h.opts.Auth.AuthenticateLocal(username, body.Password, now)
 	if err != nil {
 		h.guard.Failure(username, now)
+		if !auditLogin(adminauth.Principal{AccountID: username}, "denied", "invalid-credentials") {
+			return
+		}
 		writeJSON(w, http.StatusUnauthorized, map[string]any{"ok": false, "error": "unauthorized"})
 		return
 	}
 	if principal.MFARequired {
 		if h.opts.MFAVerifier == nil || h.opts.MFAVerifier.VerifyMFA(r.Context(), principal, strings.TrimSpace(body.MFACode)) != nil {
 			h.guard.Failure(username, now)
+			if !auditLogin(principal, "denied", "mfa-failed") {
+				return
+			}
 			writeJSON(w, http.StatusUnauthorized, map[string]any{"ok": false, "error": "multi-factor authentication required"})
 			return
 		}
@@ -179,13 +204,20 @@ func (h *handler) postSession(w http.ResponseWriter, r *http.Request) {
 	reason := strings.TrimSpace(body.EmergencyReason)
 	if principal.Emergency && !validEmergencyReason(reason) {
 		h.guard.Failure(username, now)
+		if !auditLogin(principal, "denied", "emergency-reason-invalid") {
+			return
+		}
 		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "emergency access requires a 12..512 character reason"})
 		return
 	}
 	h.guard.Success(username)
 	ttl := sessionTTL(h.opts.Admin.SessionTTL)
+	if !auditLogin(principal, "success", "authenticated") {
+		return
+	}
 	token, err := issueSessionTokenAt([]byte(h.opts.Admin.SessionSecret), principal, reason, ttl, now)
 	if err != nil {
+		_ = h.recordHTTPAudit(r, principal, "admin.session.issue", "failure", map[string]string{"auth_method": string(principal.AuthMethod)})
 		h.opts.Logger.Error().Err(err).Msg("admin session issue failed")
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": "internal"})
 		return
@@ -197,6 +229,12 @@ func (h *handler) postSession(w http.ResponseWriter, r *http.Request) {
 
 func (h *handler) deleteSession(w http.ResponseWriter, r *http.Request) {
 	setNoStore(w)
+	_, r = h.requestID(w, r)
+	principal, _, _ := h.authenticatedPrincipal(r)
+	if err := h.recordHTTPAudit(r, principal, "admin.logout", "success", nil); err != nil {
+		writeAuditUnavailable(w, func(err error) { h.opts.Logger.Error().Err(err).Msg("security audit logout write failed") }, err)
+		return
+	}
 	w.Header().Set("Set-Cookie", clearSessionCookie(h.opts.Admin.BasePath, h.opts.Admin.CookieSecure))
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
@@ -248,6 +286,7 @@ func (h *handler) withExclusivePermission(permission adminauth.Permission, next 
 func (h *handler) withPermissionLock(permission adminauth.Permission, next http.Handler, exclusive bool) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		setNoStore(w)
+		_, r = h.requestID(w, r)
 		if exclusive {
 			h.policyMu.Lock()
 			defer h.policyMu.Unlock()
@@ -257,24 +296,41 @@ func (h *handler) withPermissionLock(permission adminauth.Permission, next http.
 		}
 		principal, emergencyReason, err := h.authenticatedPrincipal(r)
 		if err != nil {
+			if auditErr := h.recordHTTPAudit(r, adminauth.Principal{}, "admin.authentication", "denied", map[string]string{"permission": string(permission)}); auditErr != nil {
+				writeAuditUnavailable(w, func(err error) { h.opts.Logger.Error().Err(err).Msg("security audit write failed") }, auditErr)
+				return
+			}
 			writeJSON(w, http.StatusUnauthorized, map[string]any{"ok": false, "error": "unauthorized"})
 			return
 		}
 		authorized, err := h.opts.Auth.Authorize(principal, permission, h.opts.Now())
 		if err != nil {
+			if auditErr := h.recordHTTPAudit(r, principal, "admin.authorization", "denied", statusContext(http.StatusForbidden, permission, principal, emergencyReason)); auditErr != nil {
+				writeAuditUnavailable(w, func(err error) { h.opts.Logger.Error().Err(err).Msg("security audit write failed") }, auditErr)
+				return
+			}
 			h.opts.Logger.Warn().Str("actor", principal.AccountID).Str("permission", string(permission)).Msg("admin authorization denied")
 			writeJSON(w, http.StatusForbidden, map[string]any{"ok": false, "error": "forbidden"})
 			return
 		}
 		principal = authorized
+		if auditErr := h.recordHTTPAudit(r, principal, "admin.authorization", "authorized", statusContext(http.StatusOK, permission, principal, emergencyReason)); auditErr != nil {
+			writeAuditUnavailable(w, func(err error) { h.opts.Logger.Error().Err(err).Msg("security audit write failed") }, auditErr)
+			return
+		}
 		event := h.opts.Logger.Info().Str("actor", principal.AccountID).Str("permission", string(permission)).Str("method", r.Method).Str("path", r.URL.Path).Str("auth_method", string(principal.AuthMethod)).Bool("emergency", principal.Emergency)
 		if principal.Emergency {
-			event = event.Str("emergency_reason", emergencyReason)
+			event = event.Str("emergency_reason_digest", emergencyReasonDigest(emergencyReason))
 		}
 		event.Msg("admin request authorized")
 		ctx := context.WithValue(r.Context(), actorContextKey{}, principal)
 		ctx = context.WithValue(ctx, emergencyReasonContextKey{}, emergencyReason)
-		next.ServeHTTP(w, r.WithContext(ctx))
+		r = r.WithContext(ctx)
+		captured := &auditResponseWriter{ResponseWriter: w}
+		next.ServeHTTP(captured, r)
+		if auditErr := h.recordHTTPAudit(r.WithContext(context.WithoutCancel(r.Context())), principal, "admin.request", auditResultForStatus(captured.Status()), statusContext(captured.Status(), permission, principal, emergencyReason)); auditErr != nil {
+			h.opts.Logger.Error().Err(auditErr).Msg("security audit outcome write failed")
+		}
 	})
 }
 
@@ -367,6 +423,10 @@ func (h *handler) putPolicy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.opts.Logger.Info().Str("actor", actor.AccountID).Uint64("policy_version", next.Version).Str("policy_digest", digest).Msg("admin policy replaced")
+	if err := h.recordHTTPAudit(r, actor, "security.policy.update", "success", map[string]string{"policy_digest": digest, "new_policy_version": fmt.Sprint(next.Version)}); err != nil {
+		writeAuditUnavailable(w, func(err error) { h.opts.Logger.Error().Err(err).Msg("security audit policy result write failed") }, err)
+		return
+	}
 	w.Header().Set("ETag", `"`+digest+`"`)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "version": next.Version, "digest": digest})
 }
@@ -422,14 +482,14 @@ func (h *handler) putConfig(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": fmt.Sprintf("read existing config: %v", err)})
 		return
 	}
-	adminChanged, err := adminConfigChanged(previous, v2)
+	protectedChanged, err := protectedConfigChanged(previous, v2)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": fmt.Sprintf("read existing admin config: %v", err)})
 		return
 	}
-	if adminChanged {
+	if protectedChanged {
 		writeJSON(w, http.StatusForbidden, map[string]any{
-			"ok": false, "error": "admin authorization settings cannot be changed through the generic config endpoint",
+			"ok": false, "error": "admin authorization and security audit settings cannot be changed through the generic config endpoint",
 		})
 		return
 	}
@@ -452,11 +512,15 @@ func (h *handler) putConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	actor := actorFromContext(r.Context())
 	h.opts.Logger.Info().Str("actor", actor.AccountID).Str("path", h.opts.ConfigPath).Str("backup", backup).Msg("admin wrote config file")
+	if err := h.recordHTTPAudit(r, actor, "system.configuration.update", "success", map[string]string{"config_path": h.opts.ConfigPath, "backup_path": backup}); err != nil {
+		writeAuditUnavailable(w, func(err error) { h.opts.Logger.Error().Err(err).Msg("security audit config result write failed") }, err)
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "backup": backup})
 }
 
-func adminConfigChanged(previous []byte, next *viper.Viper) (bool, error) {
-	var currentAdmin any
+func protectedConfigChanged(previous []byte, next *viper.Viper) (bool, error) {
+	var currentAdmin, currentAudit any
 	if len(previous) > 0 {
 		current := viper.New()
 		current.SetConfigType("yaml")
@@ -464,8 +528,24 @@ func adminConfigChanged(previous []byte, next *viper.Viper) (bool, error) {
 			return false, err
 		}
 		currentAdmin = current.AllSettings()["admin"]
+		currentAudit = current.AllSettings()["audit"]
 	}
-	return !reflect.DeepEqual(currentAdmin, next.AllSettings()["admin"]), nil
+	nextSettings := next.AllSettings()
+	auditChanged := !reflect.DeepEqual(currentAudit, nextSettings["audit"])
+	if currentAudit == nil && !auditSectionEnabled(nextSettings["audit"]) {
+		auditChanged = false
+	}
+	return !reflect.DeepEqual(currentAdmin, nextSettings["admin"]) || auditChanged, nil
+}
+
+func auditSectionEnabled(value any) bool {
+	section, ok := value.(map[string]any)
+	if !ok {
+		return false
+	}
+	enabled, _ := section["enabled"].(bool)
+	required, _ := section["required"].(bool)
+	return enabled || required
 }
 
 func readConfigFile(path string) ([]byte, error) {

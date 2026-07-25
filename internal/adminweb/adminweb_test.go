@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -19,11 +20,54 @@ import (
 	"github.com/wowtrust/trustdb/internal/adminauth"
 	trustconfig "github.com/wowtrust/trustdb/internal/config"
 	"github.com/wowtrust/trustdb/internal/httpapi"
+	"github.com/wowtrust/trustdb/internal/securityaudit"
 	"golang.org/x/crypto/bcrypt"
 )
 
 func testLogger() zerolog.Logger {
 	return zerolog.New(io.Discard).Level(zerolog.Disabled)
+}
+
+type recordingAuditor struct {
+	mu     sync.Mutex
+	drafts []securityaudit.Draft
+}
+
+func (r *recordingAuditor) Record(_ context.Context, draft securityaudit.Draft) (securityaudit.SignedEvent, error) {
+	r.mu.Lock()
+	r.drafts = append(r.drafts, draft)
+	r.mu.Unlock()
+	return securityaudit.SignedEvent{}, nil
+}
+
+func (r *recordingAuditor) snapshot() []securityaudit.Draft {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]securityaudit.Draft(nil), r.drafts...)
+}
+
+func (r *recordingAuditor) actions() []string {
+	drafts := r.snapshot()
+	actions := make([]string, len(drafts))
+	for index, draft := range drafts {
+		actions[index] = draft.Action + ":" + draft.Result
+	}
+	return actions
+}
+
+type failingAuditor struct{}
+
+func (failingAuditor) Record(context.Context, securityaudit.Draft) (securityaudit.SignedEvent, error) {
+	return securityaudit.SignedEvent{}, errors.New("audit unavailable")
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }
 
 func testAdminAuthorization(t *testing.T, dir, username, password string) (*adminauth.Manager, *adminauth.FileStore) {
@@ -100,6 +144,96 @@ func TestNewRequiresIndexHTML(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected error without index.html")
+	}
+}
+
+func TestNewRequiresAuditorWhenPolicyIsRequired(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "index.html"), []byte("<!doctype html>"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	auth, store := testAdminAuthorization(t, dir, "system", "secret")
+	effective := trustconfig.Default()
+	effective.Audit.Required = true
+	_, err := New(Options{
+		Admin: trustconfig.Admin{Enabled: true, BasePath: "/admin", PolicyPath: store.Path(), SessionSecret: strings.Repeat("x", 32), WebDir: dir, SessionTTL: "1h", LoginMaxFailures: 5, LoginLockout: "15m"},
+		Viper: viper.New(), EffectiveCfg: effective, Public: http.NotFoundHandler(), Metrics: http.NotFoundHandler(), Logger: testLogger(), Auth: auth, PolicyStore: store,
+	})
+	if err == nil || !strings.Contains(err.Error(), "Auditor") {
+		t.Fatalf("New error=%v", err)
+	}
+}
+
+func TestAdminAuthenticationAndAuthorizationAreAudited(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "index.html"), []byte("<!doctype html>"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	auth, store := testAdminAuthorization(t, dir, "system", "secret")
+	recorder := &recordingAuditor{}
+	admin, err := New(Options{
+		Admin: trustconfig.Admin{Enabled: true, BasePath: "/admin", PolicyPath: store.Path(), SessionSecret: strings.Repeat("x", 32), WebDir: dir, SessionTTL: "1h", LoginMaxFailures: 5, LoginLockout: "15m"},
+		Viper: viper.New(), EffectiveCfg: trustconfig.Default(), Public: http.NotFoundHandler(), Metrics: http.NotFoundHandler(), Logger: testLogger(), Auth: auth, PolicyStore: store, Auditor: recorder,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := Mount("/admin", http.NotFoundHandler(), admin)
+	bad := httptest.NewRequest(http.MethodPost, "/admin/api/session", strings.NewReader(`{"username":"system","password":"wrong"}`))
+	bad.RemoteAddr = "192.0.2.1:1234"
+	badResult := httptest.NewRecorder()
+	handler.ServeHTTP(badResult, bad)
+	if badResult.Code != http.StatusUnauthorized {
+		t.Fatalf("bad login status=%d", badResult.Code)
+	}
+	good := httptest.NewRequest(http.MethodPost, "/admin/api/session", strings.NewReader(`{"username":"system","password":"secret"}`))
+	good.RemoteAddr = "192.0.2.1:1234"
+	goodResult := httptest.NewRecorder()
+	handler.ServeHTTP(goodResult, good)
+	if goodResult.Code != http.StatusOK {
+		t.Fatalf("good login status=%d body=%s", goodResult.Code, goodResult.Body.String())
+	}
+	request := httptest.NewRequest(http.MethodGet, "/admin/api/config", nil)
+	for _, cookie := range goodResult.Result().Cookies() {
+		request.AddCookie(cookie)
+	}
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("config status=%d body=%s", response.Code, response.Body.String())
+	}
+	actions := recorder.actions()
+	for _, want := range []string{"admin.login:denied", "admin.login:success", "admin.authorization:authorized", "admin.request:success"} {
+		if !containsString(actions, want) {
+			t.Fatalf("audit actions=%v missing %s", actions, want)
+		}
+	}
+	for _, draft := range recorder.snapshot() {
+		if draft.Context["source_hash"] == "192.0.2.1:1234" {
+			t.Fatal("raw remote address leaked into audit context")
+		}
+	}
+}
+
+func TestAdminFailsClosedWhenAuditWriteFails(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "index.html"), []byte("<!doctype html>"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	auth, store := testAdminAuthorization(t, dir, "system", "secret")
+	admin, err := New(Options{
+		Admin: trustconfig.Admin{Enabled: true, BasePath: "/admin", PolicyPath: store.Path(), SessionSecret: strings.Repeat("x", 32), WebDir: dir, SessionTTL: "1h", LoginMaxFailures: 5, LoginLockout: "15m"},
+		Viper: viper.New(), EffectiveCfg: trustconfig.Default(), Public: http.NotFoundHandler(), Metrics: http.NotFoundHandler(), Logger: testLogger(), Auth: auth, PolicyStore: store,
+		Auditor: failingAuditor{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPost, "/api/session", strings.NewReader(`{"username":"system","password":"secret"}`))
+	response := httptest.NewRecorder()
+	admin.ServeHTTP(response, request)
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
 	}
 }
 
@@ -435,10 +569,11 @@ func TestLocalMFAAndEmergencyReason(t *testing.T) {
 		t.Fatal(err)
 	}
 	metricsH, _ := httpapi.MetricsHandler()
+	auditor := &recordingAuditor{}
 	admin, err := New(Options{
 		Admin: trustconfig.Admin{Enabled: true, PolicyPath: store.Path(), SessionSecret: strings.Repeat("m", 32), WebDir: dir, SessionTTL: "1h", LoginMaxFailures: 5, LoginLockout: "15m"},
 		Viper: viper.New(), EffectiveCfg: trustconfig.Default(), Public: http.NotFoundHandler(), Metrics: metricsH,
-		Logger: testLogger(), Auth: auth, PolicyStore: store, MFAVerifier: testMFAVerifier{},
+		Logger: testLogger(), Auth: auth, PolicyStore: store, MFAVerifier: testMFAVerifier{}, Auditor: auditor,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -464,6 +599,13 @@ func TestLocalMFAAndEmergencyReason(t *testing.T) {
 	}
 	if got := post(`{"username":"breakglass","password":"secret","emergency_reason":"restore access during incident 2026-07-25"}`); got != http.StatusOK {
 		t.Fatalf("emergency login with reason status=%d", got)
+	}
+	for _, draft := range auditor.snapshot() {
+		for _, value := range draft.Context {
+			if strings.Contains(value, "restore access during incident") {
+				t.Fatal("raw emergency reason leaked into audit context")
+			}
+		}
 	}
 }
 
@@ -542,7 +684,7 @@ func TestPutConfigRejectsOversizedExistingFile(t *testing.T) {
 	}
 }
 
-func TestPutConfigAllowsUnchangedAdminBlockAndRejectsMutation(t *testing.T) {
+func TestPutConfigAllowsUnchangedProtectedBlocksAndRejectsMutation(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
@@ -569,6 +711,14 @@ admin:
 	h.putConfig(recorder, httptest.NewRequest(http.MethodPut, "/api/config", strings.NewReader(changed)))
 	if recorder.Code != http.StatusForbidden {
 		t.Fatalf("changed admin block status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+
+	changed = strings.Replace(current, "audit:\n  enabled: false", "audit:\n  enabled: true", 1)
+	changed = strings.Replace(changed, `  signing_key: ""`, `  signing_key: "/etc/trustdb/keys/audit.tdkey"`, 1)
+	recorder = httptest.NewRecorder()
+	h.putConfig(recorder, httptest.NewRequest(http.MethodPut, "/api/config", strings.NewReader(changed)))
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("changed audit block status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
 }
 

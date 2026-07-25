@@ -86,7 +86,7 @@ func newAdminPolicyBootstrapCommand(rt *runtimeConfig) *cobra.Command {
 	command.Flags().StringVar(&systemUsername, "system-username", "system-admin", "system administrator login name")
 	command.Flags().StringVar(&securityUsername, "security-username", "security-admin", "security administrator login name")
 	command.Flags().StringVar(&auditUsername, "audit-username", "audit-admin", "audit administrator login name")
-	return command
+	return requireAuditAction(command, "security.policy.bootstrap")
 }
 
 func bootstrapPassword(role string) (string, error) {
@@ -186,7 +186,7 @@ func newAdminPolicyRecoverCommand(rt *runtimeConfig) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			rt.logger.Warn().Str("actor", actor).Str("emergency_reason", reason).Str("policy_path", store.Path()).Uint64("policy_version", next.Version).Str("policy_digest", digest).Msg("administrative policy recovered offline")
+			rt.logger.Warn().Str("actor", actor).Str("emergency_reason_digest", auditReasonDigest(reason)).Str("policy_path", store.Path()).Uint64("policy_version", next.Version).Str("policy_digest", digest).Msg("administrative policy recovered offline")
 			return rt.writeJSON(map[string]any{"recovered": true, "actor": actor, "policy_path": store.Path(), "version": next.Version, "digest": digest})
 		},
 	}
@@ -194,7 +194,7 @@ func newAdminPolicyRecoverCommand(rt *runtimeConfig) *cobra.Command {
 	command.Flags().StringVar(&replacement, "replacement", "", "validated replacement policy JSON")
 	command.Flags().StringVar(&expectedDigest, "expect-current-digest", "", "required current policy digest")
 	command.Flags().BoolVar(&confirmed, "offline-recovery", false, "confirm use of the break-glass offline recovery path")
-	return command
+	return requireAuditAction(command, "security.policy.recover")
 }
 
 func localOSActor() (string, error) {
