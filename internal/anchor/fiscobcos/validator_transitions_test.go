@@ -79,6 +79,14 @@ func TestVerifyAuthenticatedPBFTFinalityRejectsTransitionTampering(t *testing.T)
 			match: "requires 5",
 		},
 		{
+			name: "new header sealer outside committee",
+			mutate: func(proof *AnchorProof, _ *TrustConfig) {
+				proof.Block.Fields.Sealer = int64(len(proof.Block.Fields.SealerList))
+				rebuildFinalityBlock(t, proof, allKeys)
+			},
+			match: "sealer index is outside",
+		},
+		{
 			name: "successful receipt returns nonzero",
 			mutate: func(proof *AnchorProof, config *TrustConfig) {
 				proof.ValidatorHistory[0].Receipts[0].Fields.Output[31] = 1

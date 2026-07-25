@@ -174,6 +174,9 @@ func verifyValidatorHistory(config TrustConfig, proof AnchorProof) (validatorSta
 		if err != nil {
 			return validatorState{}, fmt.Errorf("%w: transition from block %d: %v", ErrInvalidProof, current.Block.BlockNumber, err)
 		}
+		if err := verifyValidatorHeader(state, nextBlock.Fields); err != nil {
+			return validatorState{}, err
+		}
 		if err := verifyFinalityAgainstState(canonical, state, nextBlock, nextFinality); err != nil {
 			return validatorState{}, err
 		}
