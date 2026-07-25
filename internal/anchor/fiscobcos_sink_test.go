@@ -417,8 +417,7 @@ func TestFISCOBCOSValidatorHistoryCollectionFetchesContentsOnlyForChanges(t *tes
 				t.Fatal(err)
 			}
 			source := fiscobcos.ValidatorHistoryBlock{
-				Block:    fiscobcos.BlockEvidence{Fields: sourceFields, RawCanonicalHeader: sourceRaw, BlockHash: sourceHash, BlockNumber: 499},
-				Finality: fiscobcos.FinalityEvidence{Signatures: []fiscobcos.CommitSignature{{ValidatorNodeID: trust.Validators[0].NodeID, Signature: bytes.Repeat([]byte{1}, 65)}}},
+				Block: fiscobcos.BlockEvidence{Fields: sourceFields, RawCanonicalHeader: sourceRaw, BlockHash: sourceHash, BlockNumber: 499},
 			}
 			full := source
 			full.Transactions = []fiscobcos.TransitionTransactionEvidence{{}}

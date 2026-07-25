@@ -749,12 +749,15 @@ func (d *nativeDriver) GetValidatorHistoryBlock(
 	if err != nil {
 		return fiscobcos.ValidatorHistoryBlock{}, err
 	}
-	consensus, err := d.GetConsensusSnapshot(ctx, blockNumber)
-	if err != nil {
-		return fiscobcos.ValidatorHistoryBlock{}, err
-	}
 	result := fiscobcos.ValidatorHistoryBlock{
-		Block: header.Evidence, Finality: consensus.Finality,
+		Block: header.Evidence,
+	}
+	if blockNumber != d.trust.TrustedCheckpoint.BlockNumber {
+		consensus, err := d.GetConsensusSnapshot(ctx, blockNumber)
+		if err != nil {
+			return fiscobcos.ValidatorHistoryBlock{}, err
+		}
+		result.Finality = consensus.Finality
 	}
 	if !includeContents {
 		return result, nil

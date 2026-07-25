@@ -625,7 +625,8 @@ func (s *FISCOBCOSStandardSink) readValidatorHistoryBlockQuorum(
 		if err != nil {
 			continue
 		}
-		if err := validateValidatorHistoryObservation(s.trust.ChainHashAlgorithm, blockNumber, includeContents, item); err != nil {
+		requireFinality := blockNumber != s.trust.TrustedCheckpoint.BlockNumber
+		if err := validateValidatorHistoryObservation(s.trust.ChainHashAlgorithm, blockNumber, includeContents, requireFinality, item); err != nil {
 			s.recordQuorumFailure(bcosQuorumOperationHistory, bcosQuorumFailureDisagreement)
 			return fiscobcos.ValidatorHistoryBlock{}, ambiguousDriverFailure("validator_history", driver.Endpoint(), err)
 		}
@@ -655,13 +656,20 @@ func validateValidatorHistoryObservation(
 	hashAlgorithm string,
 	blockNumber uint64,
 	includeContents bool,
+	requireFinality bool,
 	item fiscobcos.ValidatorHistoryBlock,
 ) error {
 	if item.Block.BlockNumber != blockNumber || item.Block.Fields.BlockNumber < 0 ||
 		uint64(item.Block.Fields.BlockNumber) != blockNumber ||
-		len(item.Block.BlockHash) != 32 || len(item.Finality.Signatures) == 0 ||
+		len(item.Block.BlockHash) != 32 ||
 		len(item.Finality.Signatures) > fiscobcos.MaxCommitSignatures {
 		return fiscobcos.ErrIncompleteChainEvidence
+	}
+	if requireFinality && len(item.Finality.Signatures) == 0 {
+		return fiscobcos.ErrIncompleteChainEvidence
+	}
+	if !requireFinality && len(item.Finality.Signatures) != 0 {
+		return fiscobcos.ErrDriverInvalid
 	}
 	canonical, err := fiscobcos.MarshalNativeBlockHeaderPreimage(item.Block.Fields)
 	if err != nil || !bytes.Equal(canonical, item.Block.RawCanonicalHeader) {
