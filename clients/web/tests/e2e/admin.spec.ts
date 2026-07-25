@@ -2,17 +2,27 @@ import { expect, test, type Page } from '@playwright/test'
 
 async function mockAdminAPI(page: Page) {
   let loggedIn = false
+  const principal = {
+    account_id: 'system',
+    username: 'ops',
+    roles: ['system-admin'],
+    permissions: ['system.configure', 'system.operate', 'system.read'],
+    auth_method: 'local-password',
+    policy_version: 1,
+    policy_digest: 'a'.repeat(64),
+    session_epoch: 1,
+  }
 
   await page.route('**/admin/api/session', async (route) => {
     const method = route.request().method()
     if (method === 'GET') {
-      await route.fulfill({ json: { ok: loggedIn, username: loggedIn ? 'ops' : undefined } })
+      await route.fulfill({ json: { ok: loggedIn, principal: loggedIn ? principal : undefined } })
       return
     }
     if (method === 'POST') {
       const body = route.request().postDataJSON() as { username?: string; password?: string }
       loggedIn = body.username === 'ops' && body.password === 'secret'
-      await route.fulfill({ status: loggedIn ? 200 : 401, json: loggedIn ? { ok: true } : { ok: false, error: 'unauthorized' } })
+      await route.fulfill({ status: loggedIn ? 200 : 401, json: loggedIn ? { ok: true, principal } : { ok: false, error: 'unauthorized' } })
       return
     }
     if (method === 'DELETE') {
@@ -57,7 +67,7 @@ async function mockAdminAPI(page: Page) {
           ok: true,
           config_path: 'C:/trustdb/trustdb.yaml',
           config: {
-            admin: { enabled: true, username: 'ops', password_hash: '<redacted>', session_secret: '<redacted>' },
+            admin: { enabled: true, policy_path: 'C:/trustdb/admin-policy.json', session_secret: '<redacted>' },
             server: { listen: '127.0.0.1:8080' },
           },
         },

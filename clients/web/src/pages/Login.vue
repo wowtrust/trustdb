@@ -14,6 +14,8 @@ const auth = useAuth()
 
 const username = ref('')
 const password = ref('')
+const mfaCode = ref('')
+const emergencyReason = ref('')
 const err = ref('')
 const busy = ref(false)
 
@@ -21,7 +23,7 @@ async function submit() {
   err.value = ''
   busy.value = true
   try {
-    await auth.login(username.value.trim(), password.value)
+    await auth.login(username.value.trim(), password.value, mfaCode.value, emergencyReason.value)
     const redir = typeof route.query.redirect === 'string' ? route.query.redirect : '/dashboard'
     await router.replace(redir || '/dashboard')
   } catch (e: unknown) {
@@ -53,6 +55,12 @@ async function submit() {
         </Field>
         <Field label="密码">
           <Input v-model="password" type="password" autocomplete="current-password" />
+        </Field>
+        <Field label="MFA 验证码" hint="仅当账号策略要求 MFA 且服务接入验证器时填写">
+          <Input v-model="mfaCode" inputmode="numeric" autocomplete="one-time-code" />
+        </Field>
+        <Field label="紧急访问理由" hint="仅 break-glass 账号必填；12–512 个字符并写入操作日志">
+          <Input v-model="emergencyReason" autocomplete="off" />
         </Field>
         <p v-if="err" class="text-[12px] text-danger">{{ err }}</p>
         <Button type="submit" class="w-full" :loading="busy">登录</Button>

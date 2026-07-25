@@ -5,6 +5,9 @@ import Button from '@/components/Button.vue'
 import Input from '@/components/Input.vue'
 import Field from '@/components/Field.vue'
 import { getConfig, getConfigRaw, getOverlays, putConfigYaml } from '@/lib/api'
+import { useAuth } from '@/stores/auth'
+
+const auth = useAuth()
 
 const cfgJson = ref('')
 const overlaysJson = ref('')
@@ -14,7 +17,7 @@ const msg = ref('')
 const err = ref('')
 const busy = ref(false)
 
-const canSave = computed(() => !!cfgPath.value.trim())
+const canSave = computed(() => !!cfgPath.value.trim() && auth.hasPermission('system.configure'))
 
 async function load() {
   msg.value = ''
@@ -83,7 +86,8 @@ onMounted(() => { load() })
         <Field label="trustdb.yaml" hint="PUT 将写入 --config 指向的文件并生成 .bak 备份">
           <Input v-model="rawYaml" multiline :rows="18" mono />
         </Field>
-        <p v-if="!canSave" class="text-[11px] text-warn">当前进程未指定 --config，无法通过 Web 写回文件。</p>
+        <p v-if="!cfgPath.trim()" class="text-[11px] text-warn">当前进程未指定 --config，无法通过 Web 写回文件。</p>
+        <p v-else-if="!auth.hasPermission('system.configure')" class="text-[11px] text-warn">当前角色只有读取权限，保存需要 system.configure。</p>
         <div class="flex gap-2">
           <Button :loading="busy" :disabled="!canSave" @click="save">保存 YAML</Button>
         </div>

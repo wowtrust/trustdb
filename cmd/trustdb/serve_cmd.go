@@ -19,6 +19,7 @@ import (
 
 	"github.com/rs/zerolog"
 	"github.com/spf13/cobra"
+	"github.com/wowtrust/trustdb/internal/adminauth"
 	"github.com/wowtrust/trustdb/internal/adminweb"
 	"github.com/wowtrust/trustdb/internal/anchor"
 	"github.com/wowtrust/trustdb/internal/anchor/fiscobcos"
@@ -792,6 +793,25 @@ func newServeCommand(rt *runtimeConfig) *cobra.Command {
 			publicHandler := httpapi.NewWithSubmitterGlobalAnchorsAndSystems(submissionSvc, metricsHandler, batchSvc, globalSvc, anchorAPI, anchorSystems, statusHub)
 			handler := http.Handler(publicHandler)
 			if rt.cfg.Admin.Enabled {
+				policyStore, err := adminauth.NewFileStore(rt.cfg.Admin.PolicyPath)
+				if err != nil {
+					return err
+				}
+				policy, _, err := policyStore.Load(time.Now())
+				if err != nil {
+					return fmt.Errorf("load admin authorization policy: %w", err)
+				}
+				authManager, err := adminauth.NewManager(policy, time.Now())
+				if err != nil {
+					return fmt.Errorf("initialize admin authorization policy: %w", err)
+				}
+				var oidcVerifier adminweb.OIDCVerifier
+				if len(rt.cfg.Admin.OIDCGatewayPins) > 0 {
+					oidcVerifier, err = adminweb.NewMTLSGatewayOIDCVerifier(rt.cfg.Admin.OIDCGatewayPins)
+					if err != nil {
+						return err
+					}
+				}
 				ah, err := adminweb.New(adminweb.Options{
 					Admin:        rt.cfg.Admin,
 					Viper:        rt.viper,
@@ -800,6 +820,9 @@ func newServeCommand(rt *runtimeConfig) *cobra.Command {
 					Public:       publicHandler,
 					Metrics:      metricsHandler,
 					Logger:       rt.logger,
+					Auth:         authManager,
+					PolicyStore:  policyStore,
+					OIDCVerifier: oidcVerifier,
 				})
 				if err != nil {
 					return err
@@ -956,7 +979,7 @@ func newServeCommand(rt *runtimeConfig) *cobra.Command {
 	cmd.Flags().IntVar(&anchorOtsUpgradeBatchSize, "anchor-ots-upgrade-batch-size", 0, fmt.Sprintf("max number of OTS STHAnchorResults processed per upgrade sweep (default 64, max %d)", anchor.MaxOtsUpgradeBatchSize))
 	cmd.Flags().StringVar(&anchorOtsUpgradeTimeoutText, "anchor-ots-upgrade-timeout", "", "per-calendar GET timeout for the OTS upgrader (default 30s)")
 	cmd.Flags().IntVar(&anchorOtsUpgradeWorkers, "anchor-ots-upgrade-workers", 0, "bounded concurrent OTS proof upgrade worker count")
-	return cmd
+	return requirePermission(cmd, adminauth.PermissionSystemOperate)
 }
 
 func shutdownGRPCServer(ctx context.Context, server *grpc.Server) {

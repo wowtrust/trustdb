@@ -146,4 +146,11 @@ The owner-permissions-only compatibility path requires explicit
 
 ## Admin Web (`admin`)
 
-Optional block `admin` enables the operator UI mounted by `trustdb serve` (see repository README). Use `TRUSTDB_ADMIN_*` env vars in production; set `admin.password_hash` to a bcrypt string from `trustdb admin hash-password`, and `admin.session_secret` to at least 32 random bytes.
+The `admin` block points to a versioned, separated RBAC policy. Bootstrap it
+with `trustdb admin policy bootstrap`; do not put plaintext passwords in YAML.
+`admin.enabled` mounts the operator UI, while `admin.cli_enforce` independently
+protects privileged commands. The production template enables CLI enforcement,
+so bootstrap `/etc/trustdb/admin-policy.json` before running protected commands.
+Set `admin.session_secret` to at least 32 random bytes only when the Web console
+is enabled. See [Administrative RBAC](../docs/compliance/ADMINISTRATIVE_RBAC.md) and the
+[Chinese guide](../docs/zh-CN/ADMINISTRATIVE_RBAC.md).

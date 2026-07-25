@@ -44,7 +44,10 @@ func newRootCommand(out, errOut io.Writer) *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
-			return rt.load()
+			if err := rt.load(); err != nil {
+				return err
+			}
+			return rt.authorizeCLI(cmd)
 		},
 		PersistentPostRunE: func(cmd *cobra.Command, args []string) error {
 			return rt.close()
@@ -269,12 +272,15 @@ func setDefaults(v *viper.Viper) {
 	defAdmin := defaults.Admin
 	v.SetDefault("admin.enabled", defAdmin.Enabled)
 	v.SetDefault("admin.base_path", defAdmin.BasePath)
-	v.SetDefault("admin.username", defAdmin.Username)
-	v.SetDefault("admin.password_hash", defAdmin.PasswordHash)
+	v.SetDefault("admin.policy_path", defAdmin.PolicyPath)
 	v.SetDefault("admin.session_secret", defAdmin.SessionSecret)
 	v.SetDefault("admin.web_dir", defAdmin.WebDir)
 	v.SetDefault("admin.cookie_secure", defAdmin.CookieSecure)
 	v.SetDefault("admin.session_ttl", defAdmin.SessionTTL)
+	v.SetDefault("admin.login_max_failures", defAdmin.LoginMaxFailures)
+	v.SetDefault("admin.login_lockout", defAdmin.LoginLockout)
+	v.SetDefault("admin.cli_enforce", defAdmin.CLIEnforce)
+	v.SetDefault("admin.oidc_gateway_spki_sha256", defAdmin.OIDCGatewayPins)
 
 	bindEnv(v, "run_profile", "TRUSTDB_RUN_PROFILE")
 	bindEnv(v, "paths.data_dir", "TRUSTDB_PATHS_DATA_DIR", "TRUSTDB_DATA_DIR")
@@ -412,12 +418,15 @@ func setDefaults(v *viper.Viper) {
 	bindEnv(v, "anchor.ots.upgrade.workers", "TRUSTDB_ANCHOR_OTS_UPGRADE_WORKERS")
 	bindEnv(v, "admin.enabled", "TRUSTDB_ADMIN_ENABLED")
 	bindEnv(v, "admin.base_path", "TRUSTDB_ADMIN_BASE_PATH")
-	bindEnv(v, "admin.username", "TRUSTDB_ADMIN_USERNAME")
-	bindEnv(v, "admin.password_hash", "TRUSTDB_ADMIN_PASSWORD_HASH")
+	bindEnv(v, "admin.policy_path", "TRUSTDB_ADMIN_POLICY_PATH")
 	bindEnv(v, "admin.session_secret", "TRUSTDB_ADMIN_SESSION_SECRET")
 	bindEnv(v, "admin.web_dir", "TRUSTDB_ADMIN_WEB_DIR")
 	bindEnv(v, "admin.cookie_secure", "TRUSTDB_ADMIN_COOKIE_SECURE")
 	bindEnv(v, "admin.session_ttl", "TRUSTDB_ADMIN_SESSION_TTL")
+	bindEnv(v, "admin.login_max_failures", "TRUSTDB_ADMIN_LOGIN_MAX_FAILURES")
+	bindEnv(v, "admin.login_lockout", "TRUSTDB_ADMIN_LOGIN_LOCKOUT")
+	bindEnv(v, "admin.cli_enforce", "TRUSTDB_ADMIN_CLI_ENFORCE")
+	bindEnv(v, "admin.oidc_gateway_spki_sha256", "TRUSTDB_ADMIN_OIDC_GATEWAY_SPKI_SHA256")
 }
 
 func bindEnv(v *viper.Viper, key string, env ...string) {

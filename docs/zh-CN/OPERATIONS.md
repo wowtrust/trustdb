@@ -30,6 +30,10 @@
 
 ## 2. 配置生成和上线门禁
 
+使用 `configs/production.yaml` 时，先按[管理 RBAC 手册](ADMINISTRATIVE_RBAC.md)
+执行 `admin policy bootstrap`。生产模板启用了 `admin.cli_enforce`，因此后续受保护
+命令需要显式管理员身份。
+
 ```bash
 trustdb config init --out /etc/trustdb/production.yaml
 trustdb config validate --config /etc/trustdb/production.yaml
@@ -123,6 +127,8 @@ WAL/proofstore 同步、下游队列和外部 provider 限制共同约束。用�
 - 关闭 NATS：先 drain，再设 `nats.enabled=false`，保留 stream/result/DLQ。
 - 关闭 L5：设 `anchor.sink=off`；历史 anchor result 仍不可变。
 - 关闭 Admin Web：设 `admin.enabled=false`；不影响核心 API。
+- Admin Web 关闭不等于关闭 CLI 鉴权；生产保留 `admin.cli_enforce=true`，角色矩阵、
+  锁定和 break-glass 流程见[管理 RBAC 手册](ADMINISTRATIVE_RBAC.md)。
 - Global Log 关闭后新记录最高只能停在 L2/L3，不应用作生产 L4/L5 路径。
 
 ## 7. 升级和回退

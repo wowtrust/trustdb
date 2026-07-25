@@ -4,9 +4,10 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/spf13/cobra"
+	"github.com/wowtrust/trustdb/internal/adminauth"
 	trustconfig "github.com/wowtrust/trustdb/internal/config"
 	"github.com/wowtrust/trustdb/internal/trusterr"
-	"github.com/spf13/cobra"
 )
 
 func newConfigCommand(rt *runtimeConfig) *cobra.Command {
@@ -43,32 +44,26 @@ func newConfigInitCommand(rt *runtimeConfig) *cobra.Command {
 	}
 	cmd.Flags().StringVar(&outPath, "out", "trustdb.yaml", "output config file")
 	cmd.Flags().BoolVar(&force, "force", false, "overwrite existing config")
-	return cmd
+	return requirePermission(cmd, adminauth.PermissionSystemConfigure)
 }
 
 func newConfigShowCommand(rt *runtimeConfig) *cobra.Command {
-	var showSensitive bool
 	cmd := &cobra.Command{
 		Use:   "show",
 		Short: "Show the merged config used by this process",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg := rt.cfg.Redacted()
-			if showSensitive {
-				cfg = rt.cfg
-			}
 			return rt.writeJSON(map[string]any{
 				"config_file": rt.viper.ConfigFileUsed(),
-				"redacted":    !showSensitive,
-				"config":      cfg,
+				"redacted":    true,
+				"config":      rt.cfg.Redacted(),
 			})
 		},
 	}
-	cmd.Flags().BoolVar(&showSensitive, "show-sensitive", false, "show sensitive config values")
-	return cmd
+	return requirePermission(cmd, adminauth.PermissionSystemRead)
 }
 
 func newConfigValidateCommand(rt *runtimeConfig) *cobra.Command {
-	return &cobra.Command{
+	return requirePermission(&cobra.Command{
 		Use:   "validate",
 		Short: "Validate the merged config used by this process",
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -80,5 +75,5 @@ func newConfigValidateCommand(rt *runtimeConfig) *cobra.Command {
 				"config_file": rt.viper.ConfigFileUsed(),
 			})
 		},
-	}
+	}, adminauth.PermissionSystemRead)
 }

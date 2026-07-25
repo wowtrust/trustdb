@@ -2,6 +2,7 @@ package adminweb
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,13 +12,30 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"reflect"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/rs/zerolog"
 	"github.com/spf13/viper"
+	"github.com/wowtrust/trustdb/internal/adminauth"
 	trustconfig "github.com/wowtrust/trustdb/internal/config"
-	"golang.org/x/crypto/bcrypt"
 )
+
+type MFAVerifier interface {
+	VerifyMFA(context.Context, adminauth.Principal, string) error
+}
+
+type OIDCIdentity struct {
+	Issuer  string
+	Subject string
+	MFA     bool
+}
+
+type OIDCVerifier interface {
+	VerifyOIDC(*http.Request) (OIDCIdentity, error)
+}
 
 // Options configures the admin HTTP subtree.
 type Options struct {
@@ -28,10 +46,18 @@ type Options struct {
 	Public       http.Handler
 	Metrics      http.Handler
 	Logger       zerolog.Logger
+	Auth         *adminauth.Manager
+	PolicyStore  *adminauth.FileStore
+	MFAVerifier  MFAVerifier
+	OIDCVerifier OIDCVerifier
+	Now          func() time.Time
 }
 
 type handler struct {
-	opts Options
+	opts     Options
+	guard    *loginGuard
+	policyMu sync.RWMutex
+	configMu sync.Mutex
 }
 
 // New returns the admin subtree handler (paths relative to admin base, e.g. /api/...).
@@ -53,19 +79,35 @@ func New(opts Options) (http.Handler, error) {
 	if opts.Metrics == nil {
 		return nil, errors.New("adminweb.Options.Metrics is required")
 	}
-	h := &handler{opts: opts}
+	if opts.Auth == nil || opts.PolicyStore == nil {
+		return nil, errors.New("adminweb.Options.Auth and PolicyStore are required")
+	}
+	if opts.Now == nil {
+		opts.Now = time.Now
+	}
+	_, managerDigest := opts.Auth.Snapshot()
+	_, storedDigest, err := opts.PolicyStore.Load(opts.Now())
+	if err != nil {
+		return nil, fmt.Errorf("load admin policy store: %w", err)
+	}
+	if managerDigest != storedDigest {
+		return nil, errors.New("adminweb: authorization manager and policy store do not match")
+	}
+	h := &handler{opts: opts, guard: newLoginGuard(opts.Admin.LoginMaxFailures, loginLockout(opts.Admin.LoginLockout))}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/session", h.getSession)
 	mux.HandleFunc("POST /api/session", h.postSession)
 	mux.HandleFunc("DELETE /api/session", h.deleteSession)
-	mux.Handle("GET /api/metrics", h.withAuth(http.HandlerFunc(h.getMetricsJSON)))
-	mux.Handle("GET /api/config", h.withAuth(http.HandlerFunc(h.getConfig)))
-	mux.Handle("GET /api/config/raw", h.withAuth(http.HandlerFunc(h.getConfigRaw)))
-	mux.Handle("PUT /api/config", h.withAuth(http.HandlerFunc(h.putConfig)))
-	mux.Handle("GET /api/overlays", h.withAuth(http.HandlerFunc(h.getOverlays)))
+	mux.Handle("GET /api/metrics", h.withPermission(adminauth.PermissionSystemRead, http.HandlerFunc(h.getMetricsJSON)))
+	mux.Handle("GET /api/config", h.withPermission(adminauth.PermissionSystemRead, http.HandlerFunc(h.getConfig)))
+	mux.Handle("GET /api/config/raw", h.withPermission(adminauth.PermissionSystemRead, http.HandlerFunc(h.getConfigRaw)))
+	mux.Handle("PUT /api/config", h.withPermission(adminauth.PermissionSystemConfigure, http.HandlerFunc(h.putConfig)))
+	mux.Handle("GET /api/overlays", h.withPermission(adminauth.PermissionSystemRead, http.HandlerFunc(h.getOverlays)))
+	mux.Handle("GET /api/security/policy", h.withPermission(adminauth.PermissionSecurityPolicyRead, http.HandlerFunc(h.getPolicy)))
+	mux.Handle("PUT /api/security/policy", h.withExclusivePermission(adminauth.PermissionSecurityPolicyWrite, http.HandlerFunc(h.putPolicy)))
 
 	proxy := http.StripPrefix("/api/proxy", getOnlyHandler{h: opts.Public})
-	mux.Handle("/api/proxy/", h.withAuth(proxy))
+	mux.Handle("/api/proxy/", h.withPermission(adminauth.PermissionSystemRead, proxy))
 
 	mux.Handle("/", spaFileServer(webDir))
 	return mux, nil
@@ -82,16 +124,19 @@ func (g getOnlyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *handler) getSession(w http.ResponseWriter, r *http.Request) {
-	if u, ok := h.authedUser(r); ok {
-		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "username": u})
+	setNoStore(w)
+	if principal, _, err := h.authenticatedPrincipal(r); err == nil {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "principal": principal})
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": false})
 }
 
 type loginBody struct {
-	Username string `json:"username"`
-	Password string `json:"password"`
+	Username        string `json:"username"`
+	Password        string `json:"password"`
+	MFACode         string `json:"mfa_code,omitempty"`
+	EmergencyReason string `json:"emergency_reason,omitempty"`
 }
 
 const (
@@ -102,6 +147,7 @@ const (
 var errRequestBodyTooLarge = errors.New("request body too large")
 
 func (h *handler) postSession(w http.ResponseWriter, r *http.Request) {
+	setNoStore(w)
 	var body loginBody
 	if err := decodeJSONBodyLimit(r.Body, &body, maxLoginBodyBytes); err != nil {
 		if errors.Is(err, errRequestBodyTooLarge) {
@@ -111,63 +157,142 @@ func (h *handler) postSession(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "invalid json"})
 		return
 	}
-	wantUser := strings.TrimSpace(h.opts.Admin.Username)
-	if subtleStringEq(wantUser, strings.TrimSpace(body.Username)) != 1 {
-		// still run bcrypt to reduce user enumeration timing a little
-		_ = bcrypt.CompareHashAndPassword([]byte(h.opts.Admin.PasswordHash), []byte("invalid"))
+	now := h.opts.Now()
+	username := strings.TrimSpace(body.Username)
+	if !h.guard.Allow(username, now) {
+		writeJSON(w, http.StatusTooManyRequests, map[string]any{"ok": false, "error": "login temporarily locked"})
+		return
+	}
+	principal, err := h.opts.Auth.AuthenticateLocal(username, body.Password, now)
+	if err != nil {
+		h.guard.Failure(username, now)
 		writeJSON(w, http.StatusUnauthorized, map[string]any{"ok": false, "error": "unauthorized"})
 		return
 	}
-	if err := bcrypt.CompareHashAndPassword([]byte(h.opts.Admin.PasswordHash), []byte(body.Password)); err != nil {
-		writeJSON(w, http.StatusUnauthorized, map[string]any{"ok": false, "error": "unauthorized"})
+	if principal.MFARequired {
+		if h.opts.MFAVerifier == nil || h.opts.MFAVerifier.VerifyMFA(r.Context(), principal, strings.TrimSpace(body.MFACode)) != nil {
+			h.guard.Failure(username, now)
+			writeJSON(w, http.StatusUnauthorized, map[string]any{"ok": false, "error": "multi-factor authentication required"})
+			return
+		}
+	}
+	reason := strings.TrimSpace(body.EmergencyReason)
+	if principal.Emergency && !validEmergencyReason(reason) {
+		h.guard.Failure(username, now)
+		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "emergency access requires a 12..512 character reason"})
 		return
 	}
+	h.guard.Success(username)
 	ttl := sessionTTL(h.opts.Admin.SessionTTL)
-	token, err := issueSessionToken([]byte(h.opts.Admin.SessionSecret), wantUser, ttl)
+	token, err := issueSessionTokenAt([]byte(h.opts.Admin.SessionSecret), principal, reason, ttl, now)
 	if err != nil {
 		h.opts.Logger.Error().Err(err).Msg("admin session issue failed")
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": "internal"})
 		return
 	}
 	w.Header().Set("Set-Cookie", buildSessionCookie(h.opts.Admin.BasePath, token, h.opts.Admin.CookieSecure, ttl))
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
-}
-
-func subtleStringEq(a, b string) int {
-	if len(a) != len(b) {
-		return 0
-	}
-	var v byte
-	for i := 0; i < len(a); i++ {
-		v |= a[i] ^ b[i]
-	}
-	if v == 0 {
-		return 1
-	}
-	return 0
+	h.opts.Logger.Info().Str("actor", principal.AccountID).Str("auth_method", string(principal.AuthMethod)).Bool("emergency", principal.Emergency).Msg("admin session issued")
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "principal": principal})
 }
 
 func (h *handler) deleteSession(w http.ResponseWriter, r *http.Request) {
+	setNoStore(w)
 	w.Header().Set("Set-Cookie", clearSessionCookie(h.opts.Admin.BasePath, h.opts.Admin.CookieSecure))
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
-func (h *handler) authedUser(r *http.Request) (string, bool) {
-	c, err := r.Cookie(sessionCookieName)
-	if err != nil || c.Value == "" {
-		return "", false
+type actorContextKey struct{}
+
+func (h *handler) authenticatedPrincipal(r *http.Request) (adminauth.Principal, string, error) {
+	if cookie, err := r.Cookie(sessionCookieName); err == nil && cookie.Value != "" {
+		principal, reason, ok := verifySessionToken([]byte(h.opts.Admin.SessionSecret), cookie.Value)
+		if !ok {
+			return adminauth.Principal{}, "", adminauth.ErrUnauthenticated
+		}
+		current, err := h.opts.Auth.ValidatePrincipal(principal, h.opts.Now())
+		return current, reason, err
 	}
-	return verifySessionToken([]byte(h.opts.Admin.SessionSecret), c.Value)
+	if r.TLS != nil && len(r.TLS.PeerCertificates) > 0 {
+		principal, err := h.opts.Auth.AuthenticateMTLS(r.TLS.PeerCertificates[0], h.opts.Now())
+		if err == nil && !principal.MFARequired {
+			reason := strings.TrimSpace(r.Header.Get("X-TrustDB-Emergency-Reason"))
+			if principal.Emergency && !validEmergencyReason(reason) {
+				return adminauth.Principal{}, "", adminauth.ErrUnauthenticated
+			}
+			return principal, reason, nil
+		}
+	}
+	if h.opts.OIDCVerifier != nil {
+		identity, err := h.opts.OIDCVerifier.VerifyOIDC(r)
+		if err == nil {
+			principal, authErr := h.opts.Auth.AuthenticateOIDC(identity.Issuer, identity.Subject, h.opts.Now())
+			if authErr == nil && (!principal.MFARequired || identity.MFA) {
+				reason := strings.TrimSpace(r.Header.Get("X-TrustDB-Emergency-Reason"))
+				if !principal.Emergency || validEmergencyReason(reason) {
+					return principal, reason, nil
+				}
+			}
+		}
+	}
+	return adminauth.Principal{}, "", adminauth.ErrUnauthenticated
 }
 
-func (h *handler) withAuth(next http.Handler) http.Handler {
+func (h *handler) withPermission(permission adminauth.Permission, next http.Handler) http.Handler {
+	return h.withPermissionLock(permission, next, false)
+}
+
+func (h *handler) withExclusivePermission(permission adminauth.Permission, next http.Handler) http.Handler {
+	return h.withPermissionLock(permission, next, true)
+}
+
+func (h *handler) withPermissionLock(permission adminauth.Permission, next http.Handler, exclusive bool) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if _, ok := h.authedUser(r); !ok {
+		setNoStore(w)
+		if exclusive {
+			h.policyMu.Lock()
+			defer h.policyMu.Unlock()
+		} else {
+			h.policyMu.RLock()
+			defer h.policyMu.RUnlock()
+		}
+		principal, emergencyReason, err := h.authenticatedPrincipal(r)
+		if err != nil {
 			writeJSON(w, http.StatusUnauthorized, map[string]any{"ok": false, "error": "unauthorized"})
 			return
 		}
-		next.ServeHTTP(w, r)
+		authorized, err := h.opts.Auth.Authorize(principal, permission, h.opts.Now())
+		if err != nil {
+			h.opts.Logger.Warn().Str("actor", principal.AccountID).Str("permission", string(permission)).Msg("admin authorization denied")
+			writeJSON(w, http.StatusForbidden, map[string]any{"ok": false, "error": "forbidden"})
+			return
+		}
+		principal = authorized
+		event := h.opts.Logger.Info().Str("actor", principal.AccountID).Str("permission", string(permission)).Str("method", r.Method).Str("path", r.URL.Path).Str("auth_method", string(principal.AuthMethod)).Bool("emergency", principal.Emergency)
+		if principal.Emergency {
+			event = event.Str("emergency_reason", emergencyReason)
+		}
+		event.Msg("admin request authorized")
+		ctx := context.WithValue(r.Context(), actorContextKey{}, principal)
+		ctx = context.WithValue(ctx, emergencyReasonContextKey{}, emergencyReason)
+		next.ServeHTTP(w, r.WithContext(ctx))
 	})
+}
+
+func setNoStore(w http.ResponseWriter) {
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Pragma", "no-cache")
+}
+
+type emergencyReasonContextKey struct{}
+
+func actorFromContext(ctx context.Context) adminauth.Principal {
+	principal, _ := ctx.Value(actorContextKey{}).(adminauth.Principal)
+	return principal
+}
+
+func validEmergencyReason(reason string) bool {
+	length := len(strings.TrimSpace(reason))
+	return length >= 12 && length <= 512
 }
 
 func (h *handler) getMetricsJSON(w http.ResponseWriter, r *http.Request) {
@@ -194,6 +319,58 @@ func (h *handler) getConfig(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (h *handler) getPolicy(w http.ResponseWriter, r *http.Request) {
+	policy, digest := h.opts.Auth.Snapshot()
+	w.Header().Set("ETag", `"`+digest+`"`)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok": true, "policy": policy, "digest": digest,
+		"warning": "password_hash values are credential verifiers; handle this response as sensitive",
+	})
+}
+
+func (h *handler) putPolicy(w http.ResponseWriter, r *http.Request) {
+	expected := strings.Trim(strings.TrimSpace(r.Header.Get("If-Match")), `"`)
+	if expected == "" {
+		writeJSON(w, http.StatusPreconditionRequired, map[string]any{"ok": false, "error": "If-Match policy digest is required"})
+		return
+	}
+	body, err := readBodyLimit(r.Body, adminauth.MaxPolicyBytes)
+	if err != nil {
+		if errors.Is(err, errRequestBodyTooLarge) {
+			writeJSON(w, http.StatusRequestEntityTooLarge, map[string]any{"ok": false, "error": "policy too large"})
+			return
+		}
+		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "read body"})
+		return
+	}
+	next, err := adminauth.ParsePolicy(body, h.opts.Now())
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+	actor := actorFromContext(r.Context())
+	digest, err := h.opts.PolicyStore.ReplaceOnline(actor, expected, next, h.opts.Now())
+	if err != nil {
+		switch {
+		case errors.Is(err, adminauth.ErrPolicyConflict):
+			writeJSON(w, http.StatusConflict, map[string]any{"ok": false, "error": "policy changed; reload and retry"})
+		case errors.Is(err, adminauth.ErrPermissionDenied):
+			writeJSON(w, http.StatusForbidden, map[string]any{"ok": false, "error": "forbidden"})
+		default:
+			writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": err.Error()})
+		}
+		return
+	}
+	if err := h.opts.Auth.Replace(next, h.opts.Now()); err != nil {
+		h.opts.Logger.Error().Err(err).Msg("persisted admin policy could not be activated")
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": "policy persisted but activation failed; restart required"})
+		return
+	}
+	h.opts.Logger.Info().Str("actor", actor.AccountID).Uint64("policy_version", next.Version).Str("policy_digest", digest).Msg("admin policy replaced")
+	w.Header().Set("ETag", `"`+digest+`"`)
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "version": next.Version, "digest": digest})
+}
+
 func (h *handler) getConfigRaw(w http.ResponseWriter, r *http.Request) {
 	if strings.TrimSpace(h.opts.ConfigPath) == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "no --config path; raw file API disabled"})
@@ -214,6 +391,9 @@ func (h *handler) getConfigRaw(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *handler) putConfig(w http.ResponseWriter, r *http.Request) {
+	h.configMu.Lock()
+	defer h.configMu.Unlock()
+
 	if strings.TrimSpace(h.opts.ConfigPath) == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "no --config path; cannot write"})
 		return
@@ -233,20 +413,8 @@ func (h *handler) putConfig(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": fmt.Sprintf("yaml: %v", err)})
 		return
 	}
-	cfg := trustconfig.FromViper(v2)
-	if err := cfg.Validate(); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": err.Error()})
-		return
-	}
-	backup := ""
-	prev, err := readConfigFile(h.opts.ConfigPath)
+	previous, err := readConfigFile(h.opts.ConfigPath)
 	switch {
-	case err == nil && len(prev) > 0:
-		backup, err = writeConfigBackup(h.opts.ConfigPath, prev)
-		if err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": fmt.Sprintf("backup: %v", err)})
-			return
-		}
 	case errors.Is(err, errRequestBodyTooLarge):
 		writeJSON(w, http.StatusRequestEntityTooLarge, map[string]any{"ok": false, "error": "existing config file too large"})
 		return
@@ -254,12 +422,50 @@ func (h *handler) putConfig(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": fmt.Sprintf("read existing config: %v", err)})
 		return
 	}
+	adminChanged, err := adminConfigChanged(previous, v2)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": fmt.Sprintf("read existing admin config: %v", err)})
+		return
+	}
+	if adminChanged {
+		writeJSON(w, http.StatusForbidden, map[string]any{
+			"ok": false, "error": "admin authorization settings cannot be changed through the generic config endpoint",
+		})
+		return
+	}
+	cfg := trustconfig.FromViper(v2)
+	if err := cfg.Validate(); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+	backup := ""
+	if len(previous) > 0 {
+		backup, err = writeConfigBackup(h.opts.ConfigPath, previous)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": fmt.Sprintf("backup: %v", err)})
+			return
+		}
+	}
 	if err := writeConfigAtomic(h.opts.ConfigPath, body); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": err.Error()})
 		return
 	}
-	h.opts.Logger.Info().Str("path", h.opts.ConfigPath).Str("backup", backup).Msg("admin wrote config file")
+	actor := actorFromContext(r.Context())
+	h.opts.Logger.Info().Str("actor", actor.AccountID).Str("path", h.opts.ConfigPath).Str("backup", backup).Msg("admin wrote config file")
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "backup": backup})
+}
+
+func adminConfigChanged(previous []byte, next *viper.Viper) (bool, error) {
+	var currentAdmin any
+	if len(previous) > 0 {
+		current := viper.New()
+		current.SetConfigType("yaml")
+		if err := current.ReadConfig(bytes.NewReader(previous)); err != nil {
+			return false, err
+		}
+		currentAdmin = current.AllSettings()["admin"]
+	}
+	return !reflect.DeepEqual(currentAdmin, next.AllSettings()["admin"]), nil
 }
 
 func readConfigFile(path string) ([]byte, error) {

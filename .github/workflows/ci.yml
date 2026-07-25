@@ -201,6 +201,33 @@ jobs:
       - name: Run race tests
         run: go test -race -mod=readonly ./...
 
+  admin-authorization-platform:
+    name: Admin authorization · ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-15
+          - windows-2025
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Run administrative authorization tests
+        run: |
+          go test -count=1 -mod=readonly ./internal/adminauth ./internal/adminweb ./internal/config
+          go test -count=1 -mod=readonly ./cmd/trustdb -run '^(TestPrivilegedCommandPermissionAnnotations|TestCLIAuthorizationAllowsOnlyGrantedRole|TestAdminPolicyBootstrapCommand|TestAdminPolicyOfflineRecoveryRequiresReason)$'
+
   backend-integration:
     name: Backend integration tests
     runs-on: ubuntu-latest

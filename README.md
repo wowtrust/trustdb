@@ -111,7 +111,7 @@ Desktop packages carry a release-specific self-signed certificate and its public
 - Portable `.tdbackup` create, verify, and resumable restore.
 - Go SDK for claim signing, HTTP/gRPC calls, proof export, and local verification.
 - Wails + Vue desktop client for local identity, file attestation, record management, proof refresh, `.sproof` export, and offline verification.
-- Optional Vue Admin Web mounted by `trustdb serve` for metrics, read-only browsing, and controlled YAML config maintenance.
+- Optional Vue Admin Web and privileged CLI authorization backed by versioned RBAC, system/security/audit separation, mTLS/OIDC/MFA hooks, bounded lockout, and break-glass recovery.
 
 ## Proof Levels
 
@@ -341,7 +341,7 @@ Optional JetStream topology, security, flow-control, recovery, and Go SDK usage 
 
 ## Admin Web And Desktop
 
-The optional Admin Web (`clients/web`) is served under `/admin` by `trustdb serve` when enabled. It provides metrics, read-only API browsing, and YAML config maintenance when the server is started with `--config`.
+The optional Admin Web (`clients/web`) is served under `/admin` by `trustdb serve` when enabled. A versioned policy separates system, security, and audit administrators; additional roles govern keys, backup/restore, anchoring, and read-only support. The same policy can fail-close privileged CLI commands. See [Administrative RBAC and separation of duties](docs/compliance/ADMINISTRATIVE_RBAC.md) and the [Chinese operations guide](docs/zh-CN/ADMINISTRATIVE_RBAC.md).
 
 The desktop client (`clients/desktop`) is a Wails + Vue application for local identity setup, file attestation, server settings, local record indexes, proof refresh, proof export, and offline verification.
 
@@ -354,6 +354,8 @@ The screenshot below is rendered directly from the current desktop client code:
 ## Project Documents
 
 - [ARCHITECTURE.zh-CN.md](ARCHITECTURE.zh-CN.md): detailed TrustDB server, persistence, Global Log, anchoring, SDK, backup, and offline-verification architecture (Chinese).
+- [docs/compliance/ADMINISTRATIVE_RBAC.md](docs/compliance/ADMINISTRATIVE_RBAC.md): administrative roles, permission enforcement, bootstrap, policy history, mTLS/OIDC/MFA hooks, CLI authorization, and emergency recovery.
+- [docs/zh-CN/ADMINISTRATIVE_RBAC.md](docs/zh-CN/ADMINISTRATIVE_RBAC.md): 管理 RBAC、三员分立、会话锁定、CLI 鉴权与紧急恢复手册。
 - [docs/integrations/NATS_INGRESS.md](docs/integrations/NATS_INGRESS.md): optional JetStream ingress topology, configuration, security, backpressure, result recovery, and Go SDK workflow.
 - [docs/integrations/PKCS11_SIGNER.md](docs/integrations/PKCS11_SIGNER.md): isolated native PKCS#11 signer, PIN-file and mechanism gates, rotation, SoftHSM interoperability, and production-token qualification.
 - [docs/integrations/TLCP_GATEWAY.md](docs/integrations/TLCP_GATEWAY.md): pinned Tengine/Tongsuo TLCP gateway, SM2/SM3 dual certificates, SM4-GCM, CRLs, readiness, rotation, and real HTTP/gRPC interoperability.

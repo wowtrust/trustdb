@@ -1,5 +1,19 @@
 export const adminApiPrefix = '/admin/api'
 
+export type AdminPrincipal = {
+  account_id: string
+  username: string
+  roles: string[]
+  permissions: string[]
+  auth_method: string
+  policy_version: number
+  policy_digest: string
+  session_epoch: number
+  emergency?: boolean
+  not_after?: string
+  mfa_required?: boolean
+}
+
 export type Metric = {
   name: string
   type?: string
@@ -153,15 +167,20 @@ export async function adminFetch(path: string, init?: RequestInit): Promise<Resp
   })
 }
 
-export async function getSession(): Promise<{ ok: boolean; username?: string }> {
+export async function getSession(): Promise<{ ok: boolean; principal?: AdminPrincipal }> {
   const res = await adminFetch('/session', { method: 'GET' })
   return parseJSON(res)
 }
 
-export async function login(username: string, password: string): Promise<void> {
+export async function login(username: string, password: string, mfaCode = '', emergencyReason = ''): Promise<void> {
   const res = await adminFetch('/session', {
     method: 'POST',
-    body: JSON.stringify({ username, password }),
+    body: JSON.stringify({
+      username,
+      password,
+      ...(mfaCode.trim() ? { mfa_code: mfaCode.trim() } : {}),
+      ...(emergencyReason.trim() ? { emergency_reason: emergencyReason.trim() } : {}),
+    }),
   })
   const j = await parseJSON<{ ok?: boolean; error?: string }>(res)
   if (!res.ok || !j.ok) throw new Error(j.error || '登录失败')
