@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"reflect"
 	"sync"
 	"time"
 
@@ -45,7 +46,6 @@ type Writer struct {
 	publicKey      trustcrypto.PublicKeyDescriptor
 	clock          Clock
 	stats          Stats
-	unlock         func() error
 	closed         bool
 }
 
@@ -115,45 +115,16 @@ func OpenWriter(ctx context.Context, opts Options) (*Writer, error) {
 			return nil, err
 		}
 	}
-	result, err := scanAuditFile(ctx, file, publicKey, 0, nil)
-	if err != nil {
-		return nil, err
-	}
-	checkpoint, checkpointExists, err := readCheckpoint(ctx, opts.CheckpointPath, publicKey)
-	if err != nil {
-		return nil, err
-	}
-	if checkpointExists {
-		if checkpoint.Checkpoint.CryptoSuite != publicKey.Suite || checkpoint.Checkpoint.Sequence > result.stats.Sequence {
-			return nil, ErrRollback
-		}
-		if checkpoint.Checkpoint.Sequence > 0 {
-			match, err := hashAtSequence(ctx, file, publicKey, checkpoint.Checkpoint.Sequence)
-			if err != nil || !bytes.Equal(match, checkpoint.Checkpoint.EventHash) {
-				return nil, ErrRollback
-			}
-		}
-		if checkpoint.Checkpoint.Sequence == result.stats.Sequence && checkpoint.Checkpoint.LogBytes > result.goodOffset {
-			return nil, ErrRollback
-		}
-	}
-	if result.truncated {
-		if err := file.Truncate(result.goodOffset); err != nil {
-			return nil, fmt.Errorf("securityaudit: remove incomplete crash tail: %w", err)
-		}
-		if err := file.Sync(); err != nil {
-			return nil, err
-		}
-	}
 	writer := &Writer{
 		file: file, path: opts.Path, checkpointPath: opts.CheckpointPath, maxBytes: opts.MaxBytes,
 		retention: opts.Retention, signer: opts.Signer, publicKey: publicKey.Clone(), clock: opts.Clock,
-		stats: result.stats, unlock: unlock,
+		stats: Stats{LogBytes: int64(len(auditFileMagic)), Suite: publicKey.Suite},
 	}
-	if !checkpointExists || checkpoint.Checkpoint.Sequence != result.stats.Sequence || !bytes.Equal(checkpoint.Checkpoint.EventHash, result.stats.EventHash) {
-		if err := writer.writeCheckpoint(ctx, time.Now().UTC()); err != nil {
-			return nil, err
-		}
+	if err := writer.refreshLocked(ctx); err != nil {
+		return nil, err
+	}
+	if err := unlock(); err != nil {
+		return nil, err
 	}
 	closeFile = false
 	closeLock = false
@@ -165,6 +136,14 @@ func (w *Writer) Record(ctx context.Context, draft Draft) (SignedEvent, error) {
 	defer w.mu.Unlock()
 	if w.closed {
 		return SignedEvent{}, errors.New("securityaudit: writer is closed")
+	}
+	unlock, err := acquireLock(w.path)
+	if err != nil {
+		return SignedEvent{}, err
+	}
+	defer unlock()
+	if err := w.refreshLocked(ctx); err != nil {
+		return SignedEvent{}, err
 	}
 	clean, err := sanitizeDraft(draft)
 	if err != nil {
@@ -251,7 +230,47 @@ func (w *Writer) Close() error {
 		return nil
 	}
 	w.closed = true
-	return errors.Join(w.file.Close(), w.unlock())
+	return w.file.Close()
+}
+
+func (w *Writer) refreshLocked(ctx context.Context) error {
+	result, err := scanAuditFile(ctx, w.file, w.publicKey, 0, nil)
+	if err != nil {
+		return err
+	}
+	checkpoint, checkpointExists, err := readCheckpoint(ctx, w.checkpointPath, w.publicKey)
+	if err != nil {
+		return err
+	}
+	if checkpointExists {
+		if checkpoint.Checkpoint.CryptoSuite != w.publicKey.Suite || checkpoint.Checkpoint.Sequence > result.stats.Sequence {
+			return ErrRollback
+		}
+		if checkpoint.Checkpoint.Sequence > 0 {
+			match, err := hashAtSequence(ctx, w.file, w.publicKey, checkpoint.Checkpoint.Sequence)
+			if err != nil || !bytes.Equal(match, checkpoint.Checkpoint.EventHash) {
+				return ErrRollback
+			}
+		}
+		if checkpoint.Checkpoint.Sequence == result.stats.Sequence && checkpoint.Checkpoint.LogBytes > result.goodOffset {
+			return ErrRollback
+		}
+	}
+	if result.truncated {
+		if err := w.file.Truncate(result.goodOffset); err != nil {
+			return fmt.Errorf("securityaudit: remove incomplete crash tail: %w", err)
+		}
+		if err := w.file.Sync(); err != nil {
+			return err
+		}
+	}
+	w.stats = cloneStats(result.stats)
+	if !checkpointExists || checkpoint.Checkpoint.Sequence != result.stats.Sequence || !bytes.Equal(checkpoint.Checkpoint.EventHash, result.stats.EventHash) || checkpoint.Checkpoint.LogBytes != result.stats.LogBytes {
+		if err := w.writeCheckpoint(ctx, time.Now().UTC()); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (w *Writer) writeCheckpoint(ctx context.Context, now time.Time) error {
@@ -359,11 +378,19 @@ func verifyEvent(ctx context.Context, signed SignedEvent, publicKey trustcrypto.
 	if event.SchemaVersion != EventSchema || event.CryptoSuite != publicKey.Suite || event.Sequence != previousSequence+1 || !bytes.Equal(event.PreviousHash, previousHash) {
 		return ErrInvalidChain
 	}
-	if event.LocalTimeUnixNano <= 0 || event.RetentionUntilUnix <= event.LocalTimeUnixNano || event.EventID == "" {
+	if event.LocalTimeUnixNano <= 0 || event.RetentionUntilUnix <= event.LocalTimeUnixNano || !validEventID(event.EventID) || len(signed.EventHash) != 32 {
 		return ErrInvalidEvent
 	}
-	if _, err := sanitizeDraft(Draft{Actor: event.Actor, Roles: event.Roles, Action: event.Action, Object: event.Object, Result: event.Result, RequestID: event.RequestID, Source: event.Source, PolicyVersion: event.PolicyVersion, Context: event.Context}); err != nil {
+	if event.Sequence == 1 && len(event.PreviousHash) != 0 || event.Sequence > 1 && len(event.PreviousHash) != 32 || !validTimeEvidence(event.Time) {
+		return ErrInvalidEvent
+	}
+	draft := Draft{Actor: event.Actor, Roles: event.Roles, Action: event.Action, Object: event.Object, Result: event.Result, RequestID: event.RequestID, Source: event.Source, PolicyVersion: event.PolicyVersion, Context: event.Context}
+	clean, err := sanitizeDraft(draft)
+	if err != nil {
 		return err
+	}
+	if !reflect.DeepEqual(clean, draft) {
+		return fmt.Errorf("%w: event fields are not canonical or privacy-redacted", ErrInvalidEvent)
 	}
 	input, err := eventInput(event)
 	if err != nil {
@@ -381,6 +408,38 @@ func verifyEvent(ctx context.Context, signed SignedEvent, publicKey trustcrypto.
 		return fmt.Errorf("%w: signature: %v", ErrInvalidChain, err)
 	}
 	return nil
+}
+
+func validEventID(value string) bool {
+	decoded, err := hex.DecodeString(value)
+	return err == nil && len(decoded) == 16
+}
+
+func validTimeEvidence(value TimeEvidence) bool {
+	if cleanIdentifier(value.Source, 128) == "" || cleanIdentifier(value.Status, 64) == "" || cleanIdentifier(value.Confidence, 64) == "" || value.UncertaintyNanos < 0 {
+		return false
+	}
+	if value.ReferenceSampleUnixN == 0 {
+		local := value.Source == "system-clock" && value.Status == "unverified" && value.Confidence == "local"
+		unavailable := value.Source == "configured-reference" && value.Status == "unavailable" && value.Confidence == "none"
+		return (local || unavailable) && !value.Synchronized && value.OffsetNanos == 0 && value.UncertaintyNanos == 0 && value.SampleAgeNanos == 0
+	}
+	if value.ReferenceSampleUnixN < 0 || value.Source == "system-clock" || value.Source == "configured-reference" {
+		return false
+	}
+	switch value.Confidence {
+	case "authenticated", "network", "hardware", "local":
+	default:
+		return false
+	}
+	switch value.Status {
+	case "synchronized":
+		return value.Synchronized && value.Confidence != "local" && value.SampleAgeNanos >= 0
+	case "stale", "drift-exceeded", "unsynchronized", "unverified":
+		return !value.Synchronized
+	default:
+		return false
+	}
 }
 
 func eventInput(event Event) ([]byte, error) {

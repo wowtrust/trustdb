@@ -12,6 +12,12 @@ import (
 )
 
 func secureAuditFile(file *os.File) error {
+	return secureAuditPath(file.Name())
+}
+
+func secureAuditDirectory(path string) error { return secureAuditPath(path) }
+
+func secureAuditPath(path string) error {
 	owner, err := currentUserSID()
 	if err != nil {
 		return err
@@ -23,12 +29,20 @@ func secureAuditFile(file *os.File) error {
 	if err != nil {
 		return err
 	}
-	return windows.SetNamedSecurityInfo(file.Name(), windows.SE_FILE_OBJECT,
+	return windows.SetNamedSecurityInfo(path, windows.SE_FILE_OBJECT,
 		windows.OWNER_SECURITY_INFORMATION|windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION,
 		owner, nil, acl, nil)
 }
 
 func validateAuditFilePermissions(path string, _ os.FileInfo) error {
+	return validateAuditPathPermissions(path)
+}
+
+func validateAuditDirectoryPermissions(path string, _ os.FileInfo) error {
+	return validateAuditPathPermissions(path)
+}
+
+func validateAuditPathPermissions(path string) error {
 	descriptor, err := windows.GetNamedSecurityInfo(path, windows.SE_FILE_OBJECT, windows.OWNER_SECURITY_INFORMATION|windows.DACL_SECURITY_INFORMATION)
 	if err != nil {
 		return fmt.Errorf("%w: inspect ACL: %v", ErrUnsafeStorage, err)
@@ -53,8 +67,12 @@ func validateAuditFilePermissions(path string, _ os.FileInfo) error {
 	if err := windows.GetAce(dacl, 0, &ace); err != nil {
 		return err
 	}
+	if ace == nil || ace.Header.AceType != windows.ACCESS_ALLOWED_ACE_TYPE || ace.Header.AceFlags&windows.INHERITED_ACE != 0 {
+		return fmt.Errorf("%w: owner ACE is invalid", ErrUnsafeStorage)
+	}
 	aceSID := (*windows.SID)(unsafe.Pointer(&ace.SidStart))
-	if ace == nil || !expected.Equals(aceSID) {
+	const fileAllAccess = windows.STANDARD_RIGHTS_REQUIRED | windows.SYNCHRONIZE | 0x1ff
+	if !expected.Equals(aceSID) || ace.Mask&windows.GENERIC_ALL == 0 && ace.Mask&fileAllAccess != fileAllAccess {
 		return fmt.Errorf("%w: DACL grants an unexpected principal", ErrUnsafeStorage)
 	}
 	return nil

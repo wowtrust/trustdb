@@ -3,10 +3,13 @@ package securityaudit
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -64,6 +67,32 @@ func TestSignedAuditChainAndExportAcrossSuites(t *testing.T) {
 			tampered := bytes.Replace(exported.Bytes(), []byte(`"actor":"security-admin"`), []byte(`"actor":"security-admin-x"`), 1)
 			if _, err := VerifyExportJSONL(context.Background(), bytes.NewReader(tampered), publicKey); err == nil {
 				t.Fatal("tampered export verified")
+			}
+			newline := bytes.IndexByte(exported.Bytes(), '\n')
+			if newline < 0 {
+				t.Fatal("export has no manifest line")
+			}
+			trailingJSON := append([]byte(nil), exported.Bytes()[:newline]...)
+			trailingJSON = append(trailingJSON, []byte(" {}")...)
+			trailingJSON = append(trailingJSON, exported.Bytes()[newline:]...)
+			if _, err := VerifyExportJSONL(context.Background(), bytes.NewReader(trailingJSON), publicKey); err == nil {
+				t.Fatal("export line with trailing JSON verified")
+			}
+			checkpoint, err := writer.Checkpoint(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			checkpointJSON, err := json.Marshal(checkpoint)
+			if err != nil {
+				t.Fatal(err)
+			}
+			checkpointStats, err := VerifyCheckpointArtifact(context.Background(), bytes.NewReader(checkpointJSON), publicKey)
+			if err != nil || checkpointStats.Sequence != 2 {
+				t.Fatalf("verify checkpoint stats=%+v err=%v", checkpointStats, err)
+			}
+			checkpointJSON = append(checkpointJSON, []byte(" {}")...)
+			if _, err := VerifyCheckpointArtifact(context.Background(), bytes.NewReader(checkpointJSON), publicKey); err == nil {
+				t.Fatal("checkpoint artifact with trailing JSON verified")
 			}
 			if err := writer.Close(); err != nil {
 				t.Fatal(err)
@@ -135,6 +164,24 @@ func TestClockEvidenceAndFailClosedSynchronization(t *testing.T) {
 	if _, evidence, err := staleClock.Sample(context.Background()); !errors.Is(err, ErrTimeUnsynchronized) || evidence.Status != "stale" {
 		t.Fatalf("stale evidence=%+v err=%v", evidence, err)
 	}
+	if err := WriteReferenceSample(path, ReferenceSample{
+		SchemaVersion: TimeSchema, Source: "chrony-ntp-auth", SampledAtUnixNano: now.UnixNano(),
+		OffsetNanos: -1 << 63, Synchronized: true, Confidence: "authenticated",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, evidence, err := clock.Sample(context.Background()); !errors.Is(err, ErrTimeUnsynchronized) || evidence.Status != "drift-exceeded" {
+		t.Fatalf("overflow drift evidence=%+v err=%v", evidence, err)
+	}
+	if err := WriteReferenceSample(path, ReferenceSample{
+		SchemaVersion: TimeSchema, Source: "local-monitor", SampledAtUnixNano: now.UnixNano(),
+		Synchronized: true, Confidence: "local",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, evidence, err := clock.Sample(context.Background()); !errors.Is(err, ErrTimeUnsynchronized) || evidence.Status != "unverified" {
+		t.Fatalf("local confidence evidence=%+v err=%v", evidence, err)
+	}
 }
 
 func TestAuditCapacityFailsBeforeMutation(t *testing.T) {
@@ -154,6 +201,48 @@ func TestAuditCapacityFailsBeforeMutation(t *testing.T) {
 	}
 	if after := writer.Stats(); after.Sequence != before.Sequence || after.LogBytes != before.LogBytes {
 		t.Fatalf("capacity failure mutated stats: before=%+v after=%+v", before, after)
+	}
+}
+
+func TestConcurrentWritersRefreshAndSerializeChainHead(t *testing.T) {
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "security.audit")
+	checkpointPath := filepath.Join(dir, "security.checkpoint")
+	signer := newEd25519Signer(t)
+	first := openTestWriter(t, logPath, checkpointPath, signer, nil)
+	defer first.Close()
+	second := openTestWriter(t, logPath, checkpointPath, signer, nil)
+	defer second.Close()
+	const perWriter = 25
+	var wg sync.WaitGroup
+	errorsChannel := make(chan error, 2)
+	for index, writer := range []*Writer{first, second} {
+		wg.Add(1)
+		go func(index int, writer *Writer) {
+			defer wg.Done()
+			for event := 0; event < perWriter; event++ {
+				_, err := writer.Record(context.Background(), Draft{
+					Actor: "system-admin", Action: "concurrency.test", Object: "writer", Result: "success", Source: "test",
+					RequestID: fmt.Sprintf("writer-%d-event-%d", index, event),
+				})
+				if err != nil {
+					errorsChannel <- err
+					return
+				}
+			}
+		}(index, writer)
+	}
+	wg.Wait()
+	close(errorsChannel)
+	for err := range errorsChannel {
+		t.Fatal(err)
+	}
+	stats, err := first.Verify(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.Sequence != 2*perWriter {
+		t.Fatalf("sequence=%d want=%d", stats.Sequence, 2*perWriter)
 	}
 }
 

@@ -15,13 +15,15 @@ import (
 
 	"github.com/wowtrust/trustdb/internal/cryptosuite"
 	"github.com/wowtrust/trustdb/internal/model"
+	"github.com/wowtrust/trustdb/internal/trustcrypto"
 )
 
 const (
-	EventSchema      = "trustdb.security-audit-event.v1"
-	CheckpointSchema = "trustdb.security-audit-checkpoint.v1"
-	ExportSchema     = "trustdb.security-audit-export.v1"
-	TimeSchema       = "trustdb.time-reference.v1"
+	EventSchema            = "trustdb.security-audit-event.v1"
+	CheckpointSchema       = "trustdb.security-audit-checkpoint.v1"
+	ExportSchema           = "trustdb.security-audit-export.v1"
+	CheckpointExportSchema = "trustdb.security-audit-checkpoint-export.v1"
+	TimeSchema             = "trustdb.time-reference.v1"
 
 	maxRecordBytes  = 256 << 10
 	maxContextPairs = 32
@@ -101,6 +103,12 @@ type SignedCheckpoint struct {
 	Signature  model.Signature `cbor:"signature" json:"signature"`
 }
 
+type CheckpointArtifact struct {
+	SchemaVersion string                          `json:"schema_version"`
+	PublicKey     trustcrypto.PublicKeyDescriptor `json:"public_key"`
+	Checkpoint    SignedCheckpoint                `json:"checkpoint"`
+}
+
 type Stats struct {
 	Sequence  uint64         `json:"sequence"`
 	EventHash []byte         `json:"event_hash"`
@@ -142,7 +150,11 @@ func sanitizeDraft(d Draft) (Draft, error) {
 		roles = append(roles, role)
 	}
 	sort.Strings(roles)
-	d.Roles = roles
+	if len(roles) == 0 {
+		d.Roles = nil
+	} else {
+		d.Roles = roles
+	}
 	if len(d.Context) > maxContextPairs {
 		return Draft{}, fmt.Errorf("%w: too many context fields", ErrInvalidEvent)
 	}

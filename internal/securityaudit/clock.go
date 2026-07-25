@@ -94,12 +94,16 @@ func (c *referenceClock) Sample(ctx context.Context) (time.Time, TimeEvidence, e
 		evidence.Status = "stale"
 		evidence.Synchronized = false
 	}
-	if abs64(sample.OffsetNanos)+sample.UncertaintyNanos > c.opts.MaxClockDrift.Nanoseconds() {
+	if driftExceeded(sample.OffsetNanos, sample.UncertaintyNanos, c.opts.MaxClockDrift.Nanoseconds()) {
 		evidence.Status = "drift-exceeded"
 		evidence.Synchronized = false
 	}
 	if !sample.Synchronized {
 		evidence.Status = "unsynchronized"
+	}
+	if sample.Confidence == "local" {
+		evidence.Status = "unverified"
+		evidence.Synchronized = false
 	}
 	if c.opts.RequireSynchronized && !evidence.Synchronized {
 		return now, evidence, fmt.Errorf("%w: time status %s", ErrTimeUnsynchronized, evidence.Status)
@@ -111,7 +115,7 @@ func validateReferenceSample(sample ReferenceSample) error {
 	if sample.SchemaVersion != TimeSchema {
 		return fmt.Errorf("trusted time schema must be %q", TimeSchema)
 	}
-	if cleanIdentifier(sample.Source, 128) == "" || sample.SampledAtUnixNano <= 0 {
+	if cleanIdentifier(sample.Source, 128) == "" || sample.Source == "system-clock" || sample.Source == "configured-reference" || sample.SampledAtUnixNano <= 0 {
 		return errors.New("trusted time source and sampled_at_unix_nano are required")
 	}
 	if sample.UncertaintyNanos < 0 {
@@ -153,9 +157,10 @@ func readProtectedFile(path string, maxBytes int64) ([]byte, error) {
 	return data, nil
 }
 
-func abs64(value int64) int64 {
-	if value < 0 {
-		return -value
+func driftExceeded(offset, uncertainty, limit int64) bool {
+	if uncertainty < 0 || limit <= 0 || uncertainty > limit {
+		return true
 	}
-	return value
+	remaining := limit - uncertainty
+	return offset > remaining || offset < -remaining
 }

@@ -10,18 +10,18 @@ import (
 
 func openProtectedAppend(path string) (*os.File, error) {
 	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	if err := ensureProtectedDirectory(dir); err != nil {
 		return nil, err
 	}
-	info, err := os.Lstat(dir)
-	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
-		return nil, fmt.Errorf("%w: parent is not a stable directory", ErrUnsafeStorage)
+	file, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
+	created := err == nil
+	if errors.Is(err, fs.ErrExist) {
+		file, err = os.OpenFile(path, os.O_RDWR, 0)
 	}
-	file, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600)
 	if err != nil {
 		return nil, err
 	}
-	if err := validateStableProtectedFile(path, file); err != nil {
+	if err := validateStableProtectedFile(path, file, created); err != nil {
 		_ = file.Close()
 		return nil, err
 	}
@@ -29,18 +29,21 @@ func openProtectedAppend(path string) (*os.File, error) {
 }
 
 func openProtectedExisting(path string) (*os.File, error) {
+	if err := validateProtectedDirectory(filepath.Dir(path)); err != nil {
+		return nil, err
+	}
 	file, err := os.Open(path)
 	if err != nil {
 		return nil, err
 	}
-	if err := validateStableProtectedFile(path, file); err != nil {
+	if err := validateStableProtectedFile(path, file, false); err != nil {
 		_ = file.Close()
 		return nil, err
 	}
 	return file, nil
 }
 
-func validateStableProtectedFile(path string, file *os.File) error {
+func validateStableProtectedFile(path string, file *os.File, created bool) error {
 	pathInfo, err := os.Lstat(path)
 	if err != nil {
 		return err
@@ -52,8 +55,10 @@ func validateStableProtectedFile(path string, file *os.File) error {
 	if pathInfo.Mode()&os.ModeSymlink != 0 || !pathInfo.Mode().IsRegular() || !fileInfo.Mode().IsRegular() || !os.SameFile(pathInfo, fileInfo) {
 		return fmt.Errorf("%w: target is not a stable regular file", ErrUnsafeStorage)
 	}
-	if err := secureAuditFile(file); err != nil {
-		return err
+	if created {
+		if err := secureAuditFile(file); err != nil {
+			return err
+		}
 	}
 	return validateAuditFilePermissions(path, fileInfo)
 }
@@ -73,7 +78,7 @@ func acquireLock(path string) (func() error, error) {
 
 func writeProtectedAtomic(path string, data []byte) error {
 	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	if err := ensureProtectedDirectory(dir); err != nil {
 		return err
 	}
 	if target, err := os.Lstat(path); err == nil {
@@ -115,4 +120,32 @@ func writeProtectedAtomic(path string, data []byte) error {
 	}
 	cleanup = false
 	return nil
+}
+
+func ensureProtectedDirectory(path string) error {
+	_, err := os.Lstat(path)
+	created := errors.Is(err, fs.ErrNotExist)
+	if err != nil && !created {
+		return err
+	}
+	if created {
+		if err := os.MkdirAll(path, 0o700); err != nil {
+			return err
+		}
+		if err := secureAuditDirectory(path); err != nil {
+			return err
+		}
+	}
+	return validateProtectedDirectory(path)
+}
+
+func validateProtectedDirectory(path string) error {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("%w: parent is not a stable directory", ErrUnsafeStorage)
+	}
+	return validateAuditDirectoryPermissions(path, info)
 }
