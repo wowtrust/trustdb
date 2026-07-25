@@ -10,6 +10,19 @@
 
 run_profile: single_node_production
 
+audit:
+  enabled: true
+  required: true
+  path: "/var/lib/trustdb/audit/security.audit"
+  checkpoint_path: "/var/lib/trustdb/audit/security.checkpoint"
+  signing_key: "/etc/trustdb/keys/audit.tdkey"
+  max_bytes: 4294967296
+  retention: "4380h"
+  time_reference_path: "/run/trustdb/time-reference.json"
+  time_max_sample_age: "2m"
+  time_max_drift: "5s"
+  require_synchronized_time: true
+
 paths:
   data_dir: "/var/lib/trustdb"
   key_registry: "/etc/trustdb/keys/clients.tdkeys"

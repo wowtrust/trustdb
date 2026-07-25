@@ -620,6 +620,7 @@ func TestValidateRunProfileAliases(t *testing.T) {
 			cfg := Default()
 			cfg.RunProfile = raw
 			if NormalizeRunProfile(raw) == RunProfileSingleNodeProduction {
+				enableProductionAudit(&cfg)
 				cfg.Server.Transport.Mode = "tls"
 				cfg.Server.Transport.CertFile = "/run/trustdb/server.crt"
 				cfg.Server.Transport.KeyFile = "/run/trustdb/server.key"
@@ -636,6 +637,7 @@ func TestProductionPlaintextRequiresExplicitLoopbackException(t *testing.T) {
 
 	cfg := Default()
 	cfg.RunProfile = RunProfileSingleNodeProduction
+	enableProductionAudit(&cfg)
 	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "allow_local_plaintext") {
 		t.Fatalf("Validate() error = %v, want explicit plaintext exception", err)
 	}
@@ -681,6 +683,7 @@ func TestProductionTLSConfigurationIsValid(t *testing.T) {
 	t.Parallel()
 	cfg := Default()
 	cfg.RunProfile = RunProfileSingleNodeProduction
+	enableProductionAudit(&cfg)
 	cfg.Server.Listen = "0.0.0.0:8080"
 	cfg.Server.Transport = ServerTransport{
 		Mode: "mtls", CertFile: "/tls/server.crt", KeyFile: "/tls/server.key", ClientCAFile: "/tls/client-ca.crt",
@@ -689,6 +692,63 @@ func TestProductionTLSConfigurationIsValid(t *testing.T) {
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("Validate() rejected production mTLS: %v", err)
 	}
+}
+
+func TestValidateAuditProductionBoundaries(t *testing.T) {
+	t.Parallel()
+	cfg := Default()
+	cfg.Audit.Required = true
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "audit.enabled") {
+		t.Fatalf("required disabled audit error = %v", err)
+	}
+	cfg = Default()
+	cfg.Audit.Enabled = true
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "audit.signing_key") {
+		t.Fatalf("missing signing key error = %v", err)
+	}
+	cfg.Audit.SigningKey = "/keys/audit.tdkey"
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("development audit config rejected: %v", err)
+	}
+	cfg.RunProfile = RunProfileSingleNodeProduction
+	cfg.Server.Transport.Mode = "tls"
+	cfg.Server.Transport.CertFile = "/tls/server.crt"
+	cfg.Server.Transport.KeyFile = "/tls/server.key"
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "audit.required") {
+		t.Fatalf("production optional audit error = %v", err)
+	}
+	cfg.Audit.Required = true
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "require_synchronized_time") {
+		t.Fatalf("production unsynchronized audit error = %v", err)
+	}
+}
+
+func TestFromViperMapsAudit(t *testing.T) {
+	t.Parallel()
+	v := viper.New()
+	v.Set("audit.enabled", true)
+	v.Set("audit.required", true)
+	v.Set("audit.path", "/audit/events")
+	v.Set("audit.checkpoint_path", "/audit/checkpoint")
+	v.Set("audit.signing_key", "/keys/audit")
+	v.Set("audit.max_bytes", int64(1234567))
+	v.Set("audit.retention", "720h")
+	v.Set("audit.time_reference_path", "/run/time.json")
+	v.Set("audit.time_max_sample_age", "30s")
+	v.Set("audit.time_max_drift", "1s")
+	v.Set("audit.require_synchronized_time", true)
+	got := FromViper(v).Audit
+	if !got.Enabled || !got.Required || got.Path != "/audit/events" || got.MaxBytes != 1234567 || !got.RequireSynchronizedTime {
+		t.Fatalf("audit config = %+v", got)
+	}
+}
+
+func enableProductionAudit(cfg *Config) {
+	cfg.Audit.Enabled = true
+	cfg.Audit.Required = true
+	cfg.Audit.SigningKey = "/keys/audit.tdkey"
+	cfg.Audit.TimeReferencePath = "/run/time-reference.json"
+	cfg.Audit.RequireSynchronizedTime = true
 }
 
 func TestValidateRunProfileRejectsUnknown(t *testing.T) {

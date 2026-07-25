@@ -206,6 +206,21 @@ log:
     buffer_size: 8192
     drop_on_full: false
 
+# Dedicated signed/hash-chained security audit trail. It is separate from
+# application logs and is mandatory for single_node_production.
+audit:
+  enabled: false
+  required: false
+  path: ".trustdb/audit/security.audit"
+  checkpoint_path: ".trustdb/audit/security.checkpoint"
+  signing_key: ""
+  max_bytes: 4294967296
+  retention: "4380h"
+  time_reference_path: ""
+  time_max_sample_age: "2m"
+  time_max_drift: "5s"
+  require_synchronized_time: false
+
 keys:
   client_private: ""
   client_public: ""
@@ -250,6 +265,7 @@ type Config struct {
 	Proofstore Proofstore `mapstructure:"proofstore" json:"proofstore"`
 	WAL        WAL        `mapstructure:"wal" json:"wal"`
 	Log        Log        `mapstructure:"log" json:"log"`
+	Audit      Audit      `mapstructure:"audit" json:"audit"`
 	Keys       Keys       `mapstructure:"keys" json:"keys"`
 	Admin      Admin      `mapstructure:"admin" json:"admin"`
 }
@@ -272,6 +288,23 @@ type Admin struct {
 	LoginLockout     string   `mapstructure:"login_lockout" json:"login_lockout"`
 	CLIEnforce       bool     `mapstructure:"cli_enforce" json:"cli_enforce"`
 	OIDCGatewayPins  []string `mapstructure:"oidc_gateway_spki_sha256" json:"oidc_gateway_spki_sha256"`
+}
+
+// Audit configures the independent signed security audit trail. MaxBytes is a
+// fail-closed capacity boundary, not a rotation request: required audit data is
+// never silently deleted by TrustDB.
+type Audit struct {
+	Enabled                 bool   `mapstructure:"enabled" json:"enabled"`
+	Required                bool   `mapstructure:"required" json:"required"`
+	Path                    string `mapstructure:"path" json:"path"`
+	CheckpointPath          string `mapstructure:"checkpoint_path" json:"checkpoint_path"`
+	SigningKey              string `mapstructure:"signing_key" json:"signing_key"`
+	MaxBytes                int64  `mapstructure:"max_bytes" json:"max_bytes"`
+	Retention               string `mapstructure:"retention" json:"retention"`
+	TimeReferencePath       string `mapstructure:"time_reference_path" json:"time_reference_path"`
+	TimeMaxSampleAge        string `mapstructure:"time_max_sample_age" json:"time_max_sample_age"`
+	TimeMaxDrift            string `mapstructure:"time_max_drift" json:"time_max_drift"`
+	RequireSynchronizedTime bool   `mapstructure:"require_synchronized_time" json:"require_synchronized_time"`
 }
 
 type Paths struct {
@@ -637,6 +670,14 @@ func Default() Config {
 			LoginMaxFailures: 5,
 			LoginLockout:     "15m",
 		},
+		Audit: Audit{
+			Path:             ".trustdb/audit/security.audit",
+			CheckpointPath:   ".trustdb/audit/security.checkpoint",
+			MaxBytes:         4 << 30,
+			Retention:        "4380h",
+			TimeMaxSampleAge: "2m",
+			TimeMaxDrift:     "5s",
+		},
 		Log: Log{
 			Level:  "warn",
 			Format: "json",
@@ -894,6 +935,48 @@ func (c Config) Validate() error {
 	}
 	if err := validateAdmin(c.Admin); err != nil {
 		return err
+	}
+	if err := validateAudit(c.RunProfile, c.Audit); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateAudit(runProfile string, audit Audit) error {
+	production := NormalizeRunProfile(runProfile) == RunProfileSingleNodeProduction
+	if audit.Required && !audit.Enabled {
+		return fmt.Errorf("audit.enabled must be true when audit.required is true")
+	}
+	if production && (!audit.Enabled || !audit.Required) {
+		return fmt.Errorf("audit.enabled and audit.required must be true for single_node_production")
+	}
+	if !audit.Enabled {
+		return nil
+	}
+	if strings.TrimSpace(audit.Path) == "" || strings.TrimSpace(audit.CheckpointPath) == "" || strings.TrimSpace(audit.SigningKey) == "" {
+		return fmt.Errorf("audit.path, audit.checkpoint_path, and audit.signing_key are required when audit is enabled")
+	}
+	if filepath.Clean(audit.Path) == filepath.Clean(audit.CheckpointPath) {
+		return fmt.Errorf("audit.path and audit.checkpoint_path must be different")
+	}
+	if audit.MaxBytes < 1<<20 {
+		return fmt.Errorf("audit.max_bytes must be at least 1048576")
+	}
+	retention, err := time.ParseDuration(audit.Retention)
+	if err != nil || retention < 24*time.Hour {
+		return fmt.Errorf("audit.retention must be a valid duration of at least 24h")
+	}
+	if err := validatePositiveDuration("audit.time_max_sample_age", audit.TimeMaxSampleAge); err != nil {
+		return err
+	}
+	if err := validatePositiveDuration("audit.time_max_drift", audit.TimeMaxDrift); err != nil {
+		return err
+	}
+	if audit.RequireSynchronizedTime && strings.TrimSpace(audit.TimeReferencePath) == "" {
+		return fmt.Errorf("audit.time_reference_path is required when synchronized time is required")
+	}
+	if production && !audit.RequireSynchronizedTime {
+		return fmt.Errorf("audit.require_synchronized_time must be true for single_node_production")
 	}
 	return nil
 }
