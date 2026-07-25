@@ -18,7 +18,7 @@ const zhCN = {
           ["HTTP", "server.listen 开启。/healthz 和 /metrics 适合探针；业务写入使用 deterministic CBOR，优先使用 SDK。摘流或停止服务关闭。"],
           ["gRPC", "server.grpc_listen 使用非空地址开启，清空并重启关闭。与 HTTP 共用同一 submission、WAL 和 proofstore。"],
           ["NATS / JetStream", "nats.enabled=true 开启 durable fan-in。关闭前停止 publisher、drain consumer，保留 stream、result 和 DLQ；它们不进入 .tdbackup。"],
-          ["Admin Web", "admin.enabled=true 并配置 bcrypt、session secret、web_dir。设为 false 关闭，不影响核心 API；不要直接暴露公网。"],
+          ["管理 RBAC", "先 bootstrap 版本化策略，实现系统/安全/审计三员分立；admin.enabled 控制网页，cli_enforce 独立保护高权限 CLI，并支持 mTLS SPKI、OIDC/MFA 钩子和 break-glass 恢复。"],
         ],
       },
       {
@@ -39,8 +39,8 @@ const zhCN = {
           ["TiKV", "共享集群中的存算分离；一个 namespace 只允许一个逻辑 writer。使用集群级备份，trustdb backup 不直接打开 TiKV。"],
           ["索引", "full、no_storage_tokens、time_only 控制查询能力和写放大；关闭索引不能删除证明对象。"],
         ],
-        code: "wal:\n  fsync_mode: \"group\"\n  group_commit_interval: \"10ms\"\n\ntrustdb serve --wal-max-segment-bytes 1073741824 --wal-keep-segments 2",
-        note: "strict 每条 fsync；group 合并窗口；batch 延迟到 rotate/close。当前 main 的分段大小与保留数量使用 serve flags；不要把未进入配置 schema 的字段写入 YAML。",
+        code: "wal:\n  fsync_mode: \"group\"\n  group_commit_interval: \"10ms\"\n  max_segment_bytes: 1073741824\n  keep_segments: 2",
+        note: "strict 每条 fsync；group 合并窗口；batch 延迟到 rotate/close。WAL 分段大小和 checkpoint 后保留数量已经进入 YAML；CLI flags 仅作显式覆盖。",
       },
       {
         title: "L5 锚定怎么选择",
@@ -67,13 +67,13 @@ const zhCN = {
         bullets: ["健康检查和关键 metrics 正常", "提交固定 canary 并达到目标 L2/L3/L4/L5", "导出 .sproof v2，在服务停止和断网环境验证", "错误原文件、公钥和 anchor trust config 必须失败", "涉及存储、suite、WAL 或 anchor 时完成备份与恢复演练"],
       },
     ],
-    links: [["备份与恢复", "/docs/backup-recovery"], ["生产运维", "/docs/operations"], ["FISCO BCOS", "/docs/fisco-bcos"]],
+    links: [["管理 RBAC 手册", "https://github.com/wowtrust/trustdb/blob/main/docs/zh-CN/ADMINISTRATIVE_RBAC.md"], ["备份与恢复", "/docs/backup-recovery"], ["生产运维", "/docs/operations"], ["FISCO BCOS", "/docs/fisco-bcos"]],
   },
   backupRecovery: {
     eyebrow: "Docs / Operations / 02",
     title: "备份、恢复与灾备",
     lead: ".tdbackup 是 proofstore 的逻辑证据归档，不是整机快照。这里把 archive、WAL、密钥 provider、NATS、对象和区块链的恢复责任拆开。",
-    updated: "更新于 2026.07.25 · 当前 .tdbackup v4 仅支持 INTL_V1",
+    updated: "更新于 2026.07.25 · 当前 .tdbackup v5 支持 INTL_V1 与 CN_SM_V1",
     summary: [["直接 backend", "file / Pebble"], ["恢复方式", "全新目标 + 默认可续传 checkpoint"], ["验收标准", "历史查询、immutable anchor、断网 .sproof 验证"]],
     sections: [
       {
@@ -83,7 +83,7 @@ const zhCN = {
           ["包含", "proofstore 中可枚举的不可变证据对象和可恢复调度状态，每个 entry 带 suite、ordinal、类型、大小和摘要。"],
           ["不包含", "私钥、credential、PIN、证书、YAML、TrustConfig、WAL、原文件、NATS、BCOS 节点数据和 SDF recovery bundle。"],
         ],
-        note: "CN_SM_V1 在 backup v4 明确失败；不要改标为 INTL_V1。认证加密 backup v5 由 #473 跟踪。",
+        note: "v5 使用随机 DEK 和 SM4-GCM 分帧认证加密，并严格绑定 suite、proofstore generation、NodeID、LogID 与 namespace；v4/plain tar 明确拒绝。",
       },
       {
         title: "创建并立即验证",
@@ -227,20 +227,20 @@ const en = {
     summary: [["Precedence", "YAML baseline, environment override, explicit CLI flag wins"], ["Suites", "INTL_V1 / CN_SM_V1; one suite per namespace"], ["Delivery", "L1–L5 and fully offline .sproof v2 verification"]],
     sections: [
       { title: "One change method", body: ["Validate and display the merged configuration, preserve the previous digest and evidence sample, change one boundary, run a canary, then test shutdown and recovery. Disabling future behavior never authorizes deleting historical evidence or trust material."], code: "trustdb config validate --config /etc/trustdb/production.yaml\ntrustdb config show --config /etc/trustdb/production.yaml\ntrustdb doctor --config /etc/trustdb/production.yaml" },
-      { title: "Ingress and administration", cards: [["HTTP", "server.listen; use SDK deterministic CBOR for writes."], ["gRPC", "Set server.grpc_listen; clear it and restart to disable."], ["NATS", "Set nats.enabled=true; drain before disabling and retain stream/result/DLQ."], ["Admin Web", "Opt in with admin.enabled and strong session settings; never expose it directly to the Internet."]] },
+      { title: "Ingress and administration", cards: [["HTTP", "server.listen; use SDK deterministic CBOR for writes."], ["gRPC", "Set server.grpc_listen; clear it and restart to disable."], ["NATS", "Set nats.enabled=true; drain before disabling and retain stream/result/DLQ."], ["Administrative RBAC", "Bootstrap separated system/security/audit identities. admin.enabled controls Web access; cli_enforce protects privileged CLI, with mTLS/OIDC/MFA hooks and break-glass recovery."]] },
       { title: "Proof materialization", cards: [["inline", "Proof ready on the direct path."], ["async", "Durable background jobs lower submit latency."], ["on_demand", "First proof read pays materialization cost."], ["Global Log", "global_log.enabled=true produces L4; disabling caps new records at L2/L3."]] },
-      { title: "Storage and WAL", cards: [["file", "Development and diagnostics."], ["Pebble", "Recommended single-node production store."], ["TiKV", "One logical writer per namespace; use cluster backup."], ["Indexes", "full, no_storage_tokens, or time_only."]], code: "wal:\n  fsync_mode: \"group\"\n  group_commit_interval: \"10ms\"\n\ntrustdb serve --wal-max-segment-bytes 1073741824 --wal-keep-segments 2", note: "Current main exposes segment size and retention as serve flags. Do not add fields that are not yet in the YAML schema." },
+      { title: "Storage and WAL", cards: [["file", "Development and diagnostics."], ["Pebble", "Recommended single-node production store."], ["TiKV", "One logical writer per namespace; use cluster backup."], ["Indexes", "full, no_storage_tokens, or time_only."]], code: "wal:\n  fsync_mode: \"group\"\n  group_commit_interval: \"10ms\"\n  max_segment_bytes: 1073741824\n  keep_segments: 2", note: "Segment rotation and post-checkpoint retention are part of the YAML schema; serve flags remain explicit overrides." },
       { title: "Anchors", cards: [["off", "No new L5."], ["noop/file", "Pipeline/local audit only; no independent third-party time."], ["OTS", "Calendar acceptance plus later upgrade."], ["plugin", "Versioned supervised publisher and offline verifier."], ["FISCO BCOS", "Canonical TrustConfig, quorum, receipt inclusion, PBFT finality, exact binding."], ["Scheduler", "At most Pending plus immutable InFlight per key."]] },
       { title: "Cryptography and transport", cards: [["Suites", "Changing suite requires a new key, LogID, WAL, and empty proofstore namespace."], ["Key custody", "Software envelopes are for development; production uses remote/PKCS#11/SDF/HSM."], ["TLS/mTLS", "Configure server.transport and trusted client roots."], ["TLCP", "Terminate at an authenticated, controlled gateway boundary."]] },
       { title: "Minimum acceptance", bullets: ["Health and metrics pass", "Canary reaches the intended level", "Export and verify .sproof v2 while offline", "Wrong content/key/anchor trust fails", "Backup and restore every changed durable boundary"] },
     ],
-    links: [["Backup and recovery", "/docs/backup-recovery"], ["Production operations", "/docs/operations"], ["FISCO BCOS", "/docs/fisco-bcos"]],
+    links: [["Administrative RBAC", "https://github.com/wowtrust/trustdb/blob/main/docs/compliance/ADMINISTRATIVE_RBAC.md"], ["Backup and recovery", "/docs/backup-recovery"], ["Production operations", "/docs/operations"], ["FISCO BCOS", "/docs/fisco-bcos"]],
   },
   backupRecovery: {
-    eyebrow: "Docs / Operations / 02", title: "Backup and recovery", lead: ".tdbackup is a logical proofstore archive, not a machine image or key-custody recovery package.", updated: "Updated 2026.07.25 · .tdbackup v4 currently supports INTL_V1 only",
+    eyebrow: "Docs / Operations / 02", title: "Backup and recovery", lead: ".tdbackup is a logical proofstore archive, not a machine image or key-custody recovery package.", updated: "Updated 2026.07.25 · encrypted .tdbackup v5 supports INTL_V1 and CN_SM_V1",
     summary: [["Direct stores", "file / Pebble"], ["Restore", "new target + resumable checkpoint"], ["Acceptance", "historical reads, immutable anchors, offline proof verification"]],
     sections: [
-      { title: "Know the boundary", body: ["The archive includes proof bundles, roots, Global Log state, STHs, outboxes, immutable anchor results, and complete scheduler state."], cards: [["Included", "Enumerable proofstore evidence and recovery intents."], ["Excluded", "Private keys, credentials, YAML, certificates, TrustConfig, WAL, content, NATS, BCOS nodes, and SDF recovery bundles."]], note: "CN_SM_V1 fails closed in backup v4; never relabel it as INTL_V1." },
+      { title: "Know the boundary", body: ["The archive includes proof bundles, roots, Global Log state, STHs, outboxes, immutable anchor results, and complete scheduler state."], cards: [["Included", "Enumerable proofstore evidence and recovery intents."], ["Excluded", "Private keys, credentials, YAML, certificates, TrustConfig, WAL, content, NATS, BCOS nodes, and SDF recovery bundles."]], note: "V5 uses a random DEK and framed SM4-GCM authentication, binds the exact suite and namespace generation, and rejects v4/plain tar." },
       { title: "Create and verify", code: "trustdb backup create --metastore pebble \\\n  --metastore-path /var/lib/trustdb/proofs/pebble \\\n  --crypto-suite INTL_V1 --compression gzip \\\n  --out /var/backups/trustdb/proofstore.tdbackup\ntrustdb backup verify --file /var/backups/trustdb/proofstore.tdbackup" },
       { title: "Restore to a new target", code: "trustdb backup restore --file /var/backups/trustdb/proofstore.tdbackup \\\n  --metastore pebble --metastore-path /var/lib/trustdb-restore/proofs/pebble \\\n  --crypto-suite INTL_V1 --checkpoint /var/lib/trustdb-restore/checkpoint.json --resume", body: ["Resume uses the same archive, target, and BackupID-bound checkpoint. Never share one checkpoint between restore processes."] },
       { title: "Acceptance before traffic", bullets: ["Start an isolated instance with the same suite/NodeID/LogID/namespace", "Compare object counts and immutable anchor results", "Verify a pre-backup .sproof offline with independent trust roots", "Run wrong-content/key/TrustConfig negative tests", "Keep the old directory read-only through the rollback window"] },

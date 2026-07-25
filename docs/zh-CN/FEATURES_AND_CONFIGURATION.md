@@ -116,10 +116,9 @@ anchor result。切换前必须用真实查询验证业务没有依赖被关闭�
 | `group` | 在 `group_commit_interval` 内合并刷盘 | 生产默认，常用 10ms |
 | `batch` | 主要在 segment 轮转或关闭时刷盘 | 基准或可丢弃环境，不用于强耐久声明 |
 
-当前 `main` 使用 `--wal-max-segment-bytes` 启用按大小分段，并用
-`--wal-keep-segments` 控制安全 checkpoint 推进后额外保留多少个旧 segment；
-两者默认都是零。`wal` YAML 当前只配置 `fsync_mode` 与
-`group_commit_interval`，不要把尚未进入配置 schema 的字段写进生产 YAML。
+当前 `main` 使用 `wal.max_segment_bytes` 启用按大小分段，并用
+`wal.keep_segments` 控制安全 checkpoint 推进后额外保留多少个旧 segment；
+两者默认都是零。对应 serve flags 只用于显式临时覆盖，生产基线应写入 YAML。
 切换模式只影响新追加；已有 WAL、checkpoint 与 namespace binding 必须保留。
 关闭服务必须走优雅 shutdown，等待 writer、batch 和 checkpoint 收口。
 
@@ -182,11 +181,19 @@ TLCP 由受监管网关终止，TrustDB 使用严格 profile 与 active identity
 
 ### Admin Web
 
-- **开启**：`admin.enabled=true`，配置 base path、username、bcrypt password hash、
-  session secret、构建后的 `web_dir` 与 HTTPS 场景下的 secure cookie。
-- **验证**：未认证请求被拒绝；配置编辑仍经过 schema 校验；只读页面不暴露 secret。
+- **开启**：先用 `trustdb admin policy bootstrap` 创建版本化三员分立策略，再设置
+  `admin.enabled=true`、`policy_path`、session secret、构建后的 `web_dir` 与 HTTPS
+  场景下的 secure cookie。
+- **CLI**：生产设置 `admin.cli_enforce=true`；策略缺失、无权限或认证失败时，高权限
+  命令在执行前拒绝。
+- **验证**：按接口检查 `system.*`、`security.policy.*` 等权限；配置编辑仍经过 schema
+  校验，且通用 YAML 接口禁止修改 `admin` 授权边界。
 - **关闭**：`admin.enabled=false` 并重启；核心 HTTP/gRPC/SDK 不受影响。
-- **边界**：Admin Web 不是通用 IAM，也不应直接暴露公网。
+- **身份扩展**：支持 mTLS SPKI 绑定，并提供 OIDC/MFA 的已验证宿主钩子；不会信任
+  裸身份头，也不强制绑定某一家 IdP。
+
+完整角色矩阵、会话失效、锁定、在线策略更新和离线紧急恢复见
+[管理 RBAC 手册](ADMINISTRATIVE_RBAC.md)。
 
 ## 11. 日志、健康与指标
 
