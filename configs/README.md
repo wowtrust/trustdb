@@ -154,3 +154,25 @@ so bootstrap `/etc/trustdb/admin-policy.json` before running protected commands.
 Set `admin.session_secret` to at least 32 random bytes only when the Web console
 is enabled. See [Administrative RBAC](../docs/compliance/ADMINISTRATIVE_RBAC.md) and the
 [Chinese guide](../docs/zh-CN/ADMINISTRATIVE_RBAC.md).
+
+## Immutable security audit (`audit`)
+
+`audit.enabled` opens a dedicated signed and hash-chained control-plane audit
+trail. `audit.required` makes audit persistence a fail-closed prerequisite for
+privileged CLI and Admin HTTP operations. The `single_node_production` profile
+requires both values plus `require_synchronized_time`.
+
+`signing_key` is a canonical signer descriptor and may select software, remote,
+PKCS#11, or SDF custody. `path` and `checkpoint_path` must be different protected
+files. `max_bytes` is a hard capacity boundary; TrustDB never silently deletes
+or rotates audit history. `retention` is signed into each event as its retention
+deadline. The time-reference file records source, sample age, offset,
+uncertainty, synchronization, and confidence; a local-only reference cannot
+satisfy production synchronized-time policy.
+
+Use `trustdb audit status`, `audit export`, `audit verify`, and
+`audit checkpoint export|verify` for operations and offline continuity checks.
+The full setup, capacity formula, protected-file rules, external checkpoint
+custody, backup boundary, and incident runbook are in
+[Immutable security audit](../docs/compliance/IMMUTABLE_SECURITY_AUDIT.md) and
+the [Chinese guide](../docs/zh-CN/IMMUTABLE_SECURITY_AUDIT.md).

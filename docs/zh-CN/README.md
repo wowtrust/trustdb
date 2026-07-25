@@ -27,6 +27,7 @@ V2/V5 实现。它不是 v1.0.0 发布包的兼容说明：v1.0.0 发布于 V2/V
 | 批次与证明 | inline、async、on-demand；Global Log 与 STH | `batch.proof_mode`；生产证据路径保持 `global_log.enabled=true` |
 | 存储 | file、Pebble、TiKV；有界索引与同步策略 | `metastore`、`proofstore.*`；更换 backend 使用新目录/namespace |
 | WAL | strict、group、batch，目录分段、checkpoint、裁剪 | `wal.fsync_mode`；生产通常用 group，逐条 fsync 契约用 strict |
+| 不可变安全审计 | 高权限操作签名链、可信时间状态、JSONL/Checkpoint 离线验证 | [`IMMUTABLE_SECURITY_AUDIT.md`](IMMUTABLE_SECURITY_AUDIT.md) |
 | L5 锚定 | off、file、noop、OpenTimestamps、外部插件、FISCO BCOS | `anchor.sink`；关闭设为 `off`，已有结果仍保持不可变 |
 | 私钥托管 | 软件 envelope（开发）、remote、PKCS#11、SDF | `crypto.signer_plugins.*` 与 descriptor/provider；生产不回退软件 key |
 | 传输 | 本地明文限制、TLS/mTLS、TLCP 网关 | `server.transport.*`、`tlcp.*`、`--tlcp-gateway-profile` |

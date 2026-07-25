@@ -137,6 +137,7 @@ function OperationsGuidePage({ route, pageKey }) {
             {section.cards && <div className="definition-grid">{section.cards.map(([title, description]) => <div key={title}><strong>{title}</strong><p>{description}</p></div>)}</div>}
             {section.bullets && <ul>{section.bullets.map((item) => <li key={item}>{item}</li>)}</ul>}
             {section.code && <CodeBlock>{section.code}</CodeBlock>}
+            {section.platformCode && <PlatformCodeBlock commands={section.platformCode} />}
             {section.note && <Note tone="warn" title={locale === "zh-CN" ? "边界" : "Boundary"}>{section.note}</Note>}
           </section>
         ))}
@@ -159,6 +160,10 @@ export function BackupRecoveryDocsPage({ route }) {
 
 export function OperationsDocsPage({ route }) {
   return <OperationsGuidePage route={route} pageKey="operations" />;
+}
+
+export function SecurityAuditDocsPage({ route }) {
+  return <OperationsGuidePage route={route} pageKey="securityAudit" />;
 }
 
 export function FISCOBCOSDocsPage({ route }) {
