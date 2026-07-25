@@ -7,14 +7,18 @@ on:
       - "configs/compatibility/fisco-bcos-v3.16.3.json"
       - "configs/fisco-bcos-guomi-trust-config.example.json"
       - "docs/integrations/ADR-0012-FISCO-BCOS-3X-COMPATIBILITY-BASELINE.md"
+      - "docs/integrations/FISCO_BCOS_QUALIFICATION.md"
       - "docs/integrations/evidence/fisco-bcos/**"
       - "contracts/fisco-bcos/**"
       - "scripts/fisco-bcos/**"
       - "internal/anchor/fiscobcos/**"
       - "internal/anchor/fiscobcos_sink*.go"
+      - "internal/backup/**"
       - "third_party/fisco-bcos/**"
       - "internal/config/**"
       - "internal/observability/metrics.go"
+      - "internal/proofstore/**"
+      - "internal/sproof/**"
       - "cmd/trustdb/**"
       - "go.mod"
       - "go.sum"
@@ -27,14 +31,18 @@ on:
       - "configs/compatibility/fisco-bcos-v3.16.3.json"
       - "configs/fisco-bcos-guomi-trust-config.example.json"
       - "docs/integrations/ADR-0012-FISCO-BCOS-3X-COMPATIBILITY-BASELINE.md"
+      - "docs/integrations/FISCO_BCOS_QUALIFICATION.md"
       - "docs/integrations/evidence/fisco-bcos/**"
       - "contracts/fisco-bcos/**"
       - "scripts/fisco-bcos/**"
       - "internal/anchor/fiscobcos/**"
       - "internal/anchor/fiscobcos_sink*.go"
+      - "internal/backup/**"
       - "third_party/fisco-bcos/**"
       - "internal/config/**"
       - "internal/observability/metrics.go"
+      - "internal/proofstore/**"
+      - "internal/sproof/**"
       - "cmd/trustdb/**"
       - "go.mod"
       - "go.sum"
@@ -96,6 +104,15 @@ jobs:
             --crypto standard \
             --cache-dir "${RUNNER_TEMP}/fisco-cache"
 
+      - name: Verify pinned Linux arm64 artifacts
+        run: |
+          for mode in standard guomi; do
+            python3 scripts/fisco-bcos/compatibility.py verify-artifacts \
+              --platform linux/arm64 \
+              --crypto "${mode}" \
+              --cache-dir "${RUNNER_TEMP}/fisco-arm64-cache"
+          done
+
       - name: Compile and test the native standard anchor driver
         env:
           CGO_ENABLED: "1"
@@ -122,6 +139,79 @@ jobs:
         run: >
           go run golang.org/x/vuln/cmd/govulncheck@v1.6.0
           -tags=fiscobcos_sdk ./...
+
+  linux-four-node-qualification:
+    name: Linux amd64 four-node qualification (${{ matrix.mode }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 55
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [standard, guomi]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: |
+            go.sum
+            scripts/fisco-bcos/smoke-client/go.sum
+
+      - name: Install network-namespace tooling
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y util-linux
+          sudo unshare --net -- true
+
+      - name: Validate qualification harness
+        run: |
+          python3 scripts/fisco-bcos/compatibility.py validate
+          python3 scripts/fisco-bcos/test_compatibility.py
+          python3 scripts/fisco-bcos/test_performance.py
+          python3 scripts/fisco-bcos/test_wait_air_ready.py
+          bash -n scripts/fisco-bcos/smoke-air.sh
+
+      - name: Run four-node TrustDB qualification
+        env:
+          GOMODCACHE: ${{ runner.temp }}/trustdb-fisco-go-mod
+          GOCACHE: ${{ runner.temp }}/trustdb-fisco-go-build
+        run: |
+          scripts/fisco-bcos/smoke-air.sh \
+            --mode "${{ matrix.mode }}" \
+            --qualification \
+            --work-dir "${RUNNER_TEMP}/fisco-${{ matrix.mode }}-qualification" \
+            --cache-dir "${RUNNER_TEMP}/fisco-cache" \
+            >"${RUNNER_TEMP}/fisco-${{ matrix.mode }}-qualification.json"
+
+      - name: Upload sanitized qualification evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: fisco-bcos-linux-amd64-${{ matrix.mode }}-qualification
+          path: |
+            ${{ runner.temp }}/fisco-${{ matrix.mode }}-qualification.json
+            ${{ runner.temp }}/fisco-${{ matrix.mode }}-qualification/artifact-verification.json
+            ${{ runner.temp }}/fisco-${{ matrix.mode }}-qualification/client-evidence.json
+            ${{ runner.temp }}/fisco-${{ matrix.mode }}-qualification/client-stderr.log
+            ${{ runner.temp }}/fisco-${{ matrix.mode }}-qualification/consensus-preimage.json
+            ${{ runner.temp }}/fisco-${{ matrix.mode }}-qualification/consensus-preimage.stderr
+            ${{ runner.temp }}/fisco-${{ matrix.mode }}-qualification/performance.json
+            ${{ runner.temp }}/fisco-${{ matrix.mode }}-qualification/qualification-build.log
+            ${{ runner.temp }}/fisco-${{ matrix.mode }}-qualification/qualification-test.log
+            ${{ runner.temp }}/fisco-${{ matrix.mode }}-qualification/offline-qualification.log
+            ${{ runner.temp }}/fisco-${{ matrix.mode }}-qualification/node-start.log
+            ${{ runner.temp }}/fisco-${{ matrix.mode }}-qualification/node-stop.log
+            ${{ runner.temp }}/fisco-${{ matrix.mode }}-qualification/nodes-${{ matrix.mode }}/127.0.0.1/node*/nohup.out
+            ${{ runner.temp }}/fisco-${{ matrix.mode }}-qualification/qualification/*.json
+            ${{ runner.temp }}/fisco-${{ matrix.mode }}-qualification/qualification/*.sproof
+            ${{ runner.temp }}/fisco-${{ matrix.mode }}-qualification/qualification/content.bin
+            ${{ runner.temp }}/fisco-${{ matrix.mode }}-qualification/qualification/*.tdbackup
+          if-no-files-found: warn
+          retention-days: 14
 
   macos-air:
     name: macOS arm64 Air runtime
