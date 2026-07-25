@@ -407,7 +407,7 @@ func canonicalTransactionForVersion(t *testing.T, version int32) []byte {
 }
 
 func validReceiptInclusionFixture(
-	t *testing.T,
+	t testing.TB,
 	mode CryptoMode,
 	suite cryptosuite.ID,
 ) (model.SignedTreeHead, model.STHAnchorResult, TrustConfig) {

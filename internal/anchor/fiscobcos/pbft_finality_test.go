@@ -299,7 +299,7 @@ func TestVerifyStaticPBFTFinalityRejectsGuomiDirectDigestSignature(t *testing.T)
 }
 
 func validStaticFinalityFixture(
-	t *testing.T,
+	t testing.TB,
 	mode CryptoMode,
 	suite cryptosuite.ID,
 ) (model.SignedTreeHead, model.STHAnchorResult, TrustConfig, []finalityFixtureKey) {
@@ -356,7 +356,7 @@ func validStaticFinalityFixture(
 	return sth, resultWithFinalityProof(t, result, proof), trust, keys
 }
 
-func rebuildFinalityBlock(t *testing.T, proof *AnchorProof, signers []finalityFixtureKey) {
+func rebuildFinalityBlock(t testing.TB, proof *AnchorProof, signers []finalityFixtureKey) {
 	t.Helper()
 	rawHeader, err := MarshalNativeBlockHeaderPreimage(proof.Block.Fields)
 	if err != nil {
@@ -411,7 +411,7 @@ func rebuildFinalityBlock(t *testing.T, proof *AnchorProof, signers []finalityFi
 	}
 }
 
-func rebindFinalityContext(t *testing.T, proof *AnchorProof, trust TrustConfig) {
+func rebindFinalityContext(t testing.TB, proof *AnchorProof, trust TrustConfig) {
 	t.Helper()
 	contextID, err := ChainContextID(trust)
 	if err != nil {
@@ -421,7 +421,7 @@ func rebindFinalityContext(t *testing.T, proof *AnchorProof, trust TrustConfig) 
 	proof.ChainContextID = contextID
 }
 
-func mustFinalityProof(t *testing.T, result model.STHAnchorResult) AnchorProof {
+func mustFinalityProof(t testing.TB, result model.STHAnchorResult) AnchorProof {
 	t.Helper()
 	proof, err := UnmarshalProof(result.Proof)
 	if err != nil {
@@ -431,7 +431,7 @@ func mustFinalityProof(t *testing.T, result model.STHAnchorResult) AnchorProof {
 }
 
 func resultWithFinalityProof(
-	t *testing.T,
+	t testing.TB,
 	template model.STHAnchorResult,
 	proof AnchorProof,
 ) model.STHAnchorResult {

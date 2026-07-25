@@ -538,7 +538,7 @@ func testSTH(suiteID cryptosuite.ID) model.SignedTreeHead {
 	}
 }
 
-func testTrustConfig(t *testing.T, mode CryptoMode) TrustConfig {
+func testTrustConfig(t testing.TB, mode CryptoMode) TrustConfig {
 	t.Helper()
 	config, err := NewTrustConfig(mode)
 	if err != nil {

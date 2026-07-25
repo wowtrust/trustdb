@@ -390,8 +390,20 @@ func TestVerifyAuthenticatedPBFTFinalityAuthorizesTransitionWithOldCommittee(t *
 	}
 }
 
+func BenchmarkVerifyAuthenticatedPBFTFinality(b *testing.B) {
+	sth, result, trust, _, _ := validValidatorTransitionFixture(b, CryptoModeStandard)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for iteration := 0; iteration < b.N; iteration++ {
+		if err := VerifyAuthenticatedPBFTFinality(sth, result, trust); err != nil {
+			b.Fatal(err)
+		}
+	}
+	b.ReportMetric(float64(len(result.Proof)), "proof-bytes")
+}
+
 func validValidatorTransitionFixture(
-	t *testing.T,
+	t testing.TB,
 	mode CryptoMode,
 ) (model.SignedTreeHead, model.STHAnchorResult, TrustConfig, []finalityFixtureKey, []finalityFixtureKey) {
 	t.Helper()
@@ -599,7 +611,7 @@ func rewriteTransitionBlock(
 	rebuildFinalityBlock(t, proof, targetSigners)
 }
 
-func finalityKey(t *testing.T, mode CryptoMode, scalar byte) finalityFixtureKey {
+func finalityKey(t testing.TB, mode CryptoMode, scalar byte) finalityFixtureKey {
 	t.Helper()
 	privateKey := make([]byte, 32)
 	privateKey[31] = scalar
@@ -626,7 +638,7 @@ func finalityKey(t *testing.T, mode CryptoMode, scalar byte) finalityFixtureKey 
 	}
 }
 
-func encodeStringUint256Call(t *testing.T, mode CryptoMode, signature, value string, weight uint64) []byte {
+func encodeStringUint256Call(t testing.TB, mode CryptoMode, signature, value string, weight uint64) []byte {
 	t.Helper()
 	selector, err := ABISelectorForMode(mode, signature)
 	if err != nil {
@@ -642,7 +654,7 @@ func encodeStringUint256Call(t *testing.T, mode CryptoMode, signature, value str
 	return out
 }
 
-func encodeStringCall(t *testing.T, mode CryptoMode, signature, value string) []byte {
+func encodeStringCall(t testing.TB, mode CryptoMode, signature, value string) []byte {
 	t.Helper()
 	selector, err := ABISelectorForMode(mode, signature)
 	if err != nil {
