@@ -74,3 +74,5 @@ docs/*
 !docs/compliance/**
 !docs/integrations/
 !docs/integrations/**
+!docs/zh-CN/
+!docs/zh-CN/**

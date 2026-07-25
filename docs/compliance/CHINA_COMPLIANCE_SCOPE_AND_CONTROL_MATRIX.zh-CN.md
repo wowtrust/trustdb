@@ -10,6 +10,12 @@
 >
 > 适用对象：TrustDB Server/CLI、Go SDK、Desktop、proofstore、Global Log、Anchor、逻辑备份、发布制品和参考部署
 
+## 当前实现状态（2026-07-25）
+
+当前 `main` 已完成破坏性的 V2 / proofstore schema v5 切换，并已关闭 #454 与 #455：`INTL_V1` 和 `CN_SM_V1` 均可端到端生成、存储、导出并离线验证 suite-bound claim、receipt、Merkle proof、Signed STH、anchor result 与 `.sproof v2`。旧 V1 / schema v4 数据不双读、不迁移、不回退；历史版本必须保留在独立验证环境中。
+
+本矩阵后文保留了部分控制项在决策当时的 `Partial` 描述，作为设计与实施轨迹，不应覆盖上述当前状态。尚未完成的主要密码敏捷边界是逻辑备份：当前 `.tdbackup v4` 只允许 `INTL_V1`，`CN_SM_V1` 在 backup/restore 入口 fail closed，带认证且由 SM4 保护的 backup v5 由 #473 跟踪。
+
 ## 1. 文档目的
 
 本文把“国产合规”拆成可以设计、实现、测试和审计的控制项，并为每个控制项明确：

@@ -66,7 +66,7 @@ License: AGPL-3.0-only. See [LICENSE](LICENSE).
 
 The first stable release is distributed through [GitHub Releases](https://github.com/wowtrust/trustdb/releases/tag/v1.0.0). It includes Server/CLI archives for Linux, macOS, and Windows, four self-signed desktop packages, a multi-architecture Docker image, and a single `SHA256SUMS` file.
 
-This release establishes the `github.com/wowtrust/trustdb` module path, durable coalesced STH anchoring, covering-anchor offline evidence export, resumable L5 coverage projection, storage schema v4, and the current logical-backup format. Install the Go SDK by its stable tag:
+The v1.0.0 release established the `github.com/wowtrust/trustdb` module path, durable coalesced STH anchoring, covering-anchor offline evidence export, resumable L5 coverage projection, storage schema v4, and `.sproof v1`. Current `main` has since made the intentional V2/V5 cutover: proofstore schema v5, suite-bound wire/storage objects, `.sproof v2`, and end-to-end `INTL_V1` / `CN_SM_V1` evidence generation. The v1.0.0 tag remains the latest published binary/SDK release:
 
 ```bash
 go get github.com/wowtrust/trustdb@v1.0.0
@@ -76,9 +76,10 @@ The multi-architecture Docker image is published with both immutable and stable-
 
 ```bash
 docker pull wsy19990317/trustdb:1.0.0
-read -r -s -p 'Development key passphrase: ' TRUSTDB_DEV_KEY_PASSPHRASE
-export TRUSTDB_DEV_KEY_PASSPHRASE
+printf 'Development key passphrase: '
+IFS= read -r -s TRUSTDB_DEV_KEY_PASSPHRASE
 printf '\n'
+export TRUSTDB_DEV_KEY_PASSPHRASE
 docker run -d --name trustdb \
   -e TRUSTDB_DEV_KEY_PASSPHRASE \
   -p 127.0.0.1:8080:8080 \
@@ -124,7 +125,7 @@ Desktop packages carry a release-specific self-signed certificate and its public
 | L4 | The batch root is included in the Global Transparency Log and a target STH. | `GlobalLogProof` / `.tdgproof` |
 | L5 | A supported anchor sink produced a matching result for the STH/global root; only a genuinely external sink adds independent time semantics. | `STHAnchorResult` / `.tdanchor-result` |
 
-For exchange and desktop verification, `.sproof` is the recommended single-file proof container. It can include the L3 `ProofBundle`, optional L4 `GlobalLogProof`, and optional L5 `STHAnchorResult`. The stable v1 format is documented in [formats/SPROOF_V1.md](formats/SPROOF_V1.md).
+For exchange and desktop verification, `.sproof` is the recommended single-file proof container. It can include the L3 `ProofBundle`, optional L4 `GlobalLogProof`, optional L5 `STHAnchorResult`, and bounded public identity/status evidence. Current builds accept only the suite-bound v2 format documented in [formats/SPROOF_V2.md](formats/SPROOF_V2.md); v1 is retired and is not read, migrated, or used as a fallback.
 
 ## Architecture
 
@@ -161,7 +162,16 @@ Recovery accepts only the V2 WAL and checkpoint generation bound to the configur
 
 ## Quick Start
 
-Download the prebuilt Server/CLI archive for your operating system from the [v1.0.0 release](https://github.com/wowtrust/trustdb/releases/tag/v1.0.0). Verify the archive against [`SHA256SUMS`](https://github.com/wowtrust/trustdb/releases/download/v1.0.0/SHA256SUMS) before extracting it, then run the commands below from the extracted directory. No server or Go toolchain is required. The examples use a POSIX shell; Windows users should follow the platform-specific [website quick start](https://www.trustdb.ryan-wong.cn/docs/quick-start).
+The README and website tutorial track the latest V2 code on `main`. Shallow-clone it, record the exact commit, and build with the Go version declared by `go.mod`; do not run this section with the older `v1.0.0` binary. No server is required. Windows users should follow the platform-specific [website quick start](https://www.trustdb.ryan-wong.cn/docs/quick-start).
+
+```bash
+git clone --depth 1 https://github.com/wowtrust/trustdb.git trustdb-quickstart
+cd trustdb-quickstart
+git rev-parse HEAD
+mkdir -p bin
+go build -trimpath -o ./bin/trustdb ./cmd/trustdb
+./bin/trustdb version
+```
 
 Create an explicit input and a disposable working directory:
 
@@ -180,21 +190,25 @@ replace existing material, so rotate deliberately instead of regenerating an
 identity that has already issued evidence:
 
 ```bash
-read -r -s -p 'Development key passphrase: ' TRUSTDB_DEV_KEY_PASSPHRASE
-export TRUSTDB_DEV_KEY_PASSPHRASE
+printf 'Development key passphrase: '
+IFS= read -r -s TRUSTDB_DEV_KEY_PASSPHRASE
 printf '\n'
+export TRUSTDB_DEV_KEY_PASSPHRASE
 ./bin/trustdb key generate --out .trustdb-dev --prefix client
 ./bin/trustdb key generate --out .trustdb-dev --prefix server
 ```
+
+`--out .trustdb-dev` means “write generated files into the `.trustdb-dev` directory”; it is neither an upload destination nor a proof filename. `--prefix client` produces `client.key`, `client.pub`, and `client.material`.
 
 For unattended development services, set
 `TRUSTDB_DEV_KEY_PASSPHRASE_FILE` instead. It must name an owner-only regular
 file, and `TRUSTDB_DEV_KEY_PASSPHRASE` must then be unset. Keep that secret file
 outside the key directory and its backups.
 
-For a development SM2 identity, select the suite explicitly. This enables key
-provisioning and registry lifecycle testing; CN_SM_V1 server evidence generation
-remains gated until the V2 server cutover in #454:
+For a development SM2 identity, select the suite explicitly. A server started
+with a `CN_SM_V1` server descriptor generates suite-bound SM2/SM3 claims,
+receipts, Merkle proofs, STHs, anchors, and `.sproof v2`; every trusted client
+descriptor and restored proofstore namespace must use that same suite:
 
 ```bash
 ./bin/trustdb key generate \
@@ -219,9 +233,10 @@ deployments should use an approved external signer; explicit
 Rotate the development KEK without changing the signing key or public identity:
 
 ```bash
-read -r -s -p 'Replacement key passphrase: ' TRUSTDB_DEV_KEY_PASSPHRASE_NEW
-export TRUSTDB_DEV_KEY_PASSPHRASE_NEW
+printf 'Replacement key passphrase: '
+IFS= read -r -s TRUSTDB_DEV_KEY_PASSPHRASE_NEW
 printf '\n'
+export TRUSTDB_DEV_KEY_PASSPHRASE_NEW
 ./bin/trustdb key rewrap --descriptor .trustdb-dev/client.key
 export TRUSTDB_DEV_KEY_PASSPHRASE="$TRUSTDB_DEV_KEY_PASSPHRASE_NEW"
 unset TRUSTDB_DEV_KEY_PASSPHRASE_NEW
@@ -367,7 +382,8 @@ The screenshot below is rendered directly from the current desktop client code:
 - [CHANGELOG.md](CHANGELOG.md): curated user-visible release history and known limitations.
 - [docs/compliance/CHINA_COMPLIANCE_SCOPE_AND_CONTROL_MATRIX.zh-CN.md](docs/compliance/CHINA_COMPLIANCE_SCOPE_AND_CONTROL_MATRIX.zh-CN.md): versioned China compliance scope, control ownership, release gates, evidence requirements, and assessment boundaries (Chinese).
 - [CONTRIBUTING.md](CONTRIBUTING.md): issue, PR, commit, validation, and review standards.
-- [formats/SPROOF_V1.md](formats/SPROOF_V1.md): stable `.sproof` v1 exchange format.
+- [formats/SPROOF_V2.md](formats/SPROOF_V2.md): current `.sproof` v2 exchange format and offline trust boundary.
+- [docs/zh-CN/README.md](docs/zh-CN/README.md): categorized Chinese user and operations documentation.
 - [formats/KEY_DESCRIPTOR_V1.md](formats/KEY_DESCRIPTOR_V1.md): canonical key descriptor schema, provider union, resolution contract, redaction, and migration rules.
 - [formats/SM4_KEY_ENVELOPE_V1.md](formats/SM4_KEY_ENVELOPE_V1.md): canonical authenticated software-private-key envelope, passphrase KDF profile, and atomic persistence contract.
 - [formats/SIGNER_PLUGIN_V1.md](formats/SIGNER_PLUGIN_V1.md): versioned subprocess protocol for external private-key custody providers.
