@@ -184,6 +184,32 @@ func TestClockEvidenceAndFailClosedSynchronization(t *testing.T) {
 	}
 }
 
+func TestUnsynchronizedTimeIsDurablyRecordedBeforeOperationIsBlocked(t *testing.T) {
+	dir := t.TempDir()
+	clock, err := NewClock(ClockOptions{
+		ReferencePath: filepath.Join(dir, "missing-time-reference.json"),
+		MaxSampleAge:  time.Minute, MaxClockDrift: time.Second, RequireSynchronized: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer := openTestWriter(t, filepath.Join(dir, "security.audit"), filepath.Join(dir, "security.checkpoint"), newEd25519Signer(t), clock)
+	defer writer.Close()
+	event, err := writer.Record(context.Background(), Draft{
+		Actor: "system-admin", Action: "system.configuration", Object: "trustdb", Result: "authorized", Source: "test",
+	})
+	if !errors.Is(err, ErrTimeUnsynchronized) {
+		t.Fatalf("record error=%v", err)
+	}
+	if event.Event.Sequence != 1 || event.Event.Result != "blocked" || event.Event.Time.Status != "unavailable" || event.Event.Time.Synchronized {
+		t.Fatalf("blocked event=%+v", event.Event)
+	}
+	stats, err := writer.Verify(context.Background())
+	if err != nil || stats.Sequence != 1 {
+		t.Fatalf("verify stats=%+v err=%v", stats, err)
+	}
+}
+
 func TestAuditCapacityFailsBeforeMutation(t *testing.T) {
 	dir := t.TempDir()
 	signer := newEd25519Signer(t)

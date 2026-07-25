@@ -149,9 +149,21 @@ func (w *Writer) Record(ctx context.Context, draft Draft) (SignedEvent, error) {
 	if err != nil {
 		return SignedEvent{}, err
 	}
-	now, timeEvidence, err := w.clock.Sample(ctx)
-	if err != nil {
-		return SignedEvent{}, err
+	now, timeEvidence, clockErr := w.clock.Sample(ctx)
+	if clockErr != nil && !errors.Is(clockErr, ErrTimeUnsynchronized) {
+		return SignedEvent{}, clockErr
+	}
+	if errors.Is(clockErr, ErrTimeUnsynchronized) {
+		clean.Result = "blocked"
+	}
+	if !validTimeEvidence(timeEvidence) {
+		if clockErr != nil {
+			return SignedEvent{}, errors.Join(clockErr, ErrInvalidEvent)
+		}
+		return SignedEvent{}, ErrInvalidEvent
+	}
+	if now.IsZero() {
+		return SignedEvent{}, errors.New("securityaudit: clock returned zero time")
 	}
 	eventID, err := randomID()
 	if err != nil {
@@ -212,7 +224,7 @@ func (w *Writer) Record(ctx context.Context, draft Draft) (SignedEvent, error) {
 	if err := w.writeCheckpoint(ctx, now.UTC()); err != nil {
 		return SignedEvent{}, err
 	}
-	return cloneSignedEvent(signed), nil
+	return cloneSignedEvent(signed), clockErr
 }
 
 func (w *Writer) Stats() Stats {
@@ -434,7 +446,7 @@ func validTimeEvidence(value TimeEvidence) bool {
 	}
 	if value.ReferenceSampleUnixN == 0 {
 		local := value.Source == "system-clock" && value.Status == "unverified" && value.Confidence == "local"
-		unavailable := value.Source == "configured-reference" && value.Status == "unavailable" && value.Confidence == "none"
+		unavailable := value.Source == "configured-reference" && (value.Status == "unavailable" || value.Status == "invalid") && value.Confidence == "none"
 		return (local || unavailable) && !value.Synchronized && value.OffsetNanos == 0 && value.UncertaintyNanos == 0 && value.SampleAgeNanos == 0
 	}
 	if value.ReferenceSampleUnixN < 0 || value.Source == "system-clock" || value.Source == "configured-reference" {

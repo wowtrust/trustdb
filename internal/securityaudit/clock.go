@@ -75,14 +75,14 @@ func (c *referenceClock) Sample(ctx context.Context) (time.Time, TimeEvidence, e
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&sample); err != nil {
-		return now, TimeEvidence{}, fmt.Errorf("decode trusted time sample: %w", err)
+		return now, invalidReferenceEvidence(), fmt.Errorf("%w: decode trusted time sample: %v", ErrTimeUnsynchronized, err)
 	}
 	var trailing any
 	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
-		return now, TimeEvidence{}, errors.New("decode trusted time sample: trailing JSON")
+		return now, invalidReferenceEvidence(), fmt.Errorf("%w: decode trusted time sample: trailing JSON", ErrTimeUnsynchronized)
 	}
 	if err := validateReferenceSample(sample); err != nil {
-		return now, TimeEvidence{}, err
+		return now, invalidReferenceEvidence(), fmt.Errorf("%w: %v", ErrTimeUnsynchronized, err)
 	}
 	age := now.Sub(time.Unix(0, sample.SampledAtUnixNano).UTC())
 	evidence := TimeEvidence{
@@ -109,6 +109,10 @@ func (c *referenceClock) Sample(ctx context.Context) (time.Time, TimeEvidence, e
 		return now, evidence, fmt.Errorf("%w: time status %s", ErrTimeUnsynchronized, evidence.Status)
 	}
 	return now, evidence, nil
+}
+
+func invalidReferenceEvidence() TimeEvidence {
+	return TimeEvidence{Source: "configured-reference", Status: "invalid", Confidence: "none"}
 }
 
 func validateReferenceSample(sample ReferenceSample) error {
