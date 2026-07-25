@@ -37,6 +37,8 @@ proofstore:
 wal:
   fsync_mode: "group"
   group_commit_interval: "10ms"
+  max_segment_bytes: 0
+  keep_segments: 0
 
 identity:
   tenant: "default"
@@ -238,6 +240,7 @@ type Config struct {
 	History    History    `mapstructure:"history" json:"history"`
 	Backup     Backup     `mapstructure:"backup" json:"backup"`
 	Proofstore Proofstore `mapstructure:"proofstore" json:"proofstore"`
+	WAL        WAL        `mapstructure:"wal" json:"wal"`
 	Log        Log        `mapstructure:"log" json:"log"`
 	Keys       Keys       `mapstructure:"keys" json:"keys"`
 	Admin      Admin      `mapstructure:"admin" json:"admin"`
@@ -383,6 +386,16 @@ type Batch struct {
 	MaterializerQueueSize    int    `mapstructure:"materializer_queue_size" json:"materializer_queue_size"`
 	MaterializerPollInterval string `mapstructure:"materializer_poll_interval" json:"materializer_poll_interval"`
 	ProofWorkers             int    `mapstructure:"proof_workers" json:"proof_workers"`
+}
+
+// WAL configures append durability, segmented rotation, and post-checkpoint
+// retention. Zero rotation bytes disables size-based rotation; zero retained
+// segments keeps only the active and checkpoint-covered segments.
+type WAL struct {
+	FsyncMode           string `mapstructure:"fsync_mode" json:"fsync_mode"`
+	GroupCommitInterval string `mapstructure:"group_commit_interval" json:"group_commit_interval"`
+	MaxSegmentBytes     int64  `mapstructure:"max_segment_bytes" json:"max_segment_bytes"`
+	KeepSegments        int    `mapstructure:"keep_segments" json:"keep_segments"`
 }
 
 type GlobalLog struct {
@@ -562,6 +575,12 @@ func Default() Config {
 			MaterializerPollInterval: "250ms",
 			ProofWorkers:             0,
 		},
+		WAL: WAL{
+			FsyncMode:           "group",
+			GroupCommitInterval: "10ms",
+			MaxSegmentBytes:     0,
+			KeepSegments:        0,
+		},
 		GlobalLog: GlobalLog{
 			Enabled: true,
 			LogID:   "trustdb-global-log",
@@ -734,6 +753,25 @@ func (c Config) Validate() error {
 	case "", "inline", "async", "on_demand":
 	default:
 		return fmt.Errorf("batch.proof_mode must be one of inline, async, or on_demand")
+	}
+	walMode := strings.ToLower(strings.TrimSpace(c.WAL.FsyncMode))
+	switch walMode {
+	case "strict", "group", "batch":
+	default:
+		return fmt.Errorf("wal.fsync_mode must be strict, group, or batch")
+	}
+	walGroupCommitInterval, err := time.ParseDuration(c.WAL.GroupCommitInterval)
+	if err != nil {
+		return fmt.Errorf("wal.group_commit_interval must be a valid duration: %w", err)
+	}
+	if walMode == "group" && walGroupCommitInterval <= 0 {
+		return fmt.Errorf("wal.group_commit_interval must be greater than 0 when wal.fsync_mode is group")
+	}
+	if c.WAL.MaxSegmentBytes < 0 {
+		return fmt.Errorf("wal.max_segment_bytes must be zero or greater")
+	}
+	if c.WAL.KeepSegments < 0 {
+		return fmt.Errorf("wal.keep_segments must be zero or greater")
 	}
 	switch strings.ToLower(c.Anchor.Scope) {
 	case "", "global":

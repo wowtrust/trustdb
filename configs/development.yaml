@@ -25,6 +25,8 @@ proofstore:
 wal:
   fsync_mode: "group"
   group_commit_interval: "10ms"
+  max_segment_bytes: 0
+  keep_segments: 0
 
 identity:
   tenant: "default"

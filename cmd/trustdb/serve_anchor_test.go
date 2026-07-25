@@ -14,6 +14,7 @@ import (
 
 	ethcrypto "github.com/ethereum/go-ethereum/crypto"
 	"github.com/rs/zerolog"
+	"github.com/spf13/cobra"
 	"github.com/wowtrust/trustdb/internal/anchor"
 	"github.com/wowtrust/trustdb/internal/anchor/fiscobcos"
 	"github.com/wowtrust/trustdb/internal/anchor/fiscobcos/standardsdk"
@@ -418,6 +419,34 @@ func TestServeDurationFlagBounds(t *testing.T) {
 		if got, err := parseWALGroupCommitInterval(mode, "0s"); err != nil || got != 10*time.Millisecond {
 			t.Fatalf("inactive WAL group interval for %s = %v err=%v, want normalized 10ms nil", mode, got, err)
 		}
+	}
+}
+
+func TestWALSegmentFlagsOverrideConfigFallbacks(t *testing.T) {
+	t.Parallel()
+	cmd := &cobra.Command{Use: "test"}
+	var maxSegmentBytes int64
+	var keepSegments int
+	cmd.Flags().Int64Var(&maxSegmentBytes, "wal-max-segment-bytes", 0, "")
+	cmd.Flags().IntVar(&keepSegments, "wal-keep-segments", 0, "")
+
+	if got := int64OrLiteral(cmd, "wal-max-segment-bytes", maxSegmentBytes, 64<<20); got != 64<<20 {
+		t.Fatalf("unmodified max segment bytes = %d, want config fallback", got)
+	}
+	if got := intOrLiteral(cmd, "wal-keep-segments", keepSegments, 3); got != 3 {
+		t.Fatalf("unmodified keep segments = %d, want config fallback", got)
+	}
+	if err := cmd.Flags().Set("wal-max-segment-bytes", "134217728"); err != nil {
+		t.Fatal(err)
+	}
+	if err := cmd.Flags().Set("wal-keep-segments", "7"); err != nil {
+		t.Fatal(err)
+	}
+	if got := int64OrLiteral(cmd, "wal-max-segment-bytes", maxSegmentBytes, 64<<20); got != 128<<20 {
+		t.Fatalf("flag max segment bytes = %d, want 128 MiB", got)
+	}
+	if got := intOrLiteral(cmd, "wal-keep-segments", keepSegments, 3); got != 7 {
+		t.Fatalf("flag keep segments = %d, want 7", got)
 	}
 }
 

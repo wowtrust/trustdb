@@ -326,13 +326,9 @@ func newServeCommand(rt *runtimeConfig) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if cmd.Flags().Changed("wal-max-segment-bytes") {
-				walMaxSegmentBytes, _ = cmd.Flags().GetInt64("wal-max-segment-bytes")
-			}
-			if cmd.Flags().Changed("wal-keep-segments") {
-				walKeepSegments, _ = cmd.Flags().GetInt("wal-keep-segments")
-			}
-			walFsyncMode = stringOrLiteral(cmd, "wal-fsync-mode", walFsyncMode, rt.viper.GetString("wal.fsync_mode"))
+			walMaxSegmentBytes = int64OrLiteral(cmd, "wal-max-segment-bytes", walMaxSegmentBytes, rt.cfg.WAL.MaxSegmentBytes)
+			walKeepSegments = intOrLiteral(cmd, "wal-keep-segments", walKeepSegments, rt.cfg.WAL.KeepSegments)
+			walFsyncMode = stringOrLiteral(cmd, "wal-fsync-mode", walFsyncMode, rt.cfg.WAL.FsyncMode)
 			if strings.TrimSpace(walFsyncMode) == "" {
 				walFsyncMode = wal.FsyncGroup
 			}
@@ -341,7 +337,7 @@ func newServeCommand(rt *runtimeConfig) *cobra.Command {
 			default:
 				return trusterr.New(trusterr.CodeInvalidArgument, "wal fsync mode must be strict, group, or batch")
 			}
-			walGroupCommitIntervalText = stringOrLiteral(cmd, "wal-group-commit-interval", walGroupCommitIntervalText, rt.viper.GetString("wal.group_commit_interval"))
+			walGroupCommitIntervalText = stringOrLiteral(cmd, "wal-group-commit-interval", walGroupCommitIntervalText, rt.cfg.WAL.GroupCommitInterval)
 			if strings.TrimSpace(walGroupCommitIntervalText) == "" {
 				walGroupCommitIntervalText = "10ms"
 			}
@@ -2338,6 +2334,20 @@ func replayWALAccepted(ctx context.Context, walPath string, engine app.LocalEngi
 }
 
 func stringOrLiteral(cmd *cobra.Command, flagName, flagValue, fallback string) string {
+	if cmd.Flags().Changed(flagName) {
+		return flagValue
+	}
+	return fallback
+}
+
+func int64OrLiteral(cmd *cobra.Command, flagName string, flagValue, fallback int64) int64 {
+	if cmd.Flags().Changed(flagName) {
+		return flagValue
+	}
+	return fallback
+}
+
+func intOrLiteral(cmd *cobra.Command, flagName string, flagValue, fallback int) int {
 	if cmd.Flags().Changed(flagName) {
 		return flagValue
 	}

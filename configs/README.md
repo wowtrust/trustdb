@@ -72,6 +72,14 @@ shutdown hooks to release or reconcile HSM/KMS sessions.
 
 `anchor.poll_interval` controls the O(1) durable scheduler recovery lookup. Triggered work normally starts immediately; polling resumes pending or in-flight work after missed triggers and restarts. Benchmark profiles use `250ms`, while the default remains `2s` to limit idle store reads.
 
+`wal.max_segment_bytes` enables size-based directory-WAL rotation when greater
+than zero. `wal.keep_segments` retains that many segments older than the
+checkpoint-covered segment after a safe checkpoint advance; zero keeps only
+the active and checkpoint-covered segments. Both values default to zero to
+preserve the existing no-size-rotation policy. Explicit
+`--wal-max-segment-bytes` and `--wal-keep-segments` flags override YAML and
+environment values.
+
 The optional `nats` section is disabled by default. Enabling, pre-provisioning,
 securing, sizing, and consuming the JetStream ingress is documented in the
 [NATS ingress guide](../docs/integrations/NATS_INGRESS.md). Keep the generated

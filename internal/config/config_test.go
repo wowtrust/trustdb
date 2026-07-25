@@ -20,7 +20,7 @@ func TestDefaultConfigIsValid(t *testing.T) {
 func TestDefaultYAMLIsStructured(t *testing.T) {
 	t.Parallel()
 
-	for _, section := range []string{"paths:", "identity:", "server:", "nats:", "registry:", "batch:", "crypto:", "proofstore:", "log:", "keys:"} {
+	for _, section := range []string{"paths:", "identity:", "server:", "nats:", "registry:", "batch:", "wal:", "crypto:", "proofstore:", "log:", "keys:"} {
 		if !strings.Contains(DefaultYAML, section) {
 			t.Fatalf("default yaml missing section %q", section)
 		}
@@ -33,6 +33,12 @@ func TestDefaultYAMLIsStructured(t *testing.T) {
 	}
 	if Default().Batch.ProofMode != "inline" {
 		t.Fatalf("default batch.proof_mode = %q, want inline", Default().Batch.ProofMode)
+	}
+	if Default().WAL.FsyncMode != "group" || Default().WAL.GroupCommitInterval != "10ms" || Default().WAL.MaxSegmentBytes != 0 || Default().WAL.KeepSegments != 0 {
+		t.Fatalf("default wal config = %+v", Default().WAL)
+	}
+	if !strings.Contains(DefaultYAML, "  max_segment_bytes: 0\n  keep_segments: 0") {
+		t.Fatal("default yaml missing WAL segment policy")
 	}
 	if Default().Proofstore.ArtifactSyncMode != "chunk" {
 		t.Fatalf("default proofstore.artifact_sync_mode = %q, want chunk", Default().Proofstore.ArtifactSyncMode)
@@ -90,6 +96,42 @@ func TestDefaultYAMLIsStructured(t *testing.T) {
 	}
 	if Default().NATS.DLQStream != "TRUSTDB_INGRESS_V2_DLQ" || Default().NATS.DLQSubject != "trustdb.ingress.v2.dlq.*" || Default().NATS.DLQMaxAge != "0s" {
 		t.Fatalf("default NATS DLQ topology = %+v", Default().NATS)
+	}
+}
+
+func TestFromViperMapsWALConfig(t *testing.T) {
+	t.Parallel()
+	v := viper.New()
+	v.Set("wal.fsync_mode", "strict")
+	v.Set("wal.group_commit_interval", "25ms")
+	v.Set("wal.max_segment_bytes", int64(64<<20))
+	v.Set("wal.keep_segments", 3)
+
+	got := FromViper(v).WAL
+	if got.FsyncMode != "strict" || got.GroupCommitInterval != "25ms" || got.MaxSegmentBytes != 64<<20 || got.KeepSegments != 3 {
+		t.Fatalf("wal config = %+v", got)
+	}
+}
+
+func TestValidateWALConfig(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name   string
+		mutate func(*Config)
+		want   string
+	}{
+		{name: "mode", mutate: func(c *Config) { c.WAL.FsyncMode = "sometimes" }, want: "wal.fsync_mode"},
+		{name: "group interval", mutate: func(c *Config) { c.WAL.GroupCommitInterval = "0s" }, want: "wal.group_commit_interval"},
+		{name: "segment bytes", mutate: func(c *Config) { c.WAL.MaxSegmentBytes = -1 }, want: "wal.max_segment_bytes"},
+		{name: "keep segments", mutate: func(c *Config) { c.WAL.KeepSegments = -1 }, want: "wal.keep_segments"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := Default()
+			tc.mutate(&cfg)
+			if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("Validate() error = %v, want %s", err, tc.want)
+			}
+		})
 	}
 }
 
