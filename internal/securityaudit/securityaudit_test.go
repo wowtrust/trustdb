@@ -27,8 +27,8 @@ func TestSignedAuditChainAndExportAcrossSuites(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			dir := t.TempDir()
-			logPath := filepath.Join(dir, "security.audit")
-			checkpointPath := filepath.Join(dir, "security.checkpoint")
+			logPath := filepath.Join(dir, "audit", "security.audit")
+			checkpointPath := filepath.Join(dir, "audit", "security.checkpoint")
 			writer := openTestWriter(t, logPath, checkpointPath, test.signer(t), nil)
 			first, err := writer.Record(context.Background(), Draft{
 				Actor: "security-admin", Roles: []string{"security-admin"}, Action: "security.policy.update",
@@ -40,6 +40,9 @@ func TestSignedAuditChainAndExportAcrossSuites(t *testing.T) {
 			}
 			if first.Event.Context["access_token"] != "<redacted>" {
 				t.Fatalf("sensitive context = %q", first.Event.Context["access_token"])
+			}
+			if got := time.Duration(first.Event.RetentionUntilUnix - first.Event.LocalTimeUnixNano); got != 180*24*time.Hour {
+				t.Fatalf("retention duration=%s", got)
 			}
 			second, err := writer.Record(context.Background(), Draft{
 				Actor: "backup-operator", Roles: []string{"backup-operator"}, Action: "backup.create",
@@ -106,8 +109,8 @@ func TestSignedAuditChainAndExportAcrossSuites(t *testing.T) {
 
 func TestAuditCrashTailRecoveryAndCheckpointRollbackDetection(t *testing.T) {
 	dir := t.TempDir()
-	logPath := filepath.Join(dir, "security.audit")
-	checkpointPath := filepath.Join(dir, "security.checkpoint")
+	logPath := filepath.Join(dir, "audit", "security.audit")
+	checkpointPath := filepath.Join(dir, "audit", "security.checkpoint")
 	signer := newEd25519Signer(t)
 	writer := openTestWriter(t, logPath, checkpointPath, signer, nil)
 	if _, err := writer.Record(context.Background(), Draft{Actor: "system-admin", Action: "server.start", Object: "trustdb", Result: "success", Source: "server"}); err != nil {
@@ -143,7 +146,7 @@ func TestAuditCrashTailRecoveryAndCheckpointRollbackDetection(t *testing.T) {
 
 func TestClockEvidenceAndFailClosedSynchronization(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "time-reference.json")
+	path := filepath.Join(dir, "time", "time-reference.json")
 	now := time.Date(2026, 7, 26, 9, 0, 0, 0, time.UTC)
 	if err := WriteReferenceSample(path, ReferenceSample{
 		SchemaVersion: TimeSchema, Source: "chrony-ntp-auth", SampledAtUnixNano: now.Add(-time.Second).UnixNano(),
@@ -187,13 +190,13 @@ func TestClockEvidenceAndFailClosedSynchronization(t *testing.T) {
 func TestUnsynchronizedTimeIsDurablyRecordedBeforeOperationIsBlocked(t *testing.T) {
 	dir := t.TempDir()
 	clock, err := NewClock(ClockOptions{
-		ReferencePath: filepath.Join(dir, "missing-time-reference.json"),
+		ReferencePath: filepath.Join(dir, "time", "missing-time-reference.json"),
 		MaxSampleAge:  time.Minute, MaxClockDrift: time.Second, RequireSynchronized: true,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	writer := openTestWriter(t, filepath.Join(dir, "security.audit"), filepath.Join(dir, "security.checkpoint"), newEd25519Signer(t), clock)
+	writer := openTestWriter(t, filepath.Join(dir, "audit", "security.audit"), filepath.Join(dir, "audit", "security.checkpoint"), newEd25519Signer(t), clock)
 	defer writer.Close()
 	event, err := writer.Record(context.Background(), Draft{
 		Actor: "system-admin", Action: "system.configuration", Object: "trustdb", Result: "authorized", Source: "test",
@@ -213,7 +216,7 @@ func TestUnsynchronizedTimeIsDurablyRecordedBeforeOperationIsBlocked(t *testing.
 func TestAuditCapacityFailsBeforeMutation(t *testing.T) {
 	dir := t.TempDir()
 	signer := newEd25519Signer(t)
-	opts := testOptions(filepath.Join(dir, "audit"), filepath.Join(dir, "checkpoint"), signer, nil)
+	opts := testOptions(filepath.Join(dir, "audit", "security.audit"), filepath.Join(dir, "audit", "security.checkpoint"), signer, nil)
 	opts.MaxBytes = 1 << 20
 	writer, err := OpenWriter(context.Background(), opts)
 	if err != nil {
@@ -232,8 +235,8 @@ func TestAuditCapacityFailsBeforeMutation(t *testing.T) {
 
 func TestConcurrentWritersRefreshAndSerializeChainHead(t *testing.T) {
 	dir := t.TempDir()
-	logPath := filepath.Join(dir, "security.audit")
-	checkpointPath := filepath.Join(dir, "security.checkpoint")
+	logPath := filepath.Join(dir, "audit", "security.audit")
+	checkpointPath := filepath.Join(dir, "audit", "security.checkpoint")
 	signer := newEd25519Signer(t)
 	first := openTestWriter(t, logPath, checkpointPath, signer, nil)
 	defer first.Close()
@@ -274,8 +277,8 @@ func TestConcurrentWritersRefreshAndSerializeChainHead(t *testing.T) {
 
 func TestSlowExportDoesNotHoldTheCrossProcessWriterLock(t *testing.T) {
 	dir := t.TempDir()
-	logPath := filepath.Join(dir, "security.audit")
-	checkpointPath := filepath.Join(dir, "security.checkpoint")
+	logPath := filepath.Join(dir, "audit", "security.audit")
+	checkpointPath := filepath.Join(dir, "audit", "security.checkpoint")
 	signer := newEd25519Signer(t)
 	exporter := openTestWriter(t, logPath, checkpointPath, signer, nil)
 	defer exporter.Close()

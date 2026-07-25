@@ -146,8 +146,8 @@ func writeAuditTestConfig(t *testing.T, dir, signerPath string, requireTime bool
 	content := []byte("audit:\n" +
 		"  enabled: true\n" +
 		"  required: true\n" +
-		"  path: " + quoteYAML(filepath.Join(dir, "security.audit")) + "\n" +
-		"  checkpoint_path: " + quoteYAML(filepath.Join(dir, "security.checkpoint")) + "\n" +
+		"  path: " + quoteYAML(filepath.Join(dir, "audit", "security.audit")) + "\n" +
+		"  checkpoint_path: " + quoteYAML(filepath.Join(dir, "audit", "security.checkpoint")) + "\n" +
 		"  signing_key: " + quoteYAML(signerPath) + "\n" +
 		"  max_bytes: 16777216\n" +
 		"  retention: 4380h\n" +
