@@ -358,6 +358,7 @@ The screenshot below is rendered directly from the current desktop client code:
 - [docs/integrations/ADR-0016-FISCO-BCOS-STATIC-PBFT-FINALITY.md](docs/integrations/ADR-0016-FISCO-BCOS-STATIC-PBFT-FINALITY.md): disconnected Standard/Guomi block finality against a verifier-local static validator checkpoint, strict membership/quorum rules, exact anchor binding, and local L5 promotion.
 - [docs/integrations/ADR-0017-FISCO-BCOS-VALIDATOR-SET-TRANSITIONS.md](docs/integrations/ADR-0017-FISCO-BCOS-VALIDATOR-SET-TRANSITIONS.md): authenticated weighted-PBFT validator transitions, complete mutation-block evidence, explicit checkpoint advancement, and fail-closed RPBFT boundaries.
 - [docs/integrations/FISCO_BCOS_QUALIFICATION.md](docs/integrations/FISCO_BCOS_QUALIFICATION.md): reproducible Standard/Guomi four-node qualification, disconnected L5 verification, retained evidence, architecture admission, and Pro/Max production procedures.
+- [docs/integrations/FISCO_BCOS_OPERATIONS.md](docs/integrations/FISCO_BCOS_OPERATIONS.md): operator runbook for deployment, contract and role governance, key custody, certificate rotation, checkpoint governance, backup and restore, monitoring, incident response, offline verification, and disaster-recovery drills.
 - [COMMUNITY.md](COMMUNITY.md): support, discussion, and first-contribution entry points.
 - [ROADMAP.md](ROADMAP.md): public product direction and ways to influence it.
 - [SECURITY.md](SECURITY.md): private vulnerability reporting and supported-version policy.
