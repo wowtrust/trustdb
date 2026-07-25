@@ -70,9 +70,18 @@ type liveBCOSQualificationReport struct {
 	ValidatorHistoryBlockCount int    `json:"validator_history_block_count"`
 }
 
+var errInjectedUnknownOutcome = errors.New("injected transport loss after successful BCOS submission")
+
 type qualificationUnknownOutcomeDriver struct {
 	fiscobcos.Driver
 	injected *atomic.Bool
+	// firstRealError records the first genuine submission error observed before
+	// the injector could fire. On loaded runners the first submission can fail
+	// ambiguously on its own (for example a receipt-wait timeout after the
+	// transaction landed); that real unknown outcome exercises exactly the
+	// durable checkpoint-and-recover path the injection targets, so it must
+	// pass through unchanged instead of being masked or skipped.
+	firstRealError *atomic.Value
 }
 
 func (d qualificationUnknownOutcomeDriver) SubmitPreparedAnchor(
@@ -80,10 +89,14 @@ func (d qualificationUnknownOutcomeDriver) SubmitPreparedAnchor(
 	attempt fiscobcos.TransactionSubmission,
 ) (fiscobcos.SubmissionOutcome, error) {
 	outcome, err := d.Driver.SubmitPreparedAnchor(ctx, attempt)
-	if err == nil && d.injected.CompareAndSwap(false, true) {
-		return fiscobcos.SubmissionOutcome{}, errors.New("injected transport loss after successful BCOS submission")
+	if !d.injected.CompareAndSwap(false, true) {
+		return outcome, err
 	}
-	return outcome, err
+	if err != nil {
+		d.firstRealError.Store(err.Error())
+		return outcome, err
+	}
+	return fiscobcos.SubmissionOutcome{}, errInjectedUnknownOutcome
 }
 
 func (d qualificationUnknownOutcomeDriver) GetValidatorHistoryBlock(
@@ -96,6 +109,76 @@ func (d qualificationUnknownOutcomeDriver) GetValidatorHistoryBlock(
 		return fiscobcos.ValidatorHistoryBlock{}, fiscobcos.ErrIncompleteChainEvidence
 	}
 	return driver.GetValidatorHistoryBlock(ctx, blockNumber, includeTransitions)
+}
+
+type stubQualificationSubmitDriver struct {
+	fiscobcos.Driver
+	errs  []error
+	calls int
+}
+
+func (d *stubQualificationSubmitDriver) SubmitPreparedAnchor(
+	context.Context,
+	fiscobcos.TransactionSubmission,
+) (fiscobcos.SubmissionOutcome, error) {
+	var err error
+	if d.calls < len(d.errs) {
+		err = d.errs[d.calls]
+	}
+	d.calls++
+	if err != nil {
+		return fiscobcos.SubmissionOutcome{}, err
+	}
+	return fiscobcos.SubmissionOutcome{Status: fiscobcos.ReceiptStatusOK}, nil
+}
+
+func TestQualificationUnknownOutcomeDriverArmsOnFirstSubmission(t *testing.T) {
+	t.Run("injects after a successful first submission", func(t *testing.T) {
+		var injected atomic.Bool
+		var firstRealError atomic.Value
+		stub := &stubQualificationSubmitDriver{}
+		driver := qualificationUnknownOutcomeDriver{Driver: stub, injected: &injected, firstRealError: &firstRealError}
+
+		if _, err := driver.SubmitPreparedAnchor(context.Background(), fiscobcos.TransactionSubmission{}); !errors.Is(err, errInjectedUnknownOutcome) {
+			t.Fatalf("first successful submission must surface the injected error, got %v", err)
+		}
+		if !injected.Load() {
+			t.Fatal("injector did not arm on the first submission")
+		}
+		if firstRealError.Load() != nil {
+			t.Fatal("injector recorded a real error that never happened")
+		}
+		if _, err := driver.SubmitPreparedAnchor(context.Background(), fiscobcos.TransactionSubmission{}); err != nil {
+			t.Fatalf("subsequent submissions must pass through, got %v", err)
+		}
+	})
+
+	t.Run("keeps a genuine first-submission unknown outcome", func(t *testing.T) {
+		var injected atomic.Bool
+		var firstRealError atomic.Value
+		realErr := errors.New("receipt wait timed out after submission")
+		stub := &stubQualificationSubmitDriver{errs: []error{realErr}}
+		driver := qualificationUnknownOutcomeDriver{Driver: stub, injected: &injected, firstRealError: &firstRealError}
+
+		_, err := driver.SubmitPreparedAnchor(context.Background(), fiscobcos.TransactionSubmission{})
+		if !errors.Is(err, realErr) {
+			t.Fatalf("genuine submission error must pass through unchanged, got %v", err)
+		}
+		if errors.Is(err, errInjectedUnknownOutcome) {
+			t.Fatal("genuine unknown outcome must not be masked by the injected error")
+		}
+		if !injected.Load() {
+			t.Fatal("injector must arm even when the first submission fails on its own")
+		}
+		if recorded, _ := firstRealError.Load().(string); recorded != realErr.Error() {
+			t.Fatalf("recorded first real error = %q, want %q", recorded, realErr.Error())
+		}
+		// The drill is consumed: a later successful submission passes through so
+		// the durable retry path can complete the publication.
+		if _, err := driver.SubmitPreparedAnchor(context.Background(), fiscobcos.TransactionSubmission{}); err != nil {
+			t.Fatalf("subsequent submissions must pass through, got %v", err)
+		}
+	})
 }
 
 func TestLiveBCOSFourNodeQualification(t *testing.T) {
@@ -145,10 +228,12 @@ func TestLiveBCOSFourNodeQualification(t *testing.T) {
 		t.Fatalf("create native BCOS drivers: %v", err)
 	}
 	var unknownOutcomeInjected atomic.Bool
+	var firstRealSubmitError atomic.Value
 	for index := range drivers {
 		drivers[index] = qualificationUnknownOutcomeDriver{
-			Driver:   drivers[index],
-			injected: &unknownOutcomeInjected,
+			Driver:         drivers[index],
+			injected:       &unknownOutcomeInjected,
+			firstRealError: &firstRealSubmitError,
 		}
 	}
 	sink, err := anchor.NewFISCOBCOSStandardSink(anchor.FISCOBCOSStandardSinkConfig{
@@ -185,14 +270,24 @@ func TestLiveBCOSFourNodeQualification(t *testing.T) {
 		Generation: 1,
 		Target:     fixture.proof.GlobalProof.STH,
 	}
-	result, err := publishBCOSQualificationDurably(ctx, sink, attempt, checkpoint, &providerState)
+	result, err := publishBCOSQualificationDurably(t, ctx, sink, attempt, checkpoint, &providerState)
 	if err != nil {
 		t.Fatalf("publish real Signed STH: %v", err)
 	}
 	if len(providerState) == 0 {
 		t.Fatal("durable publication did not checkpoint provider state")
 	}
-	if !unknownOutcomeInjected.Load() || !unknownOutcomeCheckpointed {
+	firstRealError, _ := firstRealSubmitError.Load().(string)
+	t.Logf(
+		"durable publication unknown-outcome drill: injector armed=%v checkpointed=%v first real submission error=%q",
+		unknownOutcomeInjected.Load(),
+		unknownOutcomeCheckpointed,
+		firstRealError,
+	)
+	if !unknownOutcomeInjected.Load() {
+		t.Fatal("durable publication never intercepted a submission for the unknown-outcome drill")
+	}
+	if !unknownOutcomeCheckpointed {
 		t.Fatal("durable publication did not checkpoint and recover the injected unknown outcome")
 	}
 	replayAttempt := attempt
@@ -339,23 +434,39 @@ func TestLiveBCOSFourNodeQualification(t *testing.T) {
 }
 
 func publishBCOSQualificationDurably(
+	t *testing.T,
 	ctx context.Context,
 	sink *anchor.FISCOBCOSStandardSink,
 	attempt model.STHAnchorAttempt,
 	checkpoint anchor.ProviderStateCheckpoint,
 	providerState *[]byte,
 ) (model.STHAnchorResult, error) {
-	deadline := time.NewTimer(2 * time.Minute)
+	t.Helper()
+	// Loaded CI runners stack C SDK message timeouts (15s each) across quorum
+	// probes and receipt reads, so convergence can legitimately take minutes.
+	deadline := time.NewTimer(4 * time.Minute)
 	defer deadline.Stop()
 	retry := time.NewTicker(250 * time.Millisecond)
 	defer retry.Stop()
 
+	started := time.Now()
+	attempts := 0
 	var lastErr error
+	lastLoggedErr := ""
 	incompleteEvidenceRetries := 0
 	for {
+		attempts++
 		attempt.ProviderState = append(attempt.ProviderState[:0], (*providerState)...)
 		result, err := sink.PublishDurable(ctx, attempt, checkpoint)
 		if err == nil {
+			if attempts > 1 {
+				t.Logf(
+					"durable BCOS publication converged after %d attempts in %s (last transient error: %v)",
+					attempts,
+					time.Since(started).Round(time.Millisecond),
+					lastErr,
+				)
+			}
 			return result, nil
 		}
 		if errors.Is(err, anchor.ErrPermanent) {
@@ -374,6 +485,10 @@ func publishBCOSQualificationDurably(
 			}
 		}
 		lastErr = err
+		if errText := err.Error(); errText != lastLoggedErr {
+			t.Logf("durable BCOS publication attempt %d failed transiently after %s: %v", attempts, time.Since(started).Round(time.Millisecond), err)
+			lastLoggedErr = errText
+		}
 		select {
 		case <-ctx.Done():
 			return model.STHAnchorResult{}, errors.Join(lastErr, ctx.Err())

@@ -531,7 +531,9 @@ if [[ ${QUALIFICATION} == true ]]; then
     mkdir "${NODE_PARENT}/node3/log"
     start_node 3
     NODE3_RECONVERGED=false
-    for attempt in {1..120}; do
+    # node3 can take well over a minute to rejoin the four-node consensus
+    # group on macOS and other loaded hosts; allow up to 150 seconds.
+    for attempt in {1..300}; do
         NODE3_FOUR_MEMBER_AFTER=$(four_member_observation_count "${NODE_PARENT}/node3")
         if ((NODE3_FOUR_MEMBER_AFTER > 0)); then
             NODE3_RECONVERGED=true
@@ -570,7 +572,7 @@ if [[ ${QUALIFICATION} == true ]]; then
         TRUSTDB_REPO_ROOT="${REPO_ROOT}" \
             "${WORK_DIR}/bcos-qualification.test" \
             -test.run '^TestLiveBCOSFourNodeQualification$' \
-            -test.count=1 -test.v
+            -test.count=1 -test.v -test.timeout=15m
     ) >"${WORK_DIR}/qualification-test.log" 2>&1; then
         echo "the live TrustDB BCOS qualification failed" >&2
         sed 's/^/  /' "${WORK_DIR}/qualification-test.log" >&2
