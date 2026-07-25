@@ -763,7 +763,7 @@ func (st *Transaction) WriteTo(buf *codec.Buffer) (err error) {
 		return err
 	}
 
-	if len(st.DataHash) > 0 {
+	if st.DataHash != nil {
 		err = buf.WriteHead(codec.SimpleList, 2)
 		if err != nil {
 			return err
@@ -815,7 +815,7 @@ func (st *Transaction) WriteTo(buf *codec.Buffer) (err error) {
 		}
 	}
 
-	if len(st.Sender) > 0 {
+	if st.Sender != nil {
 		err = buf.WriteHead(codec.SimpleList, 7)
 		if err != nil {
 			return err
