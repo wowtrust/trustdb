@@ -108,6 +108,7 @@ curl --fail http://127.0.0.1:8080/healthz
 - Go SDK：claim 签名、HTTP/gRPC 调用、证明导出、本地验证。
 - Wails + Vue 桌面客户端：本地身份、文件存证、记录管理、proof refresh、`.sproof` 导出和离线验证。
 - 可选 Vue Admin Web：由 `trustdb serve` 挂载，用于 metrics、只读浏览和受控 YAML 配置维护。
+- 独立的签名/哈希链安全审计：覆盖认证、授权、配置、密钥、备份、Anchor、trust root 和服务生命周期，支持 SM2/SM3、可信时间 fail-closed、JSONL 完全离线验证与独立保管的签名 checkpoint。
 - React + Vite 官网源码：位于 `website`，与主仓库一起构建和校验，并使用 GSAP 实现动态证明信号与滚动叙事。
 
 ## 证明等级
@@ -138,8 +139,9 @@ TrustDB 默认按单节点服务运行。多个计算节点可以共享同一个
 - Anchor path：STH/global roots 按 `(node_id, log_id, sink)` 合并进常数空间的 Pending/InFlight 调度状态，再由 anchor worker 按固定窗口发布。
 - Storage path：proof 数据可落到 file、Pebble 或 TiKV proofstore。
 - Backup path：proofstore 数据可导出为 `.tdbackup`，支持 verify 与可断点续传的 restore 状态；便携备份不包含节点本地 WAL checkpoint。
-- 密码敏捷切换边界：`.tdbackup v4` 当前仅允许 `INTL_V1`。`CN_SM_V1` 存储会在 backup/restore 入口 fail closed，待 [#473](https://github.com/wowtrust/trustdb/issues/473) 交付带认证、使用 SM4 保护的 backup v5；逻辑备份子系统本身不会被删除。
+- 加密逻辑备份：`.tdbackup v5` 已支持 `INTL_V1` 与 `CN_SM_V1`，使用 provider-wrapped 随机 DEK、SM4-GCM 分帧认证加密、suite 选择的 SHA-256/SM3 entry digest，以及 source/target namespace-bound 可恢复 checkpoint；v4/plain tar 不读取、不迁移、不回退。
 - Observability path：`/metrics` 暴露 ingest、batch、global log、anchor、WAL、backup、storage 等指标。
+- 安全审计 path：高权限控制面的授权意图和结果写入独立签名链；[配置、可信时间、导出、离线验证、容量与事件处置](docs/zh-CN/IMMUTABLE_SECURITY_AUDIT.md)不依赖普通日志或 `.sproof`。
 
 file、Pebble 和每个 TiKV namespace 使用 proofstore storage schema v5。旧版或无版本标记的非空存储会明确失败；当前版本不扫描、不迁移、也不双读旧键布局。部署 V5 时应使用空 namespace 和新的 LogID。
 

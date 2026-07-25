@@ -42,6 +42,7 @@ import (
 	"github.com/wowtrust/trustdb/internal/natsingress"
 	"github.com/wowtrust/trustdb/internal/observability"
 	"github.com/wowtrust/trustdb/internal/proofstore"
+	"github.com/wowtrust/trustdb/internal/securityaudit"
 	"github.com/wowtrust/trustdb/internal/statusnotify"
 	"github.com/wowtrust/trustdb/internal/submission"
 	"github.com/wowtrust/trustdb/internal/tlcpprofile"
@@ -766,6 +767,12 @@ func newServeCommand(rt *runtimeConfig) *cobra.Command {
 				defer tlsManager.Close()
 				tlsManager.Start(serveCtx, func(err error) {
 					rt.logger.Error().Err(err).Msg("listener TLS reload failed; retaining last known-good certificate policy")
+					if auditErr := rt.auditRecord(context.WithoutCancel(serveCtx), securityaudit.Draft{
+						Action: "transport.certificate.reload", Object: "server-listener", Result: "failure", Source: "server",
+						Context: map[string]string{"transport_mode": transportMode, "error_code": string(trusterr.CodeFailedPrecondition)},
+					}); auditErr != nil {
+						rt.logger.Error().Err(auditErr).Msg("security audit TLS reload write failed")
+					}
 				})
 			}
 			natsIngress, err := startServeNATSIngress(serveCtx, rt.cfg.NATS, submissionSvc, metrics, rt.logger)
@@ -823,6 +830,7 @@ func newServeCommand(rt *runtimeConfig) *cobra.Command {
 					Auth:         authManager,
 					PolicyStore:  policyStore,
 					OIDCVerifier: oidcVerifier,
+					Auditor:      rt.auditor,
 				})
 				if err != nil {
 					return err
@@ -884,6 +892,12 @@ func newServeCommand(rt *runtimeConfig) *cobra.Command {
 					}
 				}()
 			}
+			if err := rt.auditRecord(cmd.Context(), securityaudit.Draft{
+				Action: "server.lifecycle", Object: rt.cfg.Server.ID, Result: "started", Source: "server",
+				Context: map[string]string{"http_listen": listen, "grpc_listen": grpcListen, "transport_mode": transportMode, "anchor_sink": anchorSinkKind},
+			}); err != nil {
+				return fmt.Errorf("record server startup audit event: %w", err)
+			}
 
 			go func() {
 				rt.logger.Info().Str("listen", listen).Str("transport", transportMode).Msg("starting trustdb server")
@@ -920,7 +934,18 @@ func newServeCommand(rt *runtimeConfig) *cobra.Command {
 				shutdownErrs = append(shutdownErrs, err)
 			}
 			rt.logger.Info().Msg("trustdb server stopped")
-			return errors.Join(append([]error{runErr}, shutdownErrs...)...)
+			resultErr := errors.Join(append([]error{runErr}, shutdownErrs...)...)
+			result := "stopped"
+			if resultErr != nil {
+				result = "failure"
+			}
+			if err := rt.auditRecord(context.Background(), securityaudit.Draft{
+				Action: "server.lifecycle", Object: rt.cfg.Server.ID, Result: result, Source: "server",
+				Context: map[string]string{"transport_mode": transportMode},
+			}); err != nil {
+				resultErr = errors.Join(resultErr, fmt.Errorf("record server shutdown audit event: %w", err))
+			}
+			return resultErr
 		},
 	}
 	addServerFlags(cmd)

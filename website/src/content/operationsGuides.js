@@ -67,7 +67,7 @@ const zhCN = {
         bullets: ["健康检查和关键 metrics 正常", "提交固定 canary 并达到目标 L2/L3/L4/L5", "导出 .sproof v2，在服务停止和断网环境验证", "错误原文件、公钥和 anchor trust config 必须失败", "涉及存储、suite、WAL 或 anchor 时完成备份与恢复演练"],
       },
     ],
-    links: [["管理 RBAC 手册", "https://github.com/wowtrust/trustdb/blob/main/docs/zh-CN/ADMINISTRATIVE_RBAC.md"], ["备份与恢复", "/docs/backup-recovery"], ["生产运维", "/docs/operations"], ["FISCO BCOS", "/docs/fisco-bcos"]],
+    links: [["管理 RBAC 手册", "https://github.com/wowtrust/trustdb/blob/main/docs/zh-CN/ADMINISTRATIVE_RBAC.md"], ["不可变安全审计", "/docs/security-audit"], ["备份与恢复", "/docs/backup-recovery"], ["生产运维", "/docs/operations"], ["FISCO BCOS", "/docs/fisco-bcos"]],
   },
   backupRecovery: {
     eyebrow: "Docs / Operations / 02",
@@ -81,7 +81,7 @@ const zhCN = {
         body: [".tdbackup 保存 batch/ProofBundle/root、Global Log leaf/node/state/STH/tile/outbox、immutable anchor result 和完整 scheduler Pending/InFlight/provider state。"],
         cards: [
           ["包含", "proofstore 中可枚举的不可变证据对象和可恢复调度状态，每个 entry 带 suite、ordinal、类型、大小和摘要。"],
-          ["不包含", "私钥、credential、PIN、证书、YAML、TrustConfig、WAL、原文件、NATS、BCOS 节点数据和 SDF recovery bundle。"],
+          ["不包含", "安全审计链、私钥、credential、PIN、证书、YAML、TrustConfig、WAL、原文件、NATS、BCOS 节点数据和 SDF recovery bundle。"],
         ],
         note: "v5 使用随机 DEK 和 SM4-GCM 分帧认证加密，并严格绑定 suite、proofstore generation、NodeID、LogID 与 namespace；v4/plain tar 明确拒绝。",
       },
@@ -170,7 +170,57 @@ const zhCN = {
         ],
       },
     ],
-    links: [["功能开关", "/docs/features"], ["备份恢复", "/docs/backup-recovery"], ["故障排查", "/docs/troubleshooting"]],
+    links: [["功能开关", "/docs/features"], ["安全审计", "/docs/security-audit"], ["备份恢复", "/docs/backup-recovery"], ["故障排查", "/docs/troubleshooting"]],
+  },
+  securityAudit: {
+    eyebrow: "Docs / Operations / Security audit",
+    title: "不可变安全审计与可信时间",
+    lead: "把登录、授权、配置、密钥、备份、Anchor、TrustConfig 和服务生命周期写入独立签名链；链损坏、容量耗尽或强制时间不同步时阻止高权限操作。",
+    updated: "更新于 2026.07.26 · INTL_V1 / CN_SM_V1 · Linux / macOS / Windows",
+    summary: [["完整性", "签名 + 前序哈希 + 单调 sequence"], ["生产策略", "审计或可信时间不可用即 fail closed"], ["交付物", "JSONL 全链 + 独立签名 checkpoint"]],
+    sections: [
+      {
+        title: "它与普通日志、业务证据的区别",
+        body: ["安全审计链只记录高权限控制面活动，不替代应用日志、Prometheus、业务 record、WAL 或 .sproof。每条事件包含 actor、roles、action、object、result、request ID、policy version、时间状态和有界脱敏 context。"],
+        cards: [["INTL_V1", "Ed25519 签名、SHA-256 哈希链。"], ["CN_SM_V1", "SM2 签名、SM3 哈希链。"], ["隐私", "敏感 key 自动改成 <redacted>；break-glass 原因只记录摘要。"], ["并发", "稳定追加走 O(1) checkpoint 快路径；慢导出不占用在线写锁。"]],
+        note: "本机时间、NTP 样本和 BCOS block time 都不会自动变成具有法律效力的可信时间戳。",
+      },
+      {
+        title: "1. 生成独立审计密钥",
+        body: ["审计密钥不要复用 client/server 证明签名密钥。生产使用 SDF、PKCS#11、HSM/KMS 或 remote descriptor；下面仅创建可丢弃的本地 CN_SM_V1 身份。--out 是本地目录。"],
+        platformCode: {
+          macos: "mkdir -p .trustdb-audit-key\nread -r -s -p 'Audit key passphrase: ' TRUSTDB_DEV_KEY_PASSPHRASE\nprintf '\\n'\nexport TRUSTDB_DEV_KEY_PASSPHRASE\n./bin/trustdb key generate --suite CN_SM_V1 --out .trustdb-audit-key --prefix audit\nunset TRUSTDB_DEV_KEY_PASSPHRASE",
+          linux: "mkdir -p .trustdb-audit-key\nread -r -s -p 'Audit key passphrase: ' TRUSTDB_DEV_KEY_PASSPHRASE\nprintf '\\n'\nexport TRUSTDB_DEV_KEY_PASSPHRASE\n./bin/trustdb key generate --suite CN_SM_V1 --out .trustdb-audit-key --prefix audit\nunset TRUSTDB_DEV_KEY_PASSPHRASE",
+          windows: "# 仅用于可丢弃测试；Windows 生产使用 SDF/PKCS#11/remote descriptor\nNew-Item -ItemType Directory -Force .trustdb-audit-key | Out-Null\n.\\bin\\trustdb.exe key generate --suite CN_SM_V1 --out .trustdb-audit-key --prefix audit --protection plaintext-dev-v1",
+        },
+        bullets: ["audit.key 是 signer descriptor", "audit.pub 是验证方独立保管的 public verifier descriptor", "audit.material 是本地私钥材料；不能与 KEK 放在同一备份范围"],
+      },
+      {
+        title: "2. 配置审计与 time-reference",
+        code: "audit:\n  enabled: true\n  required: true\n  path: \"/var/lib/trustdb/audit/security.audit\"\n  checkpoint_path: \"/var/lib/trustdb/audit/security.checkpoint\"\n  signing_key: \"/etc/trustdb/keys/audit.tdkey\"\n  max_bytes: 4294967296\n  retention: \"4380h\"\n  time_reference_path: \"/run/trustdb/time-reference.json\"\n  time_max_sample_age: \"2m\"\n  time_max_drift: \"5s\"\n  require_synchronized_time: true",
+        body: ["time-monitor agent 必须原子刷新 trustdb.time-reference.v1 JSON，写入来源、采样时间、offset、uncertainty、synchronized 和 confidence。local confidence 始终是 unverified，不能满足生产强制同步。"],
+        bullets: ["状态包括 synchronized、stale、drift-exceeded、unsynchronized、unavailable、invalid、unverified", "失败时先签入 result=blocked，再拒绝操作", "Admin 通用配置接口不能修改 admin/audit 块"],
+      },
+      {
+        title: "3. 检查、导出和完全离线验证",
+        platformCode: {
+          macos: "./bin/trustdb --config /etc/trustdb/trustdb.yaml audit status\n./bin/trustdb --config /etc/trustdb/trustdb.yaml audit export --out ./security-audit.jsonl\n./bin/trustdb audit verify --file ./security-audit.jsonl --public-key ./audit.pub\n./bin/trustdb --config /etc/trustdb/trustdb.yaml audit checkpoint export --out ./audit-checkpoint.json\n./bin/trustdb audit checkpoint verify --file ./audit-checkpoint.json --public-key ./audit.pub",
+          linux: "./bin/trustdb --config /etc/trustdb/trustdb.yaml audit status\n./bin/trustdb --config /etc/trustdb/trustdb.yaml audit export --out ./security-audit.jsonl\n./bin/trustdb audit verify --file ./security-audit.jsonl --public-key ./audit.pub\n./bin/trustdb --config /etc/trustdb/trustdb.yaml audit checkpoint export --out ./audit-checkpoint.json\n./bin/trustdb audit checkpoint verify --file ./audit-checkpoint.json --public-key ./audit.pub",
+          windows: ".\\bin\\trustdb.exe --config C:\\TrustDB\\trustdb.yaml audit status\n.\\bin\\trustdb.exe --config C:\\TrustDB\\trustdb.yaml audit export --out .\\security-audit.jsonl\n.\\bin\\trustdb.exe audit verify --file .\\security-audit.jsonl --public-key .\\audit.pub\n.\\bin\\trustdb.exe --config C:\\TrustDB\\trustdb.yaml audit checkpoint export --out .\\audit-checkpoint.json\n.\\bin\\trustdb.exe audit checkpoint verify --file .\\audit-checkpoint.json --public-key .\\audit.pub",
+        },
+        body: ["verify 不访问服务器、provider 或网络，只接受验证方本地提供且与导出 metadata 精确匹配的 audit.pub。周期 checkpoint 应进入独立 WORM/Object Lock，或由受控外部流程锚定其精确字节/摘要。"],
+      },
+      {
+        title: "4. 容量、备份和保留",
+        body: ["估算公式：峰值事件数/天 × 实测字节/事件 × 保留天数 × 安全系数。默认 4 GiB / 4380h 约为每天 23.5 MiB；若平均 2 KiB，未留余量时约 12,000 条/天。"],
+        bullets: ["达到 max_bytes 后阻止需要审计的操作，不自动删除或轮转历史", ".tdbackup v5 不包含安全审计链；JSONL、checkpoint、audit.pub、time-monitor 配置和外部 receipt 单独保管", "restore 会被审计，但不会覆盖目标环境原有审计历史"],
+      },
+      {
+        title: "5. 出现异常怎么处理",
+        cards: [["rollback / truncation", "停止高权限操作，逐字节保全 log/checkpoint/lock，并与独立 checkpoint 比对；禁止 truncate 或重建。"], ["unsafe storage", "检查 owner、mode/DACL、父目录可写权限、symlink 和文件类型。"], ["capacity exhausted", "保留链、扩容、审批提高 max_bytes；不能删除 checkpoint 或尾部。"], ["time unsynchronized", "修复 time monitor，检查 age、offset、uncertainty、confidence、权限和 schema；blocked 事件已入链。"]],
+      },
+    ],
+    links: [["仓库中文完整手册", "https://github.com/wowtrust/trustdb/blob/main/docs/zh-CN/IMMUTABLE_SECURITY_AUDIT.md"], ["管理 RBAC", "https://github.com/wowtrust/trustdb/blob/main/docs/zh-CN/ADMINISTRATIVE_RBAC.md"], ["备份恢复", "/docs/backup-recovery"], ["生产运维", "/docs/operations"]],
   },
   fiscoBCOS: {
     eyebrow: "Docs / Integrations / FISCO BCOS",
@@ -234,13 +284,13 @@ const en = {
       { title: "Cryptography and transport", cards: [["Suites", "Changing suite requires a new key, LogID, WAL, and empty proofstore namespace."], ["Key custody", "Software envelopes are for development; production uses remote/PKCS#11/SDF/HSM."], ["TLS/mTLS", "Configure server.transport and trusted client roots."], ["TLCP", "Terminate at an authenticated, controlled gateway boundary."]] },
       { title: "Minimum acceptance", bullets: ["Health and metrics pass", "Canary reaches the intended level", "Export and verify .sproof v2 while offline", "Wrong content/key/anchor trust fails", "Backup and restore every changed durable boundary"] },
     ],
-    links: [["Administrative RBAC", "https://github.com/wowtrust/trustdb/blob/main/docs/compliance/ADMINISTRATIVE_RBAC.md"], ["Backup and recovery", "/docs/backup-recovery"], ["Production operations", "/docs/operations"], ["FISCO BCOS", "/docs/fisco-bcos"]],
+    links: [["Administrative RBAC", "https://github.com/wowtrust/trustdb/blob/main/docs/compliance/ADMINISTRATIVE_RBAC.md"], ["Immutable security audit", "/docs/security-audit"], ["Backup and recovery", "/docs/backup-recovery"], ["Production operations", "/docs/operations"], ["FISCO BCOS", "/docs/fisco-bcos"]],
   },
   backupRecovery: {
     eyebrow: "Docs / Operations / 02", title: "Backup and recovery", lead: ".tdbackup is a logical proofstore archive, not a machine image or key-custody recovery package.", updated: "Updated 2026.07.25 · encrypted .tdbackup v5 supports INTL_V1 and CN_SM_V1",
     summary: [["Direct stores", "file / Pebble"], ["Restore", "new target + resumable checkpoint"], ["Acceptance", "historical reads, immutable anchors, offline proof verification"]],
     sections: [
-      { title: "Know the boundary", body: ["The archive includes proof bundles, roots, Global Log state, STHs, outboxes, immutable anchor results, and complete scheduler state."], cards: [["Included", "Enumerable proofstore evidence and recovery intents."], ["Excluded", "Private keys, credentials, YAML, certificates, TrustConfig, WAL, content, NATS, BCOS nodes, and SDF recovery bundles."]], note: "V5 uses a random DEK and framed SM4-GCM authentication, binds the exact suite and namespace generation, and rejects v4/plain tar." },
+      { title: "Know the boundary", body: ["The archive includes proof bundles, roots, Global Log state, STHs, outboxes, immutable anchor results, and complete scheduler state."], cards: [["Included", "Enumerable proofstore evidence and recovery intents."], ["Excluded", "Security audit chain, private keys, credentials, YAML, certificates, TrustConfig, WAL, content, NATS, BCOS nodes, and SDF recovery bundles."]], note: "V5 uses a random DEK and framed SM4-GCM authentication, binds the exact suite and namespace generation, and rejects v4/plain tar." },
       { title: "Create and verify", code: "trustdb backup create --metastore pebble \\\n  --metastore-path /var/lib/trustdb/proofs/pebble \\\n  --crypto-suite INTL_V1 --compression gzip \\\n  --out /var/backups/trustdb/proofstore.tdbackup\ntrustdb backup verify --file /var/backups/trustdb/proofstore.tdbackup" },
       { title: "Restore to a new target", code: "trustdb backup restore --file /var/backups/trustdb/proofstore.tdbackup \\\n  --metastore pebble --metastore-path /var/lib/trustdb-restore/proofs/pebble \\\n  --crypto-suite INTL_V1 --checkpoint /var/lib/trustdb-restore/checkpoint.json --resume", body: ["Resume uses the same archive, target, and BackupID-bound checkpoint. Never share one checkpoint between restore processes."] },
       { title: "Acceptance before traffic", bullets: ["Start an isolated instance with the same suite/NodeID/LogID/namespace", "Compare object counts and immutable anchor results", "Verify a pre-backup .sproof offline with independent trust roots", "Run wrong-content/key/TrustConfig negative tests", "Keep the old directory read-only through the rollback window"] },
@@ -259,7 +309,27 @@ const en = {
       { title: "Capacity and performance", body: ["Workers are not CPU cores. Increase concurrency against fixed semantics and data until p99, context switches, lock waits, or storage queues regress."], bullets: ["Transport latency and throughput", "Ingest/batch/materializer queues", "WAL fsync/segments and proofstore latency", "Outbox/STH/anchor/provider progress", "CPU/RSS/GC/fd/disk/network"] },
       { title: "Breaking upgrade", body: ["Current main accepts V2 model/WAL/API/.sproof and proofstore schema v5 only. Preserve the old version and LogID for historical verification; initialize the new generation with new keys, LogID, namespace, and WAL."], note: "Never let an old binary open V2/V5 data or re-encode old objects as new cryptographic identities." },
       { title: "Incident routing", cards: [["Connection refused", "Check process, listener, TLS, and startup log."], ["Stuck at L2/L3", "Inspect materializer or Global Log outbox."], ["No L5", "Inspect window, Pending/InFlight, and provider quorum."], ["WAL mismatch", "Use the correct identity-bound directory."], ["Pebble LOCK", "Find the owner; do not remove the lock."], ["BCOS disagreement", "Stop publishing and treat as a security event."]] },
-    ], links: [["Feature catalog", "/docs/features"], ["Backup", "/docs/backup-recovery"], ["Troubleshooting", "/docs/troubleshooting"]],
+    ], links: [["Feature catalog", "/docs/features"], ["Security audit", "/docs/security-audit"], ["Backup", "/docs/backup-recovery"], ["Troubleshooting", "/docs/troubleshooting"]],
+  },
+  securityAudit: {
+    eyebrow: "Docs / Operations / Security audit", title: "Immutable security audit and trusted-time evidence", lead: "Write authentication, authorization, configuration, key, backup, anchor, trust configuration, and lifecycle activity to a separate signed chain; fail closed on broken continuity, capacity exhaustion, or required-time failure.", updated: "Updated 2026.07.26 · INTL_V1 / CN_SM_V1 · Linux / macOS / Windows",
+    summary: [["Integrity", "signature + previous hash + monotonic sequence"], ["Production", "audit and synchronized time are mandatory"], ["Artifacts", "full JSONL chain + signed checkpoint"]],
+    sections: [
+      { title: "Separate from logs and business proofs", body: ["The security chain records privileged control-plane actions. It does not replace application logs, Prometheus, business records, WAL, or .sproof. Events carry actor, roles, action, object, result, request ID, policy version, time state, and bounded redacted context."], cards: [["INTL_V1", "Ed25519 signatures and a SHA-256 chain."], ["CN_SM_V1", "SM2 signatures and an SM3 chain."], ["Privacy", "Sensitive keys become <redacted>; emergency reasons are digested."], ["Concurrency", "Stable appends use an O(1) checkpoint path; slow output does not hold the live writer lock."]], note: "Local time, NTP samples, and BCOS block time are not automatically legal trusted timestamps." },
+      { title: "1. Create a dedicated audit key", body: ["Do not reuse client/server proof keys. Production uses SDF, PKCS#11, HSM/KMS, or remote custody. These commands create a disposable CN_SM_V1 identity; --out is a local directory."], platformCode: {
+        macos: "mkdir -p .trustdb-audit-key\nread -r -s -p 'Audit key passphrase: ' TRUSTDB_DEV_KEY_PASSPHRASE\nprintf '\\n'\nexport TRUSTDB_DEV_KEY_PASSPHRASE\n./bin/trustdb key generate --suite CN_SM_V1 --out .trustdb-audit-key --prefix audit\nunset TRUSTDB_DEV_KEY_PASSPHRASE",
+        linux: "mkdir -p .trustdb-audit-key\nread -r -s -p 'Audit key passphrase: ' TRUSTDB_DEV_KEY_PASSPHRASE\nprintf '\\n'\nexport TRUSTDB_DEV_KEY_PASSPHRASE\n./bin/trustdb key generate --suite CN_SM_V1 --out .trustdb-audit-key --prefix audit\nunset TRUSTDB_DEV_KEY_PASSPHRASE",
+        windows: "# Disposable test only; use SDF/PKCS#11/remote custody in production\nNew-Item -ItemType Directory -Force .trustdb-audit-key | Out-Null\n.\\bin\\trustdb.exe key generate --suite CN_SM_V1 --out .trustdb-audit-key --prefix audit --protection plaintext-dev-v1",
+      }, bullets: ["audit.key is the signer descriptor", "audit.pub is independently distributed verifier trust", "audit.material must not share a backup boundary with its KEK"] },
+      { title: "2. Configure audit and time reference", code: "audit:\n  enabled: true\n  required: true\n  path: \"/var/lib/trustdb/audit/security.audit\"\n  checkpoint_path: \"/var/lib/trustdb/audit/security.checkpoint\"\n  signing_key: \"/etc/trustdb/keys/audit.tdkey\"\n  max_bytes: 4294967296\n  retention: \"4380h\"\n  time_reference_path: \"/run/trustdb/time-reference.json\"\n  time_max_sample_age: \"2m\"\n  time_max_drift: \"5s\"\n  require_synchronized_time: true", body: ["A time-monitor agent atomically refreshes trustdb.time-reference.v1 with source, sample time, offset, uncertainty, synchronization, and confidence. local confidence is always unverified and cannot satisfy production policy."], bullets: ["States: synchronized, stale, drift-exceeded, unsynchronized, unavailable, invalid, unverified", "A failed time gate signs result=blocked before rejecting the operation", "The generic Admin config endpoint cannot modify admin/audit"] },
+      { title: "3. Inspect, export, and verify offline", platformCode: {
+        macos: "./bin/trustdb --config /etc/trustdb/trustdb.yaml audit status\n./bin/trustdb --config /etc/trustdb/trustdb.yaml audit export --out ./security-audit.jsonl\n./bin/trustdb audit verify --file ./security-audit.jsonl --public-key ./audit.pub\n./bin/trustdb --config /etc/trustdb/trustdb.yaml audit checkpoint export --out ./audit-checkpoint.json\n./bin/trustdb audit checkpoint verify --file ./audit-checkpoint.json --public-key ./audit.pub",
+        linux: "./bin/trustdb --config /etc/trustdb/trustdb.yaml audit status\n./bin/trustdb --config /etc/trustdb/trustdb.yaml audit export --out ./security-audit.jsonl\n./bin/trustdb audit verify --file ./security-audit.jsonl --public-key ./audit.pub\n./bin/trustdb --config /etc/trustdb/trustdb.yaml audit checkpoint export --out ./audit-checkpoint.json\n./bin/trustdb audit checkpoint verify --file ./audit-checkpoint.json --public-key ./audit.pub",
+        windows: ".\\bin\\trustdb.exe --config C:\\TrustDB\\trustdb.yaml audit status\n.\\bin\\trustdb.exe --config C:\\TrustDB\\trustdb.yaml audit export --out .\\security-audit.jsonl\n.\\bin\\trustdb.exe audit verify --file .\\security-audit.jsonl --public-key .\\audit.pub\n.\\bin\\trustdb.exe --config C:\\TrustDB\\trustdb.yaml audit checkpoint export --out .\\audit-checkpoint.json\n.\\bin\\trustdb.exe audit checkpoint verify --file .\\audit-checkpoint.json --public-key .\\audit.pub",
+      }, body: ["Verification uses no server, provider, or network. It requires the verifier-local audit.pub to exactly match export metadata. Retain checkpoints in independent WORM/Object Lock or anchor their exact bytes/digest through an approved process."] },
+      { title: "4. Capacity, backup, and retention", body: ["Formula: peak events/day × measured bytes/event × retention days × safety factor. The default 4 GiB / 4380h budget is about 23.5 MiB/day, or roughly 12,000 2-KiB events/day before safety margin."], bullets: ["max_bytes exhaustion blocks audited operations; history is never silently deleted or rotated", ".tdbackup v5 excludes this chain; retain JSONL, checkpoint, audit.pub, time-monitor configuration, and external receipt separately", "Restore is audited but does not replace destination audit history"] },
+      { title: "5. Incident response", cards: [["rollback / truncation", "Stop privileged operations, preserve log/checkpoint/lock bytes, and compare independent checkpoints. Never truncate or recreate."], ["unsafe storage", "Correct owner, mode/DACL, parent writability, symlink, or file type."], ["capacity exhausted", "Preserve the chain, add capacity, and approve a higher max_bytes. Do not delete the tail."], ["time unsynchronized", "Repair the time monitor and inspect age, offset, uncertainty, confidence, permissions, and schema; the blocked event is retained."]] },
+    ], links: [["Full repository guide", "https://github.com/wowtrust/trustdb/blob/main/docs/compliance/IMMUTABLE_SECURITY_AUDIT.md"], ["Administrative RBAC", "https://github.com/wowtrust/trustdb/blob/main/docs/compliance/ADMINISTRATIVE_RBAC.md"], ["Backup", "/docs/backup-recovery"], ["Operations", "/docs/operations"]],
   },
   fiscoBCOS: {
     eyebrow: "Docs / Integrations / FISCO BCOS", title: "Anchor TrustDB STHs to FISCO BCOS", lead: "Qualify the exact topology, pin contract and chain trust, publish through quorum, then verify receipt inclusion and PBFT finality offline.", updated: "Updated 2026.07.25 · FISCO BCOS v3.16.3 / C SDK v3.6.0",

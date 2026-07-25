@@ -112,6 +112,7 @@ Desktop packages carry a release-specific self-signed certificate and its public
 - Go SDK for claim signing, HTTP/gRPC calls, proof export, and local verification.
 - Wails + Vue desktop client for local identity, file attestation, record management, proof refresh, `.sproof` export, and offline verification.
 - Optional Vue Admin Web and privileged CLI authorization backed by versioned RBAC, system/security/audit separation, mTLS/OIDC/MFA hooks, bounded lockout, and break-glass recovery.
+- Dedicated signed/hash-chained security audit for authentication, authorization, configuration, key, backup, anchor, trust-root, and lifecycle operations, with SM2/SM3 support, fail-closed synchronized-time evidence, offline JSONL verification, and externally retainable signed checkpoints.
 
 ## Proof Levels
 
@@ -148,6 +149,7 @@ Core paths:
 - Backup path: proofstore data can be exported to `.tdbackup`, verified, and restored with resumable restore state; portable backups exclude node-local WAL checkpoints.
 - Encrypted logical backup: `.tdbackup v5` supports `INTL_V1` and `CN_SM_V1` with provider-wrapped random DEKs, authenticated SM4-GCM frames, strict deterministic-CBOR manifests, suite-selected SHA-256/SM3 entry digests, encrypted key-registry audit evidence, and resumable source/target namespace-bound restore. V4/plain tar is rejected without migration or fallback.
 - Observability path: `/metrics` exposes ingest, batch, global log, anchor, WAL, backup, and storage metrics.
+- Security-audit path: privileged control-plane intent and outcome are written to a separate signed chain; [configuration, export, offline verification, retention, and incident response](docs/compliance/IMMUTABLE_SECURITY_AUDIT.md) do not depend on application logs or `.sproof` data.
 
 File, Pebble, and each TiKV namespace use proofstore storage schema v5. Opening
 an older or unversioned non-empty store fails explicitly; TrustDB does not

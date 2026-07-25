@@ -225,8 +225,8 @@ jobs:
 
       - name: Run administrative authorization tests
         run: |
-          go test -count=1 -mod=readonly ./internal/adminauth ./internal/adminweb ./internal/config
-          go test -count=1 -mod=readonly ./cmd/trustdb -run '^(TestPrivilegedCommandPermissionAnnotations|TestCLIAuthorizationAllowsOnlyGrantedRole|TestAdminPolicyBootstrapCommand|TestAdminPolicyOfflineRecoveryRequiresReason)$'
+          go test -count=1 -mod=readonly ./internal/adminauth ./internal/adminweb ./internal/config ./internal/securityaudit
+          go test -count=1 -mod=readonly ./cmd/trustdb -run '^(TestPrivilegedCommandPermissionAnnotations|TestCLIAuthorizationAllowsOnlyGrantedRole|TestAdminPolicyBootstrapCommand|TestAdminPolicyOfflineRecoveryRequiresReason|TestCommandAuditActionsCoverSensitiveDomains|TestAuditCLIStatusExportAndOfflineVerify|TestAuditCLIFailsClosedWhenTrustedTimeIsUnavailable)$'
 
   backend-integration:
     name: Backend integration tests

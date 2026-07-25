@@ -16,6 +16,7 @@ import (
 	trustconfig "github.com/wowtrust/trustdb/internal/config"
 	"github.com/wowtrust/trustdb/internal/keydescriptor"
 	"github.com/wowtrust/trustdb/internal/logx"
+	"github.com/wowtrust/trustdb/internal/securityaudit"
 	"gopkg.in/natefinch/lumberjack.v2"
 )
 
@@ -28,6 +29,11 @@ type runtimeConfig struct {
 	logger         zerolog.Logger
 	logCloser      io.Closer
 	signerResolver *keydescriptor.Resolver
+	auditor        *securityaudit.Writer
+	auditActor     string
+	auditRoles     []string
+	auditPolicy    uint64
+	auditRequestID string
 }
 
 func newRootCommand(out, errOut io.Writer) *cobra.Command {
@@ -47,7 +53,15 @@ func newRootCommand(out, errOut io.Writer) *cobra.Command {
 			if err := rt.load(); err != nil {
 				return err
 			}
-			return rt.authorizeCLI(cmd)
+			if err := rt.initAudit(cmd); err != nil {
+				_ = rt.close()
+				return err
+			}
+			if err := rt.authorizeCLI(cmd); err != nil {
+				_ = rt.close()
+				return err
+			}
+			return nil
 		},
 		PersistentPostRunE: func(cmd *cobra.Command, args []string) error {
 			return rt.close()
@@ -84,6 +98,7 @@ func newRootCommand(out, errOut io.Writer) *cobra.Command {
 
 	root.AddCommand(newConfigCommand(rt))
 	root.AddCommand(newAdminCommand(rt))
+	root.AddCommand(newAuditCommand(rt))
 	root.AddCommand(newServeCommand(rt))
 	root.AddCommand(newKeyCommand(rt))
 	root.AddCommand(newKeygenCommand(rt, false))
@@ -104,6 +119,7 @@ func newRootCommand(out, errOut io.Writer) *cobra.Command {
 	root.AddCommand(newVersionCommand(rt))
 	root.AddCommand(newDoctorCommand(rt))
 	root.AddCommand(newCompletionCommand(rt))
+	wrapAuditedCommandRuns(root, rt)
 	return root
 }
 
@@ -225,6 +241,17 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("log.async.enabled", defaults.Log.Async.Enabled)
 	v.SetDefault("log.async.buffer_size", defaults.Log.Async.BufferSize)
 	v.SetDefault("log.async.drop_on_full", defaults.Log.Async.DropOnFull)
+	v.SetDefault("audit.enabled", defaults.Audit.Enabled)
+	v.SetDefault("audit.required", defaults.Audit.Required)
+	v.SetDefault("audit.path", defaults.Audit.Path)
+	v.SetDefault("audit.checkpoint_path", defaults.Audit.CheckpointPath)
+	v.SetDefault("audit.signing_key", defaults.Audit.SigningKey)
+	v.SetDefault("audit.max_bytes", defaults.Audit.MaxBytes)
+	v.SetDefault("audit.retention", defaults.Audit.Retention)
+	v.SetDefault("audit.time_reference_path", defaults.Audit.TimeReferencePath)
+	v.SetDefault("audit.time_max_sample_age", defaults.Audit.TimeMaxSampleAge)
+	v.SetDefault("audit.time_max_drift", defaults.Audit.TimeMaxDrift)
+	v.SetDefault("audit.require_synchronized_time", defaults.Audit.RequireSynchronizedTime)
 	v.SetDefault("keys.client_private", defaults.Keys.ClientPrivate)
 	v.SetDefault("keys.client_public", defaults.Keys.ClientPublic)
 	v.SetDefault("keys.server_private", defaults.Keys.ServerPrivate)
@@ -383,6 +410,17 @@ func setDefaults(v *viper.Viper) {
 	bindEnv(v, "log.async.enabled", "TRUSTDB_LOG_ASYNC_ENABLED", "TRUSTDB_LOG_ASYNC")
 	bindEnv(v, "log.async.buffer_size", "TRUSTDB_LOG_ASYNC_BUFFER_SIZE")
 	bindEnv(v, "log.async.drop_on_full", "TRUSTDB_LOG_ASYNC_DROP_ON_FULL")
+	bindEnv(v, "audit.enabled", "TRUSTDB_AUDIT_ENABLED")
+	bindEnv(v, "audit.required", "TRUSTDB_AUDIT_REQUIRED")
+	bindEnv(v, "audit.path", "TRUSTDB_AUDIT_PATH")
+	bindEnv(v, "audit.checkpoint_path", "TRUSTDB_AUDIT_CHECKPOINT_PATH")
+	bindEnv(v, "audit.signing_key", "TRUSTDB_AUDIT_SIGNING_KEY")
+	bindEnv(v, "audit.max_bytes", "TRUSTDB_AUDIT_MAX_BYTES")
+	bindEnv(v, "audit.retention", "TRUSTDB_AUDIT_RETENTION")
+	bindEnv(v, "audit.time_reference_path", "TRUSTDB_AUDIT_TIME_REFERENCE_PATH")
+	bindEnv(v, "audit.time_max_sample_age", "TRUSTDB_AUDIT_TIME_MAX_SAMPLE_AGE")
+	bindEnv(v, "audit.time_max_drift", "TRUSTDB_AUDIT_TIME_MAX_DRIFT")
+	bindEnv(v, "audit.require_synchronized_time", "TRUSTDB_AUDIT_REQUIRE_SYNCHRONIZED_TIME")
 	bindEnv(v, "keys.client_private", "TRUSTDB_KEYS_CLIENT_PRIVATE")
 	bindEnv(v, "keys.client_public", "TRUSTDB_KEYS_CLIENT_PUBLIC")
 	bindEnv(v, "keys.server_private", "TRUSTDB_KEYS_SERVER_PRIVATE")
@@ -465,6 +503,12 @@ func (rt *runtimeConfig) load() error {
 
 func (rt *runtimeConfig) close() error {
 	var errs []error
+	if rt.auditor != nil {
+		if err := rt.auditor.Close(); err != nil {
+			errs = append(errs, err)
+		}
+		rt.auditor = nil
+	}
 	if err := rt.closeSignerResolver(); err != nil {
 		errs = append(errs, err)
 	}
