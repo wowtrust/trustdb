@@ -4,6 +4,8 @@
 - Date: 2026-07-25
 - Issue: [#467](https://github.com/wowtrust/trustdb/issues/467)
 - Depends on: [ADR-0015](ADR-0015-FISCO-BCOS-OFFLINE-RECEIPT-INCLUSION.md)
+- Current TrustConfig/proof schemas and the optional transition policy are
+  defined by [ADR-0017](ADR-0017-FISCO-BCOS-VALIDATOR-SET-TRANSITIONS.md).
 - Admitted node baseline: FISCO BCOS `v3.16.3`, commit
   `274f864e7725fef5b8ed4c6b7a3363ee5396f104`
 
@@ -67,21 +69,20 @@ would otherwise count the same local trust root more than once.
 
 ## Static membership and quorum profile
 
-`TrustConfig v1` pins validator public keys but has no independent vote-weight
-field. Its only admitted policy is
-`fisco-bcos-pbft-2f-plus-1-v1`. Therefore this version deliberately accepts
-only unit-weight header membership:
+`TrustConfig v2` pins each validator public key, ordered membership, and
+positive vote weight. Under `static-validator-set-v1`, the target header must
+match that complete local state exactly. The admitted quorum policy is
+`fisco-bcos-weighted-pbft-v2`:
 
 ```text
-totalWeight    = number of locally pinned validators
+totalWeight    = sum of locally pinned validator vote weights
 faultyWeight   = floor((totalWeight - 1) / 3)
 requiredWeight = totalWeight - faultyWeight
 ```
 
-For four validators, three distinct valid signatures are required. A weighted
-header is rejected rather than trusting weights supplied by the evidence. A
-future weighted policy requires a new versioned local trust schema that pins
-each weight; it must not infer trusted weights from the header being verified.
+For four unit-weight validators, three distinct valid signatures are required.
+Weighted headers are accepted only when every ordered weight exactly matches
+the local configuration; weights are never inferred from the evidence.
 
 Every local validator public key uses canonical SEC1 uncompressed 65-byte
 encoding. The BCOS NodeID is exactly lowercase `0x` plus the 64-byte `X || Y`
@@ -180,12 +181,12 @@ file is not a locally verified finality decision.
 
 The verifier performs no endpoint, DNS, CA, certificate-reference,
 account-provider, HSM, or blockchain request. All collections and byte strings
-were already bounded by `AnchorProof v2`; finality performs one bounded pass
+were already bounded by `AnchorProof v3`; finality performs one bounded pass
 over at most 1,024 validators/signatures and uses maps keyed only by bounded
 canonical NodeIDs.
 
 Tests cover four-validator Standard/Guomi quorum, a target later than the
 checkpoint without a direct ancestry edge, wrong/nonmember/duplicate signer,
-insufficient quorum, changed/weighted membership, invalid sealer, malformed or
+insufficient quorum, changed membership, weighted quorum, invalid sealer, malformed or
 noncanonical signatures, checkpoint mutations, and a fully disconnected
 `.sproof` that reaches L5 only after every stage passes.

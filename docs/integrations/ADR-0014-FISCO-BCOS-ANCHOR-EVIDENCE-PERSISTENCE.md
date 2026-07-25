@@ -151,7 +151,7 @@ receipt is retained and makes the scheduler attempt fail closed.
 
 ## Immutable proof format
 
-The completed `AnchorProof v2` contains:
+The completed `AnchorProof v3` contains:
 
 - explicit chain mode and algorithm identifiers;
 - exact chain, group, genesis checkpoint, contract, and chain-context claims;
@@ -162,6 +162,8 @@ The completed `AnchorProof v2` contains:
 - every canonical receipt log plus the exact decoded `AnchorPublished` event;
 - transaction and receipt indexes and native Merkle proof nodes;
 - canonical block header bytes, block number, and block hash;
+- the bounded contiguous validator history and complete transaction/receipt
+  arrays for blocks that change membership or weight; and
 - the block's unique validator signatures. The SDK's live PBFT-view RPC is
   deliberately excluded because it is not a block-specific observation.
 
