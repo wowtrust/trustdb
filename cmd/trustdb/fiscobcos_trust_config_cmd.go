@@ -7,28 +7,33 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/spf13/cobra"
 
 	"github.com/wowtrust/trustdb/internal/anchor/fiscobcos"
+	"github.com/wowtrust/trustdb/internal/sproof"
 	"github.com/wowtrust/trustdb/internal/trusterr"
 )
 
 const maxFISCOBCOSTrustConfigJSONBytes = 4 << 20
 
 type fiscoBCOSTrustConfigInput struct {
-	CryptoMode        string                              `json:"crypto_mode"`
-	ChainID           string                              `json:"chain_id"`
-	GroupID           string                              `json:"group_id"`
-	GenesisHashHex    string                              `json:"genesis_hash_hex"`
-	TrustedCheckpoint fiscoBCOSCheckpointInput            `json:"trusted_checkpoint"`
-	Contract          fiscoBCOSContractInput              `json:"contract"`
-	Endpoints         []string                            `json:"endpoints"`
-	ReadQuorum        uint32                              `json:"read_quorum"`
-	AccountProvider   fiscoBCOSAccountProviderInput       `json:"account_provider"`
-	Certificates      fiscoBCOSCertificateInput           `json:"certificates"`
-	Validators        []fiscoBCOSValidatorDescriptorInput `json:"validators"`
+	CryptoMode                string                              `json:"crypto_mode"`
+	ChainID                   string                              `json:"chain_id"`
+	GroupID                   string                              `json:"group_id"`
+	GenesisHashHex            string                              `json:"genesis_hash_hex"`
+	TrustedCheckpoint         fiscoBCOSCheckpointInput            `json:"trusted_checkpoint"`
+	Contract                  fiscoBCOSContractInput              `json:"contract"`
+	Endpoints                 []string                            `json:"endpoints"`
+	ReadQuorum                uint32                              `json:"read_quorum"`
+	ValidatorTransitionPolicy string                              `json:"validator_transition_policy"`
+	AccountProvider           fiscoBCOSAccountProviderInput       `json:"account_provider"`
+	Certificates              fiscoBCOSCertificateInput           `json:"certificates"`
+	Validators                []fiscoBCOSValidatorDescriptorInput `json:"validators"`
 }
 
 type fiscoBCOSCheckpointInput struct {
@@ -62,18 +67,35 @@ type fiscoBCOSCertificateInput struct {
 type fiscoBCOSValidatorDescriptorInput struct {
 	NodeID       string `json:"node_id"`
 	PublicKeyHex string `json:"public_key_hex"`
+	VoteWeight   uint64 `json:"vote_weight"`
 }
 
 type fiscoBCOSTrustConfigReport struct {
-	SchemaVersion     string                              `json:"schema_version"`
-	CryptoMode        fiscobcos.CryptoMode                `json:"crypto_mode"`
-	ChainID           string                              `json:"chain_id"`
-	GroupID           string                              `json:"group_id"`
-	TrustConfigDigest string                              `json:"trust_config_digest"`
-	ChainContextID    string                              `json:"chain_context_id"`
-	Endpoints         []string                            `json:"endpoints"`
-	ReadQuorum        uint32                              `json:"read_quorum"`
-	Validators        []fiscoBCOSValidatorDescriptorInput `json:"validators"`
+	SchemaVersion             string                              `json:"schema_version"`
+	CryptoMode                fiscobcos.CryptoMode                `json:"crypto_mode"`
+	ChainID                   string                              `json:"chain_id"`
+	GroupID                   string                              `json:"group_id"`
+	TrustConfigDigest         string                              `json:"trust_config_digest"`
+	ChainContextID            string                              `json:"chain_context_id"`
+	Endpoints                 []string                            `json:"endpoints"`
+	ReadQuorum                uint32                              `json:"read_quorum"`
+	ValidatorTransitionPolicy string                              `json:"validator_transition_policy"`
+	Checkpoint                fiscoBCOSCheckpointReport           `json:"checkpoint"`
+	Validators                []fiscoBCOSValidatorDescriptorInput `json:"validators"`
+}
+
+type fiscoBCOSCheckpointReport struct {
+	BlockNumber          uint64 `json:"block_number"`
+	BlockHash            string `json:"block_hash"`
+	Generation           uint64 `json:"generation"`
+	PreviousConfigDigest string `json:"previous_config_digest,omitempty"`
+}
+
+type fiscoBCOSAdvanceReport struct {
+	OldTrustConfigDigest string                    `json:"old_trust_config_digest"`
+	NewTrustConfigDigest string                    `json:"new_trust_config_digest"`
+	OldCheckpoint        fiscoBCOSCheckpointReport `json:"old_checkpoint"`
+	NewCheckpoint        fiscoBCOSCheckpointReport `json:"new_checkpoint"`
 }
 
 func newAnchorFISCOBCOSCommand(rt *runtimeConfig) *cobra.Command {
@@ -92,7 +114,127 @@ func newFISCOBCOSTrustConfigCommand(rt *runtimeConfig) *cobra.Command {
 	}
 	cmd.AddCommand(newFISCOBCOSTrustConfigCreateCommand(rt))
 	cmd.AddCommand(newFISCOBCOSTrustConfigInspectCommand(rt))
+	cmd.AddCommand(newFISCOBCOSTrustConfigAdvanceCommand(rt))
 	return cmd
+}
+
+func newFISCOBCOSTrustConfigAdvanceCommand(rt *runtimeConfig) *cobra.Command {
+	var inputPath, evidencePath, outputPath, expectedDigestHex string
+	cmd := &cobra.Command{
+		Use:   "advance",
+		Short: "Verify an offline transition chain and atomically advance the local trust checkpoint",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			for _, required := range []struct{ name, value string }{
+				{name: "--input", value: inputPath},
+				{name: "--evidence", value: evidencePath},
+				{name: "--out", value: outputPath},
+				{name: "--expect-current-digest", value: expectedDigestHex},
+			} {
+				if strings.TrimSpace(required.value) == "" {
+					return usageError(required.name + " is required")
+				}
+			}
+			samePath, err := pathsNameSameFile(inputPath, outputPath)
+			if err != nil {
+				return trusterr.Wrap(trusterr.CodeInvalidArgument, "compare FISCO BCOS TrustConfig paths", err)
+			}
+			if !samePath {
+				return usageError("--out must name the same canonical TrustConfig file as --input")
+			}
+			expectedDigest, err := decodeExactHex("expect_current_digest", expectedDigestHex, 32)
+			if err != nil {
+				return trusterr.Wrap(trusterr.CodeInvalidArgument, "decode expected FISCO BCOS TrustConfig digest", err)
+			}
+			lockPath := inputPath + ".advance.lock"
+			lock, err := os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+			if err != nil {
+				return trusterr.Wrap(trusterr.CodeFailedPrecondition, "acquire exclusive FISCO BCOS checkpoint advancement lock", err)
+			}
+			lockClosed := false
+			defer func() {
+				if !lockClosed {
+					_ = lock.Close()
+				}
+				_ = os.Remove(lockPath)
+			}()
+			if _, err := lock.Write([]byte("0x" + hex.EncodeToString(expectedDigest) + "\n")); err != nil {
+				return trusterr.Wrap(trusterr.CodeFailedPrecondition, "record FISCO BCOS checkpoint advancement lock", err)
+			}
+			if err := lock.Sync(); err != nil {
+				return trusterr.Wrap(trusterr.CodeFailedPrecondition, "sync FISCO BCOS checkpoint advancement lock", err)
+			}
+			if err := lock.Close(); err != nil {
+				lockClosed = true
+				return trusterr.Wrap(trusterr.CodeFailedPrecondition, "close FISCO BCOS checkpoint advancement lock", err)
+			}
+			lockClosed = true
+
+			current, err := loadCanonicalFISCOBCOSTrustConfig(inputPath)
+			if err != nil {
+				return err
+			}
+			currentDigest, err := fiscobcos.TrustConfigDigest(current)
+			if err != nil {
+				return trusterr.Wrap(trusterr.CodeInternal, "digest current FISCO BCOS TrustConfig", err)
+			}
+			if !bytes.Equal(currentDigest, expectedDigest) {
+				return trusterr.New(trusterr.CodeFailedPrecondition, "current FISCO BCOS TrustConfig digest changed; refusing checkpoint advancement")
+			}
+			evidence, err := sproof.ReadFile(evidencePath)
+			if err != nil {
+				return trusterr.Wrap(trusterr.CodeInvalidArgument, "read offline .sproof transition evidence", err)
+			}
+			if evidence.AnchorResult == nil || evidence.AnchorResult.SinkName != fiscobcos.SinkName {
+				return trusterr.New(trusterr.CodeInvalidArgument, "offline evidence does not carry a FISCO BCOS anchor result")
+			}
+			proof, err := fiscobcos.UnmarshalProof(evidence.AnchorResult.Proof)
+			if err != nil {
+				return trusterr.Wrap(trusterr.CodeInvalidArgument, "decode FISCO BCOS transition proof", err)
+			}
+			next, err := fiscobcos.AdvanceTrustConfigCheckpoint(current, proof)
+			if err != nil {
+				return trusterr.Wrap(trusterr.CodeFailedPrecondition, "verify FISCO BCOS validator transition chain", err)
+			}
+			nextBytes, err := fiscobcos.MarshalTrustConfig(next)
+			if err != nil {
+				return trusterr.Wrap(trusterr.CodeInternal, "encode advanced FISCO BCOS TrustConfig", err)
+			}
+			if err := writeFileAtomic(outputPath, nextBytes, 0o600); err != nil {
+				return trusterr.Wrap(trusterr.CodeFailedPrecondition, "write advanced FISCO BCOS TrustConfig", err)
+			}
+			nextDigest, err := fiscobcos.TrustConfigDigest(next)
+			if err != nil {
+				return trusterr.Wrap(trusterr.CodeInternal, "digest advanced FISCO BCOS TrustConfig", err)
+			}
+			return rt.writeJSON(fiscoBCOSAdvanceReport{
+				OldTrustConfigDigest: "0x" + hex.EncodeToString(currentDigest),
+				NewTrustConfigDigest: "0x" + hex.EncodeToString(nextDigest),
+				OldCheckpoint:        checkpointReport(current),
+				NewCheckpoint:        checkpointReport(next),
+			})
+		},
+	}
+	cmd.Flags().StringVar(&inputPath, "input", "", "current canonical TrustConfig CBOR path")
+	cmd.Flags().StringVar(&evidencePath, "evidence", "", "complete offline .sproof file carrying the authenticated transition chain")
+	cmd.Flags().StringVar(&outputPath, "out", "", "canonical TrustConfig CBOR path; must name the same file as --input")
+	cmd.Flags().StringVar(&expectedDigestHex, "expect-current-digest", "", "required 32-byte current TrustConfig digest for rollback/concurrency protection")
+	return cmd
+}
+
+func pathsNameSameFile(left, right string) (bool, error) {
+	leftAbsolute, err := filepath.Abs(left)
+	if err != nil {
+		return false, err
+	}
+	rightAbsolute, err := filepath.Abs(right)
+	if err != nil {
+		return false, err
+	}
+	if runtime.GOOS == "windows" {
+		return strings.EqualFold(filepath.Clean(leftAbsolute), filepath.Clean(rightAbsolute)), nil
+	}
+	return filepath.Clean(leftAbsolute) == filepath.Clean(rightAbsolute), nil
 }
 
 func newFISCOBCOSTrustConfigCreateCommand(rt *runtimeConfig) *cobra.Command {
@@ -315,6 +457,7 @@ func (input fiscoBCOSTrustConfigInput) trustConfig() (fiscobcos.TrustConfig, err
 	config.Contract.EventSignature = input.Contract.EventSignature
 	config.Endpoints = append([]string(nil), input.Endpoints...)
 	config.ReadQuorum = input.ReadQuorum
+	config.ValidatorTransitionPolicy = input.ValidatorTransitionPolicy
 	config.AccountProvider = fiscobcos.AccountProviderConfig{
 		Provider:     input.AccountProvider.Provider,
 		KeyID:        input.AccountProvider.KeyID,
@@ -360,6 +503,7 @@ func (input fiscoBCOSTrustConfigInput) trustConfig() (fiscobcos.TrustConfig, err
 			Algorithm:         params.ChainSignatureAlgorithm,
 			PublicKeyEncoding: params.PublicKeyEncoding,
 			PublicKey:         publicKey,
+			VoteWeight:        validator.VoteWeight,
 		}
 	}
 	return config, nil
@@ -404,17 +548,32 @@ func newFISCOBCOSTrustConfigReport(config fiscobcos.TrustConfig) (fiscoBCOSTrust
 		validators[index] = fiscoBCOSValidatorDescriptorInput{
 			NodeID:       validator.NodeID,
 			PublicKeyHex: "0x" + hex.EncodeToString(validator.PublicKey),
+			VoteWeight:   validator.VoteWeight,
 		}
 	}
 	return fiscoBCOSTrustConfigReport{
-		SchemaVersion:     config.SchemaVersion,
-		CryptoMode:        config.CryptoMode,
-		ChainID:           config.ChainID,
-		GroupID:           config.GroupID,
-		TrustConfigDigest: "0x" + hex.EncodeToString(digest),
-		ChainContextID:    "0x" + hex.EncodeToString(contextID),
-		Endpoints:         append([]string(nil), config.Endpoints...),
-		ReadQuorum:        config.ReadQuorum,
-		Validators:        validators,
+		SchemaVersion:             config.SchemaVersion,
+		CryptoMode:                config.CryptoMode,
+		ChainID:                   config.ChainID,
+		GroupID:                   config.GroupID,
+		TrustConfigDigest:         "0x" + hex.EncodeToString(digest),
+		ChainContextID:            "0x" + hex.EncodeToString(contextID),
+		Endpoints:                 append([]string(nil), config.Endpoints...),
+		ReadQuorum:                config.ReadQuorum,
+		ValidatorTransitionPolicy: config.ValidatorTransitionPolicy,
+		Checkpoint:                checkpointReport(config),
+		Validators:                validators,
 	}, nil
+}
+
+func checkpointReport(config fiscobcos.TrustConfig) fiscoBCOSCheckpointReport {
+	report := fiscoBCOSCheckpointReport{
+		BlockNumber: config.TrustedCheckpoint.BlockNumber,
+		BlockHash:   "0x" + hex.EncodeToString(config.TrustedCheckpoint.BlockHash),
+		Generation:  config.CheckpointGeneration,
+	}
+	if len(config.PreviousConfigDigest) != 0 {
+		report.PreviousConfigDigest = "0x" + hex.EncodeToString(config.PreviousConfigDigest)
+	}
+	return report
 }

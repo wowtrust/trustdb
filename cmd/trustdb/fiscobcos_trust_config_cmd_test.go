@@ -226,12 +226,118 @@ func TestFISCOBCOSGuomiTrustConfigExampleIsCanonicalizable(t *testing.T) {
 	}
 }
 
+func TestFISCOBCOSTrustConfigAdvanceRequiresInPlaceCAS(t *testing.T) {
+	t.Parallel()
+
+	config := testFISCOBCOSTrust(t)
+	config.ValidatorTransitionPolicy = fiscobcos.ValidatorPolicyTransitions
+	canonical, err := fiscobcos.MarshalTrustConfig(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest, err := fiscobcos.TrustConfigDigest(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	directory := t.TempDir()
+	inputPath := filepath.Join(directory, "trust-config.cbor")
+	if err := os.WriteFile(inputPath, canonical, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	wrongOutput := filepath.Join(directory, "forked-config.cbor")
+	command := newRootCommand(&bytes.Buffer{}, &bytes.Buffer{})
+	command.SetArgs([]string{
+		"anchor", "fisco-bcos", "trust-config", "advance",
+		"--input", inputPath,
+		"--evidence", filepath.Join(directory, "missing.sproof"),
+		"--out", wrongOutput,
+		"--expect-current-digest", "0x" + hex.EncodeToString(digest),
+	})
+	if err := command.Execute(); err == nil || !strings.Contains(err.Error(), "same canonical TrustConfig file") {
+		t.Fatalf("advance with forked output error = %v", err)
+	}
+	if _, err := os.Stat(wrongOutput); !os.IsNotExist(err) {
+		t.Fatalf("forked output exists or stat failed: %v", err)
+	}
+
+	before, err := os.ReadFile(inputPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrongDigest := append([]byte(nil), digest...)
+	wrongDigest[0] ^= 0xff
+	command = newRootCommand(&bytes.Buffer{}, &bytes.Buffer{})
+	command.SetArgs([]string{
+		"anchor", "fisco-bcos", "trust-config", "advance",
+		"--input", inputPath,
+		"--evidence", filepath.Join(directory, "missing.sproof"),
+		"--out", inputPath,
+		"--expect-current-digest", "0x" + hex.EncodeToString(wrongDigest),
+	})
+	if err := command.Execute(); err == nil || !strings.Contains(err.Error(), "digest changed") {
+		t.Fatalf("advance with stale digest error = %v", err)
+	}
+	after, err := os.ReadFile(inputPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatal("stale-digest advance modified the canonical TrustConfig")
+	}
+	if _, err := os.Stat(inputPath + ".advance.lock"); !os.IsNotExist(err) {
+		t.Fatalf("advance lock was not cleaned up: %v", err)
+	}
+}
+
+func TestFISCOBCOSTrustConfigAdvanceRejectsConcurrentLock(t *testing.T) {
+	t.Parallel()
+
+	config := testFISCOBCOSTrust(t)
+	config.ValidatorTransitionPolicy = fiscobcos.ValidatorPolicyTransitions
+	canonical, err := fiscobcos.MarshalTrustConfig(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest, err := fiscobcos.TrustConfigDigest(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	directory := t.TempDir()
+	inputPath := filepath.Join(directory, "trust-config.cbor")
+	if err := os.WriteFile(inputPath, canonical, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	lockPath := inputPath + ".advance.lock"
+	if err := os.WriteFile(lockPath, []byte("operator-owned\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	command := newRootCommand(&bytes.Buffer{}, &bytes.Buffer{})
+	command.SetArgs([]string{
+		"anchor", "fisco-bcos", "trust-config", "advance",
+		"--input", inputPath,
+		"--evidence", filepath.Join(directory, "missing.sproof"),
+		"--out", inputPath,
+		"--expect-current-digest", "0x" + hex.EncodeToString(digest),
+	})
+	if err := command.Execute(); err == nil || !strings.Contains(err.Error(), "acquire exclusive") {
+		t.Fatalf("advance with concurrent lock error = %v", err)
+	}
+	lockBytes, err := os.ReadFile(lockPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(lockBytes) != "operator-owned\n" {
+		t.Fatalf("concurrent lock changed to %q", lockBytes)
+	}
+}
+
 func trustConfigInputForTest(config fiscobcos.TrustConfig) fiscoBCOSTrustConfigInput {
 	validators := make([]fiscoBCOSValidatorDescriptorInput, len(config.Validators))
 	for index, validator := range config.Validators {
 		validators[index] = fiscoBCOSValidatorDescriptorInput{
 			NodeID:       validator.NodeID,
 			PublicKeyHex: "0x" + hex.EncodeToString(validator.PublicKey),
+			VoteWeight:   validator.VoteWeight,
 		}
 	}
 	caHashes := make([]string, len(config.Certificates.TrustedCACertificateHashes))
@@ -257,8 +363,9 @@ func trustConfigInputForTest(config fiscobcos.TrustConfig) fiscoBCOSTrustConfigI
 			ProtocolVersion: config.Contract.ProtocolVersion,
 			EventSignature:  config.Contract.EventSignature,
 		},
-		Endpoints:  append([]string(nil), config.Endpoints...),
-		ReadQuorum: config.ReadQuorum,
+		Endpoints:                 append([]string(nil), config.Endpoints...),
+		ReadQuorum:                config.ReadQuorum,
+		ValidatorTransitionPolicy: config.ValidatorTransitionPolicy,
 		AccountProvider: fiscoBCOSAccountProviderInput{
 			Provider:     config.AccountProvider.Provider,
 			KeyID:        config.AccountProvider.KeyID,

@@ -174,6 +174,9 @@ func writeFileAtomic(path string, data []byte, mode fs.FileMode) error {
 	if err := tmp.Chmod(mode); err != nil {
 		return err
 	}
+	if err := tmp.Sync(); err != nil {
+		return err
+	}
 	if err := tmp.Close(); err != nil {
 		closed = true
 		return err
@@ -183,22 +186,14 @@ func writeFileAtomic(path string, data []byte, mode fs.FileMode) error {
 		return err
 	}
 	cleanup = false
-	return nil
+	return syncDirectoryDurable(dir)
 }
 
 func renameReplace(src, dst string) error {
 	if err := rejectDirectoryTarget(dst); err != nil {
 		return err
 	}
-	if err := os.Rename(src, dst); err != nil {
-		if os.IsExist(err) {
-			if removeErr := os.Remove(dst); removeErr == nil {
-				return os.Rename(src, dst)
-			}
-		}
-		return err
-	}
-	return nil
+	return replaceFileDurable(src, dst)
 }
 
 func rejectDirectoryTarget(path string) error {
