@@ -700,6 +700,8 @@ func (s *FISCOBCOSStandardSink) readReceiptQuorum(
 	var selectedKey []byte
 	matches := 0
 	positiveSeen := false
+	var firstEvidenceErr error
+	var firstEvidenceEndpoint string
 	for _, driver := range s.drivers {
 		receipt, err := driver.GetReceiptWithProof(ctx, attempt)
 		if errors.Is(err, fiscobcos.ErrTransactionNotFound) {
@@ -709,6 +711,10 @@ func (s *FISCOBCOSStandardSink) readReceiptQuorum(
 			continue
 		}
 		if err != nil {
+			if firstEvidenceErr == nil {
+				firstEvidenceErr = err
+				firstEvidenceEndpoint = driver.Endpoint()
+			}
 			continue
 		}
 		positiveSeen = true
@@ -743,6 +749,13 @@ func (s *FISCOBCOSStandardSink) readReceiptQuorum(
 		return fiscobcos.ReceiptWithProof{}, fiscobcos.ErrTransactionNotFound
 	}
 	s.recordQuorumFailure(bcosQuorumOperationReceipt, bcosQuorumFailureInsufficient)
+	if !positiveSeen && notFound == 0 && firstEvidenceErr != nil {
+		return fiscobcos.ReceiptWithProof{}, ambiguousDriverFailure(
+			"recover_receipt_quorum",
+			firstEvidenceEndpoint,
+			firstEvidenceErr,
+		)
+	}
 	return fiscobcos.ReceiptWithProof{}, ambiguousDriverFailure(
 		"recover_receipt_quorum",
 		s.drivers[0].Endpoint(),

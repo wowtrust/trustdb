@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -695,6 +696,73 @@ func TestFISCOBCOSStandardSinkDoesNotCountStaleNotFoundTowardReceiptQuorum(t *te
 	if err == nil || errors.Is(err, fiscobcos.ErrTransactionNotFound) ||
 		!errors.Is(err, fiscobcos.ErrIncompleteChainEvidence) {
 		t.Fatalf("stale not-found error=%v, want ambiguous incomplete quorum evidence", err)
+	}
+}
+
+func TestFISCOBCOSStandardSinkPreservesReceiptEvidenceFailureWhenEveryEndpointFails(t *testing.T) {
+	trust, drivers := fakeBCOSFixture(t)
+	evidenceErr := fmt.Errorf(
+		"%w: receipt version=2 cannot be reconstructed",
+		fiscobcos.ErrIncompleteChainEvidence,
+	)
+	for _, driver := range drivers {
+		driver.(*fakeBCOSDriver).readErr = evidenceErr
+	}
+
+	sink, err := NewFISCOBCOSStandardSink(FISCOBCOSStandardSinkConfig{TrustConfig: trust, Drivers: drivers})
+	if err != nil {
+		t.Fatal(err)
+	}
+	route, err := sink.probeQuorum(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = sink.readReceiptQuorum(context.Background(), fiscobcos.TransactionSubmission{
+		TransactionHash: bytes.Repeat([]byte{0x92}, 32),
+	}, route)
+	if !errors.Is(err, fiscobcos.ErrIncompleteChainEvidence) ||
+		!strings.Contains(err.Error(), "receipt version=2 cannot be reconstructed") {
+		t.Fatalf("receipt evidence error=%v, want the endpoint reconstruction failure", err)
+	}
+}
+
+func TestFISCOBCOSBlockQuorumIgnoresEndpointSpecificRPCAndCommitSubsets(t *testing.T) {
+	t.Parallel()
+
+	left := fakeBCOSBlockHeader()
+	right := cloneBlockHeader(left)
+	right.Observation.NormalizedRPCHeader = []byte("same block with a different retained commit subset")
+	if !sameBlockHeader(left, right) {
+		t.Fatal("same consensus-critical block was rejected because RPC observations differed")
+	}
+	right.Evidence.RawCanonicalHeader = append([]byte(nil), right.Evidence.RawCanonicalHeader...)
+	right.Evidence.RawCanonicalHeader[0] ^= 1
+	if sameBlockHeader(left, right) {
+		t.Fatal("different consensus-critical block header was accepted")
+	}
+
+	history := fiscobcos.ValidatorHistoryBlock{
+		Block: left.Evidence,
+		Finality: fiscobcos.FinalityEvidence{Signatures: []fiscobcos.CommitSignature{{
+			ValidatorNodeID: "validator-a",
+			Signature:       bytes.Repeat([]byte{0x81}, 64),
+		}}},
+	}
+	other := history
+	other.Finality.Signatures = []fiscobcos.CommitSignature{{
+		ValidatorNodeID: "validator-b",
+		Signature:       bytes.Repeat([]byte{0x82}, 64),
+	}}
+	leftKey, err := validatorHistoryQuorumKey(history)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rightKey, err := validatorHistoryQuorumKey(other)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(leftKey, rightKey) {
+		t.Fatal("same history block was rejected because nodes retained different valid commit subsets")
 	}
 }
 
