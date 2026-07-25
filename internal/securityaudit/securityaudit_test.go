@@ -1,0 +1,197 @@
+package securityaudit
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/wowtrust/trustdb/internal/trustcrypto"
+)
+
+func TestSignedAuditChainAndExportAcrossSuites(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		name   string
+		signer func(t *testing.T) trustcrypto.Signer
+	}{
+		{"intl-v1", newEd25519Signer},
+		{"cn-sm-v1", newSM2Signer},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			dir := t.TempDir()
+			logPath := filepath.Join(dir, "security.audit")
+			checkpointPath := filepath.Join(dir, "security.checkpoint")
+			writer := openTestWriter(t, logPath, checkpointPath, test.signer(t), nil)
+			first, err := writer.Record(context.Background(), Draft{
+				Actor: "security-admin", Roles: []string{"security-admin"}, Action: "security.policy.update",
+				Object: "admin-policy", Result: "success", RequestID: "request-1", Source: "admin-http", PolicyVersion: 7,
+				Context: map[string]string{"policy_digest": strings.Repeat("a", 64), "access_token": "must-not-leak"},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if first.Event.Context["access_token"] != "<redacted>" {
+				t.Fatalf("sensitive context = %q", first.Event.Context["access_token"])
+			}
+			second, err := writer.Record(context.Background(), Draft{
+				Actor: "backup-operator", Roles: []string{"backup-operator"}, Action: "backup.create",
+				Object: "logical-backup", Result: "success", RequestID: "request-2", Source: "cli", PolicyVersion: 7,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(second.Event.PreviousHash, first.EventHash) {
+				t.Fatal("second event does not chain to first")
+			}
+			var exported bytes.Buffer
+			stats, err := writer.ExportJSONL(context.Background(), &exported)
+			if err != nil {
+				t.Fatal(err)
+			}
+			publicKey := writer.PublicKey()
+			if stats.Sequence != 2 {
+				t.Fatalf("sequence = %d", stats.Sequence)
+			}
+			verified, err := VerifyExportJSONL(context.Background(), bytes.NewReader(exported.Bytes()), publicKey)
+			if err != nil || verified.Sequence != 2 {
+				t.Fatalf("verify export stats=%+v err=%v", verified, err)
+			}
+			tampered := bytes.Replace(exported.Bytes(), []byte(`"actor":"security-admin"`), []byte(`"actor":"security-admin-x"`), 1)
+			if _, err := VerifyExportJSONL(context.Background(), bytes.NewReader(tampered), publicKey); err == nil {
+				t.Fatal("tampered export verified")
+			}
+			if err := writer.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := VerifyLog(context.Background(), logPath, checkpointPath, publicKey); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestAuditCrashTailRecoveryAndCheckpointRollbackDetection(t *testing.T) {
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "security.audit")
+	checkpointPath := filepath.Join(dir, "security.checkpoint")
+	signer := newEd25519Signer(t)
+	writer := openTestWriter(t, logPath, checkpointPath, signer, nil)
+	if _, err := writer.Record(context.Background(), Draft{Actor: "system-admin", Action: "server.start", Object: "trustdb", Result: "success", Source: "server"}); err != nil {
+		t.Fatal(err)
+	}
+	stats := writer.Stats()
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	file, err := os.OpenFile(logPath, os.O_WRONLY|os.O_APPEND, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := file.Write([]byte("EVT1\x00\x00")); err != nil {
+		t.Fatal(err)
+	}
+	_ = file.Close()
+	recovered := openTestWriter(t, logPath, checkpointPath, signer, nil)
+	if recovered.Stats().LogBytes != stats.LogBytes {
+		t.Fatalf("recovered bytes=%d want=%d", recovered.Stats().LogBytes, stats.LogBytes)
+	}
+	if err := recovered.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Truncate(logPath, int64(len(auditFileMagic))); err != nil {
+		t.Fatal(err)
+	}
+	_, err = OpenWriter(context.Background(), testOptions(logPath, checkpointPath, signer, nil))
+	if !errors.Is(err, ErrRollback) {
+		t.Fatalf("rollback open error = %v", err)
+	}
+}
+
+func TestClockEvidenceAndFailClosedSynchronization(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "time-reference.json")
+	now := time.Date(2026, 7, 26, 9, 0, 0, 0, time.UTC)
+	if err := WriteReferenceSample(path, ReferenceSample{
+		SchemaVersion: TimeSchema, Source: "chrony-ntp-auth", SampledAtUnixNano: now.Add(-time.Second).UnixNano(),
+		OffsetNanos: int64(20 * time.Millisecond), UncertaintyNanos: int64(10 * time.Millisecond),
+		Synchronized: true, Confidence: "authenticated",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	clock, err := NewClock(ClockOptions{ReferencePath: path, MaxSampleAge: time.Minute, MaxClockDrift: time.Second, RequireSynchronized: true, Now: func() time.Time { return now }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, evidence, err := clock.Sample(context.Background())
+	if err != nil || !evidence.Synchronized || evidence.Status != "synchronized" {
+		t.Fatalf("evidence=%+v err=%v", evidence, err)
+	}
+	staleClock, _ := NewClock(ClockOptions{ReferencePath: path, MaxSampleAge: 500 * time.Millisecond, MaxClockDrift: time.Second, RequireSynchronized: true, Now: func() time.Time { return now }})
+	if _, evidence, err := staleClock.Sample(context.Background()); !errors.Is(err, ErrTimeUnsynchronized) || evidence.Status != "stale" {
+		t.Fatalf("stale evidence=%+v err=%v", evidence, err)
+	}
+}
+
+func TestAuditCapacityFailsBeforeMutation(t *testing.T) {
+	dir := t.TempDir()
+	signer := newEd25519Signer(t)
+	opts := testOptions(filepath.Join(dir, "audit"), filepath.Join(dir, "checkpoint"), signer, nil)
+	opts.MaxBytes = 1 << 20
+	writer, err := OpenWriter(context.Background(), opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writer.Close()
+	before := writer.Stats()
+	writer.maxBytes = before.LogBytes + 1
+	if _, err := writer.Record(context.Background(), Draft{Actor: "audit-admin", Action: "audit.export", Object: "security-audit", Result: "success", Source: "cli"}); !errors.Is(err, ErrCapacity) {
+		t.Fatalf("capacity error = %v", err)
+	}
+	if after := writer.Stats(); after.Sequence != before.Sequence || after.LogBytes != before.LogBytes {
+		t.Fatalf("capacity failure mutated stats: before=%+v after=%+v", before, after)
+	}
+}
+
+func openTestWriter(t *testing.T, logPath, checkpointPath string, signer trustcrypto.Signer, clock Clock) *Writer {
+	t.Helper()
+	writer, err := OpenWriter(context.Background(), testOptions(logPath, checkpointPath, signer, clock))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return writer
+}
+
+func testOptions(logPath, checkpointPath string, signer trustcrypto.Signer, clock Clock) Options {
+	return Options{Path: logPath, CheckpointPath: checkpointPath, MaxBytes: 16 << 20, Retention: 180 * 24 * time.Hour, Signer: signer, Clock: clock}
+}
+
+func newEd25519Signer(t *testing.T) trustcrypto.Signer {
+	t.Helper()
+	_, privateKey, err := trustcrypto.GenerateEd25519Key()
+	if err != nil {
+		t.Fatal(err)
+	}
+	signer, err := trustcrypto.NewEd25519Signer("audit-ed25519", privateKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return signer
+}
+
+func newSM2Signer(t *testing.T) trustcrypto.Signer {
+	t.Helper()
+	_, privateKey, err := trustcrypto.GenerateSM2Key()
+	if err != nil {
+		t.Fatal(err)
+	}
+	signer, err := trustcrypto.NewSM2Signer("audit-sm2", privateKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return signer
+}
