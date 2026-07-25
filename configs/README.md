@@ -80,6 +80,17 @@ preserve the existing no-size-rotation policy. Explicit
 `--wal-max-segment-bytes` and `--wal-keep-segments` flags override YAML and
 environment values.
 
+`backup` configures encrypted `.tdbackup v5` output. `compression` is applied
+before encryption; `frame_bytes` is the authenticated SM4-GCM plaintext frame
+size (64 KiB–16 MiB, default 1 MiB). `key_provider` selects the KEK adapter and
+`key_id` is a non-secret reference stored in the archive header. The built-in
+`passphrase-dev-v1` provider reads exactly one of
+`TRUSTDB_BACKUP_PASSPHRASE` or `TRUSTDB_BACKUP_PASSPHRASE_FILE`; it is for
+development and offline drills. It never follows key-registry descriptor
+references to copy private material. See the
+[backup and recovery guide](../docs/zh-CN/BACKUP_AND_RECOVERY.md) and
+[format contract](../formats/BACKUP_V5.md).
+
 The optional `nats` section is disabled by default. Enabling, pre-provisioning,
 securing, sizing, and consuming the JetStream ingress is documented in the
 [NATS ingress guide](../docs/integrations/NATS_INGRESS.md). Keep the generated
@@ -102,7 +113,7 @@ semantics and recovery boundaries.
 
 `benchmark*.yaml` files use separate data directories. Do not point them at an
 existing proofstore: file, Pebble, and each TiKV namespace now require storage
-schema v4 and intentionally refuse legacy or unversioned layouts instead of
+schema v5 and intentionally refuse legacy or unversioned layouts instead of
 deleting or migrating them.
 
 ## `run_profile`

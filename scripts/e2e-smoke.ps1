@@ -12,6 +12,8 @@ if ([string]::IsNullOrWhiteSpace($WorkDir)) {
     $WorkDir = Join-Path $script:RepoRoot ".localtest\e2e-smoke"
 }
 $WorkDir = [System.IO.Path]::GetFullPath($WorkDir)
+$previousBackupPassphrase = [Environment]::GetEnvironmentVariable("TRUSTDB_BACKUP_PASSPHRASE", "Process")
+$env:TRUSTDB_BACKUP_PASSPHRASE = "trustdb-windows-smoke-backup-passphrase"
 
 function Write-Step([string]$Message) {
     Write-Host "[trustdb-smoke] $Message"
@@ -286,8 +288,10 @@ try {
         "backup", "create",
         "--metastore", "pebble",
         "--metastore-path", $pebbleDir,
+        "--crypto-suite", "INTL_V1",
         "--out", $backupPath,
-        "--compression", "gzip"
+        "--compression", "gzip",
+        "--key-registry="
     )
     Invoke-TrustDBJson @("--log-format", "json", "--log-output", "stderr", "backup", "verify", "--file", $backupPath) | Out-Null
 
@@ -298,7 +302,8 @@ try {
         "backup", "restore",
         "--file", $backupPath,
         "--metastore", "pebble",
-        "--metastore-path", $restorePebbleDir
+        "--metastore-path", $restorePebbleDir,
+        "--crypto-suite", "INTL_V1"
     ) | Out-Null
 
     $restorePort = $Port + 1
@@ -336,5 +341,10 @@ try {
     }
     if ($null -ne $restoreServer) {
         Stop-TrustDBServer $restoreServer
+    }
+    if ($null -eq $previousBackupPassphrase) {
+        Remove-Item Env:TRUSTDB_BACKUP_PASSPHRASE -ErrorAction SilentlyContinue
+    } else {
+        $env:TRUSTDB_BACKUP_PASSPHRASE = $previousBackupPassphrase
     }
 }

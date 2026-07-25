@@ -186,6 +186,9 @@ history:
 
 backup:
   compression: "gzip"
+  key_provider: "passphrase-dev-v1"
+  key_id: "development-backup-key"
+  frame_bytes: 1048576
 
 log:
   level: "warn"
@@ -457,6 +460,9 @@ type History struct {
 
 type Backup struct {
 	Compression string `mapstructure:"compression" json:"compression"`
+	KeyProvider string `mapstructure:"key_provider" json:"key_provider"`
+	KeyID       string `mapstructure:"key_id" json:"key_id"`
+	FrameBytes  int    `mapstructure:"frame_bytes" json:"frame_bytes"`
 }
 
 type Proofstore struct {
@@ -607,6 +613,9 @@ func Default() Config {
 		},
 		Backup: Backup{
 			Compression: "gzip",
+			KeyProvider: "passphrase-dev-v1",
+			KeyID:       "development-backup-key",
+			FrameBytes:  1 << 20,
 		},
 		Proofstore: Proofstore{
 			ArtifactSyncMode: "chunk",
@@ -823,6 +832,12 @@ func (c Config) Validate() error {
 	case "", "gzip", "none":
 	default:
 		return fmt.Errorf("backup.compression must be gzip or none")
+	}
+	if strings.TrimSpace(c.Backup.KeyProvider) == "" || strings.TrimSpace(c.Backup.KeyID) == "" {
+		return fmt.Errorf("backup.key_provider and backup.key_id are required")
+	}
+	if c.Backup.FrameBytes < 64<<10 || c.Backup.FrameBytes > 16<<20 {
+		return fmt.Errorf("backup.frame_bytes must be between 65536 and 16777216")
 	}
 	switch strings.ToLower(c.Proofstore.ArtifactSyncMode) {
 	case "", "chunk", "batch":

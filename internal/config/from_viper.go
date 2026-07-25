@@ -173,6 +173,9 @@ func FromViper(v *viper.Viper) Config {
 		},
 		Backup: Backup{
 			Compression: v.GetString("backup.compression"),
+			KeyProvider: v.GetString("backup.key_provider"),
+			KeyID:       v.GetString("backup.key_id"),
+			FrameBytes:  v.GetInt("backup.frame_bytes"),
 		},
 		Proofstore: Proofstore{
 			ArtifactSyncMode: v.GetString("proofstore.artifact_sync_mode"),
