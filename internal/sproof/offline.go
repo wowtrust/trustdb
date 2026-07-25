@@ -155,7 +155,7 @@ func VerifyOffline(
 			return result, err
 		}
 		setBCOSStage(&result, OfflineStageBCOSReceiptInclusion, OfflineStagePassed, nil)
-		if err := fiscobcos.VerifyStaticPBFTFinality(
+		if err := fiscobcos.VerifyPBFTFinality(
 			proof.GlobalProof.STH,
 			*proof.AnchorResult,
 			*trust.FISCOBCOS,

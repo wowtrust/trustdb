@@ -83,9 +83,9 @@ Use repeatable --additional-server-public-key descriptors when accepted,
 committed, and STH signatures span a server-key rotation.
 Raw FISCO BCOS receipt evidence additionally requires verifier-local
 --fisco-bcos-trust-config. It separately verifies receipt inclusion, PBFT
-finality against the pinned static validator checkpoint, and the exact
-TrustDB anchor binding. Only all three passing promotes the offline result
-from L4 to L5.
+finality against the locally selected static or authenticated-transition
+policy, and the exact TrustDB anchor binding. Only all three passing promotes
+the offline result from L4 to L5.
 It performs no network or external provider access and emits a structured
 result for every verification stage.`,
 		RunE: func(cmd *cobra.Command, args []string) error {

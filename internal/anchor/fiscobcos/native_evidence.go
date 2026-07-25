@@ -2,6 +2,7 @@ package fiscobcos
 
 import (
 	"encoding/binary"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"math"
@@ -34,6 +35,21 @@ type NativeReceiptFields struct {
 	EffectiveGasPrice *string           `cbor:"effective_gas_price,omitempty" json:"effective_gas_price,omitempty"`
 	Logs              []NativeLogFields `cbor:"logs" json:"logs"`
 	BlockNumber       int64             `cbor:"block_number" json:"block_number"`
+}
+
+// NativeTransactionFields is the exact transaction-data projection hashed by
+// FISCO BCOS v3.16.3. Validator transition evidence deliberately supports
+// version 0 only because the pinned RPC transaction detail omits version 1
+// fee fields and therefore cannot reconstruct that hash preimage fail-closed.
+type NativeTransactionFields struct {
+	Version    int32  `cbor:"version" json:"version"`
+	ChainID    string `cbor:"chain_id" json:"chain_id"`
+	GroupID    string `cbor:"group_id" json:"group_id"`
+	BlockLimit int64  `cbor:"block_limit" json:"block_limit"`
+	Nonce      string `cbor:"nonce" json:"nonce"`
+	To         []byte `cbor:"to,omitempty" json:"to,omitempty"`
+	Input      []byte `cbor:"input" json:"input"`
+	ABI        string `cbor:"abi" json:"abi"`
 }
 
 type NativeLogFields struct {
@@ -169,6 +185,41 @@ func MarshalNativeReceiptPreimage(fields NativeReceiptFields) ([]byte, [][]byte,
 		return nil, nil, ErrIncompleteChainEvidence
 	}
 	return out, logs, nil
+}
+
+// MarshalNativeTransactionHashPreimage mirrors the v3.16.3 transaction data
+// hash implementation for version 0 transactions. It is independent of the
+// RPC JSON shape and does not include signatures, import time, or sender,
+// which are not part of the consensus transaction hash.
+func MarshalNativeTransactionHashPreimage(fields NativeTransactionFields) ([]byte, error) {
+	if fields.Version != 0 || fields.BlockLimit <= 0 ||
+		len(fields.ChainID) == 0 || len(fields.ChainID) > maxNativeEvidenceFieldBytes ||
+		len(fields.GroupID) == 0 || len(fields.GroupID) > maxNativeEvidenceFieldBytes ||
+		len(fields.Nonce) > maxNativeEvidenceFieldBytes ||
+		len(fields.To) != 0 && len(fields.To) != 20 ||
+		len(fields.Input) > maxNativeEvidenceFieldBytes ||
+		len(fields.ABI) > maxNativeEvidenceFieldBytes {
+		return nil, ErrIncompleteChainEvidence
+	}
+	size := 4 + len(fields.ChainID) + len(fields.GroupID) + 8 + len(fields.Nonce) +
+		2*len(fields.To) + len(fields.Input) + len(fields.ABI)
+	if size > maxRawTransactionBytes {
+		return nil, ErrIncompleteChainEvidence
+	}
+	out := make([]byte, 0, size)
+	out = appendInt32(out, fields.Version)
+	out = append(out, fields.ChainID...)
+	out = append(out, fields.GroupID...)
+	out = appendInt64(out, fields.BlockLimit)
+	out = append(out, fields.Nonce...)
+	if len(fields.To) != 0 {
+		encoded := make([]byte, hex.EncodedLen(len(fields.To)))
+		hex.Encode(encoded, fields.To)
+		out = append(out, encoded...)
+	}
+	out = append(out, fields.Input...)
+	out = append(out, fields.ABI...)
+	return out, nil
 }
 
 func MarshalNativeBlockHeaderPreimage(fields NativeBlockHeaderFields) ([]byte, error) {

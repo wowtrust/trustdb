@@ -80,7 +80,7 @@ func TestVerifyStaticPBFTFinalityRejectsMutations(t *testing.T) {
 			mutate: func(proof *AnchorProof, _ *TrustConfig) {
 				proof.Finality.Signatures[0].ValidatorNodeID = "0x" + strings.Repeat("ff", 64)
 			},
-			match: "not in the trusted static set",
+			match: "not in the active trusted set",
 		},
 		{
 			name: "wrong signature",
@@ -113,7 +113,7 @@ func TestVerifyStaticPBFTFinalityRejectsMutations(t *testing.T) {
 				proof.Block.Fields.SealerList[3] = bytes.Repeat([]byte{0xff}, 64)
 				rebuildFinalityBlock(t, proof, keys[:3])
 			},
-			match: "not in the trusted static set",
+			match: "does not exactly match trusted order and weight",
 		},
 		{
 			name: "weighted membership",
@@ -121,7 +121,7 @@ func TestVerifyStaticPBFTFinalityRejectsMutations(t *testing.T) {
 				proof.Block.Fields.ConsensusWeights[0] = 2
 				rebuildFinalityBlock(t, proof, keys)
 			},
-			match: "requires unit weights",
+			match: "does not exactly match trusted order and weight",
 		},
 		{
 			name: "invalid sealer index",
@@ -299,7 +299,7 @@ func TestVerifyStaticPBFTFinalityRejectsGuomiDirectDigestSignature(t *testing.T)
 }
 
 func validStaticFinalityFixture(
-	t *testing.T,
+	t testing.TB,
 	mode CryptoMode,
 	suite cryptosuite.ID,
 ) (model.SignedTreeHead, model.STHAnchorResult, TrustConfig, []finalityFixtureKey) {
@@ -347,6 +347,7 @@ func validStaticFinalityFixture(
 			Algorithm:         params.ChainSignatureAlgorithm,
 			PublicKeyEncoding: params.PublicKeyEncoding,
 			PublicKey:         publicKey,
+			VoteWeight:        1,
 		}
 		proof.Block.Fields.SealerList[index] = append([]byte(nil), rawPublic...)
 	}
@@ -355,7 +356,7 @@ func validStaticFinalityFixture(
 	return sth, resultWithFinalityProof(t, result, proof), trust, keys
 }
 
-func rebuildFinalityBlock(t *testing.T, proof *AnchorProof, signers []finalityFixtureKey) {
+func rebuildFinalityBlock(t testing.TB, proof *AnchorProof, signers []finalityFixtureKey) {
 	t.Helper()
 	rawHeader, err := MarshalNativeBlockHeaderPreimage(proof.Block.Fields)
 	if err != nil {
@@ -410,7 +411,7 @@ func rebuildFinalityBlock(t *testing.T, proof *AnchorProof, signers []finalityFi
 	}
 }
 
-func rebindFinalityContext(t *testing.T, proof *AnchorProof, trust TrustConfig) {
+func rebindFinalityContext(t testing.TB, proof *AnchorProof, trust TrustConfig) {
 	t.Helper()
 	contextID, err := ChainContextID(trust)
 	if err != nil {
@@ -420,7 +421,7 @@ func rebindFinalityContext(t *testing.T, proof *AnchorProof, trust TrustConfig) 
 	proof.ChainContextID = contextID
 }
 
-func mustFinalityProof(t *testing.T, result model.STHAnchorResult) AnchorProof {
+func mustFinalityProof(t testing.TB, result model.STHAnchorResult) AnchorProof {
 	t.Helper()
 	proof, err := UnmarshalProof(result.Proof)
 	if err != nil {
@@ -430,7 +431,7 @@ func mustFinalityProof(t *testing.T, result model.STHAnchorResult) AnchorProof {
 }
 
 func resultWithFinalityProof(
-	t *testing.T,
+	t testing.TB,
 	template model.STHAnchorResult,
 	proof AnchorProof,
 ) model.STHAnchorResult {

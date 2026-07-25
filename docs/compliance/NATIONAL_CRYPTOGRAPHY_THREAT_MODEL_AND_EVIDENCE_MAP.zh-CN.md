@@ -206,7 +206,7 @@ flowchart LR
 
 - **风险**：Critical。Merkle proof 只能说明交易属于给定 block/receipt root，不能单独证明该 block 已被可信 validator quorum 最终确认。
 - **攻击路径**：只导出 tx hash/receipt、信任单节点 header、忽略 PBFT signatures、把 `latest` block 当 finalized。
-- **控制**：`Existing`：离线 verifier 分阶段输出 receipt inclusion、PBFT finality 与 exact anchor binding；block header 由本地 static validator checkpoint 验签，任一阶段缺失不得输出 L5。
+- **控制**：`Existing`：离线 verifier 分阶段输出 receipt inclusion、PBFT finality 与 exact anchor binding；block header 按本地选择的静态验证者策略或带完整交易/收据根的认证轮换策略验签，任一阶段缺失不得输出 L5。
 - **Owner**：Security & Cryptography；Local Evidence Verifier；External Crypto & BCOS Operators。
 - **验证与证据**：篡改 transaction/receipt path/header/signature、签名不足/重复/非成员、错误 block number/hash；断网验证报告分别列出两个 stage。
 - **Gate / Issues**：`G4`；#465–#468、#471、#481。

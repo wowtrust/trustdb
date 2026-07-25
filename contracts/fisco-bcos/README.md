@@ -104,7 +104,7 @@ Collect the values from at least two mutually trusted endpoints:
    account provider reference for a plugin that advertises
    `FISCO_BCOS_GUOMI_V1`; the example uses SDF key index 7.
 
-Create the canonical `trustdb.fisco-bcos-trust-config.v1` CBOR file and record
+Create the canonical `trustdb.fisco-bcos-trust-config.v2` CBOR file and record
 both derived trust identities:
 
 ```bash
@@ -121,6 +121,31 @@ user-ID field from `crypto_mode`; unknown JSON fields, malformed hex, invalid
 curve points, node-ID/public-key mismatch, wrong endpoint schemes, and mixed
 standard/Guomi values fail before the CBOR file is written. The output is
 written atomically with mode `0600`.
+
+Every validator entry must include its exact positive `vote_weight`. Set
+`validator_transition_policy` to `authenticated-validator-transitions-v1` for
+offline-authenticated membership and weight changes, or to
+`static-validator-set-v1` for a deliberately static committee. The evidence
+and explicit checkpoint-advancement procedure are specified in
+[`ADR-0017`](../../docs/integrations/ADR-0017-FISCO-BCOS-VALIDATOR-SET-TRANSITIONS.md).
+
+After an exported `.sproof` has verified a strictly newer finalized block,
+advance the canonical local checkpoint in place. The current digest is
+mandatory CAS input; the command rejects a different output path so two
+successor configurations cannot fork from one local generation:
+
+```bash
+trustdb anchor fisco-bcos trust-config advance \
+  --input /etc/trustdb/fisco/trust-config.guomi.cbor \
+  --evidence /var/lib/trustdb/evidence/latest-anchor.sproof \
+  --expect-current-digest 0xCURRENT_TRUST_CONFIG_DIGEST \
+  --out /etc/trustdb/fisco/trust-config.guomi.cbor
+```
+
+Retain the JSON report in the operator audit log. It records both checkpoint
+identities, both config digests, the incremented generation, and the previous
+config digest. Never remove an `.advance.lock` file until an interrupted
+operation has been investigated.
 
 The resulting config contains:
 

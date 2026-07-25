@@ -12,25 +12,27 @@ import (
 const (
 	SinkName = "fisco-bcos"
 
-	SchemaTrustConfig = "trustdb.fisco-bcos-trust-config.v1"
-	SchemaAnchorProof = "trustdb.fisco-bcos-anchor-proof.v2"
+	SchemaTrustConfig = "trustdb.fisco-bcos-trust-config.v2"
+	SchemaAnchorProof = "trustdb.fisco-bcos-anchor-proof.v3"
 
 	PayloadVersion uint16 = 1
-	ProofVersion   uint64 = 2
+	ProofVersion   uint64 = 3
 
-	DomainStreamID      = "trustdb/fisco-bcos/stream/v1"
-	DomainAnchorID      = "trustdb/fisco-bcos/sth-anchor/v1"
-	DomainChainContext  = "trustdb/fisco-bcos/chain-context/v1"
-	DomainTrustConfig   = "trustdb/fisco-bcos/trust-config/v1"
-	DomainValidatorSet  = "trustdb/fisco-bcos/validator-set/v1"
-	QuorumPolicyPBFTV1  = "fisco-bcos-pbft-2f-plus-1-v1"
-	StandardAccountAlg  = "ecdsa-secp256k1"
-	StandardKeyEncoding = "sec1-uncompressed-65-byte-secp256k1"
-	GuomiAccountAlg     = "sm2-sm3"
-	GuomiKeyEncoding    = "sec1-uncompressed-65-byte-sm2p256v1"
-	StandardTransport   = "tls"
-	GuomiTransport      = "gm-tls"
-	HashKeccak256       = "keccak256"
+	DomainStreamID             = "trustdb/fisco-bcos/stream/v1"
+	DomainAnchorID             = "trustdb/fisco-bcos/sth-anchor/v1"
+	DomainChainContext         = "trustdb/fisco-bcos/chain-context/v2"
+	DomainTrustConfig          = "trustdb/fisco-bcos/trust-config/v2"
+	DomainValidatorSet         = "trustdb/fisco-bcos/validator-set/v2"
+	QuorumPolicyPBFTV2         = "fisco-bcos-weighted-pbft-v2"
+	ValidatorPolicyStatic      = "static-validator-set-v1"
+	ValidatorPolicyTransitions = "authenticated-validator-transitions-v1"
+	StandardAccountAlg         = "ecdsa-secp256k1"
+	StandardKeyEncoding        = "sec1-uncompressed-65-byte-secp256k1"
+	GuomiAccountAlg            = "sm2-sm3"
+	GuomiKeyEncoding           = "sec1-uncompressed-65-byte-sm2p256v1"
+	StandardTransport          = "tls"
+	GuomiTransport             = "gm-tls"
+	HashKeccak256              = "keccak256"
 )
 
 type CryptoMode string

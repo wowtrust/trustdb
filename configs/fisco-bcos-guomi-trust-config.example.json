@@ -18,6 +18,7 @@
     "gm-tls://127.0.0.1:20201"
   ],
   "read_quorum": 2,
+  "validator_transition_policy": "authenticated-validator-transitions-v1",
   "account_provider": {
     "provider": "sdf",
     "key_id": "trustdb-bcos-guomi-publisher",
@@ -38,19 +39,23 @@
   "validators": [
     {
       "node_id": "0x08e62d08fb369cd11b41fddd53170da67e90b1b7fe53bdac0e047126f55ea01c60e8992ccffe57b8843d915ce5126aafb2e82b20d498bfb20c9c664688e5f03c",
-      "public_key_hex": "0x0408e62d08fb369cd11b41fddd53170da67e90b1b7fe53bdac0e047126f55ea01c60e8992ccffe57b8843d915ce5126aafb2e82b20d498bfb20c9c664688e5f03c"
+      "public_key_hex": "0x0408e62d08fb369cd11b41fddd53170da67e90b1b7fe53bdac0e047126f55ea01c60e8992ccffe57b8843d915ce5126aafb2e82b20d498bfb20c9c664688e5f03c",
+      "vote_weight": 1
     },
     {
       "node_id": "0x30c6a363ef38612b9b10b99a9ad10a74131a35081a971c455f904e755d545e96c58945fed210002d1039d46c7d8fde0de4deaf78aa9f5a6848ed4fa8c7803f1b",
-      "public_key_hex": "0x0430c6a363ef38612b9b10b99a9ad10a74131a35081a971c455f904e755d545e96c58945fed210002d1039d46c7d8fde0de4deaf78aa9f5a6848ed4fa8c7803f1b"
+      "public_key_hex": "0x0430c6a363ef38612b9b10b99a9ad10a74131a35081a971c455f904e755d545e96c58945fed210002d1039d46c7d8fde0de4deaf78aa9f5a6848ed4fa8c7803f1b",
+      "vote_weight": 1
     },
     {
       "node_id": "0x41e95d07e46e86100ad2aaf643ece958ef42134afeef528d0a5fc85c01f169c2df9e3d16776839ee10e061b88e68333ace6f34a5658331cb43502e15269deadc",
-      "public_key_hex": "0x0441e95d07e46e86100ad2aaf643ece958ef42134afeef528d0a5fc85c01f169c2df9e3d16776839ee10e061b88e68333ace6f34a5658331cb43502e15269deadc"
+      "public_key_hex": "0x0441e95d07e46e86100ad2aaf643ece958ef42134afeef528d0a5fc85c01f169c2df9e3d16776839ee10e061b88e68333ace6f34a5658331cb43502e15269deadc",
+      "vote_weight": 1
     },
     {
       "node_id": "0x6ea1fe9cbb0f09a67a8d85844128f72d7e1afed84ebaa9f9aeb2a7a80629365acd808a97666ffc3bf4de9d5b3c47557d18049f568064236141d2804c614cc5d0",
-      "public_key_hex": "0x046ea1fe9cbb0f09a67a8d85844128f72d7e1afed84ebaa9f9aeb2a7a80629365acd808a97666ffc3bf4de9d5b3c47557d18049f568064236141d2804c614cc5d0"
+      "public_key_hex": "0x046ea1fe9cbb0f09a67a8d85844128f72d7e1afed84ebaa9f9aeb2a7a80629365acd808a97666ffc3bf4de9d5b3c47557d18049f568064236141d2804c614cc5d0",
+      "vote_weight": 1
     }
   ]
 }

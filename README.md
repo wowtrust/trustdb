@@ -356,6 +356,7 @@ The screenshot below is rendered directly from the current desktop client code:
 - [docs/integrations/ADR-0014-FISCO-BCOS-ANCHOR-EVIDENCE-PERSISTENCE.md](docs/integrations/ADR-0014-FISCO-BCOS-ANCHOR-EVIDENCE-PERSISTENCE.md): durable block-limit retry journals, immutable native transaction/receipt/block evidence, crash recovery, and logical backup contracts.
 - [docs/integrations/ADR-0015-FISCO-BCOS-OFFLINE-RECEIPT-INCLUSION.md](docs/integrations/ADR-0015-FISCO-BCOS-OFFLINE-RECEIPT-INCLUSION.md): pure-Go standard/Guomi transaction and receipt inclusion, strict TARS/ABI/Merkle parsing, verifier-local trust, L4 stage semantics, and offline CLI/SDK use.
 - [docs/integrations/ADR-0016-FISCO-BCOS-STATIC-PBFT-FINALITY.md](docs/integrations/ADR-0016-FISCO-BCOS-STATIC-PBFT-FINALITY.md): disconnected Standard/Guomi block finality against a verifier-local static validator checkpoint, strict membership/quorum rules, exact anchor binding, and local L5 promotion.
+- [docs/integrations/ADR-0017-FISCO-BCOS-VALIDATOR-SET-TRANSITIONS.md](docs/integrations/ADR-0017-FISCO-BCOS-VALIDATOR-SET-TRANSITIONS.md): authenticated weighted-PBFT validator transitions, complete mutation-block evidence, explicit checkpoint advancement, and fail-closed RPBFT boundaries.
 - [COMMUNITY.md](COMMUNITY.md): support, discussion, and first-contribution entry points.
 - [ROADMAP.md](ROADMAP.md): public product direction and ways to influence it.
 - [SECURITY.md](SECURITY.md): private vulnerability reporting and supported-version policy.

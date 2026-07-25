@@ -14,6 +14,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/wowtrust/trustdb/internal/anchor/fiscobcos"
+	"github.com/wowtrust/trustdb/internal/cborx"
 	"github.com/wowtrust/trustdb/internal/cryptosuite"
 	"github.com/wowtrust/trustdb/internal/model"
 	"github.com/wowtrust/trustdb/internal/observability"
@@ -27,6 +28,7 @@ const (
 	bcosQuorumOperationAnchor        = "anchor"
 	bcosQuorumOperationReceipt       = "receipt"
 	bcosQuorumOperationBlock         = "block"
+	bcosQuorumOperationHistory       = "validator_history"
 	bcosQuorumFailureInsufficient    = "insufficient"
 	bcosQuorumFailureDisagreement    = "disagreement"
 	bcosRetryReasonExactTransaction  = "exact_transaction"
@@ -399,7 +401,7 @@ func (s *FISCOBCOSStandardSink) System(context.Context) (model.AnchorSystem, err
 		},
 		Assurance: model.AnchorAssurance{
 			Decentralized: true,
-			Finality:      "PBFT commit evidence; offline verification uses the local static validator checkpoint",
+			Finality:      "PBFT commit evidence; offline verification uses the local checkpoint and validator-transition policy",
 			Custody:       s.trust.AccountProvider.Provider,
 		},
 		Metadata: map[string]string{
@@ -539,6 +541,163 @@ func (s *FISCOBCOSStandardSink) readBlockQuorum(
 		return fiscobcos.BlockHeader{}, fiscobcos.ConsensusSnapshot{}, ambiguousDriverFailure("read_block", s.drivers[0].Endpoint(), fiscobcos.ErrIncompleteChainEvidence)
 	}
 	return selectedHeader, selectedConsensus, nil
+}
+
+func (s *FISCOBCOSStandardSink) collectValidatorHistory(
+	ctx context.Context,
+	target fiscobcos.BlockEvidence,
+	route bcosQuorumRoute,
+) ([]fiscobcos.ValidatorHistoryBlock, error) {
+	if s.trust.ValidatorTransitionPolicy == fiscobcos.ValidatorPolicyStatic {
+		return nil, nil
+	}
+	if s.trust.ValidatorTransitionPolicy != fiscobcos.ValidatorPolicyTransitions {
+		return nil, permanentDriverFailure("validator_history", s.drivers[0].Endpoint(), fiscobcos.ErrInvalidTrustConfig)
+	}
+	if target.BlockNumber <= s.trust.TrustedCheckpoint.BlockNumber {
+		return nil, nil
+	}
+	delta := target.BlockNumber - s.trust.TrustedCheckpoint.BlockNumber
+	if delta > fiscobcos.MaxValidatorHistoryBlocks {
+		return nil, permanentDriverFailure("validator_history", s.drivers[0].Endpoint(), fiscobcos.ErrIncompleteChainEvidence)
+	}
+	history := make([]fiscobcos.ValidatorHistoryBlock, delta)
+	totalTransitionItems := 0
+	totalTransitionBytes := 0
+	for index := uint64(0); index < delta; index++ {
+		blockNumber := s.trust.TrustedCheckpoint.BlockNumber + index
+		item, err := s.readValidatorHistoryBlockQuorum(ctx, blockNumber, false, route)
+		if err != nil {
+			return nil, err
+		}
+		history[index] = item
+	}
+	for index := range history {
+		var nextHeader fiscobcos.NativeBlockHeaderFields
+		if index+1 == len(history) {
+			nextHeader = target.Fields
+		} else {
+			nextHeader = history[index+1].Block.Fields
+		}
+		if fiscobcos.ValidatorHeadersHaveSameSet(history[index].Block.Fields, nextHeader) {
+			continue
+		}
+		full, err := s.readValidatorHistoryBlockQuorum(ctx, history[index].Block.BlockNumber, true, route)
+		if err != nil {
+			return nil, err
+		}
+		if !sameHistoryHeaderAndFinality(history[index], full) {
+			s.recordQuorumFailure(bcosQuorumOperationHistory, bcosQuorumFailureDisagreement)
+			return nil, ambiguousDriverFailure("validator_history", s.drivers[0].Endpoint(), fiscobcos.ErrEndpointDisagreement)
+		}
+		if len(full.Transactions) > fiscobcos.MaxNativeEvidenceItems-totalTransitionItems {
+			return nil, permanentDriverFailure("validator_history", s.drivers[0].Endpoint(), fiscobcos.ErrIncompleteChainEvidence)
+		}
+		fullRaw, err := cborx.Marshal(full)
+		if err != nil || len(fullRaw) > fiscobcos.MaxProofBytes-totalTransitionBytes {
+			return nil, permanentDriverFailure("validator_history", s.drivers[0].Endpoint(), fiscobcos.ErrIncompleteChainEvidence)
+		}
+		totalTransitionItems += len(full.Transactions)
+		totalTransitionBytes += len(fullRaw)
+		history[index] = full
+	}
+	// The first block hash and validator state are verifier-local trust. Its
+	// commit proof is redundant and intentionally omitted from the file.
+	history[0].Finality.Signatures = nil
+	return history, nil
+}
+
+func (s *FISCOBCOSStandardSink) readValidatorHistoryBlockQuorum(
+	ctx context.Context,
+	blockNumber uint64,
+	includeContents bool,
+	route bcosQuorumRoute,
+) (fiscobcos.ValidatorHistoryBlock, error) {
+	var selected fiscobcos.ValidatorHistoryBlock
+	var selectedRaw []byte
+	successes := 0
+	for _, driver := range s.drivers {
+		historyDriver, ok := driver.(fiscobcos.ValidatorHistoryDriver)
+		if !ok {
+			return fiscobcos.ValidatorHistoryBlock{}, permanentDriverFailure("validator_history", driver.Endpoint(), fiscobcos.ErrUnsupportedSDK)
+		}
+		item, err := historyDriver.GetValidatorHistoryBlock(ctx, blockNumber, includeContents)
+		if err != nil {
+			continue
+		}
+		requireFinality := blockNumber != s.trust.TrustedCheckpoint.BlockNumber
+		if err := validateValidatorHistoryObservation(s.trust.ChainHashAlgorithm, blockNumber, includeContents, requireFinality, item); err != nil {
+			s.recordQuorumFailure(bcosQuorumOperationHistory, bcosQuorumFailureDisagreement)
+			return fiscobcos.ValidatorHistoryBlock{}, ambiguousDriverFailure("validator_history", driver.Endpoint(), err)
+		}
+		raw, err := cborx.Marshal(item)
+		if err != nil {
+			return fiscobcos.ValidatorHistoryBlock{}, permanentDriverFailure("validator_history", driver.Endpoint(), fiscobcos.ErrDriverInvalid)
+		}
+		if selectedRaw == nil {
+			selected = item
+			selectedRaw = raw
+		} else if !bytes.Equal(selectedRaw, raw) {
+			s.recordQuorumFailure(bcosQuorumOperationHistory, bcosQuorumFailureDisagreement)
+			return fiscobcos.ValidatorHistoryBlock{}, ambiguousDriverFailure("validator_history", driver.Endpoint(), fiscobcos.ErrEndpointDisagreement)
+		}
+		if route.isHealthy(driver.Endpoint()) {
+			successes++
+		}
+	}
+	if successes < int(s.trust.ReadQuorum) {
+		s.recordQuorumFailure(bcosQuorumOperationHistory, bcosQuorumFailureInsufficient)
+		return fiscobcos.ValidatorHistoryBlock{}, ambiguousDriverFailure("validator_history", s.drivers[0].Endpoint(), fiscobcos.ErrIncompleteChainEvidence)
+	}
+	return selected, nil
+}
+
+func validateValidatorHistoryObservation(
+	hashAlgorithm string,
+	blockNumber uint64,
+	includeContents bool,
+	requireFinality bool,
+	item fiscobcos.ValidatorHistoryBlock,
+) error {
+	if item.Block.BlockNumber != blockNumber || item.Block.Fields.BlockNumber < 0 ||
+		uint64(item.Block.Fields.BlockNumber) != blockNumber ||
+		len(item.Block.BlockHash) != 32 ||
+		len(item.Finality.Signatures) > fiscobcos.MaxCommitSignatures {
+		return fiscobcos.ErrIncompleteChainEvidence
+	}
+	if requireFinality && len(item.Finality.Signatures) == 0 {
+		return fiscobcos.ErrIncompleteChainEvidence
+	}
+	if !requireFinality && len(item.Finality.Signatures) != 0 {
+		return fiscobcos.ErrDriverInvalid
+	}
+	canonical, err := fiscobcos.MarshalNativeBlockHeaderPreimage(item.Block.Fields)
+	if err != nil || !bytes.Equal(canonical, item.Block.RawCanonicalHeader) {
+		return fiscobcos.ErrIncompleteChainEvidence
+	}
+	computedHash, err := fiscobcos.HashNativeEvidence(hashAlgorithm, canonical)
+	if err != nil || !bytes.Equal(computedHash, item.Block.BlockHash) {
+		return fiscobcos.ErrIncompleteChainEvidence
+	}
+	if includeContents {
+		if len(item.Transactions) == 0 || len(item.Transactions) != len(item.Receipts) ||
+			len(item.Transactions) > fiscobcos.MaxNativeEvidenceItems {
+			return fiscobcos.ErrIncompleteChainEvidence
+		}
+	} else if len(item.Transactions) != 0 || len(item.Receipts) != 0 {
+		return fiscobcos.ErrDriverInvalid
+	}
+	return nil
+}
+
+func sameHistoryHeaderAndFinality(left, right fiscobcos.ValidatorHistoryBlock) bool {
+	left.Transactions = nil
+	left.Receipts = nil
+	right.Transactions = nil
+	right.Receipts = nil
+	leftRaw, leftErr := cborx.Marshal(left)
+	rightRaw, rightErr := cborx.Marshal(right)
+	return leftErr == nil && rightErr == nil && bytes.Equal(leftRaw, rightRaw)
 }
 
 func payloadForSTH(sth model.SignedTreeHead) (fiscobcos.AnchorPayload, error) {
