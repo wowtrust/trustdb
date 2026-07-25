@@ -500,25 +500,32 @@ excluded from routing.
 
 ### 8.1 What a backup contains
 
-`.tdbackup` (`trustdb.backup.v4`, `internal/backup`) is a **logical**,
-backend-independent proofstore archive: deterministic CBOR objects in a tar
-stream (optional gzip), so file and Pebble stores can restore each other's
-data. The manifest records Global Log state presence and counts manifests,
-bundles, roots, Global Log leaves/nodes/tiles/outboxes, STHs, anchor results,
-and anchor schedules, and every
-entry carries its ordinal, type, size, and SHA-256.
+`.tdbackup` (`trustdb.backup.v5`, `internal/backup`) is a **logical**,
+backend-independent proofstore archive. It encrypts the optional gzip/PAX tar
+stream with authenticated SM4-GCM frames and a provider-wrapped random DEK.
+The deterministic-CBOR manifest records the exact proofstore-v5 namespace
+identity and counts manifests, bundles, batch-tree artifacts, roots, Global
+Log leaves/nodes/tiles/outboxes, STHs, anchor results, and anchor schedules.
+Every entry carries a contiguous ordinal, type, size, suite, and suite-selected
+SHA-256 (`INTL_V1`) or SM3 (`CN_SM_V1`) digest.
 
-A backup does **not** contain private keys, signer descriptors, credentials,
-device material, or the SDF recovery bundle
+A backup may contain the V2 key registry's public descriptors and signed
+lifecycle audit events. It does **not** contain private keys, referenced
+software envelope files, credentials, device material, or the SDF recovery bundle
 (`trustdb.sdf-recovery-bundle.v1`). Never claim that a `.tdbackup` alone
 recovers a signer deployment; provider recovery follows
-[SDF_SIGNER.md](SDF_SIGNER.md#provider-recovery-artifact). Backup v4 is
-currently writable for `INTL_V1`; `CN_SM_V1` backup remains fail closed until
-the authenticated, encrypted backup-v5 work tracked by issue [#473](https://github.com/wowtrust/trustdb/issues/473) lands.
-Logical backup/restore is part of the standard-mode qualification gate for
-exactly this reason.
+[SDF_SIGNER.md](SDF_SIGNER.md#provider-recovery-artifact). Backup v5 is
+writable for both `INTL_V1` and `CN_SM_V1`; v4/plain tar is rejected without
+migration or fallback. Logical backup/restore is part of both qualification
+profiles for exactly this reason.
 
 ### 8.2 Routine operations
+
+The built-in provider shown below is only for disconnected qualification and
+recovery drills. Supply exactly one of `TRUSTDB_BACKUP_PASSPHRASE` or
+`TRUSTDB_BACKUP_PASSPHRASE_FILE`; do not put the secret in command arguments.
+Production HSM/KMS integrations implement `keyenvelope.KEKProvider` and keep
+the referenced KEK outside TrustDB.
 
 ```bash
 # Create (proofstore flags: --metastore file|pebble, --metastore-path or
@@ -529,10 +536,14 @@ trustdb backup create \
   --compression gzip \
   --metastore file \
   --proof-dir /var/lib/trustdb/proofs \
-  --crypto-suite INTL_V1
+  --crypto-suite CN_SM_V1 \
+  --key-provider passphrase-dev-v1 \
+  --key-id development-backup-key \
+  --key-registry /var/lib/trustdb/keys.tdkeys
 
 # Verify readability and internal typing
 trustdb backup verify \
+  --key-provider passphrase-dev-v1 \
   --file /var/backups/trustdb/proofstore-20260101T000000Z.tdbackup
 
 # Restore (resumes through a checkpoint file, default
@@ -541,7 +552,9 @@ trustdb backup restore \
   --file /var/backups/trustdb/proofstore-20260101T000000Z.tdbackup \
   --metastore file \
   --proof-dir /var/lib/trustdb/proofs-restored \
-  --crypto-suite INTL_V1 \
+  --crypto-suite CN_SM_V1 \
+  --key-provider passphrase-dev-v1 \
+  --recovery-dir /var/lib/trustdb-restore/recovery \
   --resume
 ```
 
@@ -837,10 +850,12 @@ cadence afterwards; retain the drill outputs as deployment evidence.
 ### 12.5 TrustDB restore from backup
 
 1. Stop the affected TrustDB instance.
-2. `trustdb backup verify --file <archive>`; reject the archive on any error.
+2. `trustdb backup verify --key-provider <provider> --file <archive>`; reject
+   the archive on any error.
 3. `trustdb backup restore --file <archive> --metastore <kind>
-   --metastore-path <new-path> --crypto-suite INTL_V1 --resume` into a clean
-   proofstore path; retain the restore checkpoint file until completion.
+   --metastore-path <new-path> --crypto-suite INTL_V1 --key-provider
+   <provider> --recovery-dir <new-recovery-dir> --resume` into clean proofstore
+   and recovery paths; retain the restore checkpoint file until completion.
 4. Start TrustDB against the restored store with the unchanged TrustConfig;
    the durable journal and anchor schedules resume from the restored state.
 5. Export a sample of `.sproof` files spanning pre- and post-backup STHs and

@@ -2,7 +2,7 @@
 
 > 文档编号：`TDB-CN-CM-001`
 >
-> 版本：`0.1.7`
+> 版本：`0.1.8`
 >
 > 基线日期：`2026-07-23`
 >
@@ -14,7 +14,7 @@
 
 当前 `main` 已完成破坏性的 V2 / proofstore schema v5 切换，并已关闭 #454 与 #455：`INTL_V1` 和 `CN_SM_V1` 均可端到端生成、存储、导出并离线验证 suite-bound claim、receipt、Merkle proof、Signed STH、anchor result 与 `.sproof v2`。旧 V1 / schema v4 数据不双读、不迁移、不回退；历史版本必须保留在独立验证环境中。
 
-本矩阵后文保留了部分控制项在决策当时的 `Partial` 描述，作为设计与实施轨迹，不应覆盖上述当前状态。尚未完成的主要密码敏捷边界是逻辑备份：当前 `.tdbackup v4` 只允许 `INTL_V1`，`CN_SM_V1` 在 backup/restore 入口 fail closed，带认证且由 SM4 保护的 backup v5 由 #473 跟踪。
+逻辑备份已经切换为 `.tdbackup v5`：`INTL_V1` 与 `CN_SM_V1` 均使用 provider-wrapped 随机 DEK 和 SM4-GCM 分帧保护，entry 分别使用 SHA-256/SM3，restore 在发布任何对象前完成全文件认证，并把 source/target namespace 同时绑定到 resumable checkpoint。v4/plain tar 不读取、不迁移、不回退。
 
 ## 1. 文档目的
 

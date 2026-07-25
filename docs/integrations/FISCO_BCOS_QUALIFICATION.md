@@ -32,8 +32,8 @@ the `standard` and `guomi` modes. Each run performs all of the following:
 8. separately rejects changed content, receipt inclusion evidence, PBFT
    signatures, and exact anchor binding at the expected verification stage;
 9. exercises logical backup, verification, restore, and immutable anchor-result
-   comparison for `INTL_V1`. `CN_SM_V1` backup remains fail closed until the
-   authenticated backup-v5 work tracked by #473 is available.
+   comparison for both `INTL_V1` and `CN_SM_V1` through authenticated,
+   SM4-protected `.tdbackup v5`.
 
 The gate never treats an SDK response, transaction inclusion, or a block
 timestamp as sufficient L5 evidence. L5 is produced only after the ordinary

@@ -219,14 +219,12 @@ key, plaintext SM4 key, or same-session native handle. Its unkeyed SM3 checksum
 detects accidental corruption but cannot authenticate an attacker who can
 rewrite the artifact and recompute the checksum.
 
-The current `.tdbackup v4` is a proofstore-only format and does **not** contain
-this provider recovery artifact, key descriptors, credentials, or device key
-material. Operators must not claim that a v4 archive alone recovers an SDF
-deployment. Issue
-[#473](https://github.com/wowtrust/trustdb/issues/473) owns the breaking,
-authenticated and encrypted backup v5 integration: it will carry the complete
-SDF recovery artifact as a typed inventory entry while keeping credentials and
-private/plaintext keys outside the archive.
+The current `.tdbackup v5` is an authenticated, SM4-encrypted logical format.
+It can preserve the V2 key registry's public descriptors and signed lifecycle
+audit log, but it does **not** contain this SDF provider recovery artifact,
+credentials, or device key material. Operators must not claim that a logical
+archive alone recovers an SDF deployment; retain and restore the recovery
+bundle through the independent provider ceremony.
 
 ### SM4 KEK boundary
 
