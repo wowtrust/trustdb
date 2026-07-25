@@ -390,6 +390,63 @@ func TestVerifyAuthenticatedPBFTFinalityAuthorizesTransitionWithOldCommittee(t *
 	}
 }
 
+func TestVerifyAuthenticatedPBFTFinalityAcceptsGenesisCheckpoint(t *testing.T) {
+	t.Parallel()
+
+	sth, result, trust, keys := validStaticFinalityFixture(t, CryptoModeStandard, cryptosuite.INTLV1)
+	proof := mustFinalityProof(t, result)
+	trust.ValidatorTransitionPolicy = ValidatorPolicyTransitions
+	genesisFields := NativeBlockHeaderFields{
+		Version:          proof.Block.Fields.Version,
+		TransactionsRoot: bytes.Repeat([]byte{0x21}, identifierBytes),
+		ReceiptsRoot:     bytes.Repeat([]byte{0x22}, identifierBytes),
+		StateRoot:        bytes.Repeat([]byte{0x23}, identifierBytes),
+		BlockNumber:      0,
+		GasUsed:          "0",
+		Timestamp:        1,
+		Sealer:           0,
+		SealerList:       cloneByteSlices(proof.Block.Fields.SealerList),
+		ConsensusWeights: append([]int64(nil), proof.Block.Fields.ConsensusWeights...),
+	}
+	genesisRaw, err := MarshalNativeBlockHeaderPreimage(genesisFields)
+	if err != nil {
+		t.Fatal(err)
+	}
+	genesisHash, err := HashNativeEvidence(proof.ChainHashAlgorithm, genesisRaw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	trust.TrustedCheckpoint = BlockCheckpoint{BlockNumber: 0, BlockHash: genesisHash}
+	proof.ValidatorHistory = []ValidatorHistoryBlock{{Block: BlockEvidence{
+		Fields: genesisFields, RawCanonicalHeader: genesisRaw,
+		BlockHash: genesisHash, BlockNumber: 0,
+	}}}
+	proof.Receipt.Fields.BlockNumber = 1
+	proof.Receipt.RawCanonicalReceipt, proof.Receipt.CanonicalLogs, err =
+		MarshalNativeReceiptPreimage(proof.Receipt.Fields)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proof.Receipt.ReceiptHash, err = HashNativeEvidence(
+		proof.ChainHashAlgorithm,
+		proof.Receipt.RawCanonicalReceipt,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proof.Receipt.ReceiptProof = [][]byte{append([]byte(nil), proof.Receipt.ReceiptHash...)}
+	proof.Block.BlockNumber = 1
+	proof.Block.Fields.BlockNumber = 1
+	proof.Block.Fields.ParentInfo = []NativeParentInfo{{BlockNumber: 0, BlockHash: genesisHash}}
+	proof.Block.Fields.ReceiptsRoot = append([]byte(nil), proof.Receipt.ReceiptHash...)
+	rebindFinalityContext(t, &proof, trust)
+	rebuildFinalityBlock(t, &proof, keys[:3])
+	candidate := resultWithFinalityProof(t, result, proof)
+	if err := VerifyAuthenticatedPBFTFinality(sth, candidate, trust); err != nil {
+		t.Fatalf("VerifyAuthenticatedPBFTFinality() error = %v", err)
+	}
+}
+
 func BenchmarkVerifyAuthenticatedPBFTFinality(b *testing.B) {
 	sth, result, trust, _, _ := validValidatorTransitionFixture(b, CryptoModeStandard)
 	b.ReportAllocs()

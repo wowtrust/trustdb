@@ -346,8 +346,7 @@ func ValidateProofStructure(proof AnchorProof) error {
 func validateHistoryBlockStructure(proof AnchorProof, index int, item ValidatorHistoryBlock) error {
 	if len(item.Block.RawCanonicalHeader) == 0 ||
 		len(item.Block.RawCanonicalHeader) > maxRawHeaderBytes ||
-		len(item.Block.BlockHash) != identifierBytes ||
-		item.Block.BlockNumber == 0 {
+		len(item.Block.BlockHash) != identifierBytes {
 		return fmt.Errorf("%w: validator history block %d is incomplete or oversized", ErrInvalidProof, index)
 	}
 	canonicalHeader, err := MarshalNativeBlockHeaderPreimage(item.Block.Fields)
