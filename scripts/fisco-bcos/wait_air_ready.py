@@ -20,10 +20,8 @@ def observed_connected_nodes(node_dir: Path) -> int:
             text = log_path.read_text(encoding="utf-8", errors="replace")
         except OSError:
             continue
-        observed = max(
-            observed,
-            *(int(match) for match in CONNECTED_NODES_RE.findall(text)),
-        )
+        matches = (int(match) for match in CONNECTED_NODES_RE.findall(text))
+        observed = max(observed, max(matches, default=0))
     return observed
 
 
