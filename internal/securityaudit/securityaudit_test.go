@@ -246,6 +246,60 @@ func TestConcurrentWritersRefreshAndSerializeChainHead(t *testing.T) {
 	}
 }
 
+func TestSlowExportDoesNotHoldTheCrossProcessWriterLock(t *testing.T) {
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "security.audit")
+	checkpointPath := filepath.Join(dir, "security.checkpoint")
+	signer := newEd25519Signer(t)
+	exporter := openTestWriter(t, logPath, checkpointPath, signer, nil)
+	defer exporter.Close()
+	writer := openTestWriter(t, logPath, checkpointPath, signer, nil)
+	defer writer.Close()
+	if _, err := exporter.Record(context.Background(), Draft{Actor: "audit-admin", Action: "audit.export", Object: "security-audit", Result: "authorized", Source: "test"}); err != nil {
+		t.Fatal(err)
+	}
+	output := &blockingOutput{started: make(chan struct{}), release: make(chan struct{})}
+	exportDone := make(chan error, 1)
+	go func() {
+		_, err := exporter.ExportJSONL(context.Background(), output)
+		exportDone <- err
+	}()
+	select {
+	case <-output.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("export did not start")
+	}
+	writeDone := make(chan error, 1)
+	go func() {
+		_, err := writer.Record(context.Background(), Draft{Actor: "system-admin", Action: "system.operation", Object: "trustdb", Result: "success", Source: "test"})
+		writeDone <- err
+	}()
+	select {
+	case err := <-writeDone:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("audit write blocked behind slow export output")
+	}
+	close(output.release)
+	if err := <-exportDone; err != nil {
+		t.Fatal(err)
+	}
+}
+
+type blockingOutput struct {
+	once    sync.Once
+	started chan struct{}
+	release chan struct{}
+}
+
+func (w *blockingOutput) Write(data []byte) (int, error) {
+	w.once.Do(func() { close(w.started) })
+	<-w.release
+	return len(data), nil
+}
+
 func openTestWriter(t *testing.T, logPath, checkpointPath string, signer trustcrypto.Signer, clock Clock) *Writer {
 	t.Helper()
 	writer, err := OpenWriter(context.Background(), testOptions(logPath, checkpointPath, signer, clock))

@@ -27,31 +27,52 @@ type exportLine struct {
 
 func (w *Writer) ExportJSONL(ctx context.Context, output io.Writer) (Stats, error) {
 	w.mu.Lock()
-	defer w.mu.Unlock()
 	if w.closed {
+		w.mu.Unlock()
 		return Stats{}, errors.New("securityaudit: writer is closed")
 	}
 	unlock, err := acquireLock(w.path)
 	if err != nil {
+		w.mu.Unlock()
 		return Stats{}, err
 	}
-	defer unlock()
 	if err := w.refreshLocked(ctx); err != nil {
+		_ = unlock()
+		w.mu.Unlock()
 		return Stats{}, err
 	}
 	if output == nil {
+		_ = unlock()
+		w.mu.Unlock()
 		return Stats{}, errors.New("securityaudit: export writer is nil")
 	}
 	checkpoint, exists, err := readCheckpoint(ctx, w.checkpointPath, w.publicKey)
 	if err != nil || !exists {
+		_ = unlock()
+		w.mu.Unlock()
 		return Stats{}, fmt.Errorf("securityaudit: export checkpoint: %w", err)
 	}
+	snapshot, err := openProtectedExisting(w.path)
+	if err != nil {
+		_ = unlock()
+		w.mu.Unlock()
+		return Stats{}, err
+	}
+	if err := unlock(); err != nil {
+		_ = snapshot.Close()
+		w.mu.Unlock()
+		return Stats{}, err
+	}
+	w.mu.Unlock()
+	defer snapshot.Close()
+
 	encoder := json.NewEncoder(output)
 	publicKey := w.publicKey.Clone()
 	if err := encoder.Encode(exportLine{SchemaVersion: ExportSchema, Kind: "manifest", ExportedUnixN: time.Now().UTC().UnixNano(), CryptoSuite: publicKey.Suite, PublicKey: &publicKey}); err != nil {
 		return Stats{}, err
 	}
-	result, err := scanAuditFile(ctx, w.file, w.publicKey, 0, func(event SignedEvent) error {
+	reader := io.NewSectionReader(snapshot, 0, checkpoint.Checkpoint.LogBytes)
+	result, err := scanAuditFile(ctx, reader, w.publicKey, 0, func(event SignedEvent) error {
 		return encoder.Encode(exportLine{SchemaVersion: ExportSchema, Kind: "event", Event: &event})
 	})
 	if err != nil {

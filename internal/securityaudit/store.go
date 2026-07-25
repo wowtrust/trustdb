@@ -234,11 +234,24 @@ func (w *Writer) Close() error {
 }
 
 func (w *Writer) refreshLocked(ctx context.Context) error {
-	result, err := scanAuditFile(ctx, w.file, w.publicKey, 0, nil)
-	if err != nil {
+	if err := ctx.Err(); err != nil {
 		return err
 	}
 	checkpoint, checkpointExists, err := readCheckpoint(ctx, w.checkpointPath, w.publicKey)
+	if err != nil {
+		return err
+	}
+	info, err := w.file.Stat()
+	if err != nil {
+		return err
+	}
+	if checkpointExists && checkpoint.Checkpoint.CryptoSuite == w.publicKey.Suite &&
+		checkpoint.Checkpoint.Sequence == w.stats.Sequence &&
+		bytes.Equal(checkpoint.Checkpoint.EventHash, w.stats.EventHash) &&
+		checkpoint.Checkpoint.LogBytes == w.stats.LogBytes && info.Size() == w.stats.LogBytes {
+		return nil
+	}
+	result, err := scanAuditFile(ctx, w.file, w.publicKey, 0, nil)
 	if err != nil {
 		return err
 	}
@@ -296,7 +309,7 @@ func (w *Writer) writeCheckpoint(ctx context.Context, now time.Time) error {
 	return nil
 }
 
-func scanAuditFile(ctx context.Context, file *os.File, publicKey trustcrypto.PublicKeyDescriptor, target uint64, visit func(SignedEvent) error) (scanResult, error) {
+func scanAuditFile(ctx context.Context, file io.ReadSeeker, publicKey trustcrypto.PublicKeyDescriptor, target uint64, visit func(SignedEvent) error) (scanResult, error) {
 	if _, err := file.Seek(0, io.SeekStart); err != nil {
 		return scanResult{}, err
 	}
