@@ -16,6 +16,36 @@ SPEC.loader.exec_module(readiness)
 
 
 class AirReadinessTest(unittest.TestCase):
+    def test_empty_or_unrelated_logs_report_zero(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            log_dir = Path(directory) / "node0" / "log"
+            log_dir.mkdir(parents=True)
+            (log_dir / "log_empty.log").write_text("", encoding="utf-8")
+            (log_dir / "log_unrelated.log").write_text(
+                "node process started\n", encoding="utf-8"
+            )
+
+            self.assertEqual(
+                readiness.observed_connected_nodes(Path(directory) / "node0"), 0
+            )
+
+    def test_observation_uses_the_maximum_across_files(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            log_dir = Path(directory) / "node0" / "log"
+            log_dir.mkdir(parents=True)
+            (log_dir / "log_first.log").write_text(
+                "notifyGroupNodeInfo,connectedNodeSize=2\n", encoding="utf-8"
+            )
+            (log_dir / "log_second.log").write_text(
+                "notifyGroupNodeInfo,connectedNodeSize=1\n"
+                "notifyGroupNodeInfo,connectedNodeSize=4\n",
+                encoding="utf-8",
+            )
+
+            self.assertEqual(
+                readiness.observed_connected_nodes(Path(directory) / "node0"), 4
+            )
+
     def test_all_nodes_must_observe_the_complete_group(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             parent = Path(directory)
