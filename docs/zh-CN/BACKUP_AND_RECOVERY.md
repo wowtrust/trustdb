@@ -179,4 +179,3 @@ Air/Pebble 的恢复结论自动套用到 TiKV。
 | checkpoint BackupID mismatch | 混用了 archive/checkpoint；恢复正确配对，保留现场调查。 |
 | 恢复后 anchor 重试 | scheduler 被完整恢复；先检查是否已有 immutable result 和外部交易，再决定是否继续。 |
 | archive 可验证但业务不能恢复 | 缺少配置、密钥 provider、WAL/对象/NATS/BCOS 材料；按本文第 1、8 节补齐。 |
-

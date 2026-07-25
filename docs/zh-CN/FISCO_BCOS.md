@@ -237,4 +237,3 @@ recovery bundle。当前 backup v4 只支持 `INTL_V1`；国密链或国密 Trus
 - [ ] canary 达到 L5，断网验证与分阶段篡改测试通过。
 - [ ] endpoint disagreement、unknown outcome、validator transition 和恢复已演练。
 - [ ] 对外材料区分 STH 时间、BCOS block time 和可信时间戳。
-

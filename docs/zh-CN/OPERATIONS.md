@@ -183,4 +183,3 @@ PIN、token、客户原文件或带 credential 的 URL。
 - [ ] `.tdbackup` 创建、验证、恢复及外部系统恢复已经演练。
 - [ ] 告警覆盖 ingest、proof、WAL、存储、anchor、provider、容量和证书。
 - [ ] RPO/RTO、值班、升级、回退和安全事件责任人明确。
-

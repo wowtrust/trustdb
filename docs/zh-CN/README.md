@@ -71,4 +71,3 @@ trustdb doctor --config /etc/trustdb/production.yaml
 - [Signer Plugin V1](../../formats/SIGNER_PLUGIN_V1.md)
 - [FISCO BCOS 英文完整运维手册](../integrations/FISCO_BCOS_OPERATIONS.md)
 - [贡献指南](../../CONTRIBUTING.md)
-
