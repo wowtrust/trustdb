@@ -146,7 +146,7 @@ Core paths:
 - Anchor path: STH/global roots are coalesced into one durable Pending target and one immutable InFlight attempt per log and sink, then published by the configured anchor worker.
 - Storage path: proof data is stored in file, Pebble, or TiKV proofstores.
 - Backup path: proofstore data can be exported to `.tdbackup`, verified, and restored with resumable restore state; portable backups exclude node-local WAL checkpoints.
-- Crypto-agility transition: `.tdbackup v4` remains available only for `INTL_V1`. A `CN_SM_V1` store fails closed at backup/restore entry points until authenticated, SM4-protected backup v5 is delivered in [#473](https://github.com/wowtrust/trustdb/issues/473); the logical-backup subsystem itself is retained.
+- Encrypted logical backup: `.tdbackup v5` supports `INTL_V1` and `CN_SM_V1` with provider-wrapped random DEKs, authenticated SM4-GCM frames, strict deterministic-CBOR manifests, suite-selected SHA-256/SM3 entry digests, encrypted key-registry audit evidence, and resumable source/target namespace-bound restore. V4/plain tar is rejected without migration or fallback.
 - Observability path: `/metrics` exposes ingest, batch, global log, anchor, WAL, backup, and storage metrics.
 
 File, Pebble, and each TiKV namespace use proofstore storage schema v5. Opening

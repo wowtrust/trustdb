@@ -8,10 +8,10 @@ rebind an SDF deployment after a sidecar restart or provider-state recovery.
 It does not contain credentials, adapter configuration, private SM2 keys,
 plaintext SM4 keys, or native session handles.
 
-This object is not a `.tdbackup` archive. The current proofstore-only
-`.tdbackup v4` does not include it. Backup v5 integration is owned by
-[#473](https://github.com/wowtrust/trustdb/issues/473), which must carry the
-complete artifact as one authenticated and encrypted typed entry.
+This object is not a `.tdbackup` archive. Encrypted `.tdbackup v5` preserves
+proofstore evidence, the public key-registry audit log, and anchor provider
+state, but the SDF recovery bundle remains a separately governed provider
+artifact. It must be protected and restored through the SDF custody ceremony.
 
 ## Encoding and bounds
 

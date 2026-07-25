@@ -31,7 +31,7 @@ V2/V5 实现。它不是 v1.0.0 发布包的兼容说明：v1.0.0 发布于 V2/V
 | 私钥托管 | 软件 envelope（开发）、remote、PKCS#11、SDF | `crypto.signer_plugins.*` 与 descriptor/provider；生产不回退软件 key |
 | 传输 | 本地明文限制、TLS/mTLS、TLCP 网关 | `server.transport.*`、`tlcp.*`、`--tlcp-gateway-profile` |
 | 管理与观察 | `/healthz`、`/metrics`、只读 API、Admin Web、结构化日志 | `admin.enabled`、`log.*`；Admin Web 默认关闭 |
-| 备份恢复 | `.tdbackup v4` create/verify/resumable restore（当前仅 `INTL_V1`） | `trustdb backup`; `CN_SM_V1` 在 backup/restore 入口明确失败 |
+| 备份恢复 | SM4-GCM 认证加密的 `.tdbackup v5`，严格 verify 与 resumable restore | `trustdb backup`; `INTL_V1`/`CN_SM_V1`，KEK provider 与 source/target namespace checkpoint 绑定 |
 
 ## 统一的功能操作方法
 

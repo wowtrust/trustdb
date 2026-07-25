@@ -95,6 +95,9 @@ history:
 
 backup:
   compression: "gzip"
+  key_provider: "passphrase-dev-v1"
+  key_id: "development-backup-key"
+  frame_bytes: 1048576
 
 log:
   level: "info"

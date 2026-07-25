@@ -4,1107 +4,832 @@ import (
 	"archive/tar"
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/rand"
+	"encoding/binary"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/wowtrust/trustdb/internal/anchor/fiscobcos"
-	"github.com/wowtrust/trustdb/internal/anchorschedule"
 	"github.com/wowtrust/trustdb/internal/cryptosuite"
-	"github.com/wowtrust/trustdb/internal/globallog"
+	"github.com/wowtrust/trustdb/internal/keydescriptor"
+	"github.com/wowtrust/trustdb/internal/keyenvelope"
+	"github.com/wowtrust/trustdb/internal/keystore"
 	"github.com/wowtrust/trustdb/internal/model"
 	"github.com/wowtrust/trustdb/internal/proofstore"
-	"github.com/wowtrust/trustdb/internal/proofstore/proofstoretest"
 	"github.com/wowtrust/trustdb/internal/trustcrypto"
 	"github.com/wowtrust/trustdb/internal/trusterr"
 )
 
-func TestBackupCreateVerifyRestoreRoundTrip(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
+func TestBackupV5CreateVerifyRestoreRoundTrip(t *testing.T) {
+	for _, suiteID := range []cryptosuite.ID{cryptosuite.INTLV1, cryptosuite.CNSMV1} {
+		for _, compression := range []string{"none", "gzip"} {
+			t.Run(string(suiteID)+"/"+compression, func(t *testing.T) {
+				ctx := context.Background()
+				provider := newTestKEKProvider("test-kek", 0x31)
+				src := newBoundTestLocalStoreForSuite(t, filepath.Join(t.TempDir(), "src"), suiteID)
+				seedBackupStore(t, src, suiteID, 3, 0)
 
-	src := newBoundTestLocalStore(t, filepath.Join(t.TempDir(), "src"))
-	bundle := model.ProofBundle{
-		SchemaVersion: model.SchemaProofBundle,
-		CryptoSuite:   cryptosuite.INTLV1,
-		RecordID:      "record-1",
-		CommittedReceipt: model.CommittedReceipt{
-			SchemaVersion: model.SchemaCommittedReceipt,
-			CryptoSuite:   cryptosuite.INTLV1,
-			BatchID:       "batch-1",
-			BatchRoot:     repeatByte(0x44, 32),
-		},
-		BatchProof: model.BatchProof{TreeSize: 1},
-	}
-	if err := src.PutBundle(ctx, bundle); err != nil {
-		t.Fatalf("PutBundle: %v", err)
-	}
-	if err := src.PutManifest(ctx, model.BatchManifest{
-		SchemaVersion: model.SchemaBatchManifest,
-		CryptoSuite:   cryptosuite.INTLV1,
-		BatchID:       "batch-1",
-		State:         model.BatchStateCommitted,
-		TreeSize:      1,
-		BatchRoot:     repeatByte(0x44, 32),
-		RecordIDs:     []string{"record-1"},
-		ClosedAtUnixN: 1,
-	}); err != nil {
-		t.Fatalf("PutManifest: %v", err)
-	}
-	root := model.BatchRoot{
-		SchemaVersion: model.SchemaBatchRoot,
-		CryptoSuite:   cryptosuite.INTLV1,
-		BatchID:       "batch-1",
-		BatchRoot:     repeatByte(0x44, 32),
-		TreeSize:      1,
-		ClosedAtUnixN: 1,
-	}
-	if err := src.PutRoot(ctx, root); err != nil {
-		t.Fatalf("PutRoot: %v", err)
-	}
-	if err := src.EnqueueGlobalLog(ctx, model.GlobalLogOutboxItem{
-		SchemaVersion: model.SchemaGlobalLogOutbox,
-		CryptoSuite:   cryptosuite.INTLV1,
-		BatchID:       root.BatchID,
-		BatchRoot:     root,
-		Status:        model.AnchorStatePending,
-	}); err != nil {
-		t.Fatalf("EnqueueGlobalLog: %v", err)
-	}
+				path := filepath.Join(t.TempDir(), "proofstore.tdbackup")
+				report, err := Create(ctx, src, path, Options{
+					Compression: compression, FrameBytes: minFramePlainBytes,
+					KEKProvider: provider, KEKKeyID: "test-backup-kek",
+					Clock: func() time.Time { return time.Unix(100, 123).UTC() },
+				})
+				if err != nil {
+					t.Fatalf("Create: %v", err)
+				}
+				if report.SchemaVersion != SchemaManifest || report.CryptoSuite != suiteID || report.FormatGeneration != 5 ||
+					report.NodeID != "test-node" || report.LogID != "test-log" || report.NamespaceID != "test-local" ||
+					report.Bundles != 3 || report.BatchTreeLeaves != 3 || report.BatchTreeNodes == 0 || report.Manifests != 1 || report.Roots != 1 {
+					t.Fatalf("Create report = %+v", report)
+				}
+				wantDigest := cryptosuite.HashSHA256
+				if suiteID == cryptosuite.CNSMV1 {
+					wantDigest = cryptosuite.HashSM3
+				}
+				if report.DigestAlgorithm != wantDigest {
+					t.Fatalf("digest = %q, want %q", report.DigestAlgorithm, wantDigest)
+				}
+				raw, err := os.ReadFile(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if bytes.Contains(raw, []byte("record-000")) || bytes.Contains(raw, []byte("batch-001")) {
+					t.Fatal("encrypted backup exposes proofstore plaintext")
+				}
 
-	_, priv, err := trustcrypto.GenerateEd25519Key()
-	if err != nil {
-		t.Fatalf("GenerateEd25519Key: %v", err)
-	}
-	globalSvc, err := globallog.New(globallog.Options{
-		Store:  src,
-		NodeID: "node-1",
-		LogID:  "backup-test",
-		Signer: trustcrypto.MustNewEd25519Signer("backup-key", priv),
-		Clock:  func() time.Time { return time.Unix(10, 0).UTC() },
-	})
-	if err != nil {
-		t.Fatalf("globallog.New: %v", err)
-	}
-	sth, err := globalSvc.AppendBatchRoot(ctx, root)
-	if err != nil {
-		t.Fatalf("AppendBatchRoot: %v", err)
-	}
-	if _, err := globalSvc.CompactHistory(ctx, 1); err != nil {
-		t.Fatalf("CompactHistory: %v", err)
-	}
-	resultWriter := any(src).(proofstore.STHAnchorResultWriter)
-	if err := resultWriter.PutSTHAnchorResult(ctx, model.STHAnchorResult{
-		SchemaVersion:    model.SchemaSTHAnchorResult,
-		CryptoSuite:      cryptosuite.INTLV1,
-		EvidenceStage:    model.AnchorEvidenceStageLocalOnly,
-		NodeID:           sth.NodeID,
-		LogID:            sth.LogID,
-		TreeSize:         sth.TreeSize,
-		SinkName:         "noop",
-		AnchorID:         "noop-sth-1",
-		RootHash:         sth.RootHash,
-		STH:              sth,
-		PublishedAtUnixN: 11,
-	}); err != nil {
-		t.Fatalf("PutSTHAnchorResult: %v", err)
-	}
-	if err := src.PutCheckpoint(ctx, model.WALCheckpoint{
-		SchemaVersion:   model.SchemaWALCheckpoint,
-		CryptoSuite:     cryptosuite.INTLV1,
-		LastSequence:    42,
-		RecordedAtUnixN: 12,
-	}); err != nil {
-		t.Fatalf("PutCheckpoint: %v", err)
-	}
+				verified, err := Verify(ctx, path, provider)
+				if err != nil {
+					t.Fatalf("Verify: %v", err)
+				}
+				if verified.BackupID != report.BackupID || len(verified.Entries) != len(report.Entries) {
+					t.Fatalf("Verify report = %+v", verified)
+				}
 
-	path := filepath.Join(t.TempDir(), "trustdb.tdbackup")
-	report, err := Create(ctx, src, path, Options{Compression: "gzip"})
-	if err != nil {
-		t.Fatalf("Create: %v", err)
-	}
-	if report.SchemaVersion != SchemaManifest || report.BackupID == "" || report.CryptoSuite != cryptosuite.INTLV1 || len(report.Entries) == 0 {
-		t.Fatalf("missing v4 manifest metadata: %+v", report)
-	}
-	if report.Bundles != 1 || report.Roots != 1 || report.GlobalLeaves != 1 || report.GlobalNodes == 0 || !report.GlobalState || report.STHs != 1 || report.GlobalOutboxes != 1 || report.AnchorResults != 1 {
-		t.Fatalf("unexpected create report: %+v", report)
-	}
-	verified, err := Verify(ctx, path)
-	if err != nil {
-		t.Fatalf("Verify: %v", err)
-	}
-	if verified.CryptoSuite != cryptosuite.INTLV1 || verified.AnchorResults != 1 || verified.GlobalTiles != 1 {
-		t.Fatalf("unexpected verify report: %+v", verified)
-	}
-
-	dst := newBoundTestLocalStore(t, filepath.Join(t.TempDir(), "dst"))
-	checkpoint := filepath.Join(t.TempDir(), "restore.checkpoint.json")
-	restored, err := RestoreWithOptions(ctx, dst, path, RestoreOptions{Resume: true, CheckpointPath: checkpoint})
-	if err != nil {
-		t.Fatalf("Restore: %v", err)
-	}
-	if restored.Bundles != 1 || restored.GlobalLeaves != 1 || restored.GlobalNodes == 0 || !restored.GlobalState || restored.GlobalOutboxes != 1 || restored.AnchorResults != 1 {
-		t.Fatalf("unexpected restore report: %+v", restored)
-	}
-	if _, err := os.Stat(checkpoint); err != nil {
-		t.Fatalf("restore checkpoint not written: %v", err)
-	}
-	gotBundle, err := dst.GetBundle(ctx, "record-1")
-	if err != nil {
-		t.Fatalf("GetBundle restored: %v", err)
-	}
-	if gotBundle.RecordID != "record-1" {
-		t.Fatalf("restored bundle = %+v", gotBundle)
-	}
-	if latest, err := dst.LatestRoot(ctx); err != nil || latest.BatchID != root.BatchID {
-		t.Fatalf("LatestRoot restored latest=%+v err=%v", latest, err)
-	}
-	if _, ok, err := dst.GetSTHAnchorResult(ctx, 1); err != nil || !ok {
-		t.Fatalf("GetSTHAnchorResult restored ok=%v err=%v", ok, err)
-	}
-	if _, ok, err := dst.GetGlobalLogState(ctx); err != nil || !ok {
-		t.Fatalf("GetGlobalLogState restored ok=%v err=%v", ok, err)
-	}
-	if latest, ok, err := dst.LatestSignedTreeHead(ctx); err != nil || !ok || latest.TreeSize != sth.TreeSize {
-		t.Fatalf("LatestSignedTreeHead restored latest=%+v ok=%v err=%v", latest, ok, err)
-	}
-	if _, ok, err := dst.GetGlobalLogOutboxItem(ctx, root.BatchID); err != nil || !ok {
-		t.Fatalf("GetGlobalLogOutboxItem restored ok=%v err=%v", ok, err)
-	}
-	if checkpoint, ok, err := dst.GetCheckpoint(ctx); err != nil || ok {
-		t.Fatalf("GetCheckpoint restored checkpoint=%+v ok=%v err=%v, want absent node-local state", checkpoint, ok, err)
-	}
-}
-
-func TestBackupV4RejectsCNSMSuiteUntilV5(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	src := newBoundTestLocalStoreForSuite(t, filepath.Join(t.TempDir(), "src"), cryptosuite.CNSMV1)
-	path := filepath.Join(t.TempDir(), "cn.tdbackup")
-	if _, err := Create(ctx, src, path, Options{Compression: "none"}); trusterr.CodeOf(err) != trusterr.CodeFailedPrecondition || !strings.Contains(err.Error(), "backup v4") {
-		t.Fatalf("Create CN_SM_V1 backup v4 code=%s err=%v", trusterr.CodeOf(err), err)
-	}
-	if _, err := os.Stat(path); !os.IsNotExist(err) {
-		t.Fatalf("unsupported backup v4 output exists: %v", err)
-	}
-}
-
-func TestBackupRoundTripPreservesAnchorScheduleAndIndependentResult(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	src := newBoundTestLocalStore(t, filepath.Join(t.TempDir(), "src"))
-	scheduler, ok := any(src).(proofstore.STHAnchorScheduleStore)
-	if !ok {
-		t.Fatal("LocalStore does not implement STHAnchorScheduleStore")
-	}
-	resultWriter, ok := any(src).(proofstore.STHAnchorResultWriter)
-	if !ok {
-		t.Fatal("LocalStore does not implement STHAnchorResultWriter")
-	}
-	key := model.STHAnchorScheduleKey{NodeID: "node-1", LogID: "log-1", SinkName: fiscobcos.SinkName}
-	firstSTH := backupScheduleSTH(key, 1, 0x11)
-	firstResultKey := key
-	firstResultKey.SinkName = "test-anchor"
-	firstResult := backupScheduleResult(firstResultKey, firstSTH, "anchor-1", 110)
-
-	inFlightSTH := backupScheduleSTH(key, 3, 0x33)
-	if _, err := scheduler.UpsertSTHAnchorCandidate(ctx, model.STHAnchorCandidate{
-		Key: key, STH: inFlightSTH, ObservedAtUnixN: 200, DueAtUnixN: 200,
-	}); err != nil {
-		t.Fatalf("UpsertSTHAnchorCandidate in-flight: %v", err)
-	}
-	inFlightAttempt, claimed, err := scheduler.ClaimSTHAnchorAttempt(ctx, key, 200, 250, "worker-2", "lease-2")
-	if err != nil || !claimed {
-		t.Fatalf("ClaimSTHAnchorAttempt in-flight claimed=%v err=%v", claimed, err)
-	}
-	payload, err := fiscobcos.NewAnchorPayload(cryptosuite.INTLV1, inFlightSTH)
-	if err != nil {
-		t.Fatal(err)
-	}
-	canonicalPayload, err := fiscobcos.MarshalPayload(payload)
-	if err != nil {
-		t.Fatal(err)
-	}
-	callData, err := fiscobcos.PublishCallData(payload)
-	if err != nil {
-		t.Fatal(err)
-	}
-	providerState, err := fiscobcos.MarshalAttemptJournal(fiscobcos.AttemptJournal{
-		SchemaVersion:   fiscobcos.SchemaAttemptJournal,
-		FormatVersion:   fiscobcos.AttemptJournalVersion,
-		Generation:      inFlightAttempt.Generation,
-		Revision:        1,
-		NodeID:          key.NodeID,
-		LogID:           key.LogID,
-		SinkName:        key.SinkName,
-		TreeSize:        inFlightSTH.TreeSize,
-		RootHash:        append([]byte(nil), inFlightSTH.RootHash...),
-		SignedSTHDigest: append([]byte(nil), payload.SignedSTHDigest...),
-		CryptoMode:      fiscobcos.CryptoModeStandard,
-		ChainID:         "chain0",
-		GroupID:         "group0",
-		Contract: fiscobcos.ContractBinding{
-			Address: repeatByte(0x41, 20), CodeHash: repeatByte(0x42, 32),
-			ProtocolVersion: "trustdb-anchor-v1",
-			EventSignature:  "AnchorPublished(bytes32)",
-		},
-		ChainContextID:   repeatByte(0x43, 32),
-		CanonicalPayload: canonicalPayload,
-		Attempts: []fiscobcos.JournalAttempt{{
-			Transaction: fiscobcos.SignedTransactionAttempt{
-				Ordinal:                 1,
-				RawCanonicalTransaction: []byte("exact-signed-bcos-transaction"),
-				ChainID:                 "chain0",
-				GroupID:                 "group0",
-				To:                      repeatByte(0x41, 20),
-				Input:                   callData,
-				Signature:               repeatByte(0x44, 65),
-				Sender:                  repeatByte(0x45, 20),
-				TransactionHash:         repeatByte(0x46, 32),
-				BlockLimit:              700,
-				PreparedAtUnixN:         1,
-			},
-			Outcome: fiscobcos.AttemptOutcomeSubmitUnknown,
-		}},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := scheduler.CompareAndSwapSTHAnchorProviderState(ctx, key, inFlightAttempt.Generation, "lease-2", 225, nil, providerState); err != nil {
-		t.Fatalf("CompareAndSwapSTHAnchorProviderState: %v", err)
-	}
-	if err := scheduler.RescheduleSTHAnchorAttempt(ctx, key, inFlightAttempt.Generation, "lease-2", 2, 300, "temporary outage"); err != nil {
-		t.Fatalf("RescheduleSTHAnchorAttempt: %v", err)
-	}
-	if _, claimed, err := scheduler.ClaimSTHAnchorAttempt(ctx, key, 300, 350, "worker-3", "lease-3"); err != nil || !claimed {
-		t.Fatalf("ClaimSTHAnchorAttempt retry claimed=%v err=%v", claimed, err)
-	}
-	pendingSTH := backupScheduleSTH(key, 5, 0x55)
-	if _, err := scheduler.UpsertSTHAnchorCandidate(ctx, model.STHAnchorCandidate{
-		Key: key, STH: pendingSTH, ObservedAtUnixN: 310, DueAtUnixN: 410,
-	}); err != nil {
-		t.Fatalf("UpsertSTHAnchorCandidate pending: %v", err)
-	}
-	// Exercise the backup capability directly: successful immutable results
-	// must not depend on a legacy per-STH outbox entry being present.
-	if err := resultWriter.PutSTHAnchorResult(ctx, firstResult); err != nil {
-		t.Fatalf("PutSTHAnchorResult idempotent: %v", err)
-	}
-	secondSinkKey := key
-	secondSinkKey.SinkName = "ots"
-	secondSinkResult := backupScheduleResult(secondSinkKey, firstSTH, "anchor-1-ots", 111)
-	if err := resultWriter.PutSTHAnchorResult(ctx, secondSinkResult); err != nil {
-		t.Fatalf("PutSTHAnchorResult second sink: %v", err)
-	}
-	coverage := any(src).(proofstore.L5CoverageCheckpointStore)
-	if _, err := coverage.AdvanceL5CoverageCheckpoint(ctx, key, 1, 120); err != nil {
-		t.Fatalf("AdvanceL5CoverageCheckpoint: %v", err)
-	}
-
-	path := filepath.Join(t.TempDir(), "anchor-schedule.tdbackup")
-	report, err := Create(ctx, src, path, Options{Compression: "none"})
-	if err != nil {
-		t.Fatalf("Create: %v", err)
-	}
-	if report.AnchorResults != 2 || report.AnchorSchedules != 1 {
-		t.Fatalf("backup report = %+v", report)
-	}
-
-	dst := newBoundTestLocalStore(t, filepath.Join(t.TempDir(), "dst"))
-	restored, err := Restore(ctx, dst, path)
-	if err != nil {
-		t.Fatalf("Restore: %v", err)
-	}
-	if restored.AnchorResults != 2 || restored.AnchorSchedules != 1 {
-		t.Fatalf("restore report = %+v", restored)
-	}
-	restoredScheduler := any(dst).(proofstore.STHAnchorScheduleStore)
-	schedule, found, err := restoredScheduler.GetSTHAnchorSchedule(ctx, key)
-	if err != nil || !found {
-		t.Fatalf("GetSTHAnchorSchedule found=%v err=%v", found, err)
-	}
-	if schedule.InFlight == nil || schedule.InFlight.Target.TreeSize != 3 || schedule.InFlight.Attempts != 2 || schedule.InFlight.NextAttemptUnixN != 300 || schedule.InFlight.LastAttemptUnixN != 300 || schedule.InFlight.LastErrorMessage != "temporary outage" || !bytes.Equal(schedule.InFlight.ProviderState, providerState) {
-		t.Fatalf("restored in-flight = %+v", schedule.InFlight)
-	}
-	restoredJournal, err := fiscobcos.UnmarshalAttemptJournal(schedule.InFlight.ProviderState)
-	if err != nil {
-		t.Fatalf("decode restored BCOS attempt journal: %v", err)
-	}
-	if len(restoredJournal.Attempts) != 1 ||
-		!bytes.Equal(restoredJournal.Attempts[0].Transaction.RawCanonicalTransaction, []byte("exact-signed-bcos-transaction")) {
-		t.Fatalf("restored BCOS attempt bytes changed: %+v", restoredJournal.Attempts)
-	}
-	if schedule.InFlight.LeaseOwner != "" || schedule.InFlight.LeaseToken != "" || schedule.InFlight.LeaseUntilUnixN != 0 {
-		t.Fatalf("restored stale lease = %+v", schedule.InFlight)
-	}
-	if schedule.Pending == nil || schedule.Pending.Target.TreeSize != 5 || schedule.Pending.OpenedAtUnixN != 310 || schedule.Pending.DueAtUnixN != 410 {
-		t.Fatalf("restored pending = %+v", schedule.Pending)
-	}
-	if result, found, err := dst.GetSTHAnchorResult(ctx, 1); err != nil || !found || result.TreeSize != 1 {
-		t.Fatalf("restored independent result = %+v found=%v err=%v", result, found, err)
-	}
-	keyedReader := any(dst).(proofstore.STHAnchorResultKeyedReader)
-	for _, tc := range []struct {
-		key      model.STHAnchorScheduleKey
-		anchorID string
-	}{{firstResultKey, "anchor-1"}, {secondSinkKey, "anchor-1-ots"}} {
-		resultKey := model.STHAnchorResultKey{NodeID: tc.key.NodeID, LogID: tc.key.LogID, SinkName: tc.key.SinkName, TreeSize: 1}
-		result, found, err := keyedReader.GetSTHAnchorResultForKey(ctx, resultKey)
-		if err != nil || !found || result.AnchorID != tc.anchorID {
-			t.Fatalf("restored keyed result %s = %+v found=%v err=%v", tc.key.SinkName, result, found, err)
+				dst := newBoundTestLocalStoreForSuite(t, filepath.Join(t.TempDir(), "dst"), suiteID)
+				checkpoint := filepath.Join(t.TempDir(), "restore.checkpoint.json")
+				restored, err := RestoreWithOptions(ctx, dst, path, RestoreOptions{
+					Resume: true, CheckpointPath: checkpoint, KEKProviders: []keyenvelope.KEKProvider{provider},
+				})
+				if err != nil {
+					t.Fatalf("Restore: %v", err)
+				}
+				if restored.Bundles != 3 || restored.BatchTreeLeaves != 3 || restored.BatchTreeNodes == 0 || restored.Manifests != 1 || restored.Roots != 1 {
+					t.Fatalf("Restore report = %+v", restored)
+				}
+				if _, err := dst.GetBundle(ctx, "record-002"); err != nil {
+					t.Fatalf("restored bundle: %v", err)
+				}
+				leaves, err := dst.ListBatchTreeLeaves(ctx, model.BatchTreeLeafListOptions{BatchID: "batch-001", Limit: 10})
+				if err != nil || len(leaves) != 3 {
+					t.Fatalf("restored batch tree leaves=%d err=%v", len(leaves), err)
+				}
+			})
 		}
 	}
-	restoredCoverage := any(dst).(proofstore.L5CoverageCheckpointStore)
-	if checkpoint, found, err := restoredCoverage.GetL5CoverageCheckpoint(ctx, key); err != nil || found {
-		t.Fatalf("restored derived L5 checkpoint=%+v found=%v err=%v, want absent", checkpoint, found, err)
-	}
 }
 
-func TestRestoreRejectsTamperedBCOSJournalBeforeWrites(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	key := model.STHAnchorScheduleKey{NodeID: "node-tamper", LogID: "log-tamper", SinkName: fiscobcos.SinkName}
-	target := backupScheduleSTH(key, 3, 0x33)
-	tamperedSTH := target
-	tamperedSTH.TimestampUnixN++
-	payload, err := fiscobcos.NewAnchorPayload(cryptosuite.INTLV1, tamperedSTH)
-	if err != nil {
-		t.Fatal(err)
-	}
-	canonicalPayload, err := fiscobcos.MarshalPayload(payload)
-	if err != nil {
-		t.Fatal(err)
-	}
-	callData, err := fiscobcos.PublishCallData(payload)
-	if err != nil {
-		t.Fatal(err)
-	}
-	journalBytes, err := fiscobcos.MarshalAttemptJournal(fiscobcos.AttemptJournal{
-		SchemaVersion:   fiscobcos.SchemaAttemptJournal,
-		FormatVersion:   fiscobcos.AttemptJournalVersion,
-		Generation:      1,
-		Revision:        1,
-		NodeID:          key.NodeID,
-		LogID:           key.LogID,
-		SinkName:        key.SinkName,
-		TreeSize:        target.TreeSize,
-		RootHash:        append([]byte(nil), target.RootHash...),
-		SignedSTHDigest: append([]byte(nil), payload.SignedSTHDigest...),
-		CryptoMode:      fiscobcos.CryptoModeStandard,
-		ChainID:         "chain0",
-		GroupID:         "group0",
-		Contract: fiscobcos.ContractBinding{
-			Address:         repeatByte(0x41, 20),
-			CodeHash:        repeatByte(0x42, 32),
-			ProtocolVersion: fiscobcos.TrustDBAnchorV1ProtocolVersion,
-			EventSignature:  fiscobcos.TrustDBAnchorV1EventSignature,
-		},
-		ChainContextID:   repeatByte(0x43, 32),
-		CanonicalPayload: canonicalPayload,
-		Attempts: []fiscobcos.JournalAttempt{{
-			Transaction: fiscobcos.SignedTransactionAttempt{
-				Ordinal:                 1,
-				RawCanonicalTransaction: []byte("tampered-signed-bcos-transaction"),
-				ChainID:                 "chain0",
-				GroupID:                 "group0",
-				To:                      repeatByte(0x41, 20),
-				Input:                   callData,
-				Signature:               repeatByte(0x44, 65),
-				Sender:                  repeatByte(0x45, 20),
-				TransactionHash:         repeatByte(0x46, 32),
-				BlockLimit:              700,
-				PreparedAtUnixN:         1,
-			},
-			Outcome: fiscobcos.AttemptOutcomeSubmitUnknown,
-		}},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	schedule := model.STHAnchorSchedule{
-		SchemaVersion:  model.SchemaSTHAnchorSchedule,
-		CryptoSuite:    cryptosuite.INTLV1,
-		Key:            key,
-		NextGeneration: 2,
-		Revision:       1,
-		InFlight: &model.STHAnchorAttempt{
-			Generation:       1,
-			Target:           target,
-			OpenedAtUnixN:    1,
-			DueAtUnixN:       1,
-			Attempts:         1,
-			NextAttemptUnixN: 2,
-			LastAttemptUnixN: 1,
-			ProviderState:    journalBytes,
-		},
-	}
-	if err := anchorschedule.ValidateSchedule(schedule); err != nil {
-		t.Fatalf("test schedule: %v", err)
-	}
-
-	path := filepath.Join(t.TempDir(), "tampered-journal.tdbackup")
-	file, err := os.Create(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	tw := tar.NewWriter(file)
-	manifest := Manifest{
-		SchemaVersion: SchemaManifest,
-		BackupID:      "tampered-journal",
-		CreatedAt:     time.Unix(1, 0).UTC().Format(time.RFC3339Nano),
-		Compression:   "none",
-		CryptoSuite:   cryptosuite.INTLV1,
-	}
-	var ordinal int64
-	root := model.BatchRoot{
-		SchemaVersion: model.SchemaBatchRoot,
-		CryptoSuite:   cryptosuite.INTLV1,
-		BatchID:       "must-not-restore",
-		BatchRoot:     repeatByte(0x55, 32),
-		TreeSize:      1,
-		ClosedAtUnixN: 1,
-	}
-	if err := writeCBORTracked(tw, &manifest, &ordinal, "roots/must-not-restore.tdroot", "batch_root", root); err != nil {
-		t.Fatal(err)
-	}
-	if err := writeCBORTracked(tw, &manifest, &ordinal, "anchors/schedules/000000.tdanchor-schedule", "sth_anchor_schedule", schedule); err != nil {
-		t.Fatal(err)
-	}
-	if err := writeJSONTracked(tw, &manifest, &ordinal, "manifest.json", "manifest", manifest); err != nil {
-		t.Fatal(err)
-	}
-	if err := writeJSONTracked(tw, &manifest, &ordinal, "summary.json", "summary", manifest); err != nil {
-		t.Fatal(err)
-	}
-	if err := tw.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if err := file.Close(); err != nil {
-		t.Fatal(err)
-	}
-
-	dst := newBoundTestLocalStore(t, filepath.Join(t.TempDir(), "dst"))
-	if _, err := Restore(ctx, dst, path); trusterr.CodeOf(err) != trusterr.CodeDataLoss ||
-		!strings.Contains(err.Error(), "complete Signed STH") {
-		t.Fatalf("Restore tampered journal error=%v", err)
-	}
-	if _, err := dst.LatestRoot(ctx); trusterr.CodeOf(err) != trusterr.CodeNotFound {
-		t.Fatalf("restore wrote an entry before rejecting tampered journal: %v", err)
-	}
-}
-
-func TestRestoreRejectsForgedBCOSOfflineStageBeforeWrites(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	key := model.STHAnchorScheduleKey{NodeID: "node-forged-stage", LogID: "log-forged-stage", SinkName: fiscobcos.SinkName}
-	sth := backupScheduleSTH(key, 4, 0x44)
-	result := proofstoretest.FISCOBCOSResult(t, key, sth, 400)
-	result.EvidenceStage = model.AnchorEvidenceStageOfflineVerified
-
-	path := filepath.Join(t.TempDir(), "forged-bcos-stage.tdbackup")
-	file, err := os.Create(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	tw := tar.NewWriter(file)
-	manifest := Manifest{
-		SchemaVersion: SchemaManifest,
-		BackupID:      "forged-bcos-stage",
-		CreatedAt:     time.Unix(1, 0).UTC().Format(time.RFC3339Nano),
-		Compression:   "none",
-		CryptoSuite:   cryptosuite.INTLV1,
-	}
-	var ordinal int64
-	root := model.BatchRoot{
-		SchemaVersion: model.SchemaBatchRoot,
-		CryptoSuite:   cryptosuite.INTLV1,
-		BatchID:       "must-not-restore-forged-stage",
-		BatchRoot:     repeatByte(0x56, 32),
-		TreeSize:      1,
-		ClosedAtUnixN: 1,
-	}
-	if err := writeCBORTracked(tw, &manifest, &ordinal, "roots/must-not-restore-forged-stage.tdroot", "batch_root", root); err != nil {
-		t.Fatal(err)
-	}
-	if err := writeCBORTracked(tw, &manifest, &ordinal, "anchors/sth-result/000000000.tdsth-anchor-result", "sth_anchor_result", result); err != nil {
-		t.Fatal(err)
-	}
-	if err := writeJSONTracked(tw, &manifest, &ordinal, "manifest.json", "manifest", manifest); err != nil {
-		t.Fatal(err)
-	}
-	if err := writeJSONTracked(tw, &manifest, &ordinal, "summary.json", "summary", manifest); err != nil {
-		t.Fatal(err)
-	}
-	if err := tw.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if err := file.Close(); err != nil {
-		t.Fatal(err)
-	}
-
-	dst := newBoundTestLocalStore(t, filepath.Join(t.TempDir(), "dst"))
-	if _, err := Restore(ctx, dst, path); trusterr.CodeOf(err) != trusterr.CodeDataLoss ||
-		!strings.Contains(err.Error(), "remain raw") {
-		t.Fatalf("Restore forged BCOS stage error=%v", err)
-	}
-	if _, err := dst.LatestRoot(ctx); trusterr.CodeOf(err) != trusterr.CodeNotFound {
-		t.Fatalf("restore wrote an entry before rejecting forged BCOS stage: %v", err)
-	}
-}
-
-func TestRestoreRejectsLegacySchemaBeforeApplyingEntries(t *testing.T) {
-	t.Parallel()
-	for _, schema := range []string{"trustdb.backup.v2", "trustdb.backup.v3"} {
-		schema := schema
-		t.Run(schema, func(t *testing.T) {
+func TestBackupV5RestoresAcrossFileAndPebbleBackends(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		sourceKind proofstore.Backend
+		targetKind proofstore.Backend
+	}{
+		{name: "file-to-pebble", sourceKind: proofstore.BackendFile, targetKind: proofstore.BackendPebble},
+		{name: "pebble-to-file", sourceKind: proofstore.BackendPebble, targetKind: proofstore.BackendFile},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()
-			path := filepath.Join(t.TempDir(), "legacy.tdbackup")
-			f, err := os.Create(path)
-			if err != nil {
+			provider := newTestKEKProvider("test-kek", 0x39)
+			src := openBoundTestStore(t, tc.sourceKind, filepath.Join(t.TempDir(), "src"), "source-namespace")
+			seedBackupStore(t, src, cryptosuite.INTLV1, 3, 0)
+
+			path := filepath.Join(t.TempDir(), "portable.tdbackup")
+			if _, err := Create(ctx, src, path, testCreateOptions(provider)); err != nil {
 				t.Fatalf("Create: %v", err)
 			}
-			tw := tar.NewWriter(f)
-			legacy := Manifest{
-				SchemaVersion: schema,
-				BackupID:      "legacy-backup",
-				CreatedAt:     time.Unix(1, 0).UTC().Format(time.RFC3339Nano),
-				Compression:   "none",
-			}
-			var ordinal int64
-			root := model.BatchRoot{SchemaVersion: model.SchemaBatchRoot, BatchID: "must-not-restore", BatchRoot: repeatByte(0x42, 32), TreeSize: 1, ClosedAtUnixN: 1}
-			if err := writeCBORTracked(tw, &legacy, &ordinal, "roots/must-not-restore.tdroot", "batch_root", root); err != nil {
-				t.Fatalf("write root: %v", err)
-			}
-			if err := writeJSONTracked(tw, &legacy, &ordinal, "manifest.json", "manifest", legacy); err != nil {
-				t.Fatalf("write manifest: %v", err)
-			}
-			if err := writeJSONTracked(tw, &legacy, &ordinal, "summary.json", "summary", legacy); err != nil {
-				t.Fatalf("write summary: %v", err)
-			}
-			if err := tw.Close(); err != nil {
-				t.Fatalf("tar Close: %v", err)
-			}
-			if err := f.Close(); err != nil {
-				t.Fatalf("file Close: %v", err)
-			}
 
-			if _, err := Verify(ctx, path); trusterr.CodeOf(err) != trusterr.CodeFailedPrecondition || !strings.Contains(err.Error(), schema) {
-				t.Fatalf("Verify %s error=%v", schema, err)
-			}
-			dst := newBoundTestLocalStore(t, filepath.Join(t.TempDir(), "dst"))
-			if _, err := Restore(ctx, dst, path); trusterr.CodeOf(err) != trusterr.CodeFailedPrecondition || !strings.Contains(err.Error(), schema) {
-				t.Fatalf("Restore %s error=%v", schema, err)
-			}
-			if _, err := dst.LatestRoot(ctx); trusterr.CodeOf(err) != trusterr.CodeNotFound {
-				t.Fatalf("LatestRoot after rejected restore error=%v", err)
-			}
-		})
-	}
-}
-
-func TestVerifyRejectsMissingAndMixedSuiteBindings(t *testing.T) {
-	t.Parallel()
-	for _, tc := range []struct {
-		name        string
-		firstSuite  cryptosuite.ID
-		secondSuite cryptosuite.ID
-		wantCode    trusterr.Code
-	}{
-		{name: "missing", wantCode: trusterr.CodeFailedPrecondition},
-		{name: "mixed", firstSuite: cryptosuite.INTLV1, secondSuite: cryptosuite.CNSMV1, wantCode: trusterr.CodeDataLoss},
-	} {
-		tc := tc
-		t.Run(tc.name, func(t *testing.T) {
-			path := filepath.Join(t.TempDir(), tc.name+".tdbackup")
-			f, err := os.Create(path)
+			dst := openBoundTestStore(t, tc.targetKind, filepath.Join(t.TempDir(), "dst"), "target-namespace")
+			report, err := RestoreWithOptions(ctx, dst, path, RestoreOptions{
+				KEKProviders: []keyenvelope.KEKProvider{provider},
+			})
 			if err != nil {
-				t.Fatal(err)
+				t.Fatalf("Restore: %v", err)
 			}
-			tw := tar.NewWriter(f)
-			manifest := Manifest{
-				SchemaVersion: SchemaManifest,
-				BackupID:      "suite-binding-test",
-				CreatedAt:     time.Unix(1, 0).UTC().Format(time.RFC3339Nano),
-				Compression:   "none",
-				CryptoSuite:   tc.firstSuite,
+			if report.NamespaceID != "source-namespace" || report.TargetNamespaceID != "target-namespace" {
+				t.Fatalf("restore namespace report = %+v", report)
 			}
-			var ordinal int64
-			if err := writeJSONTracked(tw, &manifest, &ordinal, "manifest.json", "manifest", manifest); err != nil {
-				t.Fatal(err)
+			if _, err := dst.GetBundle(ctx, "record-002"); err != nil {
+				t.Fatalf("restored bundle: %v", err)
 			}
-			manifest.CryptoSuite = tc.secondSuite
-			if err := writeJSONTracked(tw, &manifest, &ordinal, "summary.json", "summary", manifest); err != nil {
-				t.Fatal(err)
-			}
-			if err := tw.Close(); err != nil {
-				t.Fatal(err)
-			}
-			if err := f.Close(); err != nil {
-				t.Fatal(err)
-			}
-			if _, err := Verify(context.Background(), path); trusterr.CodeOf(err) != tc.wantCode {
-				t.Fatalf("Verify code=%s err=%v, want=%s", trusterr.CodeOf(err), err, tc.wantCode)
+			leaves, err := dst.ListBatchTreeLeaves(ctx, model.BatchTreeLeafListOptions{BatchID: "batch-001", Limit: 10})
+			if err != nil || len(leaves) != 3 {
+				t.Fatalf("restored batch tree leaves=%d err=%v", len(leaves), err)
 			}
 		})
 	}
 }
 
-func TestBackupRootPaginationPreservesTimestampTies(t *testing.T) {
-	t.Parallel()
+func TestBackupV5PreservesAnchorScheduleAndImmutableResult(t *testing.T) {
 	ctx := context.Background()
+	provider := newTestKEKProvider("test-kek", 0x41)
 	src := newBoundTestLocalStore(t, filepath.Join(t.TempDir(), "src"))
-	const rootCount = scanPageSize + 1
-	const closedAtUnixN = int64(100)
-
-	for i := 0; i < rootCount; i++ {
-		batchID := fmt.Sprintf("batch-%04d", i)
-		if err := src.PutRoot(ctx, model.BatchRoot{
-			SchemaVersion: model.SchemaBatchRoot,
-			CryptoSuite:   cryptosuite.INTLV1,
-			BatchID:       batchID,
-			BatchRoot:     repeatByte(byte(i), 32),
-			TreeSize:      1,
-			ClosedAtUnixN: closedAtUnixN,
-		}); err != nil {
-			t.Fatalf("PutRoot(%q): %v", batchID, err)
-		}
+	key := model.STHAnchorScheduleKey{NodeID: "test-node", LogID: "test-log", SinkName: "noop"}
+	sth := testSTH(key, 7, 0x71)
+	resultSTH := testSTH(key, 5, 0x51)
+	scheduler := any(src).(proofstore.STHAnchorScheduleStore)
+	if _, err := scheduler.UpsertSTHAnchorCandidate(ctx, model.STHAnchorCandidate{
+		Key: key, STH: sth, ObservedAtUnixN: 10, DueAtUnixN: 20,
+	}); err != nil {
+		t.Fatalf("UpsertSTHAnchorCandidate: %v", err)
+	}
+	result := model.STHAnchorResult{
+		SchemaVersion: model.SchemaSTHAnchorResult, CryptoSuite: cryptosuite.INTLV1,
+		EvidenceStage: model.AnchorEvidenceStageLocalOnly, NodeID: key.NodeID, LogID: key.LogID,
+		TreeSize: resultSTH.TreeSize, SinkName: key.SinkName, AnchorID: "anchor-5",
+		RootHash: append([]byte(nil), resultSTH.RootHash...), STH: resultSTH, Proof: []byte("opaque-anchor-proof"), PublishedAtUnixN: 30,
+	}
+	if err := any(src).(proofstore.STHAnchorResultWriter).PutSTHAnchorResult(ctx, result); err != nil {
+		t.Fatalf("PutSTHAnchorResult: %v", err)
 	}
 
-	path := filepath.Join(t.TempDir(), "timestamp-ties.tdbackup")
-	report, err := Create(ctx, src, path, Options{Compression: "none"})
+	path := filepath.Join(t.TempDir(), "anchors.tdbackup")
+	if _, err := Create(ctx, src, path, testCreateOptions(provider)); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	dst := newBoundTestLocalStore(t, filepath.Join(t.TempDir(), "dst"))
+	if _, err := RestoreWithOptions(ctx, dst, path, RestoreOptions{KEKProviders: []keyenvelope.KEKProvider{provider}}); err != nil {
+		t.Fatalf("Restore: %v", err)
+	}
+	gotSchedule, found, err := any(dst).(proofstore.STHAnchorScheduleStore).GetSTHAnchorSchedule(ctx, key)
+	if err != nil || !found || gotSchedule.Pending == nil || gotSchedule.Pending.Target.TreeSize != 7 {
+		t.Fatalf("restored schedule=%+v found=%v err=%v", gotSchedule, found, err)
+	}
+	gotResult, found, err := any(dst).(proofstore.STHAnchorResultKeyedReader).GetSTHAnchorResultForKey(ctx, model.STHAnchorResultKey{
+		NodeID: key.NodeID, LogID: key.LogID, SinkName: key.SinkName, TreeSize: 5,
+	})
+	if err != nil || !found || !bytes.Equal(gotResult.Proof, result.Proof) || gotResult.AnchorID != result.AnchorID {
+		t.Fatalf("restored result=%+v found=%v err=%v", gotResult, found, err)
+	}
+}
+
+func TestBackupV5PreservesKeyRegistryAuditWithoutPrivateMaterial(t *testing.T) {
+	ctx := context.Background()
+	provider := newTestKEKProvider("test-kek", 0x45)
+	src := newBoundTestLocalStore(t, filepath.Join(t.TempDir(), "src"))
+	seedBackupStore(t, src, cryptosuite.INTLV1, 1, 0)
+	registryPath := filepath.Join(t.TempDir(), "keys.tdkeys")
+	createTestKeyRegistry(t, registryPath)
+	registryBytes, err := os.ReadFile(registryPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "with-registry.tdbackup")
+	opts := testCreateOptions(provider)
+	opts.KeyRegistryPath = registryPath
+	report, err := Create(ctx, src, path, opts)
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	if report.Roots != rootCount {
-		t.Fatalf("Create Roots = %d, want %d", report.Roots, rootCount)
+	if report.KeyRegistries != 1 || !containsString(report.Inventory.PublicEvidence, "key-registry-audit") ||
+		!containsString(report.Inventory.SecretReferences, "signer-private-material:external-not-exported") {
+		t.Fatalf("inventory=%+v key_registries=%d", report.Inventory, report.KeyRegistries)
 	}
-	verified, err := Verify(ctx, path)
+	raw, err := os.ReadFile(path)
 	if err != nil {
-		t.Fatalf("Verify: %v", err)
+		t.Fatal(err)
 	}
-	if verified.Roots != rootCount {
-		t.Fatalf("Verify Roots = %d, want %d", verified.Roots, rootCount)
+	if bytes.Contains(raw, registryBytes) {
+		t.Fatal("key registry audit bytes were not encrypted")
 	}
 
 	dst := newBoundTestLocalStore(t, filepath.Join(t.TempDir(), "dst"))
-	restored, err := Restore(ctx, dst, path)
-	if err != nil {
+	if _, err := RestoreWithOptions(ctx, dst, path, RestoreOptions{KEKProviders: []keyenvelope.KEKProvider{provider}}); trusterr.CodeOf(err) != trusterr.CodeFailedPrecondition {
+		t.Fatalf("restore without recovery directory error=%v code=%s", err, trusterr.CodeOf(err))
+	}
+	if empty, err := restoreDestinationEmpty(ctx, dst); err != nil || !empty {
+		t.Fatalf("restore published before recovery target validation: empty=%v err=%v", empty, err)
+	}
+
+	recoveryDir := filepath.Join(t.TempDir(), "recovery")
+	if _, err := RestoreWithOptions(ctx, dst, path, RestoreOptions{
+		KEKProviders: []keyenvelope.KEKProvider{provider}, RecoveryDir: recoveryDir,
+	}); err != nil {
 		t.Fatalf("Restore: %v", err)
 	}
-	if restored.Roots != rootCount {
-		t.Fatalf("Restore Roots = %d, want %d", restored.Roots, rootCount)
-	}
-	restoredRootCount := 0
-	afterClosedAtUnixN := int64(0)
-	afterBatchID := ""
-	for {
-		roots, err := dst.ListRootsPage(ctx, model.RootListOptions{
-			Limit:              scanPageSize,
-			Direction:          model.RecordListDirectionAsc,
-			AfterClosedAtUnixN: afterClosedAtUnixN,
-			AfterBatchID:       afterBatchID,
-		})
-		if err != nil {
-			t.Fatalf("ListRootsPage: %v", err)
-		}
-		if len(roots) == 0 {
-			break
-		}
-		restoredRootCount += len(roots)
-		lastRoot := roots[len(roots)-1]
-		afterClosedAtUnixN = lastRoot.ClosedAtUnixN
-		afterBatchID = lastRoot.BatchID
-	}
-	if restoredRootCount != rootCount {
-		t.Fatalf("restored root count = %d, want %d", restoredRootCount, rootCount)
+	restored, err := os.ReadFile(filepath.Join(recoveryDir, "key-registry.tdkeys"))
+	if err != nil || !bytes.Equal(restored, registryBytes) {
+		t.Fatalf("restored key registry bytes changed: err=%v", err)
 	}
 }
 
-func TestBackupCreateRejectsMissingManifestBundle(t *testing.T) {
-	t.Parallel()
+func TestBackupV5RejectsMalformedKeyRegistryBeforePublishingArchive(t *testing.T) {
 	ctx := context.Background()
+	provider := newTestKEKProvider("test-kek", 0x47)
 	src := newBoundTestLocalStore(t, filepath.Join(t.TempDir(), "src"))
-	if err := src.PutManifest(ctx, model.BatchManifest{
-		SchemaVersion: model.SchemaBatchManifest,
-		CryptoSuite:   cryptosuite.INTLV1,
-		BatchID:       "batch-missing-bundle",
-		State:         model.BatchStateCommitted,
-		TreeSize:      1,
-		BatchRoot:     repeatByte(0x44, 32),
-		RecordIDs:     []string{"record-missing"},
-		ClosedAtUnixN: 1,
-	}); err != nil {
-		t.Fatalf("PutManifest: %v", err)
+	seedBackupStore(t, src, cryptosuite.INTLV1, 1, 0)
+	registryPath := filepath.Join(t.TempDir(), "invalid.tdkeys")
+	if err := os.WriteFile(registryPath, []byte("TDBKEYR2\nnot-a-v2-registry"), 0o600); err != nil {
+		t.Fatal(err)
 	}
-
-	dir := t.TempDir()
-	path := filepath.Join(dir, "incomplete.tdbackup")
-	_, err := Create(ctx, src, path, Options{Compression: "none"})
+	path := filepath.Join(t.TempDir(), "must-not-exist.tdbackup")
+	opts := testCreateOptions(provider)
+	opts.KeyRegistryPath = registryPath
+	_, err := Create(ctx, src, path, opts)
 	if trusterr.CodeOf(err) != trusterr.CodeDataLoss {
-		t.Fatalf("Create error = %v, code = %s, want %s", err, trusterr.CodeOf(err), trusterr.CodeDataLoss)
-	}
-	if !strings.Contains(err.Error(), "batch-missing-bundle") || !strings.Contains(err.Error(), "record-missing") {
-		t.Fatalf("Create error = %q, want batch and record identifiers", err)
+		t.Fatalf("error=%v code=%s", err, trusterr.CodeOf(err))
 	}
 	if _, statErr := os.Stat(path); !os.IsNotExist(statErr) {
-		t.Fatalf("backup target stat error = %v, want not exist", statErr)
-	}
-	temporaryFiles, globErr := filepath.Glob(filepath.Join(dir, ".incomplete.tdbackup.*.tmp"))
-	if globErr != nil {
-		t.Fatalf("Glob temporary files: %v", globErr)
-	}
-	if len(temporaryFiles) != 0 {
-		t.Fatalf("temporary backup files remain: %v", temporaryFiles)
+		t.Fatalf("malformed key registry published archive: stat error=%v", statErr)
 	}
 }
 
-func TestBackupRoundTripPreservesGlobalOutboxStatuses(t *testing.T) {
-	t.Parallel()
+func TestBackupV5AuthenticationFailures(t *testing.T) {
 	ctx := context.Background()
-	src := newBoundTestLocalStore(t, filepath.Join(t.TempDir(), "src"))
-	items := []model.GlobalLogOutboxItem{
-		{SchemaVersion: model.SchemaGlobalLogOutbox, CryptoSuite: cryptosuite.INTLV1, BatchID: "batch-pending", Status: model.AnchorStatePending, EnqueuedAtUnixN: 1},
-		{SchemaVersion: model.SchemaGlobalLogOutbox, CryptoSuite: cryptosuite.INTLV1, BatchID: "batch-published", Status: model.AnchorStatePublished, EnqueuedAtUnixN: 2, CompletedAtUnixN: 3},
+	provider := newTestKEKProvider("test-kek", 0x51)
+	path := createLargeTestBackup(t, provider)
+	original, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
 	}
-	for _, item := range items {
-		if err := src.EnqueueGlobalLog(ctx, item); err != nil {
-			t.Fatalf("EnqueueGlobalLog(%q): %v", item.BatchID, err)
+
+	t.Run("wrong key", func(t *testing.T) {
+		_, err := Verify(ctx, path, newTestKEKProvider("test-kek", 0x52))
+		assertDataLoss(t, err)
+	})
+	t.Run("missing provider", func(t *testing.T) {
+		_, err := Verify(ctx, path)
+		if trusterr.CodeOf(err) != trusterr.CodeFailedPrecondition {
+			t.Fatalf("error=%v code=%s", err, trusterr.CodeOf(err))
 		}
+	})
+	t.Run("modified ciphertext", func(t *testing.T) {
+		mutated := append([]byte(nil), original...)
+		mutated[len(mutated)-backupTagBytes-2] ^= 0x80
+		assertMutatedBackupRejected(t, path, mutated, provider)
+	})
+	t.Run("truncated final tag", func(t *testing.T) {
+		assertMutatedBackupRejected(t, path, original[:len(original)-1], provider)
+	})
+	t.Run("trailing bytes", func(t *testing.T) {
+		mutated := append(append([]byte(nil), original...), 0x01)
+		assertMutatedBackupRejected(t, path, mutated, provider)
+	})
+	t.Run("reordered frames", func(t *testing.T) {
+		mutated := reorderFirstTwoFrames(t, original)
+		assertMutatedBackupRejected(t, path, mutated, provider)
+	})
+	t.Run("modified header", func(t *testing.T) {
+		mutated := append([]byte(nil), original...)
+		headerStart := len(backupMagic) + 4
+		mutated[headerStart+8] ^= 0x01
+		assertMutatedBackupRejected(t, path, mutated, provider)
+	})
+}
+
+func FuzzBackupV5RejectsAuthenticatedByteMutations(f *testing.F) {
+	ctx := context.Background()
+	provider := newTestKEKProvider("fuzz-kek", 0x57)
+	src, err := proofstore.OpenLocalStore(filepath.Join(f.TempDir(), "src"), cryptosuite.INTLV1, "test-node", "test-log", "fuzz-source")
+	if err != nil {
+		f.Fatal(err)
 	}
-	path := filepath.Join(t.TempDir(), "global-outboxes.tdbackup")
-	report, err := Create(ctx, src, path, Options{Compression: "none"})
+	path := filepath.Join(f.TempDir(), "seed.tdbackup")
+	if _, err := Create(ctx, src, path, testCreateOptions(provider)); err != nil {
+		f.Fatal(err)
+	}
+	if err := src.Close(); err != nil {
+		f.Fatal(err)
+	}
+	seed, err := os.ReadFile(path)
+	if err != nil {
+		f.Fatal(err)
+	}
+	tempDir := f.TempDir()
+	f.Add(uint32(0), byte(1), uint16(0))
+	f.Add(uint32(len(seed)/2), byte(0x80), uint16(1))
+	f.Fuzz(func(t *testing.T, offset uint32, mask byte, truncate uint16) {
+		mutated := append([]byte(nil), seed...)
+		mutated[int(offset%uint32(len(mutated)))] ^= mask | 1
+		if remove := int(truncate) % len(mutated); remove > 0 {
+			mutated = mutated[:len(mutated)-remove]
+		}
+		mutatedPath, err := os.CreateTemp(tempDir, "mutation-*.tdbackup")
+		if err != nil {
+			t.Fatal(err)
+		}
+		name := mutatedPath.Name()
+		if _, err := mutatedPath.Write(mutated); err != nil {
+			_ = mutatedPath.Close()
+			t.Fatal(err)
+		}
+		if err := mutatedPath.Close(); err != nil {
+			t.Fatal(err)
+		}
+		defer os.Remove(name)
+		if _, err := Verify(ctx, name, provider); err == nil {
+			t.Fatal("authenticated byte mutation was accepted")
+		}
+	})
+}
+
+func TestRestoreRejectsCorruptionBeforePublishingAnyEntry(t *testing.T) {
+	ctx := context.Background()
+	provider := newTestKEKProvider("test-kek", 0x61)
+	path := createLargeTestBackup(t, provider)
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw[len(raw)-backupTagBytes-1] ^= 0x40
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	dst := newBoundTestLocalStore(t, filepath.Join(t.TempDir(), "dst"))
+	_, err = RestoreWithOptions(ctx, dst, path, RestoreOptions{KEKProviders: []keyenvelope.KEKProvider{provider}})
+	assertDataLoss(t, err)
+	if empty, emptyErr := restoreDestinationEmpty(ctx, dst); emptyErr != nil || !empty {
+		t.Fatalf("destination changed before verification completed: empty=%v err=%v", empty, emptyErr)
+	}
+}
+
+func TestRestoreRequiresExactEmptyNamespace(t *testing.T) {
+	ctx := context.Background()
+	provider := newTestKEKProvider("test-kek", 0x71)
+	src := newBoundTestLocalStore(t, filepath.Join(t.TempDir(), "src"))
+	seedBackupStore(t, src, cryptosuite.INTLV1, 1, 0)
+	path := filepath.Join(t.TempDir(), "proofstore.tdbackup")
+	if _, err := Create(ctx, src, path, testCreateOptions(provider)); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("new namespace", func(t *testing.T) {
+		dst, err := proofstore.OpenLocalStore(filepath.Join(t.TempDir(), "dst"), cryptosuite.INTLV1, "test-node", "test-log", "different")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer dst.Close()
+		if _, err = RestoreWithOptions(ctx, *dst, path, RestoreOptions{KEKProviders: []keyenvelope.KEKProvider{provider}}); err != nil {
+			t.Fatalf("restore into new namespace: %v", err)
+		}
+		if _, err := dst.GetBundle(ctx, "record-000"); err != nil {
+			t.Fatalf("restored bundle: %v", err)
+		}
+	})
+
+	t.Run("different log identity", func(t *testing.T) {
+		dst, err := proofstore.OpenLocalStore(filepath.Join(t.TempDir(), "dst"), cryptosuite.INTLV1, "test-node", "different-log", "different")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer dst.Close()
+		_, err = RestoreWithOptions(ctx, *dst, path, RestoreOptions{KEKProviders: []keyenvelope.KEKProvider{provider}})
+		if trusterr.CodeOf(err) != trusterr.CodeFailedPrecondition || !strings.Contains(err.Error(), "namespace") {
+			t.Fatalf("error=%v code=%s", err, trusterr.CodeOf(err))
+		}
+	})
+
+	t.Run("different cryptographic suite", func(t *testing.T) {
+		dst, err := proofstore.OpenLocalStore(filepath.Join(t.TempDir(), "dst"), cryptosuite.CNSMV1, "test-node", "test-log", "different")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer dst.Close()
+		_, err = RestoreWithOptions(ctx, *dst, path, RestoreOptions{KEKProviders: []keyenvelope.KEKProvider{provider}})
+		if trusterr.CodeOf(err) != trusterr.CodeFailedPrecondition {
+			t.Fatalf("error=%v code=%s", err, trusterr.CodeOf(err))
+		}
+	})
+
+	t.Run("non-empty destination", func(t *testing.T) {
+		dst := newBoundTestLocalStore(t, filepath.Join(t.TempDir(), "dst"))
+		seedBackupStore(t, dst, cryptosuite.INTLV1, 1, 0)
+		_, err := RestoreWithOptions(ctx, dst, path, RestoreOptions{KEKProviders: []keyenvelope.KEKProvider{provider}})
+		if trusterr.CodeOf(err) != trusterr.CodeFailedPrecondition || !strings.Contains(err.Error(), "not empty") {
+			t.Fatalf("error=%v code=%s", err, trusterr.CodeOf(err))
+		}
+	})
+}
+
+func TestRestoreResumesAfterManifestWriteFailure(t *testing.T) {
+	ctx := context.Background()
+	provider := newTestKEKProvider("test-kek", 0x72)
+	src := newBoundTestLocalStore(t, filepath.Join(t.TempDir(), "src"))
+	seedBackupStore(t, src, cryptosuite.INTLV1, 3, 0)
+	path := filepath.Join(t.TempDir(), "proofstore.tdbackup")
+	if _, err := Create(ctx, src, path, testCreateOptions(provider)); err != nil {
+		t.Fatal(err)
+	}
+	dst := newBoundTestLocalStore(t, filepath.Join(t.TempDir(), "dst"))
+	checkpoint := filepath.Join(t.TempDir(), "restore.json")
+	failing := &failManifestStore{LocalStore: dst, remaining: 1}
+	_, err := RestoreWithOptions(ctx, failing, path, RestoreOptions{
+		Resume: true, CheckpointPath: checkpoint, KEKProviders: []keyenvelope.KEKProvider{provider},
+	})
+	if err == nil || !strings.Contains(err.Error(), "injected manifest failure") {
+		t.Fatalf("first restore error=%v", err)
+	}
+	cp, err := readRestoreCheckpoint(checkpoint)
+	if err != nil || cp.BackupID == "" || cp.LastOrdinal == 0 {
+		t.Fatalf("checkpoint=%+v err=%v", cp, err)
+	}
+	if _, err := RestoreWithOptions(ctx, dst, path, RestoreOptions{
+		Resume: true, CheckpointPath: checkpoint, KEKProviders: []keyenvelope.KEKProvider{provider},
+	}); err != nil {
+		t.Fatalf("resumed restore: %v", err)
+	}
+	if _, err := dst.GetManifest(ctx, "batch-001"); err != nil {
+		t.Fatalf("manifest not restored: %v", err)
+	}
+	leaves, err := dst.ListBatchTreeLeaves(ctx, model.BatchTreeLeafListOptions{BatchID: "batch-001", Limit: 10})
+	if err != nil || len(leaves) != 3 {
+		t.Fatalf("resumed batch tree leaves=%d err=%v", len(leaves), err)
+	}
+}
+
+func TestBackupV5RejectsLegacyAndUnknownArchiveEntries(t *testing.T) {
+	ctx := context.Background()
+	provider := newTestKEKProvider("test-kek", 0x81)
+
+	t.Run("v4/plain tar", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "legacy.tdbackup")
+		file, err := os.Create(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		tw := tar.NewWriter(file)
+		if err := writeBytes(tw, "manifest.json", []byte(`{"schema_version":"trustdb.backup.v4"}`)); err != nil {
+			t.Fatal(err)
+		}
+		_ = tw.Close()
+		_ = file.Close()
+		_, err = Verify(ctx, path, provider)
+		if trusterr.CodeOf(err) != trusterr.CodeFailedPrecondition || !strings.Contains(err.Error(), "v5") {
+			t.Fatalf("error=%v code=%s", err, trusterr.CodeOf(err))
+		}
+	})
+
+	t.Run("unknown encrypted entry", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "unknown.tdbackup")
+		writeCustomArchive(t, path, provider, func(tw *tar.Writer, manifest *Manifest, ordinal *int64) {
+			if err := writeBytesTracked(tw, manifest, ordinal, "unknown/object.cbor", "unknown_type", []byte{0xf6}); err != nil {
+				t.Fatal(err)
+			}
+		})
+		_, err := Verify(ctx, path, provider)
+		assertDataLoss(t, err)
+	})
+
+	t.Run("entry after manifest", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "after-manifest.tdbackup")
+		writeCustomArchive(t, path, provider, func(tw *tar.Writer, manifest *Manifest, ordinal *int64) {
+			if err := writeCBOR(tw, "manifest.tdmanifest", *manifest); err != nil {
+				t.Fatal(err)
+			}
+			if err := writeBytesTracked(tw, manifest, ordinal, "roots/late.tdroot", "batch_root", []byte{0xf6}); err != nil {
+				t.Fatal(err)
+			}
+		})
+		_, err := Verify(ctx, path, provider)
+		assertDataLoss(t, err)
+	})
+
+	t.Run("manifest identity substitution", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "manifest-substitution.tdbackup")
+		writeCustomArchive(t, path, provider, func(tw *tar.Writer, manifest *Manifest, _ *int64) {
+			manifest.BackupID = "substituted-backup-id"
+			if err := writeCBOR(tw, "manifest.tdmanifest", *manifest); err != nil {
+				t.Fatal(err)
+			}
+		})
+		_, err := Verify(ctx, path, provider)
+		assertDataLoss(t, err)
+	})
+}
+
+func TestBackupV5StreamsLargeArchive(t *testing.T) {
+	ctx := context.Background()
+	provider := newTestKEKProvider("test-kek", 0x83)
+	src := newBoundTestLocalStore(t, filepath.Join(t.TempDir(), "src"))
+	seedBackupStore(t, src, cryptosuite.INTLV1, 8, 1<<20)
+	path := filepath.Join(t.TempDir(), "large.tdbackup")
+	opts := testCreateOptions(provider)
+	opts.FrameBytes = minFramePlainBytes
+	report, err := Create(ctx, src, path, opts)
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	if report.GlobalOutboxes != len(items) {
-		t.Fatalf("GlobalOutboxes = %d, want %d", report.GlobalOutboxes, len(items))
+	if report.Bundles != 8 {
+		t.Fatalf("bundle count=%d", report.Bundles)
 	}
-	dst := newBoundTestLocalStore(t, filepath.Join(t.TempDir(), "dst"))
-	if _, err := Restore(ctx, dst, path); err != nil {
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Size() < 8<<20 {
+		t.Fatalf("large archive size=%d", info.Size())
+	}
+	dst := openBoundTestStore(t, proofstore.BackendPebble, filepath.Join(t.TempDir(), "dst"), "large-target")
+	if _, err := RestoreWithOptions(ctx, dst, path, RestoreOptions{
+		KEKProviders: []keyenvelope.KEKProvider{provider},
+	}); err != nil {
 		t.Fatalf("Restore: %v", err)
 	}
-	for _, want := range items {
-		got, ok, err := dst.GetGlobalLogOutboxItem(ctx, want.BatchID)
-		if err != nil || !ok || got.Status != want.Status {
-			t.Fatalf("restored outbox %q = %+v ok=%v err=%v", want.BatchID, got, ok, err)
-		}
-	}
-	pending, err := dst.ListPendingGlobalLog(ctx, 100, 10)
-	if err != nil || len(pending) != 1 || pending[0].BatchID != "batch-pending" {
-		t.Fatalf("restored pending = %+v err=%v", pending, err)
+	if _, err := dst.GetBundle(ctx, "record-007"); err != nil {
+		t.Fatalf("restored bundle: %v", err)
 	}
 }
 
-func TestCreateRejectsDirectoryTarget(t *testing.T) {
-	t.Parallel()
+func seedBackupStore(t *testing.T, store proofstore.Store, suiteID cryptosuite.ID, records int, padding int) {
+	t.Helper()
 	ctx := context.Background()
-
-	store := newBoundTestLocalStore(t, filepath.Join(t.TempDir(), "src"))
-	path := filepath.Join(t.TempDir(), "trustdb.tdbackup")
-	if err := os.Mkdir(path, 0o755); err != nil {
-		t.Fatalf("Mkdir(target) error = %v", err)
-	}
-
-	if _, err := Create(ctx, store, path, Options{}); err == nil {
-		t.Fatalf("Create() error = nil, want directory target error")
-	}
-	info, err := os.Stat(path)
-	if err != nil {
-		t.Fatalf("Stat(target) error = %v", err)
-	}
-	if !info.IsDir() {
-		t.Fatalf("target directory was replaced")
-	}
-	matches, err := filepath.Glob(filepath.Join(filepath.Dir(path), "."+filepath.Base(path)+".*.tmp"))
-	if err != nil {
-		t.Fatalf("Glob() error = %v", err)
-	}
-	if len(matches) != 0 {
-		t.Fatalf("temporary files were not cleaned up: %v", matches)
-	}
-}
-
-func TestWriteRestoreCheckpointRejectsDirectoryTarget(t *testing.T) {
-	t.Parallel()
-
-	path := filepath.Join(t.TempDir(), "restore-checkpoint.json")
-	if err := os.Mkdir(path, 0o755); err != nil {
-		t.Fatalf("Mkdir(target) error = %v", err)
-	}
-
-	err := writeRestoreCheckpoint(path, RestoreCheckpoint{SchemaVersion: SchemaRestoreCheckpoint})
-	if err == nil {
-		t.Fatalf("writeRestoreCheckpoint() error = nil, want directory target error")
-	}
-	info, err := os.Stat(path)
-	if err != nil {
-		t.Fatalf("Stat(target) error = %v", err)
-	}
-	if !info.IsDir() {
-		t.Fatalf("target directory was replaced")
-	}
-	matches, err := filepath.Glob(filepath.Join(filepath.Dir(path), "."+filepath.Base(path)+".*.tmp"))
-	if err != nil {
-		t.Fatalf("Glob() error = %v", err)
-	}
-	if len(matches) != 0 {
-		t.Fatalf("temporary files were not cleaned up: %v", matches)
-	}
-}
-
-func TestRestoreRejectsInvalidResumeCheckpoint(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-
-	src := newBoundTestLocalStore(t, filepath.Join(t.TempDir(), "src"))
-	backupPath := filepath.Join(t.TempDir(), "trustdb.tdbackup")
-	if _, err := Create(ctx, src, backupPath, Options{Compression: "none"}); err != nil {
-		t.Fatalf("Create() error = %v", err)
-	}
-	checkpointPath := filepath.Join(t.TempDir(), "restore.checkpoint.json")
-	if err := os.WriteFile(checkpointPath, []byte("{not-json"), 0o600); err != nil {
-		t.Fatalf("WriteFile(checkpoint) error = %v", err)
-	}
-
-	dst := newBoundTestLocalStore(t, filepath.Join(t.TempDir(), "dst"))
-	_, err := RestoreWithOptions(ctx, dst, backupPath, RestoreOptions{
-		Resume:         true,
-		CheckpointPath: checkpointPath,
-	})
-	if err == nil {
-		t.Fatalf("RestoreWithOptions() error = nil, want invalid checkpoint error")
-	}
-}
-
-func TestReadRestoreCheckpointRejectsOversizedFile(t *testing.T) {
-	t.Parallel()
-
-	path := filepath.Join(t.TempDir(), "restore.checkpoint.json")
-	if err := os.WriteFile(path, bytes.Repeat([]byte("x"), int(maxRestoreCheckpointBytes)+1), 0o600); err != nil {
-		t.Fatalf("WriteFile(checkpoint) error = %v", err)
-	}
-
-	if _, err := readRestoreCheckpoint(path); err == nil {
-		t.Fatalf("readRestoreCheckpoint() error = nil, want oversized checkpoint error")
-	}
-}
-
-func TestCreateDoesNotReplaceTargetOnFailure(t *testing.T) {
-	t.Parallel()
-
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-
-	src := newBoundTestLocalStore(t, filepath.Join(t.TempDir(), "src"))
-	path := filepath.Join(t.TempDir(), "trustdb.tdbackup")
-	original := []byte("existing backup content")
-	if err := os.WriteFile(path, original, 0o600); err != nil {
-		t.Fatalf("WriteFile(original): %v", err)
-	}
-
-	if _, err := Create(ctx, src, path, Options{Compression: "none"}); err == nil {
-		t.Fatal("Create() error = nil, want canceled context error")
-	}
-	got, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("ReadFile(target): %v", err)
-	}
-	if !bytes.Equal(got, original) {
-		t.Fatalf("target backup was replaced on failure: got %q want %q", got, original)
-	}
-}
-
-func TestCreateUsesCollisionResistantArchiveNames(t *testing.T) {
-	t.Parallel()
-
-	ctx := context.Background()
-	src := newBoundTestLocalStore(t, filepath.Join(t.TempDir(), "src"))
-	ids := []string{"rec/1", "rec_2F1"}
-	for _, id := range ids {
-		if err := src.PutBundle(ctx, model.ProofBundle{
-			SchemaVersion: model.SchemaProofBundle,
-			CryptoSuite:   cryptosuite.INTLV1,
-			RecordID:      id,
-			CommittedReceipt: model.CommittedReceipt{
-				SchemaVersion: model.SchemaCommittedReceipt,
-				CryptoSuite:   cryptosuite.INTLV1,
-				BatchID:       "batch/collide",
-				BatchRoot:     repeatByte(0x11, 32),
+	recordIDs := make([]string, records)
+	leaves := make([]model.BatchTreeLeaf, records)
+	for i := 0; i < records; i++ {
+		recordID := fmt.Sprintf("record-%03d", i)
+		recordIDs[i] = recordID
+		bundle := model.ProofBundle{
+			SchemaVersion: model.SchemaProofBundle, CryptoSuite: suiteID,
+			RecordID: recordID, NodeID: "test-node", LogID: "test-log",
+			SignedClaim: model.SignedClaim{
+				SchemaVersion: model.SchemaSignedClaim, CryptoSuite: suiteID,
+				Claim: model.ClientClaim{
+					SchemaVersion: model.SchemaClientClaim, CryptoSuite: suiteID,
+					TenantID: "tenant", ClientID: "client", KeyID: "client-key",
+					Content: model.Content{StorageURI: strings.Repeat("x", padding)},
+				},
 			},
-			BatchProof: model.BatchProof{TreeSize: 2},
-		}); err != nil {
-			t.Fatalf("PutBundle(%q): %v", id, err)
+			ServerRecord:    model.ServerRecord{SchemaVersion: model.SchemaServerRecord, CryptoSuite: suiteID, RecordID: recordID},
+			AcceptedReceipt: model.AcceptedReceipt{SchemaVersion: model.SchemaAcceptedReceipt, CryptoSuite: suiteID, RecordID: recordID},
+			CommittedReceipt: model.CommittedReceipt{
+				SchemaVersion: model.SchemaCommittedReceipt, CryptoSuite: suiteID, RecordID: recordID,
+				BatchID: "batch-001", LeafIndex: uint64(i), BatchRoot: repeatByte(0x44, 32), ClosedAtUnixN: 10,
+			},
+			BatchProof: model.BatchProof{TreeSize: uint64(records)},
+		}
+		if err := store.PutBundle(ctx, bundle); err != nil {
+			t.Fatalf("PutBundle(%s): %v", recordID, err)
+		}
+		leaves[i] = model.BatchTreeLeaf{
+			SchemaVersion: model.SchemaBatchTreeLeaf, CryptoSuite: suiteID, BatchID: "batch-001",
+			RecordID: recordID, LeafIndex: uint64(i), LeafHash: repeatByte(byte(i+1), 32), CreatedAtUnixN: 10,
 		}
 	}
-	if err := src.PutManifest(ctx, model.BatchManifest{
-		SchemaVersion: model.SchemaBatchManifest,
-		CryptoSuite:   cryptosuite.INTLV1,
-		BatchID:       "batch/collide",
-		State:         model.BatchStateCommitted,
-		TreeSize:      2,
-		BatchRoot:     repeatByte(0x11, 32),
-		RecordIDs:     ids,
-		ClosedAtUnixN: 1,
+	nodes := []model.BatchTreeNode{{
+		SchemaVersion: model.SchemaBatchTreeNode, CryptoSuite: suiteID, BatchID: "batch-001",
+		Level: 1, StartIndex: 0, Width: uint64(records), Hash: repeatByte(0x44, 32), CreatedAtUnixN: 10,
+	}}
+	if err := store.PutBatchTreeArtifacts(ctx, leaves, nodes); err != nil {
+		t.Fatalf("PutBatchTreeArtifacts: %v", err)
+	}
+	root := model.BatchRoot{
+		SchemaVersion: model.SchemaBatchRoot, CryptoSuite: suiteID, BatchID: "batch-001",
+		NodeID: "test-node", LogID: "test-log", BatchRoot: repeatByte(0x44, 32), TreeSize: uint64(records), ClosedAtUnixN: 10,
+	}
+	if err := store.PutRoot(ctx, root); err != nil {
+		t.Fatalf("PutRoot: %v", err)
+	}
+	if err := store.PutManifest(ctx, model.BatchManifest{
+		SchemaVersion: model.SchemaBatchManifest, CryptoSuite: suiteID, BatchID: root.BatchID,
+		NodeID: root.NodeID, LogID: root.LogID, State: model.BatchStateCommitted,
+		TreeSize: root.TreeSize, BatchRoot: root.BatchRoot, RecordIDs: recordIDs, ClosedAtUnixN: root.ClosedAtUnixN,
 	}); err != nil {
 		t.Fatalf("PutManifest: %v", err)
 	}
+}
 
-	path := filepath.Join(t.TempDir(), "trustdb.tdbackup")
-	report, err := Create(ctx, src, path, Options{Compression: "none"})
+func openBoundTestStore(t *testing.T, kind proofstore.Backend, path, namespaceID string) proofstore.Store {
+	t.Helper()
+	store, err := proofstore.Open(proofstore.Config{
+		Kind: kind, Path: path, CryptoSuite: cryptosuite.INTLV1,
+		NodeID: "test-node", LogID: "test-log", NamespaceID: namespaceID,
+	})
 	if err != nil {
-		t.Fatalf("Create: %v", err)
+		t.Fatalf("open %s proofstore: %v", kind, err)
 	}
-	names := make(map[string]struct{})
-	for _, entry := range report.Entries {
-		if entry.Type != "proof_bundle" {
-			continue
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Errorf("close %s proofstore: %v", kind, err)
 		}
-		if _, ok := names[entry.Name]; ok {
-			t.Fatalf("duplicate proof bundle archive entry name: %q", entry.Name)
+	})
+	return store
+}
+
+func createTestKeyRegistry(t *testing.T, path string) {
+	t.Helper()
+	registryPublic, registryPrivate, err := trustcrypto.GenerateEd25519Key()
+	if err != nil {
+		t.Fatal(err)
+	}
+	registrySigner := trustcrypto.MustNewEd25519Signer("registry-test", registryPrivate)
+	registryTrust := trustcrypto.MustNewEd25519PublicKey("registry-test", registryPublic)
+	registry, err := keystore.Open(path, registrySigner, registryTrust)
+	if err != nil {
+		t.Fatalf("open key registry: %v", err)
+	}
+	clientPublic, _, err := trustcrypto.GenerateEd25519Key()
+	if err != nil {
+		t.Fatal(err)
+	}
+	descriptor := keydescriptor.Descriptor{
+		SchemaVersion: keydescriptor.SchemaV1,
+		Kind:          keydescriptor.KindVerifier,
+		Provider:      keydescriptor.ProviderPublic,
+		CryptoSuite:   cryptosuite.INTLV1,
+		KeyID:         "client-test",
+		Algorithm:     cryptosuite.SignatureEd25519,
+		PublicKey: keydescriptor.PublicKeyMaterial{
+			Encoding: cryptosuite.Ed25519PublicKeyEncoding,
+			Bytes:    clientPublic,
+		},
+	}
+	validFrom := time.Unix(100, 0).UTC()
+	if _, err := registry.RegisterClientKey("tenant", "client", descriptor, validFrom, validFrom.Add(time.Hour)); err != nil {
+		t.Fatalf("register client key: %v", err)
+	}
+}
+
+func createLargeTestBackup(t *testing.T, provider keyenvelope.KEKProvider) string {
+	t.Helper()
+	src := newBoundTestLocalStore(t, filepath.Join(t.TempDir(), "src"))
+	seedBackupStore(t, src, cryptosuite.INTLV1, 1, 192<<10)
+	path := filepath.Join(t.TempDir(), "large.tdbackup")
+	opts := testCreateOptions(provider)
+	opts.FrameBytes = minFramePlainBytes
+	if _, err := Create(context.Background(), src, path, opts); err != nil {
+		t.Fatalf("Create large backup: %v", err)
+	}
+	return path
+}
+
+func testCreateOptions(provider keyenvelope.KEKProvider) Options {
+	return Options{Compression: "none", KEKProvider: provider, KEKKeyID: "test-backup-kek"}
+}
+
+func assertMutatedBackupRejected(t *testing.T, originalPath string, data []byte, provider keyenvelope.KEKProvider) {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), filepath.Base(originalPath))
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Verify(context.Background(), path, provider)
+	assertDataLoss(t, err)
+}
+
+func assertDataLoss(t *testing.T, err error) {
+	t.Helper()
+	if trusterr.CodeOf(err) != trusterr.CodeDataLoss {
+		t.Fatalf("error=%v code=%s, want data_loss", err, trusterr.CodeOf(err))
+	}
+}
+
+func reorderFirstTwoFrames(t *testing.T, archive []byte) []byte {
+	t.Helper()
+	if len(archive) < len(backupMagic)+4 {
+		t.Fatal("archive too short")
+	}
+	headerLength := int(binary.BigEndian.Uint32(archive[len(backupMagic) : len(backupMagic)+4]))
+	start := len(backupMagic) + 4 + headerLength
+	frameEnd := func(offset int) int {
+		if offset+backupFrameHeaderBytes > len(archive) {
+			t.Fatal("frame header truncated")
 		}
-		names[entry.Name] = struct{}{}
+		plain := int(binary.BigEndian.Uint32(archive[offset+4 : offset+8]))
+		return offset + backupFrameHeaderBytes + plain + backupTagBytes
 	}
-	if len(names) != len(ids) {
-		t.Fatalf("proof bundle entry names = %v, want %d entries", names, len(ids))
+	firstEnd := frameEnd(start)
+	secondEnd := frameEnd(firstEnd)
+	if secondEnd > len(archive) {
+		t.Fatal("archive has fewer than two frames")
 	}
-}
-
-func TestSafeNameAvoidsPathSegmentCollisions(t *testing.T) {
-	t.Parallel()
-
-	if safeName("rec/1") == safeName("rec_2F1") {
-		t.Fatalf("safeName still collides for escaped slash spelling")
-	}
-	if safeName("") == safeName("_") {
-		t.Fatalf("safeName still collides for empty string and underscore")
-	}
-	if got := safeName(".."); got == ".." {
-		t.Fatalf("safeName(%q) = %q, want encoded non-path segment", "..", got)
-	}
-	const plain = "batch-1_2.3"
-	if got := safeName(plain); got != plain {
-		t.Fatalf("safeName(%q) = %q, want unchanged", plain, got)
-	}
-}
-
-func TestVerifyRejectsEntryHashMismatch(t *testing.T) {
-	t.Parallel()
-	path := filepath.Join(t.TempDir(), "bad.tdbackup")
-	f, err := os.Create(path)
-	if err != nil {
-		t.Fatalf("Create: %v", err)
-	}
-	tw := tar.NewWriter(f)
-	data := []byte(fmt.Sprintf("{\"schema_version\":%q}\n", SchemaManifest))
-	if err := tw.WriteHeader(&tar.Header{
-		Name: "summary.json",
-		Mode: 0o600,
-		Size: int64(len(data)),
-		PAXRecords: map[string]string{
-			paxBackupID: "bad-backup",
-			paxOrdinal:  "1",
-			paxSHA256:   hex.EncodeToString(repeatByte(0, 32)),
-			paxType:     "summary",
-		},
-	}); err != nil {
-		t.Fatalf("WriteHeader: %v", err)
-	}
-	if _, err := tw.Write(data); err != nil {
-		t.Fatalf("Write: %v", err)
-	}
-	if err := tw.Close(); err != nil {
-		t.Fatalf("tar Close: %v", err)
-	}
-	if err := f.Close(); err != nil {
-		t.Fatalf("file Close: %v", err)
-	}
-	if _, err := Verify(context.Background(), path); err == nil {
-		t.Fatal("Verify() error = nil, want sha256 mismatch")
-	}
-}
-
-func TestVerifyRejectsTrailingJSONData(t *testing.T) {
-	t.Parallel()
-	path := filepath.Join(t.TempDir(), "trailing-json.tdbackup")
-	f, err := os.Create(path)
-	if err != nil {
-		t.Fatalf("Create: %v", err)
-	}
-	tw := tar.NewWriter(f)
-	manifestJSON := fmt.Sprintf("{\"schema_version\":%q}", SchemaManifest)
-	data := []byte(manifestJSON + manifestJSON)
-	sum := sha256.Sum256(data)
-	if err := tw.WriteHeader(&tar.Header{
-		Name: "summary.json",
-		Mode: 0o600,
-		Size: int64(len(data)),
-		PAXRecords: map[string]string{
-			paxBackupID: "bad-backup",
-			paxOrdinal:  "1",
-			paxSHA256:   hex.EncodeToString(sum[:]),
-			paxType:     "summary",
-		},
-	}); err != nil {
-		t.Fatalf("WriteHeader: %v", err)
-	}
-	if _, err := tw.Write(data); err != nil {
-		t.Fatalf("Write: %v", err)
-	}
-	if err := tw.Close(); err != nil {
-		t.Fatalf("tar Close: %v", err)
-	}
-	if err := f.Close(); err != nil {
-		t.Fatalf("file Close: %v", err)
-	}
-	if _, err := Verify(context.Background(), path); err == nil {
-		t.Fatal("Verify() error = nil, want trailing JSON error")
-	}
-}
-
-func repeatByte(b byte, n int) []byte {
-	out := make([]byte, n)
-	for i := range out {
-		out[i] = b
-	}
+	out := make([]byte, 0, len(archive))
+	out = append(out, archive[:start]...)
+	out = append(out, archive[firstEnd:secondEnd]...)
+	out = append(out, archive[start:firstEnd]...)
+	out = append(out, archive[secondEnd:]...)
 	return out
 }
 
-func backupScheduleSTH(key model.STHAnchorScheduleKey, treeSize uint64, seed byte) model.SignedTreeHead {
-	return model.SignedTreeHead{
-		SchemaVersion:  model.SchemaSignedTreeHead,
-		CryptoSuite:    cryptosuite.INTLV1,
-		TreeAlg:        model.DefaultMerkleTreeAlg,
-		TreeSize:       treeSize,
-		RootHash:       repeatByte(seed, 32),
-		TimestampUnixN: int64(treeSize),
-		NodeID:         key.NodeID,
-		LogID:          key.LogID,
-		Signature: model.Signature{
-			Alg:       model.DefaultSignatureAlg,
-			KeyID:     "server-key",
-			Signature: repeatByte(seed, 64),
-		},
+func writeCustomArchive(t *testing.T, path string, provider keyenvelope.KEKProvider, write func(*tar.Writer, *Manifest, *int64)) {
+	t.Helper()
+	file, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	header := EnvelopeHeader{
+		BackupID: "custom-backup", CreatedAt: time.Unix(1, 0).UTC().Format(time.RFC3339Nano),
+		Compression: "none", CryptoSuite: cryptosuite.INTLV1, FormatGeneration: 5,
+		NodeID: "test-node", LogID: "test-log", NamespaceID: "test-local",
+		FramePlaintextBytes: minFramePlainBytes, KEKKeyID: "test-backup-kek",
+	}
+	frames, envelope, err := newEncryptedArchiveWriter(context.Background(), file, header, provider, rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tw := tar.NewWriter(frames)
+	manifest := Manifest{
+		SchemaVersion: SchemaManifest, BackupID: envelope.BackupID, CreatedAt: envelope.CreatedAt,
+		Compression: envelope.Compression, CryptoSuite: envelope.CryptoSuite, FormatGeneration: envelope.FormatGeneration,
+		NodeID: envelope.NodeID, LogID: envelope.LogID, NamespaceID: envelope.NamespaceID,
+		Encryption: envelope.ContentAlgorithm, KEKProvider: envelope.KEKProvider, KEKKeyID: envelope.KEKKeyID,
+		DigestAlgorithm: cryptosuite.HashSHA256, Entries: make([]Entry, 0),
+	}
+	var ordinal int64
+	write(tw, &manifest, &ordinal)
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := frames.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
 	}
 }
 
-func backupScheduleResult(key model.STHAnchorScheduleKey, sth model.SignedTreeHead, anchorID string, publishedAt int64) model.STHAnchorResult {
-	return model.STHAnchorResult{
-		SchemaVersion:    model.SchemaSTHAnchorResult,
-		CryptoSuite:      cryptosuite.INTLV1,
-		EvidenceStage:    model.AnchorEvidenceStageOfflineVerified,
-		NodeID:           key.NodeID,
-		LogID:            key.LogID,
-		TreeSize:         sth.TreeSize,
-		SinkName:         key.SinkName,
-		AnchorID:         anchorID,
-		RootHash:         append([]byte(nil), sth.RootHash...),
-		STH:              sth,
-		Proof:            []byte("anchor-proof"),
-		PublishedAtUnixN: publishedAt,
+type failManifestStore struct {
+	proofstore.LocalStore
+	remaining int
+}
+
+func (s *failManifestStore) PutManifest(ctx context.Context, manifest model.BatchManifest) error {
+	if s.remaining > 0 {
+		s.remaining--
+		return errors.New("injected manifest failure")
+	}
+	return s.LocalStore.PutManifest(ctx, manifest)
+}
+
+type testKEKProvider struct {
+	name string
+	key  []byte
+}
+
+func newTestKEKProvider(name string, fill byte) *testKEKProvider {
+	return &testKEKProvider{name: name, key: repeatByte(fill, 16)}
+}
+
+func (p *testKEKProvider) Name() string { return p.name }
+
+func (p *testKEKProvider) WrapDEK(_ context.Context, dek, aad []byte) (keyenvelope.WrappedDEK, error) {
+	aead, err := testWrapAEAD(p.key)
+	if err != nil {
+		return keyenvelope.WrappedDEK{}, err
+	}
+	nonce := repeatByte(0xa5, aead.NonceSize())
+	return keyenvelope.WrappedDEK{
+		Provider: p.name, Algorithm: "AES-GCM-TEST-ONLY", Parameters: nonce,
+		Ciphertext: aead.Seal(nil, nonce, dek, aad),
+	}, nil
+}
+
+func (p *testKEKProvider) UnwrapDEK(_ context.Context, wrapped keyenvelope.WrappedDEK, aad []byte) ([]byte, error) {
+	if wrapped.Provider != p.name || wrapped.Algorithm != "AES-GCM-TEST-ONLY" {
+		return nil, errors.New("test KEK metadata mismatch")
+	}
+	aead, err := testWrapAEAD(p.key)
+	if err != nil {
+		return nil, err
+	}
+	if len(wrapped.Parameters) != aead.NonceSize() {
+		return nil, errors.New("test KEK nonce mismatch")
+	}
+	return aead.Open(nil, wrapped.Parameters, wrapped.Ciphertext, aad)
+}
+
+func testWrapAEAD(key []byte) (cipher.AEAD, error) {
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, err
+	}
+	return cipher.NewGCM(block)
+}
+
+func testSTH(key model.STHAnchorScheduleKey, treeSize uint64, fill byte) model.SignedTreeHead {
+	return model.SignedTreeHead{
+		SchemaVersion: model.SchemaSignedTreeHead, CryptoSuite: cryptosuite.INTLV1,
+		NodeID: key.NodeID, LogID: key.LogID, TreeAlg: cryptosuite.MerkleRFC6962SHA256, TreeSize: treeSize, RootHash: repeatByte(fill, 32),
+		TimestampUnixN: 1,
+		Signature:      model.Signature{Alg: cryptosuite.SignatureEd25519, KeyID: "server-key", Signature: repeatByte(0x99, 64)},
 	}
 }
+
+func repeatByte(value byte, count int) []byte { return bytes.Repeat([]byte{value}, count) }
+
+func containsString(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
+}
+
+var _ io.Reader = (*bytes.Reader)(nil)

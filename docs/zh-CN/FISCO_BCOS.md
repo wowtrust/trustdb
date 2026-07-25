@@ -222,10 +222,11 @@ trustdb anchor fisco-bcos trust-config advance \
 
 ## 12. 备份边界
 
-`.tdbackup v4` 会保存 immutable anchor result、Pending/InFlight 和 FISCO BCOS
-provider state，但不保存 publisher 私钥、证书、TrustConfig、节点数据或 SDF
-recovery bundle。当前 backup v4 只支持 `INTL_V1`；国密链或国密 TrustDB suite
-不应被错误改标以绕过限制。完整策略见[备份与恢复](BACKUP_AND_RECOVERY.md)。
+`.tdbackup v5` 会以 SM4-GCM 认证加密保存 immutable anchor result、
+Pending/InFlight 和完整 FISCO BCOS provider state，同时支持 `INTL_V1` 与
+`CN_SM_V1`。它仍不保存 publisher 私钥、证书、TrustConfig、节点数据、KEK 或
+SDF recovery bundle；这些材料必须独立恢复。完整流程见
+[备份与恢复](BACKUP_AND_RECOVERY.md)。
 
 ## 13. 上线清单
 

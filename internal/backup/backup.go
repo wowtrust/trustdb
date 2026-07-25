@@ -9,14 +9,14 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
-	"crypto/sha256"
 	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
+	"math/bits"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"time"
@@ -25,73 +25,115 @@ import (
 	"github.com/wowtrust/trustdb/internal/anchorschedule"
 	"github.com/wowtrust/trustdb/internal/cborx"
 	"github.com/wowtrust/trustdb/internal/cryptosuite"
-	"github.com/wowtrust/trustdb/internal/formatregistry"
+	"github.com/wowtrust/trustdb/internal/keyenvelope"
+	"github.com/wowtrust/trustdb/internal/keystore"
 	"github.com/wowtrust/trustdb/internal/model"
 	"github.com/wowtrust/trustdb/internal/proofstore"
+	"github.com/wowtrust/trustdb/internal/proofstoremeta"
+	"github.com/wowtrust/trustdb/internal/trustcrypto"
 	"github.com/wowtrust/trustdb/internal/trusterr"
 )
 
-const SchemaManifest = "trustdb.backup.v4"
-const SchemaRestoreCheckpoint = "trustdb.backup-restore-checkpoint.v1"
+const SchemaManifest = "trustdb.backup.v5"
+const SchemaRestoreCheckpoint = "trustdb.backup-restore-checkpoint.v2"
 const scanPageSize = 1024
 const maxRestoreEntryBytes int64 = 128 << 20
 const maxRestoreCheckpointBytes int64 = 1 << 20
+const maxRecoveryArtifactBytes int64 = 128 << 20
 
 const (
-	paxBackupID = "trustdb.backup_id"
-	paxOrdinal  = "trustdb.ordinal"
-	paxSHA256   = "trustdb.sha256"
-	paxType     = "trustdb.type"
-	paxSuite    = "trustdb.crypto_suite"
+	paxBackupID  = "trustdb.backup_id"
+	paxOrdinal   = "trustdb.ordinal"
+	paxDigest    = "trustdb.digest"
+	paxDigestAlg = "trustdb.digest_algorithm"
+	paxType      = "trustdb.type"
+	paxSuite     = "trustdb.crypto_suite"
 
 	encodedArchiveNamePrefix = "~"
 )
 
 type Entry struct {
-	Ordinal int64  `json:"ordinal"`
-	Name    string `json:"name"`
-	Type    string `json:"type"`
-	Size    int64  `json:"size"`
-	SHA256  string `json:"sha256"`
+	Ordinal         int64          `cbor:"ordinal" json:"ordinal"`
+	Name            string         `cbor:"name" json:"name"`
+	Type            string         `cbor:"type" json:"type"`
+	Size            int64          `cbor:"size" json:"size"`
+	CryptoSuite     cryptosuite.ID `cbor:"crypto_suite" json:"crypto_suite"`
+	DigestAlgorithm string         `cbor:"digest_algorithm" json:"digest_algorithm"`
+	Digest          []byte         `cbor:"digest" json:"digest"`
 }
 
 type Manifest struct {
-	SchemaVersion string         `json:"schema_version"`
-	BackupID      string         `json:"backup_id"`
-	CreatedAt     string         `json:"created_at"`
-	Compression   string         `json:"compression"`
-	CryptoSuite   cryptosuite.ID `json:"-"`
+	SchemaVersion     string         `cbor:"schema_version" json:"schema_version"`
+	BackupID          string         `cbor:"backup_id" json:"backup_id"`
+	ParentBackupID    string         `cbor:"parent_backup_id,omitempty" json:"parent_backup_id,omitempty"`
+	CreatedAt         string         `cbor:"created_at" json:"created_at"`
+	Compression       string         `cbor:"compression" json:"compression"`
+	CryptoSuite       cryptosuite.ID `cbor:"crypto_suite" json:"crypto_suite"`
+	FormatGeneration  uint64         `cbor:"format_generation" json:"format_generation"`
+	NodeID            string         `cbor:"node_id" json:"node_id"`
+	LogID             string         `cbor:"log_id" json:"log_id"`
+	NamespaceID       string         `cbor:"namespace_id" json:"namespace_id"`
+	TargetNamespaceID string         `cbor:"target_namespace_id,omitempty" json:"target_namespace_id,omitempty"`
+	Encryption        string         `cbor:"encryption" json:"encryption"`
+	KEKProvider       string         `cbor:"kek_provider" json:"kek_provider"`
+	KEKKeyID          string         `cbor:"kek_key_id" json:"kek_key_id"`
+	DigestAlgorithm   string         `cbor:"digest_algorithm" json:"digest_algorithm"`
 
-	Manifests       int     `json:"manifests"`
-	Bundles         int     `json:"bundles"`
-	Roots           int     `json:"roots"`
-	GlobalLeaves    int     `json:"global_leaves"`
-	GlobalNodes     int     `json:"global_nodes"`
-	GlobalState     bool    `json:"global_state"`
-	STHs            int     `json:"sths"`
-	GlobalTiles     int     `json:"global_tiles"`
-	GlobalOutboxes  int     `json:"global_outboxes"`
-	AnchorResults   int     `json:"anchor_results"`
-	AnchorSchedules int     `json:"anchor_schedules"`
-	Entries         []Entry `json:"entries,omitempty"`
+	Manifests       int       `cbor:"manifests" json:"manifests"`
+	Bundles         int       `cbor:"bundles" json:"bundles"`
+	BatchTreeLeaves int       `cbor:"batch_tree_leaves" json:"batch_tree_leaves"`
+	BatchTreeNodes  int       `cbor:"batch_tree_nodes" json:"batch_tree_nodes"`
+	Roots           int       `cbor:"roots" json:"roots"`
+	GlobalLeaves    int       `cbor:"global_leaves" json:"global_leaves"`
+	GlobalNodes     int       `cbor:"global_nodes" json:"global_nodes"`
+	GlobalState     bool      `cbor:"global_state" json:"global_state"`
+	STHs            int       `cbor:"sths" json:"sths"`
+	GlobalTiles     int       `cbor:"global_tiles" json:"global_tiles"`
+	GlobalOutboxes  int       `cbor:"global_outboxes" json:"global_outboxes"`
+	AnchorResults   int       `cbor:"anchor_results" json:"anchor_results"`
+	AnchorSchedules int       `cbor:"anchor_schedules" json:"anchor_schedules"`
+	KeyRegistries   int       `cbor:"key_registries" json:"key_registries"`
+	Inventory       Inventory `cbor:"inventory" json:"inventory"`
+	Entries         []Entry   `cbor:"entries" json:"entries"`
+}
+
+type Inventory struct {
+	SecretReferences       []string `cbor:"secret_references" json:"secret_references"`
+	PublicEvidence         []string `cbor:"public_evidence" json:"public_evidence"`
+	DerivedIndexes         []string `cbor:"derived_indexes" json:"derived_indexes"`
+	RebuildableCheckpoints []string `cbor:"rebuildable_checkpoints" json:"rebuildable_checkpoints"`
 }
 
 type Options struct {
-	Compression string
-	Clock       func() time.Time
+	Compression     string
+	Clock           func() time.Time
+	Random          io.Reader
+	FrameBytes      int
+	ParentBackupID  string
+	KEKProvider     keyenvelope.KEKProvider
+	KEKKeyID        string
+	KeyRegistryPath string
 }
 
 type RestoreOptions struct {
 	Resume         bool
 	CheckpointPath string
+	KEKProviders   []keyenvelope.KEKProvider
+	RecoveryDir    string
 }
 
 type RestoreCheckpoint struct {
-	SchemaVersion string `json:"schema_version"`
-	BackupID      string `json:"backup_id"`
-	LastOrdinal   int64  `json:"last_ordinal"`
-	LastName      string `json:"last_name"`
-	UpdatedAt     string `json:"updated_at"`
+	SchemaVersion     string         `json:"schema_version"`
+	BackupID          string         `json:"backup_id"`
+	CryptoSuite       cryptosuite.ID `json:"crypto_suite"`
+	NodeID            string         `json:"node_id"`
+	LogID             string         `json:"log_id"`
+	SourceNamespaceID string         `json:"source_namespace_id"`
+	TargetNamespaceID string         `json:"target_namespace_id"`
+	RecoveryDir       string         `json:"recovery_dir,omitempty"`
+	LastOrdinal       int64          `json:"last_ordinal"`
+	LastName          string         `json:"last_name"`
+	UpdatedAt         string         `json:"updated_at"`
 }
 
 func Create(ctx context.Context, store proofstore.Store, path string, opts Options) (Manifest, error) {
@@ -101,12 +143,17 @@ func Create(ctx context.Context, store proofstore.Store, path string, opts Optio
 	if path == "" {
 		return Manifest{}, trusterr.New(trusterr.CodeInvalidArgument, "backup output path is required")
 	}
-	suiteID, err := proofstore.BoundCryptoSuite(store)
+	binding, err := proofstore.BoundNamespace(store)
 	if err != nil {
 		return Manifest{}, err
 	}
-	if _, _, err := formatregistry.RequireWritable(formatregistry.BackupV4, suiteID); err != nil {
-		return Manifest{}, trusterr.Wrap(trusterr.CodeFailedPrecondition, "backup v4 is not writable for this cryptographic suite", err)
+	suiteID := binding.CryptoSuite
+	_, suite, err := requireBackupV5(suiteID)
+	if err != nil {
+		return Manifest{}, err
+	}
+	if opts.KEKProvider == nil || strings.TrimSpace(opts.KEKKeyID) == "" {
+		return Manifest{}, trusterr.New(trusterr.CodeInvalidArgument, "backup KEK provider and key ID are required")
 	}
 	resultLister, ok := store.(proofstore.STHAnchorResultLister)
 	if !ok {
@@ -116,7 +163,10 @@ func Create(ctx context.Context, store proofstore.Store, path string, opts Optio
 	if !ok {
 		return Manifest{}, trusterr.New(trusterr.CodeFailedPrecondition, "backup store cannot enumerate STH anchor schedules")
 	}
-	compression := normaliseCompression(opts.Compression)
+	compression, err := normaliseCompression(opts.Compression)
+	if err != nil {
+		return Manifest{}, err
+	}
 	clock := opts.Clock
 	if clock == nil {
 		clock = func() time.Time { return time.Now().UTC() }
@@ -138,10 +188,33 @@ func Create(ctx context.Context, store proofstore.Store, path string, opts Optio
 		_ = f.Close()
 	}()
 
-	var out io.Writer = f
+	createdAt := clock().UTC()
+	backupID := fmt.Sprintf("tdb-%d", createdAt.UnixNano())
+	frameBytes := opts.FrameBytes
+	if frameBytes == 0 {
+		frameBytes = defaultFramePlainBytes
+	}
+	frames, envelope, err := newEncryptedArchiveWriter(ctx, f, EnvelopeHeader{
+		BackupID:            backupID,
+		CreatedAt:           createdAt.Format(time.RFC3339Nano),
+		Compression:         compression,
+		CryptoSuite:         suiteID,
+		FormatGeneration:    binding.FormatGeneration,
+		NodeID:              binding.NodeID,
+		LogID:               binding.LogID,
+		NamespaceID:         binding.NamespaceID,
+		FramePlaintextBytes: uint32(frameBytes),
+		KEKKeyID:            strings.TrimSpace(opts.KEKKeyID),
+	}, opts.KEKProvider, opts.Random)
+	if err != nil {
+		return Manifest{}, err
+	}
+	var out io.Writer = frames
 	var gz *gzip.Writer
 	if compression == "gzip" {
-		gz = gzip.NewWriter(f)
+		gz = gzip.NewWriter(frames)
+		gz.Header.ModTime = time.Unix(0, 0).UTC()
+		gz.Header.OS = 255
 		out = gz
 	}
 	tw := tar.NewWriter(out)
@@ -150,17 +223,30 @@ func Create(ctx context.Context, store proofstore.Store, path string, opts Optio
 			return err
 		}
 		if gz != nil {
-			return gz.Close()
+			if err := gz.Close(); err != nil {
+				return err
+			}
 		}
-		return nil
+		return frames.Close()
 	}
 
 	report := Manifest{
-		SchemaVersion: SchemaManifest,
-		BackupID:      fmt.Sprintf("tdb-%d", clock().UTC().UnixNano()),
-		CreatedAt:     clock().UTC().Format(time.RFC3339Nano),
-		Compression:   compression,
-		CryptoSuite:   suiteID,
+		SchemaVersion:    SchemaManifest,
+		BackupID:         envelope.BackupID,
+		ParentBackupID:   strings.TrimSpace(opts.ParentBackupID),
+		CreatedAt:        envelope.CreatedAt,
+		Compression:      envelope.Compression,
+		CryptoSuite:      envelope.CryptoSuite,
+		FormatGeneration: envelope.FormatGeneration,
+		NodeID:           envelope.NodeID,
+		LogID:            envelope.LogID,
+		NamespaceID:      envelope.NamespaceID,
+		Encryption:       envelope.ContentAlgorithm,
+		KEKProvider:      envelope.KEKProvider,
+		KEKKeyID:         envelope.KEKKeyID,
+		DigestAlgorithm:  suite.StorageIntegrityHash.Algorithm,
+		Inventory:        backupInventory(envelope.KEKProvider, envelope.KEKKeyID, false),
+		Entries:          make([]Entry, 0),
 	}
 	var ordinal int64
 
@@ -190,6 +276,50 @@ func Create(ctx context.Context, store proofstore.Store, path string, opts Optio
 					return Manifest{}, err
 				}
 				report.Bundles++
+			}
+			var afterLeaf uint64
+			hasAfterLeaf := false
+			for {
+				leaves, err := store.ListBatchTreeLeaves(ctx, model.BatchTreeLeafListOptions{
+					BatchID: manifest.BatchID, Limit: scanPageSize, AfterLeafIndex: afterLeaf, HasAfter: hasAfterLeaf,
+				})
+				if err != nil {
+					return Manifest{}, err
+				}
+				if len(leaves) == 0 {
+					break
+				}
+				for _, leaf := range leaves {
+					name := fmt.Sprintf("batch-tree/%s/leaves/%020d.tdbleaf", safeName(manifest.BatchID), leaf.LeafIndex)
+					if err := writeCBORTracked(tw, &report, &ordinal, name, "batch_tree_leaf", leaf); err != nil {
+						return Manifest{}, err
+					}
+					report.BatchTreeLeaves++
+					afterLeaf, hasAfterLeaf = leaf.LeafIndex, true
+				}
+			}
+			for level := uint64(1); level <= uint64(bits.Len64(manifest.TreeSize)); level++ {
+				var afterStart uint64
+				hasAfterStart := false
+				for {
+					nodes, err := store.ListBatchTreeNodes(ctx, model.BatchTreeNodeListOptions{
+						BatchID: manifest.BatchID, Level: level, Limit: scanPageSize, AfterStartIndex: afterStart, HasAfter: hasAfterStart,
+					})
+					if err != nil {
+						return Manifest{}, err
+					}
+					if len(nodes) == 0 {
+						break
+					}
+					for _, node := range nodes {
+						name := fmt.Sprintf("batch-tree/%s/nodes/%020d_%020d.tdbnode", safeName(manifest.BatchID), node.Level, node.StartIndex)
+						if err := writeCBORTracked(tw, &report, &ordinal, name, "batch_tree_node", node); err != nil {
+							return Manifest{}, err
+						}
+						report.BatchTreeNodes++
+						afterStart, hasAfterStart = node.StartIndex, true
+					}
+				}
 			}
 			if err := writeCBORTracked(tw, &report, &ordinal, "manifests/"+safeName(manifest.BatchID)+".tdmanifest", "batch_manifest", manifest); err != nil {
 				return Manifest{}, err
@@ -378,14 +508,33 @@ func Create(ctx context.Context, store proofstore.Store, path string, opts Optio
 		report.AnchorSchedules++
 	}
 
-	if err := writeJSONTracked(tw, &report, &ordinal, "manifest.json", "manifest", report); err != nil {
-		return Manifest{}, err
+	if strings.TrimSpace(opts.KeyRegistryPath) != "" {
+		registryBytes, err := readRecoveryArtifact(opts.KeyRegistryPath, maxRecoveryArtifactBytes)
+		if err != nil {
+			return Manifest{}, trusterr.Wrap(trusterr.CodeDataLoss, "read key registry audit evidence", err)
+		}
+		registrySummary, err := keystore.InspectEvidence(registryBytes)
+		if err != nil {
+			return Manifest{}, trusterr.Wrap(trusterr.CodeDataLoss, "validate key registry audit evidence", err)
+		}
+		if registrySummary.Manifest.CryptoSuite != suiteID {
+			return Manifest{}, trusterr.New(trusterr.CodeFailedPrecondition, "key registry and proofstore cryptographic suites do not match")
+		}
+		if err := writeBytesTracked(tw, &report, &ordinal, "recovery/key-registry.tdkeys", "key_registry_audit", registryBytes); err != nil {
+			return Manifest{}, err
+		}
+		report.KeyRegistries++
+		report.Inventory = backupInventory(envelope.KEKProvider, envelope.KEKKeyID, true)
 	}
-	if err := writeJSONTracked(tw, &report, &ordinal, "summary.json", "summary", report); err != nil {
+
+	if err := writeCBOR(tw, "manifest.tdmanifest", report); err != nil {
 		return Manifest{}, err
 	}
 	if err := closeArchive(); err != nil {
 		return Manifest{}, trusterr.Wrap(trusterr.CodeDataLoss, "close backup archive", err)
+	}
+	if err := f.Sync(); err != nil {
+		return Manifest{}, trusterr.Wrap(trusterr.CodeDataLoss, "sync backup file", err)
 	}
 	if err := f.Close(); err != nil {
 		return Manifest{}, trusterr.Wrap(trusterr.CodeDataLoss, "close backup file", err)
@@ -397,67 +546,52 @@ func Create(ctx context.Context, store proofstore.Store, path string, opts Optio
 	return report, nil
 }
 
-func Verify(ctx context.Context, path string) (Manifest, error) {
-	manifest := Manifest{}
-	start := Manifest{}
-	var foundStart, foundSummary bool
-	var archiveSuite cryptosuite.ID
-	var suiteErr error
-	err := readArchiveStream(path, func(entry archiveEntry) error {
-		if err := ctx.Err(); err != nil {
+func Verify(ctx context.Context, path string, providers ...keyenvelope.KEKProvider) (Manifest, error) {
+	var manifest Manifest
+	var foundManifest bool
+	observed := make([]Entry, 0)
+	seenNames := make(map[string]struct{})
+	header, err := readArchiveStream(ctx, path, providers, func(entry archiveEntry) error {
+		if foundManifest {
+			return trusterr.New(trusterr.CodeDataLoss, "backup manifest must be the final archive entry")
+		}
+		if entry.Name == "manifest.tdmanifest" {
+			foundManifest = true
+			return decodeCBORUntrackedEntry(entry, &manifest)
+		}
+		if _, exists := seenNames[entry.Name]; exists {
+			return trusterr.New(trusterr.CodeDataLoss, fmt.Sprintf("duplicate backup entry %q", entry.Name))
+		}
+		seenNames[entry.Name] = struct{}{}
+		if err := validateStreamEntry(entry); err != nil {
 			return err
 		}
-		if suiteErr == nil {
-			switch {
-			case entry.CryptoSuite == "":
-				suiteErr = trusterr.New(trusterr.CodeFailedPrecondition, "backup entry is missing the proofstore cryptographic suite binding")
-			case archiveSuite == "":
-				if _, err := cryptosuite.RequireKnown(entry.CryptoSuite); err != nil {
-					suiteErr = trusterr.Wrap(trusterr.CodeFailedPrecondition, "backup entry has an unknown cryptographic suite", err)
-				} else {
-					archiveSuite = entry.CryptoSuite
-				}
-			case entry.CryptoSuite != archiveSuite:
-				suiteErr = trusterr.New(trusterr.CodeDataLoss, fmt.Sprintf("backup mixes cryptographic suites %s and %s", archiveSuite, entry.CryptoSuite))
-			}
-		}
-		if entry.Name == "summary.json" {
-			foundSummary = true
-			return decodeJSONEntry(entry, &manifest)
-		}
-		if entry.Name == "manifest.json" {
-			foundStart = true
-			return decodeJSONEntry(entry, &start)
-		}
-		return validateStreamEntry(entry)
+		observed = append(observed, Entry{
+			Ordinal: entry.Ordinal, Name: entry.Name, Type: entry.Type, Size: entry.Size,
+			CryptoSuite: entry.CryptoSuite, DigestAlgorithm: entry.DigestAlgorithm, Digest: append([]byte(nil), entry.Digest...),
+		})
+		return nil
 	})
 	if err != nil {
 		return Manifest{}, err
 	}
-	if !foundStart || !foundSummary {
-		return Manifest{}, trusterr.New(trusterr.CodeDataLoss, "backup summary.json is missing")
+	if !foundManifest {
+		return Manifest{}, trusterr.New(trusterr.CodeDataLoss, "backup manifest.tdmanifest is missing")
 	}
-	if start.SchemaVersion != SchemaManifest || manifest.SchemaVersion != SchemaManifest {
-		return Manifest{}, trusterr.New(trusterr.CodeFailedPrecondition, fmt.Sprintf("unsupported backup schema: manifest=%q summary=%q want=%q", start.SchemaVersion, manifest.SchemaVersion, SchemaManifest))
+	if err := validateManifestAgainstHeader(manifest, header); err != nil {
+		return Manifest{}, err
 	}
-	if suiteErr != nil {
-		return Manifest{}, suiteErr
+	if !reflect.DeepEqual(manifest.Entries, observed) {
+		return Manifest{}, trusterr.New(trusterr.CodeDataLoss, "backup manifest entry inventory does not match the authenticated archive")
 	}
-	if archiveSuite == "" {
-		return Manifest{}, trusterr.New(trusterr.CodeFailedPrecondition, "backup has no proofstore cryptographic suite binding")
+	if err := validateManifestCounts(manifest); err != nil {
+		return Manifest{}, err
 	}
-	if _, _, err := formatregistry.RequireWritable(formatregistry.BackupV4, archiveSuite); err != nil {
-		return Manifest{}, trusterr.Wrap(trusterr.CodeFailedPrecondition, "backup v4 is not supported for this cryptographic suite", err)
-	}
-	if start.BackupID == "" || manifest.BackupID == "" || start.BackupID != manifest.BackupID {
-		return Manifest{}, trusterr.New(trusterr.CodeDataLoss, "backup manifest and summary identifiers do not match")
-	}
-	manifest.CryptoSuite = archiveSuite
 	return manifest, nil
 }
 
-func Restore(ctx context.Context, store proofstore.Store, path string) (Manifest, error) {
-	return RestoreWithOptions(ctx, store, path, RestoreOptions{})
+func Restore(ctx context.Context, store proofstore.Store, path string, providers ...keyenvelope.KEKProvider) (Manifest, error) {
+	return RestoreWithOptions(ctx, store, path, RestoreOptions{KEKProviders: providers})
 }
 
 func RestoreWithOptions(ctx context.Context, store proofstore.Store, path string, opts RestoreOptions) (Manifest, error) {
@@ -472,18 +606,23 @@ func RestoreWithOptions(ctx context.Context, store proofstore.Store, path string
 	if !ok {
 		return Manifest{}, trusterr.New(trusterr.CodeFailedPrecondition, "restore store cannot restore STH anchor schedules")
 	}
-	verified, err := Verify(ctx, path)
+	verified, err := Verify(ctx, path, opts.KEKProviders...)
 	if err != nil {
 		return Manifest{}, err
 	}
-	destinationSuite, err := proofstore.BoundCryptoSuite(store)
+	destination, err := proofstore.BoundNamespace(store)
 	if err != nil {
 		return Manifest{}, err
 	}
-	if err := cryptosuite.RequireSame(destinationSuite, verified.CryptoSuite); err != nil {
-		return Manifest{}, trusterr.Wrap(trusterr.CodeFailedPrecondition, "backup and destination proofstore cryptographic suites do not match", err)
+	if destination.CryptoSuite != verified.CryptoSuite || destination.FormatGeneration != verified.FormatGeneration ||
+		destination.NodeID != verified.NodeID || destination.LogID != verified.LogID {
+		return Manifest{}, trusterr.New(trusterr.CodeFailedPrecondition, "backup and destination proofstore namespace bindings do not match")
 	}
-	report := Manifest{SchemaVersion: SchemaManifest, BackupID: verified.BackupID, CryptoSuite: verified.CryptoSuite}
+	report := Manifest{
+		SchemaVersion: SchemaManifest, BackupID: verified.BackupID, CryptoSuite: verified.CryptoSuite,
+		FormatGeneration: verified.FormatGeneration, NodeID: verified.NodeID, LogID: verified.LogID,
+		NamespaceID: verified.NamespaceID, TargetNamespaceID: destination.NamespaceID,
+	}
 	checkpointPath := opts.CheckpointPath
 	var restoreCP RestoreCheckpoint
 	if opts.Resume && checkpointPath == "" {
@@ -495,15 +634,44 @@ func RestoreWithOptions(ctx context.Context, store proofstore.Store, path string
 		if err != nil {
 			return Manifest{}, trusterr.Wrap(trusterr.CodeDataLoss, "read restore checkpoint", err)
 		}
-		if restoreCP.BackupID != "" && restoreCP.BackupID != verified.BackupID {
-			return Manifest{}, trusterr.New(trusterr.CodeFailedPrecondition, "restore checkpoint belongs to a different backup")
+		if restoreCP.BackupID != "" {
+			recoveryDir, pathErr := normalizedOptionalPath(opts.RecoveryDir)
+			if pathErr != nil {
+				return Manifest{}, pathErr
+			}
+			if restoreCP.SchemaVersion != SchemaRestoreCheckpoint || restoreCP.BackupID != verified.BackupID ||
+				restoreCP.CryptoSuite != verified.CryptoSuite || restoreCP.NodeID != verified.NodeID || restoreCP.LogID != verified.LogID ||
+				restoreCP.SourceNamespaceID != verified.NamespaceID || restoreCP.TargetNamespaceID != destination.NamespaceID ||
+				restoreCP.RecoveryDir != recoveryDir {
+				return Manifest{}, trusterr.New(trusterr.CodeFailedPrecondition, "restore checkpoint binding does not match this backup and destination")
+			}
 		}
 	}
-	err = readArchiveStream(path, func(entry archiveEntry) error {
+	if verified.KeyRegistries > 0 {
+		if strings.TrimSpace(opts.RecoveryDir) == "" {
+			return Manifest{}, trusterr.New(trusterr.CodeFailedPrecondition, "backup contains key registry audit evidence; recovery directory is required")
+		}
+		if err := prepareRecoveryDirectory(opts.RecoveryDir, restoreCP.BackupID != ""); err != nil {
+			return Manifest{}, err
+		}
+	}
+	emptyDestination, err := restoreDestinationEmpty(ctx, store)
+	if err != nil {
+		return Manifest{}, err
+	}
+	if restoreCP.BackupID == "" && !emptyDestination {
+		return Manifest{}, trusterr.New(trusterr.CodeFailedPrecondition, "backup restore destination is not empty")
+	}
+	if restoreCP.BackupID != "" && restoreCP.LastOrdinal > 0 && emptyDestination {
+		return Manifest{}, trusterr.New(trusterr.CodeFailedPrecondition, "restore checkpoint cannot resume into an empty destination")
+	}
+	batchLeaves := make(map[string][]model.BatchTreeLeaf)
+	batchNodes := make(map[string][]model.BatchTreeNode)
+	restoredHeader, err := readArchiveStream(ctx, path, opts.KEKProviders, func(entry archiveEntry) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if entry.CryptoSuite != verified.CryptoSuite {
+		if entry.Name != "manifest.tdmanifest" && entry.CryptoSuite != verified.CryptoSuite {
 			return trusterr.New(trusterr.CodeDataLoss, fmt.Sprintf("backup entry %q suite changed between verification and restore", entry.Name))
 		}
 		if opts.Resume && restoreCP.BackupID != "" && entry.BackupID == restoreCP.BackupID && entry.Ordinal <= restoreCP.LastOrdinal {
@@ -514,34 +682,58 @@ func RestoreWithOptions(ctx context.Context, store proofstore.Store, path string
 			if !opts.Resume {
 				return nil
 			}
+			recoveryDir, err := normalizedOptionalPath(opts.RecoveryDir)
+			if err != nil {
+				return err
+			}
 			return writeRestoreCheckpoint(checkpointPath, RestoreCheckpoint{
-				SchemaVersion: SchemaRestoreCheckpoint,
-				BackupID:      entry.BackupID,
-				LastOrdinal:   entry.Ordinal,
-				LastName:      entry.Name,
-				UpdatedAt:     time.Now().UTC().Format(time.RFC3339Nano),
+				SchemaVersion: SchemaRestoreCheckpoint, BackupID: verified.BackupID,
+				CryptoSuite: verified.CryptoSuite, NodeID: verified.NodeID, LogID: verified.LogID,
+				SourceNamespaceID: verified.NamespaceID, TargetNamespaceID: destination.NamespaceID,
+				RecoveryDir: recoveryDir,
+				LastOrdinal: entry.Ordinal, LastName: entry.Name, UpdatedAt: time.Now().UTC().Format(time.RFC3339Nano),
 			})
 		}
 		switch {
-		case entry.Name == "manifest.json" || entry.Name == "summary.json":
-			if entry.Name == "summary.json" {
-				var summary Manifest
-				if err := decodeJSONEntry(entry, &summary); err != nil {
-					return err
-				}
-			} else {
-				var start Manifest
-				if err := decodeJSONEntry(entry, &start); err != nil {
-					return err
-				}
+		case entry.Name == "manifest.tdmanifest":
+			var archiveManifest Manifest
+			if err := decodeCBORUntrackedEntry(entry, &archiveManifest); err != nil {
+				return err
+			}
+			if !reflect.DeepEqual(archiveManifest, verified) {
+				return trusterr.New(trusterr.CodeDataLoss, "backup changed between verification and restore")
 			}
 			return markRestored()
+		case strings.HasPrefix(entry.Name, "batch-tree/") && strings.Contains(entry.Name, "/leaves/"):
+			var v model.BatchTreeLeaf
+			if err := decodeCBOREntry(entry, &v); err != nil {
+				return err
+			}
+			batchLeaves[v.BatchID] = append(batchLeaves[v.BatchID], v)
+			report.BatchTreeLeaves++
+			return nil
+		case strings.HasPrefix(entry.Name, "batch-tree/") && strings.Contains(entry.Name, "/nodes/"):
+			var v model.BatchTreeNode
+			if err := decodeCBOREntry(entry, &v); err != nil {
+				return err
+			}
+			batchNodes[v.BatchID] = append(batchNodes[v.BatchID], v)
+			report.BatchTreeNodes++
+			return nil
 		case strings.HasPrefix(entry.Name, "manifests/"):
 			var v model.BatchManifest
 			if err := decodeCBOREntry(entry, &v); err != nil {
 				return err
 			}
 			report.Manifests++
+			leaves, hasLeaves := batchLeaves[v.BatchID]
+			if hasLeaves {
+				if err := store.PutBatchTreeArtifacts(ctx, leaves, batchNodes[v.BatchID]); err != nil {
+					return err
+				}
+				delete(batchLeaves, v.BatchID)
+				delete(batchNodes, v.BatchID)
+			}
 			if err := store.PutManifest(ctx, v); err != nil {
 				return err
 			}
@@ -653,13 +845,30 @@ func RestoreWithOptions(ctx context.Context, store proofstore.Store, path string
 				return err
 			}
 			return markRestored()
+		case entry.Name == "recovery/key-registry.tdkeys":
+			data, err := decodeRawTrackedEntry(entry)
+			if err != nil {
+				return err
+			}
+			report.KeyRegistries++
+			if err := writeFileAtomic(filepath.Join(opts.RecoveryDir, "key-registry.tdkeys"), data); err != nil {
+				return trusterr.Wrap(trusterr.CodeDataLoss, "restore key registry audit evidence", err)
+			}
+			return markRestored()
 		default:
-			_, _ = io.Copy(io.Discard, entry.Reader)
-			return nil
+			return trusterr.New(trusterr.CodeDataLoss, fmt.Sprintf("unknown backup entry %q", entry.Name))
 		}
 	})
 	if err != nil {
 		return Manifest{}, err
+	}
+	if restoredHeader.BackupID != verified.BackupID || restoredHeader.CryptoSuite != verified.CryptoSuite ||
+		restoredHeader.FormatGeneration != verified.FormatGeneration || restoredHeader.NodeID != verified.NodeID ||
+		restoredHeader.LogID != verified.LogID || restoredHeader.NamespaceID != verified.NamespaceID {
+		return Manifest{}, trusterr.New(trusterr.CodeDataLoss, "backup envelope changed between verification and restore")
+	}
+	if len(batchLeaves) != 0 || len(batchNodes) != 0 {
+		return Manifest{}, trusterr.New(trusterr.CodeDataLoss, "backup contains batch tree artifacts without a matching manifest")
 	}
 	if manager, ok := store.(proofstore.IdempotencyProjectionManager); ok {
 		if err := manager.EnsureIdempotencyProjection(ctx); err != nil {
@@ -685,24 +894,6 @@ func writeCBORTracked(tw *tar.Writer, manifest *Manifest, ordinal *int64, name, 
 	return writeBytesTracked(tw, manifest, ordinal, name, typ, data)
 }
 
-func writeJSON(tw *tar.Writer, name string, v any) error {
-	data, err := json.MarshalIndent(v, "", "  ")
-	if err != nil {
-		return err
-	}
-	data = append(data, '\n')
-	return writeBytes(tw, name, data)
-}
-
-func writeJSONTracked(tw *tar.Writer, manifest *Manifest, ordinal *int64, name, typ string, v any) error {
-	data, err := json.MarshalIndent(v, "", "  ")
-	if err != nil {
-		return err
-	}
-	data = append(data, '\n')
-	return writeBytesTracked(tw, manifest, ordinal, name, typ, data)
-}
-
 func writeBytes(tw *tar.Writer, name string, data []byte) error {
 	header := &tar.Header{
 		Name:    name,
@@ -719,13 +910,13 @@ func writeBytes(tw *tar.Writer, name string, data []byte) error {
 
 func writeBytesTracked(tw *tar.Writer, manifest *Manifest, ordinal *int64, name, typ string, data []byte) error {
 	*ordinal = *ordinal + 1
-	sum := sha256.Sum256(data)
+	digest, err := digestBytes(manifest.CryptoSuite, manifest.DigestAlgorithm, data)
+	if err != nil {
+		return err
+	}
 	entry := Entry{
-		Ordinal: *ordinal,
-		Name:    name,
-		Type:    typ,
-		Size:    int64(len(data)),
-		SHA256:  hex.EncodeToString(sum[:]),
+		Ordinal: *ordinal, Name: name, Type: typ, Size: int64(len(data)),
+		CryptoSuite: manifest.CryptoSuite, DigestAlgorithm: manifest.DigestAlgorithm, Digest: digest,
 	}
 	header := &tar.Header{
 		Name:    name,
@@ -733,11 +924,12 @@ func writeBytesTracked(tw *tar.Writer, manifest *Manifest, ordinal *int64, name,
 		Size:    int64(len(data)),
 		ModTime: time.Unix(0, 0).UTC(),
 		PAXRecords: map[string]string{
-			paxBackupID: manifest.BackupID,
-			paxOrdinal:  strconv.FormatInt(entry.Ordinal, 10),
-			paxSHA256:   entry.SHA256,
-			paxType:     typ,
-			paxSuite:    string(manifest.CryptoSuite),
+			paxBackupID:  manifest.BackupID,
+			paxOrdinal:   strconv.FormatInt(entry.Ordinal, 10),
+			paxDigest:    base64.RawURLEncoding.EncodeToString(entry.Digest),
+			paxDigestAlg: entry.DigestAlgorithm,
+			paxType:      typ,
+			paxSuite:     string(manifest.CryptoSuite),
 		},
 	}
 	if err := tw.WriteHeader(header); err != nil {
@@ -751,164 +943,250 @@ func writeBytesTracked(tw *tar.Writer, manifest *Manifest, ordinal *int64, name,
 }
 
 type archiveEntry struct {
-	Name        string
-	Size        int64
-	Ordinal     int64
-	BackupID    string
-	SHA256      string
-	Type        string
-	CryptoSuite cryptosuite.ID
-	Reader      io.Reader
+	Name            string
+	Size            int64
+	Ordinal         int64
+	BackupID        string
+	DigestAlgorithm string
+	Digest          []byte
+	Type            string
+	CryptoSuite     cryptosuite.ID
+	Reader          io.Reader
 }
 
-func readArchiveStream(path string, visit func(archiveEntry) error) error {
-	f, err := os.Open(path)
+func readArchiveStream(ctx context.Context, path string, providers []keyenvelope.KEKProvider, visit func(archiveEntry) error) (EnvelopeHeader, error) {
+	archive, err := openEncryptedArchive(ctx, path, providers)
 	if err != nil {
-		return trusterr.Wrap(trusterr.CodeInternal, "open backup file", err)
+		return EnvelopeHeader{}, err
 	}
-	defer f.Close()
-	var in io.Reader = f
-	if strings.HasSuffix(strings.ToLower(path), ".gz") || strings.HasSuffix(strings.ToLower(path), ".tdbackup") {
-		gz, err := gzip.NewReader(f)
-		if err == nil {
-			defer gz.Close()
-			in = gz
-		} else {
-			if _, seekErr := f.Seek(0, io.SeekStart); seekErr != nil {
-				return seekErr
-			}
-			in = f
+	defer archive.Close()
+	var in io.Reader = archive.frames
+	var gz *gzip.Reader
+	if archive.header.Compression == "gzip" {
+		gz, err = gzip.NewReader(archive.frames)
+		if err != nil {
+			return EnvelopeHeader{}, trusterr.Wrap(trusterr.CodeDataLoss, "open encrypted backup gzip stream", err)
 		}
+		defer gz.Close()
+		in = gz
 	}
+	in = &contextReader{ctx: ctx, reader: in}
 	tr := tar.NewReader(in)
 	var seq int64
 	for {
 		header, err := tr.Next()
 		if err == io.EOF {
-			return nil
+			if _, err := io.Copy(io.Discard, in); err != nil {
+				return EnvelopeHeader{}, trusterr.Wrap(trusterr.CodeDataLoss, "authenticate encrypted backup trailer", err)
+			}
+			return archive.header, nil
 		}
 		if err != nil {
-			return trusterr.Wrap(trusterr.CodeDataLoss, "read backup archive", err)
+			return EnvelopeHeader{}, trusterr.Wrap(trusterr.CodeDataLoss, "read backup archive", err)
 		}
 		if header.Typeflag != tar.TypeReg {
-			continue
+			return EnvelopeHeader{}, trusterr.New(trusterr.CodeDataLoss, fmt.Sprintf("backup entry %q is not a regular file", header.Name))
+		}
+		if !validArchivePath(header.Name) {
+			return EnvelopeHeader{}, trusterr.New(trusterr.CodeDataLoss, fmt.Sprintf("backup entry path %q is invalid", header.Name))
 		}
 		seq++
-		ordinal := seq
-		if raw := header.PAXRecords[paxOrdinal]; raw != "" {
-			if parsed, err := strconv.ParseInt(raw, 10, 64); err == nil {
-				ordinal = parsed
+		if header.Name == "manifest.tdmanifest" {
+			if len(header.PAXRecords) != 0 {
+				return EnvelopeHeader{}, trusterr.New(trusterr.CodeDataLoss, "backup manifest has unexpected PAX control metadata")
 			}
+			if err := visit(archiveEntry{Name: header.Name, Size: header.Size, Ordinal: seq, Reader: tr}); err != nil {
+				return EnvelopeHeader{}, err
+			}
+			continue
+		}
+		if err := validatePAXControlRecords(header); err != nil {
+			return EnvelopeHeader{}, err
+		}
+		ordinal, err := strconv.ParseInt(header.PAXRecords[paxOrdinal], 10, 64)
+		if err != nil || ordinal != seq {
+			return EnvelopeHeader{}, trusterr.New(trusterr.CodeDataLoss, fmt.Sprintf("backup entry %q ordinal is invalid", header.Name))
+		}
+		digest, err := base64.RawURLEncoding.DecodeString(header.PAXRecords[paxDigest])
+		if err != nil || len(digest) != cryptosuite.DigestSize {
+			return EnvelopeHeader{}, trusterr.New(trusterr.CodeDataLoss, fmt.Sprintf("backup entry %q digest is invalid", header.Name))
 		}
 		entry := archiveEntry{
-			Name:        header.Name,
-			Size:        header.Size,
-			Ordinal:     ordinal,
-			BackupID:    header.PAXRecords[paxBackupID],
-			SHA256:      header.PAXRecords[paxSHA256],
-			Type:        header.PAXRecords[paxType],
-			CryptoSuite: cryptosuite.ID(header.PAXRecords[paxSuite]),
-			Reader:      tr,
+			Name: header.Name, Size: header.Size, Ordinal: ordinal,
+			BackupID: header.PAXRecords[paxBackupID], DigestAlgorithm: header.PAXRecords[paxDigestAlg], Digest: digest,
+			Type: header.PAXRecords[paxType], CryptoSuite: cryptosuite.ID(header.PAXRecords[paxSuite]), Reader: tr,
+		}
+		if entry.BackupID != archive.header.BackupID || entry.CryptoSuite != archive.header.CryptoSuite || entry.Type == "" {
+			return EnvelopeHeader{}, trusterr.New(trusterr.CodeDataLoss, fmt.Sprintf("backup entry %q control metadata does not match the envelope", header.Name))
+		}
+		suite, _ := cryptosuite.RequireKnown(archive.header.CryptoSuite)
+		if entry.DigestAlgorithm != suite.StorageIntegrityHash.Algorithm {
+			return EnvelopeHeader{}, trusterr.New(trusterr.CodeDataLoss, fmt.Sprintf("backup entry %q digest algorithm does not match the suite", header.Name))
 		}
 		if err := visit(entry); err != nil {
-			return err
+			return EnvelopeHeader{}, err
 		}
 	}
 }
 
-type countingReader struct {
-	r io.Reader
-	n int64
+func validatePAXControlRecords(header *tar.Header) error {
+	allowed := map[string]struct{}{
+		paxBackupID: {}, paxOrdinal: {}, paxDigest: {}, paxDigestAlg: {}, paxType: {}, paxSuite: {},
+		"path": {},
+	}
+	for name := range header.PAXRecords {
+		if _, ok := allowed[name]; !ok {
+			return trusterr.New(trusterr.CodeDataLoss, fmt.Sprintf("backup entry %q has unknown PAX control field %q", header.Name, name))
+		}
+	}
+	if path, ok := header.PAXRecords["path"]; ok && path != header.Name {
+		return trusterr.New(trusterr.CodeDataLoss, fmt.Sprintf("backup entry %q has mismatched PAX path", header.Name))
+	}
+	for _, required := range []string{paxBackupID, paxOrdinal, paxDigest, paxDigestAlg, paxType, paxSuite} {
+		if header.PAXRecords[required] == "" {
+			return trusterr.New(trusterr.CodeDataLoss, fmt.Sprintf("backup entry %q is missing PAX control field %q", header.Name, required))
+		}
+	}
+	return nil
 }
 
-func (r *countingReader) Read(p []byte) (int, error) {
-	n, err := r.r.Read(p)
-	r.n += int64(n)
-	return n, err
+type contextReader struct {
+	ctx    context.Context
+	reader io.Reader
+}
+
+func (r *contextReader) Read(p []byte) (int, error) {
+	if err := r.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return r.reader.Read(p)
 }
 
 func decodeCBOREntry(entry archiveEntry, v any) error {
-	return decodeEntry(entry, func(r io.Reader) error {
-		return cborx.DecodeReaderLimit(r, v, entry.Size)
-	})
+	return decodeEntry(entry, v, true)
 }
 
-func decodeJSONEntry(entry archiveEntry, v any) error {
-	return decodeEntry(entry, func(r io.Reader) error {
-		decoder := json.NewDecoder(r)
-		if err := decoder.Decode(v); err != nil {
-			return err
-		}
-		var extra any
-		if err := decoder.Decode(&extra); err == nil {
-			return fmt.Errorf("backup entry %s has trailing JSON data", entry.Name)
-		} else if err != io.EOF {
-			return err
-		}
-		return nil
-	})
+func decodeCBORUntrackedEntry(entry archiveEntry, v any) error {
+	return decodeEntry(entry, v, false)
 }
 
-func decodeEntry(entry archiveEntry, decode func(io.Reader) error) error {
+func decodeRawTrackedEntry(entry archiveEntry) ([]byte, error) {
+	if entry.Size < 0 || entry.Size > maxRecoveryArtifactBytes {
+		return nil, trusterr.New(trusterr.CodeDataLoss, fmt.Sprintf("backup recovery entry %s too large: %d", entry.Name, entry.Size))
+	}
+	data := make([]byte, int(entry.Size))
+	if _, err := io.ReadFull(entry.Reader, data); err != nil {
+		return nil, trusterr.Wrap(trusterr.CodeDataLoss, fmt.Sprintf("read backup entry %s", entry.Name), err)
+	}
+	got, err := digestBytes(entry.CryptoSuite, entry.DigestAlgorithm, data)
+	if err != nil {
+		return nil, err
+	}
+	if !bytes.Equal(got, entry.Digest) {
+		return nil, trusterr.New(trusterr.CodeDataLoss, fmt.Sprintf("backup entry %s digest mismatch", entry.Name))
+	}
+	return data, nil
+}
+
+func decodeEntry(entry archiveEntry, value any, tracked bool) error {
 	if entry.Size < 0 || entry.Size > maxRestoreEntryBytes {
 		return trusterr.New(trusterr.CodeDataLoss, fmt.Sprintf("backup entry %s too large: %d", entry.Name, entry.Size))
 	}
-	h := sha256.New()
-	limited := io.LimitReader(entry.Reader, entry.Size)
-	counting := &countingReader{r: limited}
-	tee := io.TeeReader(counting, h)
-	if err := decode(tee); err != nil {
-		_, _ = io.Copy(io.Discard, tee)
-		return err
+	data := make([]byte, int(entry.Size))
+	if _, err := io.ReadFull(entry.Reader, data); err != nil {
+		return trusterr.Wrap(trusterr.CodeDataLoss, fmt.Sprintf("read backup entry %s", entry.Name), err)
 	}
-	if _, err := io.Copy(io.Discard, tee); err != nil {
-		return trusterr.Wrap(trusterr.CodeDataLoss, "drain backup entry", err)
-	}
-	if counting.n != entry.Size {
-		return trusterr.New(trusterr.CodeDataLoss, fmt.Sprintf("backup entry %s size mismatch: read %d want %d", entry.Name, counting.n, entry.Size))
-	}
-	if entry.SHA256 != "" {
-		got := hex.EncodeToString(h.Sum(nil))
-		if got != entry.SHA256 {
-			return trusterr.New(trusterr.CodeDataLoss, fmt.Sprintf("backup entry %s sha256 mismatch", entry.Name))
+	if tracked {
+		got, err := digestBytes(entry.CryptoSuite, entry.DigestAlgorithm, data)
+		if err != nil {
+			return err
 		}
+		if !bytes.Equal(got, entry.Digest) {
+			return trusterr.New(trusterr.CodeDataLoss, fmt.Sprintf("backup entry %s digest mismatch", entry.Name))
+		}
+	}
+	if err := cborx.UnmarshalLimit(data, value, int(maxRestoreEntryBytes)); err != nil {
+		return trusterr.Wrap(trusterr.CodeDataLoss, fmt.Sprintf("decode backup entry %s", entry.Name), err)
+	}
+	canonical, err := cborx.Marshal(value)
+	if err != nil || !bytes.Equal(canonical, data) {
+		return trusterr.New(trusterr.CodeDataLoss, fmt.Sprintf("backup entry %s is not deterministic CBOR", entry.Name))
 	}
 	return nil
 }
 
 func validateStreamEntry(entry archiveEntry) error {
 	switch {
-	case entry.Name == "manifest.json" || entry.Name == "summary.json":
-		var v Manifest
-		return decodeJSONEntry(entry, &v)
 	case strings.HasPrefix(entry.Name, "manifests/"):
+		if err := requireEntryType(entry, "batch_manifest"); err != nil {
+			return err
+		}
 		var v model.BatchManifest
 		return decodeCBOREntry(entry, &v)
 	case strings.HasPrefix(entry.Name, "bundles/"):
+		if err := requireEntryType(entry, "proof_bundle"); err != nil {
+			return err
+		}
 		var v model.ProofBundle
 		return decodeCBOREntry(entry, &v)
+	case strings.HasPrefix(entry.Name, "batch-tree/") && strings.Contains(entry.Name, "/leaves/"):
+		if err := requireEntryType(entry, "batch_tree_leaf"); err != nil {
+			return err
+		}
+		var v model.BatchTreeLeaf
+		return decodeCBOREntry(entry, &v)
+	case strings.HasPrefix(entry.Name, "batch-tree/") && strings.Contains(entry.Name, "/nodes/"):
+		if err := requireEntryType(entry, "batch_tree_node"); err != nil {
+			return err
+		}
+		var v model.BatchTreeNode
+		return decodeCBOREntry(entry, &v)
 	case strings.HasPrefix(entry.Name, "roots/"):
+		if err := requireEntryType(entry, "batch_root"); err != nil {
+			return err
+		}
 		var v model.BatchRoot
 		return decodeCBOREntry(entry, &v)
 	case strings.HasPrefix(entry.Name, "global/leaves/"):
+		if err := requireEntryType(entry, "global_leaf"); err != nil {
+			return err
+		}
 		var v model.GlobalLogLeaf
 		return decodeCBOREntry(entry, &v)
 	case strings.HasPrefix(entry.Name, "global/nodes/"):
+		if err := requireEntryType(entry, "global_node"); err != nil {
+			return err
+		}
 		var v model.GlobalLogNode
 		return decodeCBOREntry(entry, &v)
 	case entry.Name == "global/state.tdgstate":
+		if err := requireEntryType(entry, "global_state"); err != nil {
+			return err
+		}
 		var v model.GlobalLogState
 		return decodeCBOREntry(entry, &v)
 	case strings.HasPrefix(entry.Name, "global/sth/"):
+		if err := requireEntryType(entry, "signed_tree_head"); err != nil {
+			return err
+		}
 		var v model.SignedTreeHead
 		return decodeCBOREntry(entry, &v)
 	case strings.HasPrefix(entry.Name, "global/tiles/"):
+		if err := requireEntryType(entry, "global_tile"); err != nil {
+			return err
+		}
 		var v model.GlobalLogTile
 		return decodeCBOREntry(entry, &v)
 	case strings.HasPrefix(entry.Name, "global/outbox/"):
+		if err := requireEntryType(entry, "global_log_outbox"); err != nil {
+			return err
+		}
 		var v model.GlobalLogOutboxItem
 		return decodeCBOREntry(entry, &v)
 	case strings.HasPrefix(entry.Name, "anchors/sth-result/"):
+		if err := requireEntryType(entry, "sth_anchor_result"); err != nil {
+			return err
+		}
 		var v model.STHAnchorResult
 		if err := decodeCBOREntry(entry, &v); err != nil {
 			return err
@@ -927,6 +1205,9 @@ func validateStreamEntry(entry archiveEntry) error {
 		}
 		return nil
 	case strings.HasPrefix(entry.Name, "anchors/schedules/"):
+		if err := requireEntryType(entry, "sth_anchor_schedule"); err != nil {
+			return err
+		}
 		var v model.STHAnchorSchedule
 		if err := decodeCBOREntry(entry, &v); err != nil {
 			return err
@@ -935,10 +1216,40 @@ func validateStreamEntry(entry archiveEntry) error {
 			return trusterr.Wrap(trusterr.CodeDataLoss, "invalid STH anchor schedule", err)
 		}
 		return validateBCOSScheduleProviderState(v)
-	default:
-		_, _ = io.Copy(io.Discard, entry.Reader)
+	case entry.Name == "recovery/key-registry.tdkeys":
+		if err := requireEntryType(entry, "key_registry_audit"); err != nil {
+			return err
+		}
+		data, err := decodeRawTrackedEntry(entry)
+		if err != nil {
+			return err
+		}
+		summary, err := keystore.InspectEvidence(data)
+		if err != nil {
+			return trusterr.Wrap(trusterr.CodeDataLoss, "validate backup key registry audit evidence", err)
+		}
+		if summary.Manifest.CryptoSuite != entry.CryptoSuite {
+			return trusterr.New(trusterr.CodeDataLoss, "backup key registry audit suite does not match the archive")
+		}
 		return nil
+	default:
+		return trusterr.New(trusterr.CodeDataLoss, fmt.Sprintf("unknown backup entry %q", entry.Name))
 	}
+}
+
+func requireEntryType(entry archiveEntry, expected string) error {
+	if entry.Type != expected {
+		return trusterr.New(trusterr.CodeDataLoss, fmt.Sprintf("backup entry %q type=%q want=%q", entry.Name, entry.Type, expected))
+	}
+	return nil
+}
+
+func digestBytes(suiteID cryptosuite.ID, algorithm string, data []byte) ([]byte, error) {
+	factory, err := trustcrypto.HashFactoryForSuite(suiteID, algorithm)
+	if err != nil {
+		return nil, trusterr.Wrap(trusterr.CodeFailedPrecondition, "backup digest algorithm", err)
+	}
+	return factory.Sum(data), nil
 }
 
 func validateBCOSScheduleProviderState(schedule model.STHAnchorSchedule) error {
@@ -994,6 +1305,11 @@ func readRestoreCheckpoint(path string) (RestoreCheckpoint, error) {
 	if err := json.Unmarshal(data, &cp); err != nil {
 		return RestoreCheckpoint{}, err
 	}
+	if cp.SchemaVersion != SchemaRestoreCheckpoint || cp.BackupID == "" || cp.CryptoSuite == "" ||
+		cp.NodeID == "" || cp.LogID == "" || cp.SourceNamespaceID == "" || cp.TargetNamespaceID == "" ||
+		cp.LastOrdinal <= 0 || cp.LastName == "" || cp.UpdatedAt == "" {
+		return RestoreCheckpoint{}, fmt.Errorf("invalid restore checkpoint schema or binding")
+	}
 	return cp, nil
 }
 
@@ -1010,6 +1326,72 @@ func writeRestoreCheckpoint(path string, cp RestoreCheckpoint) error {
 	}
 	data = append(data, '\n')
 	return writeFileAtomic(path, data)
+}
+
+func readRecoveryArtifact(path string, maxBytes int64) ([]byte, error) {
+	before, err := os.Lstat(path)
+	if err != nil {
+		return nil, err
+	}
+	if before.Mode()&os.ModeSymlink != 0 || !before.Mode().IsRegular() || before.Size() <= 0 || before.Size() > maxBytes {
+		return nil, fmt.Errorf("recovery artifact must be a regular file of 1..%d bytes", maxBytes)
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	after, err := file.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !after.Mode().IsRegular() || !os.SameFile(before, after) {
+		return nil, fmt.Errorf("recovery artifact changed while opening")
+	}
+	data, err := io.ReadAll(io.LimitReader(file, maxBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > maxBytes || int64(len(data)) != after.Size() {
+		return nil, fmt.Errorf("recovery artifact size changed while reading")
+	}
+	return data, nil
+}
+
+func normalizedOptionalPath(path string) (string, error) {
+	if strings.TrimSpace(path) == "" {
+		return "", nil
+	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", trusterr.Wrap(trusterr.CodeInvalidArgument, "normalize recovery directory", err)
+	}
+	return filepath.Clean(abs), nil
+}
+
+func prepareRecoveryDirectory(path string, resume bool) error {
+	normalized, err := normalizedOptionalPath(path)
+	if err != nil {
+		return err
+	}
+	entries, err := os.ReadDir(normalized)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return trusterr.Wrap(trusterr.CodeInvalidArgument, "inspect recovery directory", err)
+	}
+	if !resume && len(entries) != 0 {
+		return trusterr.New(trusterr.CodeFailedPrecondition, "backup recovery directory is not empty")
+	}
+	if resume {
+		for _, entry := range entries {
+			if entry.Name() != "key-registry.tdkeys" || entry.IsDir() || entry.Type()&os.ModeSymlink != 0 {
+				return trusterr.New(trusterr.CodeFailedPrecondition, "backup recovery directory contains unexpected state")
+			}
+		}
+	}
+	return nil
 }
 
 func safeName(value string) string {
@@ -1090,13 +1472,189 @@ func rejectDirectoryTarget(path string) error {
 	return err
 }
 
-func normaliseCompression(value string) string {
+func normaliseCompression(value string) (string, error) {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "", "gzip", "gz":
-		return "gzip"
+		return "gzip", nil
 	case "none", "tar":
-		return "none"
+		return "none", nil
 	default:
-		return "gzip"
+		return "", trusterr.New(trusterr.CodeInvalidArgument, "backup compression must be gzip or none")
 	}
+}
+
+func validArchivePath(name string) bool {
+	if name == "" || strings.HasPrefix(name, "/") || strings.Contains(name, "\\") {
+		return false
+	}
+	for _, part := range strings.Split(name, "/") {
+		if part == "" || part == "." || part == ".." {
+			return false
+		}
+	}
+	return true
+}
+
+func validateManifestAgainstHeader(manifest Manifest, header EnvelopeHeader) error {
+	if manifest.SchemaVersion != SchemaManifest {
+		return trusterr.New(trusterr.CodeFailedPrecondition, fmt.Sprintf("unsupported backup schema %q", manifest.SchemaVersion))
+	}
+	if manifest.TargetNamespaceID != "" {
+		return trusterr.New(trusterr.CodeDataLoss, "backup manifest must not declare a restore target namespace")
+	}
+	if manifest.BackupID != header.BackupID || manifest.CreatedAt != header.CreatedAt ||
+		manifest.Compression != header.Compression || manifest.CryptoSuite != header.CryptoSuite ||
+		manifest.FormatGeneration != header.FormatGeneration || manifest.NodeID != header.NodeID ||
+		manifest.LogID != header.LogID || manifest.NamespaceID != header.NamespaceID ||
+		manifest.Encryption != header.ContentAlgorithm || manifest.KEKProvider != header.KEKProvider ||
+		manifest.KEKKeyID != header.KEKKeyID {
+		return trusterr.New(trusterr.CodeDataLoss, "backup manifest identity does not match its authenticated envelope")
+	}
+	if _, err := time.Parse(time.RFC3339Nano, manifest.CreatedAt); err != nil {
+		return trusterr.New(trusterr.CodeDataLoss, "backup creation time is invalid")
+	}
+	marker := proofstoremeta.Marker{
+		SchemaVersion: proofstoremeta.MarkerSchema, StorageSchema: proofstoremeta.StorageSchemaV5,
+		FormatGeneration: manifest.FormatGeneration, CryptoSuite: manifest.CryptoSuite,
+		NodeID: manifest.NodeID, LogID: manifest.LogID, NamespaceID: manifest.NamespaceID,
+	}
+	if err := proofstoremeta.ValidateBinding(marker, manifest.CryptoSuite, manifest.NodeID, manifest.LogID, manifest.NamespaceID); err != nil {
+		return trusterr.Wrap(trusterr.CodeDataLoss, "backup manifest namespace binding", err)
+	}
+	suite, err := cryptosuite.RequireKnown(manifest.CryptoSuite)
+	if err != nil || manifest.DigestAlgorithm != suite.StorageIntegrityHash.Algorithm {
+		return trusterr.New(trusterr.CodeDataLoss, "backup manifest digest algorithm does not match the cryptographic suite")
+	}
+	for i, entry := range manifest.Entries {
+		if entry.Ordinal != int64(i+1) || entry.CryptoSuite != manifest.CryptoSuite ||
+			entry.DigestAlgorithm != manifest.DigestAlgorithm || len(entry.Digest) != cryptosuite.DigestSize ||
+			entry.Size < 0 || entry.Size > maxRestoreEntryBytes || !validArchivePath(entry.Name) || entry.Type == "" {
+			return trusterr.New(trusterr.CodeDataLoss, fmt.Sprintf("backup manifest entry %d is invalid", i+1))
+		}
+	}
+	if manifest.KeyRegistries < 0 || manifest.KeyRegistries > 1 {
+		return trusterr.New(trusterr.CodeDataLoss, "backup recovery inventory is incomplete")
+	}
+	expectedInventory := backupInventory(manifest.KEKProvider, manifest.KEKKeyID, manifest.KeyRegistries == 1)
+	if !reflect.DeepEqual(manifest.Inventory, expectedInventory) {
+		return trusterr.New(trusterr.CodeDataLoss, "backup recovery inventory is incomplete")
+	}
+	return nil
+}
+
+func backupInventory(kekProvider, kekKeyID string, includesKeyRegistry bool) Inventory {
+	publicEvidence := []string{
+		"proof-bundles", "batch-roots", "signed-tree-heads", "anchor-results", "anchor-scheduler-state",
+	}
+	if includesKeyRegistry {
+		publicEvidence = append(publicEvidence, "key-registry-audit")
+	}
+	return Inventory{
+		SecretReferences: []string{
+			"backup-kek:" + kekProvider + ":" + kekKeyID,
+			"signer-private-material:external-not-exported",
+			"verifier-trust-roots:external-not-exported",
+		},
+		PublicEvidence: publicEvidence,
+		DerivedIndexes: []string{
+			"record-indexes", "latest-anchor-reference",
+		},
+		RebuildableCheckpoints: []string{
+			"idempotency-projection", "l5-coverage-checkpoint",
+		},
+	}
+}
+
+func validateManifestCounts(manifest Manifest) error {
+	counts := make(map[string]int)
+	for _, entry := range manifest.Entries {
+		counts[entry.Type]++
+	}
+	want := map[string]int{
+		"batch_manifest": manifest.Manifests, "proof_bundle": manifest.Bundles,
+		"batch_tree_leaf": manifest.BatchTreeLeaves, "batch_tree_node": manifest.BatchTreeNodes,
+		"batch_root": manifest.Roots, "global_leaf": manifest.GlobalLeaves,
+		"global_node": manifest.GlobalNodes, "signed_tree_head": manifest.STHs,
+		"global_tile": manifest.GlobalTiles, "global_log_outbox": manifest.GlobalOutboxes,
+		"sth_anchor_result": manifest.AnchorResults, "sth_anchor_schedule": manifest.AnchorSchedules,
+		"key_registry_audit": manifest.KeyRegistries,
+	}
+	for typ, expected := range want {
+		if counts[typ] != expected {
+			return trusterr.New(trusterr.CodeDataLoss, fmt.Sprintf("backup manifest count for %s=%d want=%d", typ, counts[typ], expected))
+		}
+		delete(counts, typ)
+	}
+	stateCount := counts["global_state"]
+	delete(counts, "global_state")
+	if stateCount > 1 || manifest.GlobalState != (stateCount == 1) {
+		return trusterr.New(trusterr.CodeDataLoss, "backup manifest global_state count is invalid")
+	}
+	if len(counts) != 0 {
+		return trusterr.New(trusterr.CodeDataLoss, "backup manifest contains an unknown entry type")
+	}
+	return nil
+}
+
+func restoreDestinationEmpty(ctx context.Context, store proofstore.Store) (bool, error) {
+	if values, err := store.ListManifestsAfter(ctx, "", 1); err != nil {
+		return false, err
+	} else if len(values) != 0 {
+		return false, nil
+	}
+	if values, err := store.ListRecordIndexes(ctx, model.RecordListOptions{Limit: 1, Direction: model.RecordListDirectionAsc}); err != nil {
+		return false, err
+	} else if len(values) != 0 {
+		return false, nil
+	}
+	if values, err := store.ListRootsPage(ctx, model.RootListOptions{Limit: 1, Direction: model.RecordListDirectionAsc}); err != nil {
+		return false, err
+	} else if len(values) != 0 {
+		return false, nil
+	}
+	if values, err := store.ListGlobalLeavesRange(ctx, 0, 1); err != nil {
+		return false, err
+	} else if len(values) != 0 {
+		return false, nil
+	}
+	if _, found, err := store.GetGlobalLogState(ctx); err != nil {
+		return false, err
+	} else if found {
+		return false, nil
+	}
+	if values, err := store.ListSignedTreeHeadsAfter(ctx, 0, 1); err != nil {
+		return false, err
+	} else if len(values) != 0 {
+		return false, nil
+	}
+	if values, err := store.ListGlobalLogNodesAfter(ctx, ^uint64(0), ^uint64(0), 1); err != nil {
+		return false, err
+	} else if len(values) != 0 {
+		return false, nil
+	}
+	if values, err := store.ListGlobalLogTilesAfter(ctx, ^uint64(0), ^uint64(0), 1); err != nil {
+		return false, err
+	} else if len(values) != 0 {
+		return false, nil
+	}
+	if values, err := store.ListGlobalLogOutboxItemsAfter(ctx, "", 1); err != nil {
+		return false, err
+	} else if len(values) != 0 {
+		return false, nil
+	}
+	if lister, ok := store.(proofstore.STHAnchorResultLister); ok {
+		if values, err := lister.ListSTHAnchorResultsAfter(ctx, model.STHAnchorResultKey{}, 1); err != nil {
+			return false, err
+		} else if len(values) != 0 {
+			return false, nil
+		}
+	}
+	if scheduler, ok := store.(proofstore.STHAnchorScheduleStore); ok {
+		if values, err := scheduler.ListSTHAnchorSchedules(ctx); err != nil {
+			return false, err
+		} else if len(values) != 0 {
+			return false, nil
+		}
+	}
+	return true, nil
 }

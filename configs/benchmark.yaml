@@ -84,6 +84,9 @@ history:
 
 backup:
   compression: "gzip"
+  key_provider: "passphrase-dev-v1"
+  key_id: "benchmark-backup-key"
+  frame_bytes: 1048576
 
 log:
   level: "warn"

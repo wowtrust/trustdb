@@ -208,7 +208,21 @@ backup v5 使用 PAX tar 作为流式容器，manifest 与所有结构化 entrie
 - immutable evidence、Signed STH、anchor result、scheduler state、key reference 和 BCOS evidence 的计数；
 - 不包含可导出的软件私钥、HSM/KMS secret 或证据文件自信任的 root。
 
+实现采用 `SM4-GCM-FRAMED-V1`：每份 archive 生成独立 128-bit DEK 和 64-bit nonce
+prefix，DEK 由 `KEKProvider` 认证包装；frame nonce 为 prefix 加连续 uint32 ordinal。
+每帧 AAD 绑定 SM3(header)、ordinal、明文长度和 final flag，最后必须出现一个零长度
+认证 final frame，之后不得有任何字节。默认 frame 为 1 MiB，可配置范围 64 KiB–16
+MiB。gzip 位于加密层内，先压缩后加密。
+
+`INTL_V1` entry digest 固定 SHA-256，`CN_SM_V1` 固定 SM3。最终
+`manifest.tdmanifest` 精确列出此前全部 entry，未知 PAX control、未知 entry、重复 path、
+非连续 ordinal、非确定性 CBOR、帧乱序、截断和尾随数据全部 fail closed。
+
 restore 必须在写第一条数据前完成整个 manifest、entry digest、schema/suite 一致性和目标 namespace 检查。目标必须为空，或是同一次 restore 的同 backup ID checkpoint；不能恢复 v4 backup，也不能把 `INTL_V1` backup 恢复到 `CN_SM_V1` namespace。
+
+目标 NodeID、LogID、suite 与 format generation 必须和来源一致；目标 NamespaceID
+允许不同，以保留 file/Pebble/TiKV 逻辑可移植性。restore checkpoint v2 同时绑定
+BackupID、source NamespaceID、target NamespaceID 和最后成功 ordinal，不能换目标续跑。
 
 不实现 v4-to-v5 offline migration tool。升级前如需保留开发环境材料，可以导出 v4 archive 供人工审计，但新版本不读取它。V2 环境从空 namespace 开始，业务测试数据按 v2 重新提交，产生全新的 record ID、batch、TreeSize、STH 和 anchor 历史。
 

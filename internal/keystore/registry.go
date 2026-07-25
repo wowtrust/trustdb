@@ -76,6 +76,15 @@ type Registry struct {
 	durableEnd  int64
 }
 
+// EvidenceSummary describes a structurally and cryptographically coherent V2
+// registry stream. The embedded registry public key is used only to verify the
+// stream's internal signatures; callers must still supply their own trusted
+// registry public descriptor before treating the evidence as authoritative.
+type EvidenceSummary struct {
+	Manifest Manifest
+	Events   int
+}
+
 type keyTimeline struct {
 	registered  model.KeyEvent
 	descriptor  keydescriptor.Descriptor
@@ -191,6 +200,34 @@ func OpenEvidence(data []byte, trustedRegistryPub trustcrypto.PublicKeyDescripto
 		}
 	}
 	return r, nil
+}
+
+// InspectEvidence validates a complete portable V2 registry without promoting
+// its embedded public key to a trust root. It is suitable for backup admission
+// and inventory checks; offline verification must still call OpenEvidence with
+// a verifier-local trusted registry public descriptor.
+func InspectEvidence(data []byte) (EvidenceSummary, error) {
+	if len(data) == 0 {
+		return EvidenceSummary{}, errors.New("keystore: registry evidence is empty")
+	}
+	manifest, events, _, truncatedTail, err := readRegistryStream(bytes.NewReader(data))
+	if err != nil {
+		return EvidenceSummary{}, err
+	}
+	if truncatedTail {
+		return EvidenceSummary{}, errors.New("keystore: registry evidence contains an incomplete final frame")
+	}
+	r := &Registry{
+		manifest:    manifest.clone(),
+		registryPub: manifest.publicKeyDescriptor(),
+		byKey:       make(map[string]keyTimeline),
+	}
+	for index := range events {
+		if err := r.loadEvent(index, events[index]); err != nil {
+			return EvidenceSummary{}, err
+		}
+	}
+	return EvidenceSummary{Manifest: manifest.clone(), Events: len(events)}, nil
 }
 
 func manifestForPublicKey(publicKey trustcrypto.PublicKeyDescriptor) Manifest {

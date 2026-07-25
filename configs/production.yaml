@@ -110,6 +110,11 @@ history:
 
 backup:
   compression: "gzip"
+  # Fail closed until the deployment registers its approved HSM/KMS KEK
+  # adapter. The built-in passphrase provider is development-only.
+  key_provider: "external-kek-provider-required"
+  key_id: "replace-with-approved-backup-kek-id"
+  frame_bytes: 1048576
 
 log:
   level: "info"

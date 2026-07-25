@@ -115,8 +115,8 @@ var registry = map[string]Descriptor{
 	SingleProofV1: descriptor(FamilySingleProof, SingleProofV1, 1, AvailabilityReserved, EncodingDeterministicCBOR, []cryptosuite.ID{cryptosuite.INTLV1}, "", MigrationRetireOnCutover, 16<<20),
 	SingleProofV2: descriptor(FamilySingleProof, SingleProofV2, 2, AvailabilityAvailable, EncodingDeterministicCBOR, []cryptosuite.ID{cryptosuite.CNSMV1, cryptosuite.INTLV1}, "crypto_suite", MigrationDestructiveCutover, MaxSingleProofBytesV2),
 
-	BackupV4: descriptorWithStrictness(FamilyBackup, BackupV4, 4, AvailabilityAvailable, EncodingBackupArchiveV4, []cryptosuite.ID{cryptosuite.INTLV1}, "", MigrationRetireOnCutover, 128<<20, false, false),
-	BackupV5: descriptorWithStrictness(FamilyBackup, BackupV5, 5, AvailabilityReserved, EncodingBackupArchiveV5, []cryptosuite.ID{cryptosuite.CNSMV1, cryptosuite.INTLV1}, "crypto_suite", MigrationDestructiveCutover, MaxBackupEntryBytesV2, true, true),
+	BackupV4: descriptorWithStrictness(FamilyBackup, BackupV4, 4, AvailabilityReserved, EncodingBackupArchiveV4, []cryptosuite.ID{cryptosuite.INTLV1}, "", MigrationRetireOnCutover, 128<<20, false, false),
+	BackupV5: descriptorWithStrictness(FamilyBackup, BackupV5, 5, AvailabilityAvailable, EncodingBackupArchiveV5, []cryptosuite.ID{cryptosuite.CNSMV1, cryptosuite.INTLV1}, "crypto_suite", MigrationDestructiveCutover, MaxBackupEntryBytesV2, true, true),
 
 	WALV1: descriptor(FamilyWAL, WALV1, 1, AvailabilityReserved, EncodingWALFrames, []cryptosuite.ID{cryptosuite.INTLV1}, "", MigrationRetireOnCutover, 0),
 	WALV2: descriptor(FamilyWAL, WALV2, 2, AvailabilityAvailable, EncodingWALFrames, []cryptosuite.ID{cryptosuite.CNSMV1, cryptosuite.INTLV1}, "crypto_suite", MigrationDestructiveCutover, MaxStoredObjectBytesV2),

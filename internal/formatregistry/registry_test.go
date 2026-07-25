@@ -25,8 +25,8 @@ func TestRegistryPinsCurrentAndReservedGenerations(t *testing.T) {
 		ModelV2:       {FamilyModel, 2, AvailabilityAvailable, MigrationDestructiveCutover, MaxStoredObjectBytesV2},
 		SingleProofV1: {FamilySingleProof, 1, AvailabilityReserved, MigrationRetireOnCutover, 16 << 20},
 		SingleProofV2: {FamilySingleProof, 2, AvailabilityAvailable, MigrationDestructiveCutover, MaxSingleProofBytesV2},
-		BackupV4:      {FamilyBackup, 4, AvailabilityAvailable, MigrationRetireOnCutover, 128 << 20},
-		BackupV5:      {FamilyBackup, 5, AvailabilityReserved, MigrationDestructiveCutover, MaxBackupEntryBytesV2},
+		BackupV4:      {FamilyBackup, 4, AvailabilityReserved, MigrationRetireOnCutover, 128 << 20},
+		BackupV5:      {FamilyBackup, 5, AvailabilityAvailable, MigrationDestructiveCutover, MaxBackupEntryBytesV2},
 		WALV1:         {FamilyWAL, 1, AvailabilityReserved, MigrationRetireOnCutover, 0},
 		WALV2:         {FamilyWAL, 2, AvailabilityAvailable, MigrationDestructiveCutover, MaxStoredObjectBytesV2},
 		ProofstoreV4:  {FamilyProofstore, 4, AvailabilityReserved, MigrationRetireOnCutover, 64 << 20},
@@ -119,11 +119,11 @@ func TestRuntimeGatesRejectReservedFormatsAndSuites(t *testing.T) {
 	if _, _, err := RequireWritable(ModelV2, cryptosuite.CNSMV1); err != nil {
 		t.Fatalf("RequireWritable(V2 CN_SM_V1) error = %v", err)
 	}
-	if _, _, err := RequireWritable(BackupV5, cryptosuite.CNSMV1); !errors.Is(err, ErrUnavailableFormat) {
-		t.Fatalf("RequireWritable(unimplemented backup v5) error = %v, want ErrUnavailableFormat", err)
+	if _, _, err := RequireWritable(BackupV5, cryptosuite.CNSMV1); err != nil {
+		t.Fatalf("RequireWritable(backup v5 CN_SM_V1) error = %v", err)
 	}
-	if _, _, err := RequireWritable(BackupV4, cryptosuite.INTLV1); err != nil {
-		t.Fatalf("RequireWritable(implemented backup v4) error = %v", err)
+	if _, _, err := RequireWritable(BackupV4, cryptosuite.INTLV1); !errors.Is(err, ErrUnavailableFormat) {
+		t.Fatalf("RequireWritable(retired backup v4) error = %v, want ErrUnavailableFormat", err)
 	}
 	if _, _, err := RequireWritable(SingleProofV1, cryptosuite.INTLV1); !errors.Is(err, ErrUnavailableFormat) {
 		t.Fatalf("RequireWritable(retired sproof v1) error = %v, want ErrUnavailableFormat", err)
@@ -284,7 +284,7 @@ func TestRegistrySnapshotCanonicalCBORGolden(t *testing.T) {
 		t.Fatalf("marshal registry snapshot: %v", err)
 	}
 	digest := sha256.Sum256(encoded)
-	const wantSHA256 = "fa5d594edb95cc7ea15877f3df780eb3e1fa89eb52b2a333c5b91baaa677cdb3"
+	const wantSHA256 = "a022216a1e5bc2f8f219d0ecd8b01d6fa55cfa09ccd3d813e6f4623e9d9ace46"
 	if got := hex.EncodeToString(digest[:]); got != wantSHA256 {
 		t.Fatalf("registry snapshot SHA-256 = %s, want %s", got, wantSHA256)
 	}

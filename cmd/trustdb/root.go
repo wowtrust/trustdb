@@ -202,6 +202,9 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("history.tile_size", defaults.History.TileSize)
 	v.SetDefault("history.hot_window_leaves", defaults.History.HotWindowLeaves)
 	v.SetDefault("backup.compression", defaults.Backup.Compression)
+	v.SetDefault("backup.key_provider", defaults.Backup.KeyProvider)
+	v.SetDefault("backup.key_id", defaults.Backup.KeyID)
+	v.SetDefault("backup.frame_bytes", defaults.Backup.FrameBytes)
 	v.SetDefault("proofstore.artifact_sync_mode", defaults.Proofstore.ArtifactSyncMode)
 	v.SetDefault("proofstore.record_index_mode", defaults.Proofstore.RecordIndexMode)
 	v.SetDefault("proofstore.tikv_pd_endpoints", defaults.Proofstore.TiKVPDAddresses)
@@ -354,6 +357,9 @@ func setDefaults(v *viper.Viper) {
 	bindEnv(v, "history.tile_size", "TRUSTDB_HISTORY_TILE_SIZE")
 	bindEnv(v, "history.hot_window_leaves", "TRUSTDB_HISTORY_HOT_WINDOW_LEAVES")
 	bindEnv(v, "backup.compression", "TRUSTDB_BACKUP_COMPRESSION")
+	bindEnv(v, "backup.key_provider", "TRUSTDB_BACKUP_KEY_PROVIDER")
+	bindEnv(v, "backup.key_id", "TRUSTDB_BACKUP_KEY_ID")
+	bindEnv(v, "backup.frame_bytes", "TRUSTDB_BACKUP_FRAME_BYTES")
 	bindEnv(v, "proofstore.artifact_sync_mode", "TRUSTDB_PROOFSTORE_ARTIFACT_SYNC_MODE")
 	bindEnv(v, "proofstore.record_index_mode", "TRUSTDB_PROOFSTORE_RECORD_INDEX_MODE")
 	bindEnv(v, "proofstore.tikv_pd_endpoints", "TRUSTDB_PROOFSTORE_TIKV_PD_ENDPOINTS", "TRUSTDB_TIKV_PD_ENDPOINTS")
@@ -653,6 +659,10 @@ func configString(cfg trustconfig.Config, key string) string {
 		return cfg.Proofstore.TiKVNamespace
 	case "backup.compression":
 		return cfg.Backup.Compression
+	case "backup.key_provider":
+		return cfg.Backup.KeyProvider
+	case "backup.key_id":
+		return cfg.Backup.KeyID
 	case "log.level":
 		return cfg.Log.Level
 	case "log.format":
