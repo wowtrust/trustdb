@@ -6,7 +6,7 @@ import { ArrowRight } from "@phosphor-icons/react";
 import { SiteFooter, SiteHeader, PageHero } from "./components/SiteChrome";
 import { useRoute, Link } from "./router";
 import { HomePage } from "./pages/HomePage";
-import { CliDocsPage, ConceptsDocsPage, DesktopDocsPage, DesktopInstallPage, DocsIndexPage, MissingDocsPage, NATSIngressDocsPage, OfflineVerificationPage, QuickStartPage, SdkDocsPage, ServerDocsPage, SourceBuildPage, TroubleshootingPage } from "./pages/DocsPages";
+import { BackupRecoveryDocsPage, CliDocsPage, ConceptsDocsPage, DesktopDocsPage, DesktopInstallPage, DocsIndexPage, FeatureCatalogDocsPage, FISCOBCOSDocsPage, MissingDocsPage, NATSIngressDocsPage, OfflineVerificationPage, OperationsDocsPage, QuickStartPage, SdkDocsPage, ServerDocsPage, SourceBuildPage, TroubleshootingPage } from "./pages/DocsPages";
 import { PerformancePage } from "./pages/PerformancePage";
 import { SproofPage } from "./pages/SproofPage";
 import { ChangelogPage, DownloadsPage } from "./pages/ReleasePages";
@@ -14,6 +14,7 @@ import { t, useLocale } from "./i18n";
 import { productExplanation } from "./content/productExplanation";
 import { useDocsOnboarding } from "./content/docsOnboarding";
 import { natsIngressContent } from "./content/natsIngress";
+import { operationsGuides } from "./content/operationsGuides";
 
 gsap.registerPlugin(ScrollTrigger, useGSAP);
 
@@ -23,6 +24,10 @@ const titles = {
   "/docs/concepts": "理解 TrustDB · 系统与证据模型",
   "/docs/quick-start": "快速开始 · TrustDB 文档",
   "/docs/server": "服务器 · TrustDB 文档",
+  "/docs/features": "功能开关 · TrustDB 文档",
+  "/docs/backup-recovery": "备份与恢复 · TrustDB 文档",
+  "/docs/operations": "生产运维 · TrustDB 文档",
+  "/docs/fisco-bcos": "FISCO BCOS · TrustDB 文档",
   "/docs/cli": "CLI · TrustDB 文档",
   "/docs/sdk": "Go SDK · TrustDB 文档",
   "/docs/nats-ingress": "NATS / JetStream · TrustDB 文档",
@@ -32,7 +37,7 @@ const titles = {
   "/docs/source-build": "从源码构建 · TrustDB 文档",
   "/docs/troubleshooting": "故障排查 · TrustDB 文档",
   "/performance": "性能基线 · TrustDB",
-  "/sproof": ".sproof v1 · TrustDB",
+  "/sproof": ".sproof v2 · TrustDB",
   "/changelog": "版本与开发日志 · TrustDB",
   "/downloads": "下载 · TrustDB",
 };
@@ -43,6 +48,10 @@ function RouteView({ route }) {
   if (route === "/docs/concepts") return <ConceptsDocsPage route={route} />;
   if (route === "/docs/quick-start") return <QuickStartPage route={route} />;
   if (route === "/docs/server") return <ServerDocsPage route={route} />;
+  if (route === "/docs/features") return <FeatureCatalogDocsPage route={route} />;
+  if (route === "/docs/backup-recovery") return <BackupRecoveryDocsPage route={route} />;
+  if (route === "/docs/operations") return <OperationsDocsPage route={route} />;
+  if (route === "/docs/fisco-bcos") return <FISCOBCOSDocsPage route={route} />;
   if (route === "/docs/cli") return <CliDocsPage route={route} />;
   if (route === "/docs/sdk") return <SdkDocsPage route={route} />;
   if (route === "/docs/nats-ingress") return <NATSIngressDocsPage route={route} />;
@@ -63,6 +72,7 @@ export function App() {
   const { route, navigationKey } = useRoute();
   const locale = useLocale();
   const docsCopy = useDocsOnboarding(locale, route.startsWith("/docs"));
+  const operationsCopy = operationsGuides(locale);
   const root = useRef(null);
 
   useEffect(() => {
@@ -74,13 +84,17 @@ export function App() {
       "/docs/offline-verification": docsCopy.offline.title,
       "/docs/server": docsCopy.server.title,
       "/docs/troubleshooting": docsCopy.troubleshooting.title,
+      "/docs/features": operationsCopy.featureCatalog.title,
+      "/docs/backup-recovery": operationsCopy.backupRecovery.title,
+      "/docs/operations": operationsCopy.operations.title,
+      "/docs/fisco-bcos": operationsCopy.fiscoBCOS.title,
     };
     document.title = route === "/docs/concepts"
       ? `${productExplanation(locale).concepts.title} · TrustDB`
       : onboardingTitles[route]
         ? `${onboardingTitles[route]} · TrustDB`
         : t(titles[route] || "页面未找到 · TrustDB");
-  }, [route, locale, docsCopy]);
+  }, [route, locale, docsCopy, operationsCopy]);
 
   useLayoutEffect(() => {
     const rootElement = document.documentElement;

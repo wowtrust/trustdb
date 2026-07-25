@@ -66,7 +66,7 @@ github.com/wowtrust/trustdb
 
 首个正式版通过 [GitHub Releases](https://github.com/wowtrust/trustdb/releases/tag/v1.0.0) 发布，包含 Linux、macOS、Windows 的服务器与 CLI、四种自签名桌面客户端、多架构 Docker 镜像和统一的 `SHA256SUMS`。
 
-本版正式确立 `github.com/wowtrust/trustdb` module 路径，并包含持久化 STH 合并锚定、covering anchor 离线证据导出、可恢复 L5 coverage 投影、存储 schema v4 和当前逻辑备份格式。Go SDK 可直接固定正式标签：
+v1.0.0 发布时正式确立了 `github.com/wowtrust/trustdb` module 路径，并包含持久化 STH 合并锚定、covering anchor 离线证据导出、可恢复 L5 coverage 投影、存储 schema v4 与 `.sproof v1`。当前 `main` 此后已经完成一次明确的破坏性 V2/V5 切换：proofstore schema v5、全链路 suite 绑定对象、`.sproof v2`，以及 `INTL_V1` / `CN_SM_V1` 端到端证据生成。v1.0.0 仍是当前最新正式发布的二进制与 SDK 标签：
 
 ```bash
 go get github.com/wowtrust/trustdb@v1.0.0
@@ -76,9 +76,10 @@ Docker Hub 同步发布 amd64 与 arm64 镜像，并提供不可变版本标签�
 
 ```bash
 docker pull wsy19990317/trustdb:1.0.0
-read -r -s -p '开发密钥口令：' TRUSTDB_DEV_KEY_PASSPHRASE
-export TRUSTDB_DEV_KEY_PASSPHRASE
+printf '开发密钥口令：'
+IFS= read -r -s TRUSTDB_DEV_KEY_PASSPHRASE
 printf '\n'
+export TRUSTDB_DEV_KEY_PASSPHRASE
 docker run -d --name trustdb \
   -e TRUSTDB_DEV_KEY_PASSPHRASE \
   -p 127.0.0.1:8080:8080 \
@@ -121,7 +122,7 @@ curl --fail http://127.0.0.1:8080/healthz
 | L4 | batch root 已进入 Global Transparency Log，并能证明包含于目标 STH。 | `GlobalLogProof` / `.tdgproof` |
 | L5 | 受支持的 anchor sink 已为对应 STH/global root 产生匹配结果；只有真实外部 sink 才增加独立时间语义。 | `STHAnchorResult` / `.tdanchor-result` |
 
-桌面客户端和交换场景推荐使用 `.sproof` 单文件证明。它可以包含 L3 `ProofBundle`、可选 L4 `GlobalLogProof` 和可选 L5 `STHAnchorResult`。稳定 v1 格式见 [formats/SPROOF_V1.md](formats/SPROOF_V1.md)。
+桌面客户端和交换场景推荐使用 `.sproof` 单文件证明。它可以包含 L3 `ProofBundle`、可选 L4 `GlobalLogProof`、可选 L5 `STHAnchorResult`，以及有界的公开身份/状态证据。当前版本只接受 [formats/SPROOF_V2.md](formats/SPROOF_V2.md) 定义的 suite-bound v2；v1 已退役，不读取、不迁移，也不会失败后回退尝试。
 
 ## 架构
 
@@ -150,7 +151,16 @@ file、Pebble 和每个 TiKV namespace 使用 proofstore storage schema v5。旧
 
 ## 快速开始
 
-从 [v1.0.0 发布页](https://github.com/wowtrust/trustdb/releases/tag/v1.0.0)下载与你的系统和处理器相符的服务器 / CLI 压缩包。解压前先用 [`SHA256SUMS`](https://github.com/wowtrust/trustdb/releases/download/v1.0.0/SHA256SUMS)核对归档，再从解压后的发布目录执行下列命令。这个本地 L3 流程无需启动服务，也不需要 Go 工具链；Windows 用户请直接跟随官网的[平台化快速开始](https://www.trustdb.ryan-wong.cn/docs/quick-start)。
+当前 README 与官网教程始终对应最新 `main` 的 V2 代码。先浅克隆、记录 commit，并用 `go.mod` 指定的 Go 版本构建 CLI；不要拿旧 `v1.0.0` 二进制执行本节命令。这个本地 L3 流程无需启动服务；Windows 用户可直接跟随官网的[平台化快速开始](https://www.trustdb.ryan-wong.cn/docs/quick-start)。
+
+```bash
+git clone --depth 1 https://github.com/wowtrust/trustdb.git trustdb-quickstart
+cd trustdb-quickstart
+git rev-parse HEAD
+mkdir -p bin
+go build -trimpath -o ./bin/trustdb ./cmd/trustdb
+./bin/trustdb version
+```
 
 先创建明确的输入和一次性练习目录：
 
@@ -162,16 +172,19 @@ mkdir -p .trustdb-dev
 生成一次性客户端和服务端身份。每条命令会写入 signer descriptor（`.key`）、公开 verifier descriptor（`.pub`）和独立的软件私钥材料（`.material`）。两个 descriptor 都是 canonical CBOR，不是裸私钥；默认 material 是经过认证的 SM4-GCM envelope。开发 passphrase 只通过标准环境变量传入，不能作为普通 argv flag。加密生成拒绝覆盖已有 material；已经签发过证据的身份必须显式轮换，不能重新生成：
 
 ```bash
-read -r -s -p '开发密钥口令：' TRUSTDB_DEV_KEY_PASSPHRASE
-export TRUSTDB_DEV_KEY_PASSPHRASE
+printf '开发密钥口令：'
+IFS= read -r -s TRUSTDB_DEV_KEY_PASSPHRASE
 printf '\n'
+export TRUSTDB_DEV_KEY_PASSPHRASE
 ./bin/trustdb key generate --out .trustdb-dev --prefix client
 ./bin/trustdb key generate --out .trustdb-dev --prefix server
 ```
 
+这里的 `--out .trustdb-dev` 是“把生成文件写入 `.trustdb-dev` 目录”，不是上传地址，也不是证明文件名；`--prefix client` 决定生成 `client.key`、`client.pub` 和 `client.material`。
+
 无人值守的开发服务可以改设 `TRUSTDB_DEV_KEY_PASSPHRASE_FILE`。该变量必须指向仅 owner 可读的普通文件，同时必须取消 `TRUSTDB_DEV_KEY_PASSPHRASE`；secret file 应位于密钥目录及其备份范围之外。
 
-开发/互操作环境可显式生成 SM2 身份。该命令只开放密钥准备和 Registry V2 生命周期测试；服务端生成 CN_SM_V1 证据仍由 #454 控制：
+开发/互操作环境可显式生成 SM2 身份。使用 `CN_SM_V1` 服务端 descriptor 启动服务后，claim、receipt、Merkle proof、STH、anchor 与 `.sproof v2` 都按 SM2/SM3 suite 生成；受信客户端 descriptor 与恢复后的 proofstore namespace 必须使用同一 suite：
 
 ```bash
 ./bin/trustdb key generate \
@@ -187,9 +200,10 @@ printf '\n'
 只轮换开发 KEK、保持签名私钥和公开身份不变：
 
 ```bash
-read -r -s -p '新开发密钥口令：' TRUSTDB_DEV_KEY_PASSPHRASE_NEW
-export TRUSTDB_DEV_KEY_PASSPHRASE_NEW
+printf '新开发密钥口令：'
+IFS= read -r -s TRUSTDB_DEV_KEY_PASSPHRASE_NEW
 printf '\n'
+export TRUSTDB_DEV_KEY_PASSPHRASE_NEW
 ./bin/trustdb key rewrap --descriptor .trustdb-dev/client.key
 export TRUSTDB_DEV_KEY_PASSPHRASE="$TRUSTDB_DEV_KEY_PASSPHRASE_NEW"
 unset TRUSTDB_DEV_KEY_PASSPHRASE_NEW
@@ -310,7 +324,8 @@ unset TRUSTDB_DEV_KEY_PASSPHRASE_NEW
 - [ADOPTERS.md](ADOPTERS.md)：公开评估、试点和生产采用者。
 - [CHANGELOG.md](CHANGELOG.md)：面向用户整理的版本变化和已知限制。
 - [CONTRIBUTING.md](CONTRIBUTING.md)：Issue、PR、Commit、验证和 Review 标准。
-- [formats/SPROOF_V1.md](formats/SPROOF_V1.md)：稳定 `.sproof` v1 交换格式。
+- [formats/SPROOF_V2.md](formats/SPROOF_V2.md)：当前 `.sproof` v2 交换格式与离线信任边界。
+- [docs/zh-CN/README.md](docs/zh-CN/README.md)：按功能分类的中文用户与运维文档入口。
 - [formats/KEY_DESCRIPTOR_V1.md](formats/KEY_DESCRIPTOR_V1.md)：canonical key descriptor schema、provider union、解析、脱敏与迁移契约。
 - [formats/SDF_RECOVERY_BUNDLE_V1.md](formats/SDF_RECOVERY_BUNDLE_V1.md)：canonical SDF 签名引用与 wrapped-SM4 provider 恢复 artifact。
 - [docs/integrations/SDF_SIGNER.md](docs/integrations/SDF_SIGNER.md)：隔离 SDF 签名 sidecar、稳定厂商适配 ABI、SM2/SM4 托管边界、配置与真机资格测试。
