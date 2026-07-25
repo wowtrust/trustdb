@@ -136,6 +136,12 @@ func FromViper(v *viper.Viper) Config {
 			MaterializerPollInterval: v.GetString("batch.materializer_poll_interval"),
 			ProofWorkers:             v.GetInt("batch.proof_workers"),
 		},
+		WAL: WAL{
+			FsyncMode:           v.GetString("wal.fsync_mode"),
+			GroupCommitInterval: v.GetString("wal.group_commit_interval"),
+			MaxSegmentBytes:     v.GetInt64("wal.max_segment_bytes"),
+			KeepSegments:        v.GetInt("wal.keep_segments"),
+		},
 		GlobalLog: GlobalLog{
 			Enabled: v.GetBool("global_log.enabled"),
 			LogID:   v.GetString("global_log.log_id"),

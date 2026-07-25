@@ -75,6 +75,8 @@ func TestConfigEnvOverride(t *testing.T) {
 	t.Setenv("TRUSTDB_NATS_PROVISION", "false")
 	t.Setenv("TRUSTDB_NATS_STREAM_MAX_BYTES", "536870912")
 	t.Setenv("TRUSTDB_NATS_TOKEN", "nats-secret")
+	t.Setenv("TRUSTDB_WAL_MAX_SEGMENT_BYTES", "67108864")
+	t.Setenv("TRUSTDB_WAL_KEEP_SEGMENTS", "4")
 
 	var out, errOut bytes.Buffer
 	cmd := newRootCommand(&out, &errOut)
@@ -110,6 +112,13 @@ func TestConfigEnvOverride(t *testing.T) {
 	}
 	if globalLog["log_id"] != "node-log-a" {
 		t.Fatalf("global_log.log_id = %v", globalLog["log_id"])
+	}
+	walConfig, ok := cfg["wal"].(map[string]any)
+	if !ok {
+		t.Fatalf("wal is not an object: %#v", cfg["wal"])
+	}
+	if walConfig["max_segment_bytes"] != float64(67108864) || walConfig["keep_segments"] != float64(4) {
+		t.Fatalf("wal segment env overrides = %#v", walConfig)
 	}
 	server, ok := cfg["server"].(map[string]any)
 	if !ok {

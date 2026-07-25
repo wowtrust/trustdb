@@ -190,6 +190,10 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("batch.materializer_queue_size", defaults.Batch.MaterializerQueueSize)
 	v.SetDefault("batch.materializer_poll_interval", defaults.Batch.MaterializerPollInterval)
 	v.SetDefault("batch.proof_workers", defaults.Batch.ProofWorkers)
+	v.SetDefault("wal.fsync_mode", defaults.WAL.FsyncMode)
+	v.SetDefault("wal.group_commit_interval", defaults.WAL.GroupCommitInterval)
+	v.SetDefault("wal.max_segment_bytes", defaults.WAL.MaxSegmentBytes)
+	v.SetDefault("wal.keep_segments", defaults.WAL.KeepSegments)
 	v.SetDefault("global_log.enabled", defaults.GlobalLog.Enabled)
 	v.SetDefault("global_log.log_id", defaults.GlobalLog.LogID)
 	v.SetDefault("anchor.scope", defaults.Anchor.Scope)
@@ -338,6 +342,10 @@ func setDefaults(v *viper.Viper) {
 	bindEnv(v, "batch.materializer_queue_size", "TRUSTDB_BATCH_MATERIALIZER_QUEUE_SIZE")
 	bindEnv(v, "batch.materializer_poll_interval", "TRUSTDB_BATCH_MATERIALIZER_POLL_INTERVAL")
 	bindEnv(v, "batch.proof_workers", "TRUSTDB_BATCH_PROOF_WORKERS")
+	bindEnv(v, "wal.fsync_mode", "TRUSTDB_WAL_FSYNC_MODE")
+	bindEnv(v, "wal.group_commit_interval", "TRUSTDB_WAL_GROUP_COMMIT_INTERVAL")
+	bindEnv(v, "wal.max_segment_bytes", "TRUSTDB_WAL_MAX_SEGMENT_BYTES")
+	bindEnv(v, "wal.keep_segments", "TRUSTDB_WAL_KEEP_SEGMENTS")
 	bindEnv(v, "global_log.enabled", "TRUSTDB_GLOBAL_LOG_ENABLED")
 	bindEnv(v, "global_log.log_id", "TRUSTDB_GLOBAL_LOG_LOG_ID", "TRUSTDB_GLOBAL_LOG_ID")
 	bindEnv(v, "anchor.scope", "TRUSTDB_ANCHOR_SCOPE")
@@ -631,6 +639,10 @@ func configString(cfg trustconfig.Config, key string) string {
 		return cfg.Anchor.FISCOBCOS.TrustConfigFile
 	case "batch.proof_mode":
 		return cfg.Batch.ProofMode
+	case "wal.fsync_mode":
+		return cfg.WAL.FsyncMode
+	case "wal.group_commit_interval":
+		return cfg.WAL.GroupCommitInterval
 	case "proofstore.artifact_sync_mode":
 		return cfg.Proofstore.ArtifactSyncMode
 	case "proofstore.record_index_mode":
