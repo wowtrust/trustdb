@@ -511,6 +511,7 @@ func (s *FISCOBCOSStandardSink) readBlockQuorum(
 ) (fiscobcos.BlockHeader, fiscobcos.ConsensusSnapshot, error) {
 	var selectedHeader fiscobcos.BlockHeader
 	var selectedConsensus fiscobcos.ConsensusSnapshot
+	selected := false
 	successes := 0
 	for _, driver := range s.drivers {
 		header, err := driver.GetBlockHeader(ctx, blockNumber)
@@ -525,10 +526,11 @@ func (s *FISCOBCOSStandardSink) readBlockQuorum(
 			s.recordQuorumFailure(bcosQuorumOperationBlock, bcosQuorumFailureDisagreement)
 			return fiscobcos.BlockHeader{}, fiscobcos.ConsensusSnapshot{}, ambiguousDriverFailure("read_block", driver.Endpoint(), err)
 		}
-		if selectedHeader.Evidence.BlockNumber == 0 {
+		if !selected {
+			selected = true
 			selectedHeader = cloneBlockHeader(header)
 			selectedConsensus = cloneConsensus(consensus)
-		} else if !sameBlockHeader(selectedHeader, header) || !sameConsensusSnapshot(selectedConsensus, consensus) {
+		} else if !sameBlockHeader(selectedHeader, header) {
 			s.recordQuorumFailure(bcosQuorumOperationBlock, bcosQuorumFailureDisagreement)
 			return fiscobcos.BlockHeader{}, fiscobcos.ConsensusSnapshot{}, ambiguousDriverFailure("read_block", driver.Endpoint(), fiscobcos.ErrEndpointDisagreement)
 		}
@@ -586,7 +588,7 @@ func (s *FISCOBCOSStandardSink) collectValidatorHistory(
 		if err != nil {
 			return nil, err
 		}
-		if !sameHistoryHeaderAndFinality(history[index], full) {
+		if !sameHistoryHeader(history[index], full) {
 			s.recordQuorumFailure(bcosQuorumOperationHistory, bcosQuorumFailureDisagreement)
 			return nil, ambiguousDriverFailure("validator_history", s.drivers[0].Endpoint(), fiscobcos.ErrEndpointDisagreement)
 		}
@@ -616,6 +618,8 @@ func (s *FISCOBCOSStandardSink) readValidatorHistoryBlockQuorum(
 	var selected fiscobcos.ValidatorHistoryBlock
 	var selectedRaw []byte
 	successes := 0
+	var firstEvidenceErr error
+	var firstEvidenceEndpoint string
 	for _, driver := range s.drivers {
 		historyDriver, ok := driver.(fiscobcos.ValidatorHistoryDriver)
 		if !ok {
@@ -623,6 +627,10 @@ func (s *FISCOBCOSStandardSink) readValidatorHistoryBlockQuorum(
 		}
 		item, err := historyDriver.GetValidatorHistoryBlock(ctx, blockNumber, includeContents)
 		if err != nil {
+			if firstEvidenceErr == nil {
+				firstEvidenceErr = err
+				firstEvidenceEndpoint = driver.Endpoint()
+			}
 			continue
 		}
 		requireFinality := blockNumber != s.trust.TrustedCheckpoint.BlockNumber
@@ -630,7 +638,7 @@ func (s *FISCOBCOSStandardSink) readValidatorHistoryBlockQuorum(
 			s.recordQuorumFailure(bcosQuorumOperationHistory, bcosQuorumFailureDisagreement)
 			return fiscobcos.ValidatorHistoryBlock{}, ambiguousDriverFailure("validator_history", driver.Endpoint(), err)
 		}
-		raw, err := cborx.Marshal(item)
+		raw, err := validatorHistoryQuorumKey(item)
 		if err != nil {
 			return fiscobcos.ValidatorHistoryBlock{}, permanentDriverFailure("validator_history", driver.Endpoint(), fiscobcos.ErrDriverInvalid)
 		}
@@ -647,6 +655,13 @@ func (s *FISCOBCOSStandardSink) readValidatorHistoryBlockQuorum(
 	}
 	if successes < int(s.trust.ReadQuorum) {
 		s.recordQuorumFailure(bcosQuorumOperationHistory, bcosQuorumFailureInsufficient)
+		if firstEvidenceErr != nil {
+			return fiscobcos.ValidatorHistoryBlock{}, ambiguousDriverFailure(
+				"validator_history",
+				firstEvidenceEndpoint,
+				fmt.Errorf("block=%d include_contents=%t: %w", blockNumber, includeContents, firstEvidenceErr),
+			)
+		}
 		return fiscobcos.ValidatorHistoryBlock{}, ambiguousDriverFailure("validator_history", s.drivers[0].Endpoint(), fiscobcos.ErrIncompleteChainEvidence)
 	}
 	return selected, nil
@@ -690,14 +705,25 @@ func validateValidatorHistoryObservation(
 	return nil
 }
 
-func sameHistoryHeaderAndFinality(left, right fiscobcos.ValidatorHistoryBlock) bool {
+func sameHistoryHeader(left, right fiscobcos.ValidatorHistoryBlock) bool {
 	left.Transactions = nil
 	left.Receipts = nil
+	left.Finality.Signatures = nil
 	right.Transactions = nil
 	right.Receipts = nil
+	right.Finality.Signatures = nil
 	leftRaw, leftErr := cborx.Marshal(left)
 	rightRaw, rightErr := cborx.Marshal(right)
 	return leftErr == nil && rightErr == nil && bytes.Equal(leftRaw, rightRaw)
+}
+
+func validatorHistoryQuorumKey(item fiscobcos.ValidatorHistoryBlock) ([]byte, error) {
+	// A finalized PBFT block can legitimately be retained with different
+	// quorum subsets at different nodes. Compare the consensus-critical block
+	// and transition contents here; the selected signature subset is verified
+	// cryptographically before the anchor result is returned.
+	item.Finality.Signatures = nil
+	return cborx.Marshal(item)
 }
 
 func payloadForSTH(sth model.SignedTreeHead) (fiscobcos.AnchorPayload, error) {
@@ -856,8 +882,7 @@ func sameBlockHeader(left, right fiscobcos.BlockHeader) bool {
 		bytes.Equal(left.Evidence.BlockHash, right.Evidence.BlockHash) &&
 		bytes.Equal(left.Evidence.RawCanonicalHeader, right.Evidence.RawCanonicalHeader) &&
 		left.Observation.BlockNumber == right.Observation.BlockNumber &&
-		bytes.Equal(left.Observation.BlockHashClaim, right.Observation.BlockHashClaim) &&
-		bytes.Equal(left.Observation.NormalizedRPCHeader, right.Observation.NormalizedRPCHeader)
+		bytes.Equal(left.Observation.BlockHashClaim, right.Observation.BlockHashClaim)
 }
 
 func sameByteSlices(left, right [][]byte) bool {
@@ -866,20 +891,6 @@ func sameByteSlices(left, right [][]byte) bool {
 	}
 	for index := range left {
 		if !bytes.Equal(left[index], right[index]) {
-			return false
-		}
-	}
-	return true
-}
-
-func sameConsensusSnapshot(left, right fiscobcos.ConsensusSnapshot) bool {
-	if left.BlockNumber != right.BlockNumber || !bytes.Equal(left.BlockHash, right.BlockHash) ||
-		len(left.Finality.Signatures) != len(right.Finality.Signatures) {
-		return false
-	}
-	for i := range left.Finality.Signatures {
-		if left.Finality.Signatures[i].ValidatorNodeID != right.Finality.Signatures[i].ValidatorNodeID ||
-			!bytes.Equal(left.Finality.Signatures[i].Signature, right.Finality.Signatures[i].Signature) {
 			return false
 		}
 	}

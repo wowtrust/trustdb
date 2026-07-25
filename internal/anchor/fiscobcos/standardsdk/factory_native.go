@@ -64,8 +64,15 @@ const (
 	maxSDKParentBlocks          = 1024
 	maxSDKConsensusWeights      = 1024
 	maxSDKTransactionNonceBytes = 1024
+	maxSDKUnsignedDecimalDigits = 80
 	supportedNativeVersion      = "3.6.0"
 	supportedNativeCommit       = "53240138c396c10cb0e1a2b7b4d5c0cdaa0ac539"
+	// FISCO BCOS v3.16.3 Ledger::checkEntryValid returns GetStorageError for
+	// both an absent transaction/receipt row and an underlying storage error.
+	// Treat it as temporarily unobservable: publication remains fail closed
+	// because success still requires the complete transaction, receipt Merkle
+	// proofs, and PBFT finality evidence.
+	sdkLedgerGetStorageErrorCode = 3008
 )
 
 type nativeDriver struct {
@@ -348,32 +355,35 @@ func (d *nativeDriver) GetReceiptWithProof(ctx context.Context, attempt fiscobco
 	}
 	receipt, err := d.client.GetTransactionReceipt(ctx, hash, true)
 	if err != nil {
-		return fiscobcos.ReceiptWithProof{}, err
+		return fiscobcos.ReceiptWithProof{}, normalizeTransactionLookupError(err)
 	}
 	if receipt == nil {
 		return fiscobcos.ReceiptWithProof{}, fiscobcos.ErrTransactionNotFound
 	}
 	transaction, err := d.client.GetTransactionByHash(ctx, hash, true)
 	if err != nil {
-		return fiscobcos.ReceiptWithProof{}, err
+		return fiscobcos.ReceiptWithProof{}, normalizeTransactionLookupError(err)
 	}
 	if transaction == nil {
 		return fiscobcos.ReceiptWithProof{}, fiscobcos.ErrTransactionNotFound
 	}
 	if receipt.ReceiptProof == nil || transaction.TransactionProof == nil {
-		return fiscobcos.ReceiptWithProof{}, fiscobcos.ErrIncompleteChainEvidence
+		return fiscobcos.ReceiptWithProof{}, fmt.Errorf(
+			"%w: receipt or transaction Merkle proof is absent",
+			fiscobcos.ErrIncompleteChainEvidence,
+		)
 	}
 	if err := validateReceiptRPCBounds(receipt); err != nil {
-		return fiscobcos.ReceiptWithProof{}, err
+		return fiscobcos.ReceiptWithProof{}, fmt.Errorf("validate receipt RPC bounds: %w", err)
 	}
 	if err := validateTransactionRPCBounds(transaction); err != nil {
-		return fiscobcos.ReceiptWithProof{}, err
+		return fiscobcos.ReceiptWithProof{}, fmt.Errorf("validate transaction RPC bounds: %w", err)
 	}
 	if err := validateReceiptTransactionIdentity(receipt, transaction, attempt, d.trust); err != nil {
-		return fiscobcos.ReceiptWithProof{}, err
+		return fiscobcos.ReceiptWithProof{}, fmt.Errorf("bind receipt and transaction identity: %w", err)
 	}
 	if receipt.BlockNumber <= 0 {
-		return fiscobcos.ReceiptWithProof{}, fiscobcos.ErrIncompleteChainEvidence
+		return fiscobcos.ReceiptWithProof{}, fmt.Errorf("%w: receipt block number is not positive", fiscobcos.ErrIncompleteChainEvidence)
 	}
 	blockHash, err := d.client.GetBlockHashByNumber(ctx, int64(receipt.BlockNumber))
 	if err != nil {
@@ -383,17 +393,22 @@ func (d *nativeDriver) GetReceiptWithProof(ctx context.Context, attempt fiscobco
 	if receipt.Status == types.Success {
 		event, err = decodeAnchorEvent(receipt, d.trust.CryptoMode, d.trust.Contract)
 		if err != nil {
-			return fiscobcos.ReceiptWithProof{}, err
+			return fiscobcos.ReceiptWithProof{}, fmt.Errorf("decode anchor event: %w", err)
 		}
 	}
 	if receipt.Version > math.MaxInt32 || receipt.Status < math.MinInt32 || receipt.Status > math.MaxInt32 {
-		return fiscobcos.ReceiptWithProof{}, fiscobcos.ErrIncompleteChainEvidence
+		return fiscobcos.ReceiptWithProof{}, fmt.Errorf("%w: receipt version or status is outside the native range", fiscobcos.ErrIncompleteChainEvidence)
 	}
 	if receipt.Version >= 1 || receipt.ContractAddress != "" {
 		// The pinned Go SDK does not expose effectiveGasPrice, and RPC
 		// normalizes non-empty creation addresses so their exact native field
 		// bytes cannot be reconstructed.
-		return fiscobcos.ReceiptWithProof{}, fiscobcos.ErrIncompleteChainEvidence
+		return fiscobcos.ReceiptWithProof{}, fmt.Errorf(
+			"%w: receipt version=%d contract_address=%q cannot be reconstructed",
+			fiscobcos.ErrIncompleteChainEvidence,
+			receipt.Version,
+			receipt.ContractAddress,
+		)
 	}
 	if !encodedHexFits(receipt.Output, fiscobcos.MaxNativeEvidenceFieldBytes) {
 		return fiscobcos.ReceiptWithProof{}, fiscobcos.ErrIncompleteChainEvidence
@@ -491,7 +506,7 @@ func (d *nativeDriver) GetReceiptWithProof(ctx context.Context, attempt fiscobco
 		return fiscobcos.ReceiptWithProof{}, err
 	}
 	if len(rawReceipt) == 0 || len(rawReceipt) > maxSDKRawReceiptBytes {
-		return fiscobcos.ReceiptWithProof{}, fiscobcos.ErrDriverInvalid
+		return fiscobcos.ReceiptWithProof{}, fmt.Errorf("%w: normalized receipt JSON size=%d", fiscobcos.ErrDriverInvalid, len(rawReceipt))
 	}
 	receiptHash, err := strictHex32(receipt.Hash)
 	if err != nil {
@@ -502,15 +517,15 @@ func (d *nativeDriver) GetReceiptWithProof(ctx context.Context, attempt fiscobco
 	}
 	transactionPath, err := decodeProofNodes(transaction.TransactionProof)
 	if err != nil {
-		return fiscobcos.ReceiptWithProof{}, err
+		return fiscobcos.ReceiptWithProof{}, fmt.Errorf("decode transaction Merkle proof: %w", err)
 	}
 	receiptPath, err := decodeProofNodes(receipt.ReceiptProof)
 	if err != nil {
-		return fiscobcos.ReceiptWithProof{}, err
+		return fiscobcos.ReceiptWithProof{}, fmt.Errorf("decode receipt Merkle proof: %w", err)
 	}
 	txIndex, err := d.transactionIndex(ctx, uint64(receipt.BlockNumber), hash)
 	if err != nil {
-		return fiscobcos.ReceiptWithProof{}, err
+		return fiscobcos.ReceiptWithProof{}, fmt.Errorf("bind transaction index: %w", err)
 	}
 	var decodedEvent []byte
 	if receipt.Status == types.Success {
@@ -550,6 +565,22 @@ func (d *nativeDriver) GetReceiptWithProof(ctx context.Context, attempt fiscobco
 			ReceiptProofRPC: receiptPath, AnchorLogIndex: event.LogIndex,
 		},
 	}, nil
+}
+
+func normalizeTransactionLookupError(err error) error {
+	if err == nil {
+		return nil
+	}
+	var rpcErr client.Error
+	if errors.As(err, &rpcErr) && rpcErr.ErrorCode() == sdkLedgerGetStorageErrorCode {
+		return fmt.Errorf(
+			"%w: FISCO BCOS ledger lookup returned code %d: %w",
+			fiscobcos.ErrTransactionNotFound,
+			rpcErr.ErrorCode(),
+			err,
+		)
+	}
+	return err
 }
 
 func (d *nativeDriver) GetBlockHeader(ctx context.Context, blockNumber uint64) (fiscobcos.BlockHeader, error) {
@@ -747,7 +778,7 @@ func (d *nativeDriver) GetValidatorHistoryBlock(
 ) (fiscobcos.ValidatorHistoryBlock, error) {
 	header, err := d.GetBlockHeader(ctx, blockNumber)
 	if err != nil {
-		return fiscobcos.ValidatorHistoryBlock{}, err
+		return fiscobcos.ValidatorHistoryBlock{}, fmt.Errorf("read history block header %d: %w", blockNumber, err)
 	}
 	result := fiscobcos.ValidatorHistoryBlock{
 		Block: header.Evidence,
@@ -755,7 +786,7 @@ func (d *nativeDriver) GetValidatorHistoryBlock(
 	if blockNumber != d.trust.TrustedCheckpoint.BlockNumber {
 		consensus, err := d.GetConsensusSnapshot(ctx, blockNumber)
 		if err != nil {
-			return fiscobcos.ValidatorHistoryBlock{}, err
+			return fiscobcos.ValidatorHistoryBlock{}, fmt.Errorf("read history block finality %d: %w", blockNumber, err)
 		}
 		result.Finality = consensus.Finality
 	}
@@ -764,12 +795,16 @@ func (d *nativeDriver) GetValidatorHistoryBlock(
 	}
 	block, err := d.client.GetBlockByNumber(ctx, int64(blockNumber), false, true)
 	if err != nil {
-		return fiscobcos.ValidatorHistoryBlock{}, err
+		return fiscobcos.ValidatorHistoryBlock{}, fmt.Errorf("read history block contents %d: %w", blockNumber, err)
 	}
 	if block == nil || block.Number != blockNumber ||
 		len(block.Transactions) == 0 ||
 		len(block.Transactions) > fiscobcos.MaxNativeEvidenceItems {
-		return fiscobcos.ValidatorHistoryBlock{}, fiscobcos.ErrIncompleteChainEvidence
+		return fiscobcos.ValidatorHistoryBlock{}, fmt.Errorf(
+			"%w: history block %d contents are absent or oversized",
+			fiscobcos.ErrIncompleteChainEvidence,
+			blockNumber,
+		)
 	}
 	blockHash, err := strictHex32(block.Hash)
 	if err != nil || !bytes.Equal(blockHash, header.Evidence.BlockHash) {
@@ -785,19 +820,19 @@ func (d *nativeDriver) GetValidatorHistoryBlock(
 		hash := common.HexToHash(hashText)
 		transaction, err := d.client.GetTransactionByHash(ctx, hash, false)
 		if err != nil {
-			return fiscobcos.ValidatorHistoryBlock{}, err
+			return fiscobcos.ValidatorHistoryBlock{}, fmt.Errorf("read transition transaction %d/%d: %w", blockNumber, index, err)
 		}
 		receipt, err := d.client.GetTransactionReceipt(ctx, hash, false)
 		if err != nil {
-			return fiscobcos.ValidatorHistoryBlock{}, err
+			return fiscobcos.ValidatorHistoryBlock{}, fmt.Errorf("read transition receipt %d/%d: %w", blockNumber, index, err)
 		}
 		transactionEvidence, err := d.transitionTransactionEvidence(transaction, hash)
 		if err != nil {
-			return fiscobcos.ValidatorHistoryBlock{}, err
+			return fiscobcos.ValidatorHistoryBlock{}, fmt.Errorf("decode transition transaction %d/%d: %w", blockNumber, index, err)
 		}
 		receiptEvidence, err := d.transitionReceiptEvidence(receipt, hash, blockNumber)
 		if err != nil {
-			return fiscobcos.ValidatorHistoryBlock{}, err
+			return fiscobcos.ValidatorHistoryBlock{}, fmt.Errorf("decode transition receipt %d/%d: %w", blockNumber, index, err)
 		}
 		result.Transactions[index] = transactionEvidence
 		result.Receipts[index] = receiptEvidence
@@ -827,9 +862,17 @@ func (d *nativeDriver) transitionTransactionEvidence(
 	if err != nil {
 		return fiscobcos.TransitionTransactionEvidence{}, fiscobcos.ErrIncompleteChainEvidence
 	}
+	// The pinned node serializes the nonce as toHex(nonce) without a 0x
+	// prefix, while the consensus transaction hash preimage (v3.16.3
+	// TarsHashable.h) covers the raw nonce string bytes. Decode the RPC
+	// representation back to the raw string before recomputing the hash.
+	rawNonce, err := decodeHexBoundedOptional(transaction.Nonce, maxSDKTransactionNonceBytes)
+	if err != nil {
+		return fiscobcos.TransitionTransactionEvidence{}, fiscobcos.ErrIncompleteChainEvidence
+	}
 	fields := fiscobcos.NativeTransactionFields{
 		Version: 0, ChainID: transaction.ChainID, GroupID: transaction.GroupID,
-		BlockLimit: transaction.BlockLimit, Nonce: transaction.Nonce,
+		BlockLimit: transaction.BlockLimit, Nonce: string(rawNonce),
 		To: to, Input: input, ABI: transaction.Abi,
 	}
 	preimage, err := fiscobcos.MarshalNativeTransactionHashPreimage(fields)
@@ -1417,12 +1460,14 @@ func decodeAnchorEvent(receipt *types.Receipt, mode fiscobcos.CryptoMode, contra
 	if err != nil {
 		return fiscobcos.AnchorPublishedEvent{}, err
 	}
-	address := common.BytesToAddress(contract.Address)
 	var matched *types.NewLog
 	var matchedIndex uint64
 	for index, entry := range receipt.Logs {
-		if entry == nil || !strings.EqualFold(entry.Address, address.Hex()) ||
-			len(entry.Topics) != 4 {
+		if entry == nil || len(entry.Topics) != 4 {
+			continue
+		}
+		entryAddress, err := strictHexBytes(entry.Address, 20)
+		if err != nil || !bytes.Equal(entryAddress, contract.Address) {
 			continue
 		}
 		topic0, err := strictHex32(entry.Topics[0])
@@ -1509,13 +1554,21 @@ func validateReceiptRPCBounds(receipt *types.Receipt) error {
 	if err := addPlainRPCBudget(&budget, receipt.Message, maxSDKConfigStringBytes, maxSDKRawReceiptBytes); err != nil {
 		return err
 	}
+	if err := addUnsignedDecimalRPCBudget(
+		&budget,
+		receipt.GasUsed,
+		maxSDKUnsignedDecimalDigits,
+		true,
+		maxSDKRawReceiptBytes,
+	); err != nil {
+		return fmt.Errorf("gasUsed: %w", err)
+	}
 	for _, field := range []struct {
 		value string
 		limit int
 	}{
 		{receipt.ContractAddress, 20},
 		{receipt.From, 20},
-		{receipt.GasUsed, 32},
 		{receipt.Hash, 32},
 		{receipt.Input, fiscobcos.MaxPayloadBytes + 4},
 		{receipt.Output, maxSDKDecodedEventBytes},
@@ -1581,11 +1634,26 @@ func validateBlockRPCBounds(block *types.Block) error {
 		return err
 	}
 	for _, field := range []struct {
+		name  string
+		value string
+	}{
+		{name: "gasLimit", value: block.GasLimit},
+		{name: "gasUsed", value: block.GasUsed},
+	} {
+		if err := addUnsignedDecimalRPCBudget(
+			&budget,
+			field.value,
+			maxSDKUnsignedDecimalDigits,
+			true,
+			maxSDKRawHeaderBytes,
+		); err != nil {
+			return fmt.Errorf("%s: %w", field.name, err)
+		}
+	}
+	for _, field := range []struct {
 		value string
 		limit int
 	}{
-		{block.GasLimit, 32},
-		{block.GasUsed, 32},
 		{block.Hash, 32},
 		{block.ReceiptsRoot, 32},
 		{block.StateRoot, 32},
@@ -1673,6 +1741,27 @@ func addPlainRPCBudget(budget *int, value string, fieldLimit, totalLimit int) er
 func addHexRPCBudget(budget *int, value string, decodedLimit int, allowEmpty bool, totalLimit int) error {
 	if err := validateHexText(value, decodedLimit, allowEmpty); err != nil {
 		return err
+	}
+	return addRPCBudget(budget, len(value), totalLimit)
+}
+
+func addUnsignedDecimalRPCBudget(
+	budget *int,
+	value string,
+	maxDigits int,
+	allowEmpty bool,
+	totalLimit int,
+) error {
+	if value == "" && allowEmpty {
+		return nil
+	}
+	if maxDigits < 1 || value == "" || len(value) > maxDigits || strings.TrimSpace(value) != value {
+		return fiscobcos.ErrDriverInvalid
+	}
+	for index := 0; index < len(value); index++ {
+		if value[index] < '0' || value[index] > '9' {
+			return fiscobcos.ErrDriverInvalid
+		}
 	}
 	return addRPCBudget(budget, len(value), totalLimit)
 }

@@ -470,9 +470,11 @@ func attachStructuralRawBCOSEvidence(
 }
 
 type offlineE2EFixture struct {
-	content []byte
-	proof   model.SingleProof
-	trust   OfflineTrust
+	content   []byte
+	proof     model.SingleProof
+	trust     OfflineTrust
+	batchRoot model.BatchRoot
+	bundles   []model.ProofBundle
 }
 
 func newOfflineE2EFixture(t *testing.T, suiteID cryptosuite.ID) offlineE2EFixture {
@@ -627,8 +629,10 @@ func newOfflineE2EFixture(t *testing.T, suiteID cryptosuite.ID) offlineE2EFixtur
 		t.Fatal(err)
 	}
 	return offlineE2EFixture{
-		content: contents[0],
-		proof:   proof,
+		content:   contents[0],
+		proof:     proof,
+		batchRoot: commit.Root,
+		bundles:   append([]model.ProofBundle(nil), commit.Bundles...),
 		trust: OfflineTrust{
 			Proof: verify.TrustedKeys{
 				ClientPublicKey: clientPublic,

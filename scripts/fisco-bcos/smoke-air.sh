@@ -13,6 +13,7 @@ P2P_PORT=${BCOS_P2P_PORT:-31300}
 RPC_PORT=${BCOS_RPC_PORT:-21200}
 ADMIN_ADDRESS=0x0000000000000000000000000000000000000001
 RAW_EVM_FIXTURE=false
+QUALIFICATION=false
 PERFORMANCE_WARMUP=5
 PERFORMANCE_SAMPLES=20
 ROOT_SM_CERT_WAS_PRESENT=false
@@ -21,7 +22,7 @@ ROOT_SM_PARAM_WAS_PRESENT=false
 [[ -e ${REPO_ROOT}/sm_sm2.param ]] && ROOT_SM_PARAM_WAS_PRESENT=true
 
 usage() {
-    echo "usage: $0 --mode standard|guomi --work-dir DIR [--cache-dir DIR] [--raw-evm-fixture] [--p2p-port PORT] [--rpc-port PORT] [--performance-warmup 3-20] [--performance-samples 20-100]" >&2
+    echo "usage: $0 --mode standard|guomi --work-dir DIR [--cache-dir DIR] [--qualification] [--raw-evm-fixture] [--p2p-port PORT] [--rpc-port PORT] [--performance-warmup 3-20] [--performance-samples 20-100]" >&2
 }
 
 while (($#)); do
@@ -33,6 +34,7 @@ while (($#)); do
         --rpc-port) RPC_PORT=$2; shift 2 ;;
         --performance-warmup) PERFORMANCE_WARMUP=$2; shift 2 ;;
         --performance-samples) PERFORMANCE_SAMPLES=$2; shift 2 ;;
+        --qualification) QUALIFICATION=true; shift ;;
         --raw-evm-fixture) RAW_EVM_FIXTURE=true; shift ;;
         -h|--help) usage; exit 0 ;;
         *) usage; exit 2 ;;
@@ -45,6 +47,10 @@ if [[ ${MODE} != standard && ${MODE} != guomi ]]; then
 fi
 if [[ -z ${WORK_DIR} ]]; then
     echo "--work-dir is required so evidence is not written to an ambiguous temporary path" >&2
+    exit 2
+fi
+if [[ ${QUALIFICATION} == true && ${RAW_EVM_FIXTURE} == true ]]; then
+    echo "--qualification requires the production TrustDB anchor contract" >&2
     exit 2
 fi
 if [[ ! ${PERFORMANCE_WARMUP} =~ ^[0-9]+$ ]] || \
@@ -211,8 +217,10 @@ BUILD_ARGS=(
     -o "${NODE_DIR}"
     -e "${NODE_BIN}"
     -v v3.16.3
-    -a "${ADMIN_ADDRESS}"
 )
+if [[ ${QUALIFICATION} != true ]]; then
+    BUILD_ARGS+=(-a "${ADMIN_ADDRESS}")
+fi
 if [[ ${MODE} == guomi ]]; then
     BUILD_ARGS+=(-s)
 fi
@@ -257,7 +265,79 @@ if ! (
     exit 1
 fi
 
+if [[ ${QUALIFICATION} == true ]]; then
+    if ! (
+        cd "${REPO_ROOT}"
+        go test -c -mod=readonly -trimpath -tags=fiscobcos_sdk \
+            -o "${WORK_DIR}/bcos-qualification.test" ./internal/sproof
+        go build -mod=readonly -trimpath \
+            -o "${WORK_DIR}/offline-qualification" \
+            ./scripts/fisco-bcos/offline-qualification
+    ) >"${WORK_DIR}/qualification-build.log" 2>&1; then
+        echo "the TrustDB BCOS qualification binaries failed to build" >&2
+        sed 's/^/  /' "${WORK_DIR}/qualification-build.log" >&2
+        exit 1
+    fi
+fi
+
 NODE_PIDS=()
+
+start_node() {
+    local index=$1
+    local node_dir="${NODE_PARENT}/node${index}"
+    local pid
+    local ready=false
+    local attempt
+
+    : >"${node_dir}/nohup.out"
+    (
+        cd "${node_dir}"
+        nohup ../fisco-bcos -c config.ini -g config.genesis >>nohup.out 2>&1 &
+        printf '%s\n' "$!" >.trustdb-smoke.pid
+    )
+    pid=$(<"${node_dir}/.trustdb-smoke.pid")
+    NODE_PIDS[index]="${pid}"
+
+    for attempt in {1..40}; do
+        if ! kill -0 "${pid}" 2>/dev/null; then
+            echo "node${index} exited during startup" >&2
+            tail -80 "${node_dir}/nohup.out" >&2
+            return 1
+        fi
+        if grep -q "fisco-bcos is running" "${node_dir}/nohup.out"; then
+            ready=true
+            break
+        fi
+        sleep 0.5
+    done
+    if [[ ${ready} != true ]]; then
+        echo "node${index} did not become ready within 20 seconds" >&2
+        tail -80 "${node_dir}/nohup.out" >&2
+        return 1
+    fi
+    printf 'node%s pid=%s ready\n' "${index}" "${pid}" >>"${WORK_DIR}/node-start.log"
+}
+
+stop_node() {
+    local index=$1
+    local pid=${NODE_PIDS[index]:-}
+    local attempt
+
+    [[ -z ${pid} ]] && return 0
+    kill -TERM "${pid}" 2>/dev/null || true
+    for attempt in {1..60}; do
+        if ! kill -0 "${pid}" 2>/dev/null; then
+            NODE_PIDS[index]=""
+            printf 'node%s pid=%s stopped\n' "${index}" "${pid}" >>"${WORK_DIR}/node-stop.log"
+            return 0
+        fi
+        sleep 0.5
+    done
+    kill -KILL "${pid}" 2>/dev/null || true
+    NODE_PIDS[index]=""
+    echo "node${index} required SIGKILL" >&2
+    return 1
+}
 
 stop_nodes() {
     local pid
@@ -271,13 +351,15 @@ stop_nodes() {
     fi
 
     for ((index=${#NODE_PIDS[@]} - 1; index >= 0; index--)); do
-        pid=${NODE_PIDS[index]}
+        pid=${NODE_PIDS[index]:-}
+        [[ -z ${pid} ]] && continue
         kill -TERM "${pid}" 2>/dev/null || true
     done
 
     for attempt in {1..60}; do
         running=false
         for pid in "${NODE_PIDS[@]}"; do
+            [[ -z ${pid} ]] && continue
             if kill -0 "${pid}" 2>/dev/null; then
                 running=true
                 break
@@ -288,6 +370,7 @@ stop_nodes() {
     done
 
     for pid in "${NODE_PIDS[@]}"; do
+        [[ -z ${pid} ]] && continue
         kill -KILL "${pid}" 2>/dev/null || true
     done
     return 1
@@ -295,6 +378,9 @@ stop_nodes() {
 
 cleanup() {
     stop_nodes >/dev/null 2>&1 || true
+    if [[ ${QUALIFICATION} == true && -n ${ACCOUNT_KEY_FILE:-} ]]; then
+        rm -f "${ACCOUNT_KEY_FILE}"
+    fi
     if [[ -n ${SMOKE_LOCK:-} ]]; then
         rm -f "${SMOKE_LOCK}/pid"
         rmdir "${SMOKE_LOCK}" 2>/dev/null || true
@@ -311,40 +397,31 @@ fi
 printf '%s\n' "$$" >"${SMOKE_LOCK}/pid"
 trap cleanup EXIT INT TERM
 
+if [[ ${QUALIFICATION} == true ]]; then
+    ACCOUNT_KEY_FILE="${WORK_DIR}/publisher.key"
+    python3 - "${ACCOUNT_KEY_FILE}" <<'PY'
+import secrets
+import sys
+from pathlib import Path
+
+# The smaller bound makes the scalar valid for both secp256k1 and SM2.
+upper = min(
+    int("FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141", 16),
+    int("FFFFFFFEFFFFFFFFFFFFFFFFFFFFFFFF7203DF6B21C6052B53BBF40939D54123", 16),
+)
+value = secrets.randbelow(upper - 1) + 1
+destination = Path(sys.argv[1])
+destination.write_text(f"{value:064x}\n", encoding="ascii")
+destination.chmod(0o600)
+PY
+fi
+
 # The generated start scripts identify a process only by the shared node
 # executable path. They therefore cannot safely start these four nodes in
 # sequence, while starting all four at once has exposed an upstream gateway
 # race on high-core Linux hosts. Own the exact PID of every node instead.
 for index in 0 1 2 3; do
-    node_dir="${NODE_PARENT}/node${index}"
-    : >"${node_dir}/nohup.out"
-    (
-        cd "${node_dir}"
-        nohup ../fisco-bcos -c config.ini -g config.genesis >>nohup.out 2>&1 &
-        printf '%s\n' "$!" >.trustdb-smoke.pid
-    )
-    pid=$(<"${node_dir}/.trustdb-smoke.pid")
-    NODE_PIDS+=("${pid}")
-
-    ready=false
-    for attempt in {1..40}; do
-        if ! kill -0 "${pid}" 2>/dev/null; then
-            echo "node${index} exited during startup" >&2
-            tail -80 "${node_dir}/nohup.out" >&2
-            exit 1
-        fi
-        if grep -q "fisco-bcos is running" "${node_dir}/nohup.out"; then
-            ready=true
-            break
-        fi
-        sleep 0.5
-    done
-    if [[ ${ready} != true ]]; then
-        echo "node${index} did not become ready within 20 seconds" >&2
-        tail -80 "${node_dir}/nohup.out" >&2
-        exit 1
-    fi
-    printf 'node%s pid=%s ready\n' "${index}" "${pid}" >>"${WORK_DIR}/node-start.log"
+    start_node "${index}"
     sleep 2
 done
 
@@ -358,8 +435,10 @@ done
 # A live RPC listener is insufficient: the native SDK waits for usable group
 # membership after the websocket handshake. Avoid entering that opaque timeout
 # path until every node has observed all four members.
+AIR_READY_TIMEOUT=30
+[[ ${QUALIFICATION} == true ]] && AIR_READY_TIMEOUT=60
 python3 "${WAIT_AIR_READY}" \
-    --node-parent "${NODE_PARENT}" --node-count 4 --timeout-seconds 30
+    --node-parent "${NODE_PARENT}" --node-count 4 --timeout-seconds "${AIR_READY_TIMEOUT}"
 
 for index in 0 1 2 3; do
     if ! kill -0 "${NODE_PIDS[index]}" 2>/dev/null; then
@@ -378,20 +457,127 @@ CLIENT_ARGS=(
 )
 if [[ ${RAW_EVM_FIXTURE} == true ]]; then
     CLIENT_ARGS+=(--raw-evm-fixture)
+elif [[ ${QUALIFICATION} == true ]]; then
+    CLIENT_ARGS+=(
+        --abi "${REPO_ROOT}/contracts/fisco-bcos/artifacts/${MODE}/TrustDBAnchorV1.abi"
+        --bin "${REPO_ROOT}/contracts/fisco-bcos/artifacts/${MODE}/TrustDBAnchorV1.bin"
+        --anchor-v1-constructor
+        --account-key-file "${ACCOUNT_KEY_FILE}"
+    )
 else
     CLIENT_ARGS+=(
         --abi "${WORK_DIR}/contract/CompatibilityProbe.abi"
         --bin "${WORK_DIR}/contract/CompatibilityProbe.bin"
     )
 fi
-if ! (
+if [[ ${QUALIFICATION} == true ]]; then
+    SCENARIO_DIR="${WORK_DIR}/qualification-scenarios"
+    mkdir -p "${SCENARIO_DIR}"
+    CLIENT_ARGS+=(
+        --scenario-dir "${SCENARIO_DIR}"
+        --restart-port "$((RPC_PORT + 3))"
+    )
+fi
+
+wait_for_scenario_marker() {
+    local marker=$1
+    local attempt
+
+    for attempt in {1..1200}; do
+        if [[ -e ${marker} ]]; then
+            return 0
+        fi
+        if ! kill -0 "${CLIENT_PID}" 2>/dev/null; then
+            echo "the Go SDK smoke client exited before scenario marker ${marker}" >&2
+            return 1
+        fi
+        sleep 0.1
+    done
+    echo "timed out waiting for scenario marker ${marker}" >&2
+    return 1
+}
+
+four_member_observation_count() {
+    local node_dir=$1
+    local count
+    count=$(
+        grep -h "notifyGroupNodeInfo,connectedNodeSize=4" \
+            "${node_dir}"/log/log_*.log 2>/dev/null | wc -l | tr -d ' '
+    )
+    printf '%s\n' "${count:-0}"
+}
+
+(
     cd "${WORK_DIR}"
-    "${WORK_DIR}/smoke-client" "${CLIENT_ARGS[@]}"
+    exec "${WORK_DIR}/smoke-client" "${CLIENT_ARGS[@]}"
 ) >"${WORK_DIR}/client-evidence.json" \
-  2>"${WORK_DIR}/client-stderr.log"; then
+  2>"${WORK_DIR}/client-stderr.log" &
+CLIENT_PID=$!
+
+if [[ ${QUALIFICATION} == true ]]; then
+    wait_for_scenario_marker "${SCENARIO_DIR}/node-loss.ready"
+    stop_node 3
+    for index in 0 1 2; do
+        if ! kill -0 "${NODE_PIDS[index]}" 2>/dev/null; then
+            echo "node${index} exited while removing node3" >&2
+            exit 1
+        fi
+    done
+    printf 'node3_offline=true\n' >"${WORK_DIR}/node-loss-stage.txt"
+    : >"${SCENARIO_DIR}/node-loss.continue"
+
+    wait_for_scenario_marker "${SCENARIO_DIR}/node-restart.ready"
+    mv "${NODE_PARENT}/node3/log" "${NODE_PARENT}/node3/log-before-restart"
+    mkdir "${NODE_PARENT}/node3/log"
+    start_node 3
+    NODE3_RECONVERGED=false
+    # node3 can take well over a minute to rejoin the four-node consensus
+    # group on macOS and other loaded hosts; allow up to 150 seconds.
+    for attempt in {1..300}; do
+        NODE3_FOUR_MEMBER_AFTER=$(four_member_observation_count "${NODE_PARENT}/node3")
+        if ((NODE3_FOUR_MEMBER_AFTER > 0)); then
+            NODE3_RECONVERGED=true
+            break
+        fi
+        if ! kill -0 "${NODE_PIDS[3]}" 2>/dev/null; then
+            echo "node3 exited while rejoining the four-node group" >&2
+            exit 1
+        fi
+        sleep 0.5
+    done
+    if [[ ${NODE3_RECONVERGED} != true ]]; then
+        echo "node3 did not observe a fresh four-member group after restart" >&2
+        exit 1
+    fi
+    : >"${SCENARIO_DIR}/node-restart.continue"
+fi
+
+if ! wait "${CLIENT_PID}"; then
     echo "the Go SDK smoke client failed" >&2
     sed 's/^/  /' "${WORK_DIR}/client-stderr.log" >&2
     exit 1
+fi
+
+if [[ ${QUALIFICATION} == true ]]; then
+    QUALIFICATION_OUTPUT="${WORK_DIR}/qualification"
+    mkdir -p "${QUALIFICATION_OUTPUT}"
+    if ! (
+        cd "${REPO_ROOT}"
+        TRUSTDB_BCOS_QUALIFICATION=1 \
+        TRUSTDB_BCOS_CLIENT_EVIDENCE="${WORK_DIR}/client-evidence.json" \
+        TRUSTDB_BCOS_CERT_DIR="${SDK_DIR}" \
+        TRUSTDB_BCOS_ACCOUNT_KEY="${ACCOUNT_KEY_FILE}" \
+        TRUSTDB_BCOS_OUTPUT_DIR="${QUALIFICATION_OUTPUT}" \
+        TRUSTDB_BCOS_RPC_PORT="${RPC_PORT}" \
+        TRUSTDB_REPO_ROOT="${REPO_ROOT}" \
+            "${WORK_DIR}/bcos-qualification.test" \
+            -test.run '^TestLiveBCOSFourNodeQualification$' \
+            -test.count=1 -test.v -test.timeout=15m
+    ) >"${WORK_DIR}/qualification-test.log" 2>&1; then
+        echo "the live TrustDB BCOS qualification failed" >&2
+        sed 's/^/  /' "${WORK_DIR}/qualification-test.log" >&2
+        exit 1
+    fi
 fi
 
 if ! stop_nodes; then
@@ -399,6 +585,10 @@ if ! stop_nodes; then
     exit 1
 fi
 NODE_PIDS=()
+
+if [[ ${QUALIFICATION} == true ]]; then
+    rm -f "${ACCOUNT_KEY_FILE}"
+fi
 
 python3 - "${P2P_PORT}" "${RPC_PORT}" <<'PY'
 import socket
@@ -411,6 +601,39 @@ for base in (int(sys.argv[1]), int(sys.argv[2])):
             if sock.connect_ex(("127.0.0.1", port)) == 0:
                 raise SystemExit(f"FISCO BCOS listener still accepts connections on port {port}")
 PY
+
+if [[ ${QUALIFICATION} == true ]]; then
+    if [[ $(uname -s) != Linux ]]; then
+        echo "--qualification offline verification requires a Linux network namespace" >&2
+        exit 1
+    fi
+    if ! command -v unshare >/dev/null 2>&1; then
+        echo "--qualification requires the util-linux unshare command" >&2
+        exit 1
+    fi
+    OFFLINE_REPORT="${WORK_DIR}/qualification/offline-verification.json"
+    OFFLINE_COMMAND=(
+        "${WORK_DIR}/offline-qualification"
+        --proof "${WORK_DIR}/qualification/portable.sproof"
+        --content "${WORK_DIR}/qualification/content.bin"
+        --trust-roots "${WORK_DIR}/qualification/trust-roots.json"
+        --output "${OFFLINE_REPORT}"
+    )
+    if [[ $(id -u) -eq 0 ]]; then
+        OFFLINE_RUNNER=(env TRUSTDB_NETWORK_DISABLED=1 unshare --net --)
+    else
+        OFFLINE_RUNNER=(sudo env TRUSTDB_NETWORK_DISABLED=1 unshare --net --)
+    fi
+    if ! "${OFFLINE_RUNNER[@]}" "${OFFLINE_COMMAND[@]}" \
+        >"${WORK_DIR}/offline-qualification.log" 2>&1; then
+        echo "the disconnected TrustDB BCOS verification failed" >&2
+        sed 's/^/  /' "${WORK_DIR}/offline-qualification.log" >&2
+        exit 1
+    fi
+    if [[ $(id -u) -ne 0 ]]; then
+        sudo chown "$(id -u):$(id -g)" "${OFFLINE_REPORT}"
+    fi
+fi
 
 if ! (
     cd "${REPO_ROOT}"
@@ -445,7 +668,7 @@ fi
 
 python3 - "${WORK_DIR}" "${BASELINE}" "${MODE}" "${PLATFORM}" "${SOLC_EXECUTABLE}" \
     "${CACHE_DIR}" "${P2P_PORT}" "${RPC_PORT}" "${RAW_EVM_FIXTURE}" \
-    "${PERFORMANCE_WARMUP}" "${PERFORMANCE_SAMPLES}" <<'PY'
+    "${PERFORMANCE_WARMUP}" "${PERFORMANCE_SAMPLES}" "${QUALIFICATION}" <<'PY'
 import datetime
 import json
 import platform
@@ -466,6 +689,7 @@ work = Path(sys.argv[1])
     raw_evm_fixture,
     performance_warmup,
     performance_samples,
+    qualification,
 ) = sys.argv[2:]
 client = json.loads((work / "client-evidence.json").read_text(encoding="utf-8"))
 preimages = json.loads((work / "consensus-preimage.json").read_text(encoding="utf-8"))
@@ -481,6 +705,30 @@ if not raw_fixture and client.get("production_publish_verified") is not True:
     raise SystemExit("production publish event and getAnchor record were not verified")
 if not raw_fixture and not client.get("anchor_payload"):
     raise SystemExit("production publish payload evidence is missing")
+qualified = qualification == "true"
+if qualified and not client.get("qualification"):
+    raise SystemExit("four-node qualification evidence is missing")
+live_qualification = None
+offline_qualification = None
+if qualified:
+    live_qualification = json.loads(
+        (work / "qualification" / "live-qualification.json").read_text(encoding="utf-8")
+    )
+    offline_qualification = json.loads(
+        (work / "qualification" / "offline-verification.json").read_text(encoding="utf-8")
+    )
+    if offline_qualification.get("network_disabled_by_gate") is not True:
+        raise SystemExit("offline qualification did not record a disabled network namespace")
+    if offline_qualification.get("external_network_access") is not False:
+        raise SystemExit("offline qualification reported external network access")
+    if offline_qualification.get("external_provider_access") is not False:
+        raise SystemExit("offline qualification reported external provider access")
+    cases = {case.get("name"): case for case in offline_qualification.get("cases", [])}
+    if cases.get("complete_l5", {}).get("valid") is not True:
+        raise SystemExit("offline qualification did not produce a valid complete L5 case")
+    for name in ("content_tamper", "receipt_inclusion_tamper", "pbft_finality_tamper", "exact_binding_tamper"):
+        if cases.get(name, {}).get("valid") is not False:
+            raise SystemExit(f"offline qualification did not reject {name}")
 artifacts = json.loads((work / "artifact-verification.json").read_text(encoding="utf-8"))
 baseline = json.loads(Path(baseline_path).read_text(encoding="utf-8"))
 environment = {
@@ -555,6 +803,8 @@ command = [
 ]
 if raw_fixture:
     command.append("--raw-evm-fixture")
+if qualified:
+    command.append("--qualification")
 
 block = client["containing_block"]
 client_stderr = (work / "client-stderr.log").read_text(encoding="utf-8").splitlines()
@@ -595,6 +845,7 @@ evidence = {
         "block_verification_ns": preimages["block_verification_ns"],
         "pbft_verification_ns": preimages["pbft_verification_ns"],
         "production_publish_verified": client["production_publish_verified"],
+        "four_node_qualification": qualified,
     },
     "performance": performance,
     "cleanup": {
@@ -627,13 +878,18 @@ evidence = {
         "stale_block_limit": client["stale_block_limit"],
         "stale_block_limit_rejected": client["stale_block_limit_rejected"],
         "stale_rejection_error": client.get("stale_rejection_error", ""),
+        "qualification": client.get("qualification"),
+        "trustdb_qualification": live_qualification,
+        "offline_qualification": offline_qualification,
     },
     "client_stderr": client_stderr,
-    "limitations": [
+    "limitations": [],
+}
+if not qualified:
+    evidence["limitations"].extend([
         "This run validates the pinned Air node, compiler, C SDK and Go SDK compatibility profile only.",
         "Transaction and receipt proof arrays were retrieved but are not treated as independently verified TrustDB anchor evidence.",
-    ],
-}
+    ])
 if raw_fixture:
     evidence["limitations"].insert(
         0,

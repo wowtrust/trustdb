@@ -8,6 +8,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -46,6 +47,37 @@ func TestValidateSignerSignatureRequiresConfiguredPublicKey(t *testing.T) {
 	}
 	if err := validateStandardSignerSignature(digest[:], signature, ethcrypto.FromECDSAPub(&other.PublicKey)); err == nil {
 		t.Fatal("accepted signature from a different account")
+	}
+}
+
+type nativeRPCError struct {
+	code int
+	text string
+}
+
+func (e nativeRPCError) Error() string  { return e.text }
+func (e nativeRPCError) ErrorCode() int { return e.code }
+
+func TestNormalizeTransactionLookupErrorRetriesLedgerGetStorageError(t *testing.T) {
+	t.Parallel()
+
+	missing := nativeRPCError{code: sdkLedgerGetStorageErrorCode, text: "GetTransactionReceiptByHash"}
+	err := normalizeTransactionLookupError(missing)
+	if !errors.Is(err, fiscobcos.ErrTransactionNotFound) {
+		t.Fatalf("ledger lookup error was not classified as temporarily unobservable: %v", err)
+	}
+	var preserved nativeRPCError
+	if !errors.As(err, &preserved) || preserved.code != sdkLedgerGetStorageErrorCode {
+		t.Fatalf("ledger RPC error was not preserved: %v", err)
+	}
+
+	other := nativeRPCError{code: 3009, text: "different ledger error"}
+	err = normalizeTransactionLookupError(other)
+	if errors.Is(err, fiscobcos.ErrTransactionNotFound) {
+		t.Fatalf("unrelated RPC error was classified as temporarily unobservable: %v", err)
+	}
+	if !errors.As(err, &preserved) || preserved.code != other.code {
+		t.Fatalf("unrelated RPC error was not returned unchanged: %v", err)
 	}
 }
 
@@ -357,10 +389,15 @@ func TestNativeRPCBoundsRejectHostileEndpointValuesBeforeDecode(t *testing.T) {
 		t.Fatal("decoded an oversized proof node")
 	}
 
-	receipt := &types.Receipt{ReceiptProof: []string{}}
+	receipt := &types.Receipt{GasUsed: "97255", ReceiptProof: []string{}}
 	if err := validateReceiptRPCBounds(receipt); err != nil {
 		t.Fatalf("compact receipt rejected: %v", err)
 	}
+	receipt.GasUsed = "0x17be7"
+	if err := validateReceiptRPCBounds(receipt); err == nil {
+		t.Fatal("accepted non-decimal receipt gasUsed")
+	}
+	receipt.GasUsed = "97255"
 	receipt.Message = strings.Repeat("x", maxSDKConfigStringBytes+1)
 	if err := validateReceiptRPCBounds(receipt); err == nil {
 		t.Fatal("accepted oversized receipt message")
@@ -398,10 +435,15 @@ func TestNativeRPCBoundsRejectHostileEndpointValuesBeforeDecode(t *testing.T) {
 		t.Fatal("accepted oversized transaction input")
 	}
 
-	block := &types.Block{}
+	block := &types.Block{GasUsed: "97255", GasLimit: "3000000000"}
 	if err := validateBlockRPCBounds(block); err != nil {
 		t.Fatalf("compact header rejected: %v", err)
 	}
+	block.GasUsed = strings.Repeat("9", maxSDKUnsignedDecimalDigits+1)
+	if err := validateBlockRPCBounds(block); err == nil {
+		t.Fatal("accepted oversized block gasUsed")
+	}
+	block.GasUsed = "97255"
 	block.SignatureList = make([]types.Signature, maxSDKCommitSignatures+1)
 	if err := validateBlockRPCBounds(block); err == nil {
 		t.Fatal("accepted oversized block signature collection")
@@ -415,6 +457,51 @@ func TestNativeRPCBoundsRejectHostileEndpointValuesBeforeDecode(t *testing.T) {
 	block.Transactions = make([]interface{}, 1)
 	if err := validateBlockRPCBounds(block); err == nil {
 		t.Fatal("accepted transaction bodies in a header-only response")
+	}
+}
+
+func TestDecodeAnchorEventAcceptsNativeAddressWithoutHexPrefix(t *testing.T) {
+	t.Parallel()
+
+	contractAddress := bytes.Repeat([]byte{0x42}, 20)
+	contract := fiscobcos.ContractBinding{
+		Address:        contractAddress,
+		EventSignature: fiscobcos.TrustDBAnchorV1EventSignature,
+	}
+	eventID, err := fiscobcos.EventTopicForMode(fiscobcos.CryptoModeStandard, contract.EventSignature)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data := make([]byte, 4*32)
+	data[31] = 7
+	copy(data[32:64], bytes.Repeat([]byte{0x51}, 32))
+	copy(data[64:96], bytes.Repeat([]byte{0x52}, 32))
+	data[127] = 1
+	publisherWord := append(make([]byte, 12), bytes.Repeat([]byte{0x53}, 20)...)
+	receipt := &types.Receipt{Logs: []*types.NewLog{{
+		Address: hex.EncodeToString(contractAddress),
+		Data:    "0x" + hex.EncodeToString(data),
+		Topics: []string{
+			"0x" + hex.EncodeToString(eventID),
+			"0x" + strings.Repeat("54", 32),
+			"0x" + strings.Repeat("55", 32),
+			"0x" + hex.EncodeToString(publisherWord),
+		},
+	}}}
+
+	event, err := decodeAnchorEvent(receipt, fiscobcos.CryptoModeStandard, contract)
+	if err != nil {
+		t.Fatalf("decode native event: %v", err)
+	}
+	if event.TreeSize != 7 || event.PayloadVersion != 1 ||
+		!bytes.Equal(event.ContractAddress, contractAddress) ||
+		!bytes.Equal(event.Publisher, bytes.Repeat([]byte{0x53}, 20)) {
+		t.Fatalf("decoded event does not match native log: %+v", event)
+	}
+
+	receipt.Logs[0].Address = strings.Repeat("ff", 20)
+	if _, err := decodeAnchorEvent(receipt, fiscobcos.CryptoModeStandard, contract); !errors.Is(err, fiscobcos.ErrContractMismatch) {
+		t.Fatalf("wrong contract address error=%v, want contract mismatch", err)
 	}
 }
 
@@ -438,5 +525,59 @@ func TestBoundedHexDecodersPreserveOptionalNativeFields(t *testing.T) {
 	}
 	if _, err := decodeHexBounded("", 2); err == nil {
 		t.Fatal("decodeHexBounded accepted an empty required field")
+	}
+}
+
+func TestTransitionTransactionEvidenceDecodesRPCNonceHex(t *testing.T) {
+	t.Parallel()
+
+	// Recorded from a live v3.16.3 four-node Air network: the JSON-RPC
+	// getTransactionByHash nonce is toHex(raw nonce string) without a 0x
+	// prefix, while the consensus transaction hash covers the raw nonce
+	// string bytes. The expected hash is the on-chain transaction hash of
+	// the setWeight consensus precompile call in block 5.
+	const (
+		rawNonce  = "1470614449897024475616799902516882132264"
+		rpcNonce  = "31343730363134343439383937303234343735363136373939393032353136383832313332323634"
+		rpcTo     = "0000000000000000000000000000000000001003"
+		rpcInput  = "0xce6fa5c50000000000000000000000000000000000000000000000000000000000000040000000000000000000000000000000000000000000000000000000000000000200000000000000000000000000000000000000000000000000000000000000806430666361313838656333306331353234653161303666316235623730646262316261663336316536643739363761306332633034366363303733646364636530366434383564303764656636336135363362666132616636326365376361666231653436316261663433633737373562346435313930316530353239636536"
+		chainHash = "0x11096782747441dfc1f15b1989c99a89f02c0b3c61419dcd5709d732c1b09786"
+	)
+	if hex.EncodeToString([]byte(rawNonce)) != rpcNonce {
+		t.Fatal("test fixture nonce encoding is inconsistent")
+	}
+	driver := &nativeDriver{trust: fiscobcos.TrustConfig{
+		ChainID: "chain0", GroupID: "group0",
+		ChainHashAlgorithm: fiscobcos.HashKeccak256,
+	}}
+	transaction := &types.TransactionDetail{
+		Version: 0, ChainID: "chain0", GroupID: "group0",
+		BlockLimit: 604, Nonce: rpcNonce,
+		To: rpcTo, Input: rpcInput, Hash: chainHash,
+	}
+	evidence, err := driver.transitionTransactionEvidence(transaction, common.HexToHash(chainHash))
+	if err != nil {
+		t.Fatalf("decode live-recorded transition transaction: %v", err)
+	}
+	if evidence.Fields.Nonce != rawNonce {
+		t.Fatalf("nonce=%q, want the raw string %q", evidence.Fields.Nonce, rawNonce)
+	}
+	if !bytes.Equal(evidence.TransactionHash, common.HexToHash(chainHash).Bytes()) {
+		t.Fatalf("transaction hash %x does not match the on-chain hash", evidence.TransactionHash)
+	}
+
+	// A verbatim nonce string (not hex-encoded) is the pre-fix wire shape:
+	// the recomputed hash must not match and the evidence must fail closed.
+	stale := *transaction
+	stale.Nonce = rawNonce
+	if _, err := driver.transitionTransactionEvidence(&stale, common.HexToHash(chainHash)); !errors.Is(err, fiscobcos.ErrIncompleteChainEvidence) {
+		t.Fatalf("verbatim nonce error=%v, want incomplete chain evidence", err)
+	}
+
+	// Non-hex nonce text is outside the pinned RPC contract and must fail.
+	hostile := *transaction
+	hostile.Nonce = "zz"
+	if _, err := driver.transitionTransactionEvidence(&hostile, common.HexToHash(chainHash)); !errors.Is(err, fiscobcos.ErrIncompleteChainEvidence) {
+		t.Fatalf("non-hex nonce error=%v, want incomplete chain evidence", err)
 	}
 }
