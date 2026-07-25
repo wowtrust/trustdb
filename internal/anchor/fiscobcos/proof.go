@@ -11,21 +11,22 @@ import (
 )
 
 const (
-	MaxProofBytes          = 16 << 20
-	MaxMerklePathNodes     = 512
-	MaxCanonicalLogs       = 512
-	MaxProofNodeBytes      = 128 << 10
-	MaxCommitSignatures    = 1024
-	MaxSignatureBytes      = 1024
-	maxTransactionAttempts = 32
-	maxMerklePathNodes     = MaxMerklePathNodes
-	maxCommitSignatures    = MaxCommitSignatures
-	maxRawTransactionBytes = 4 << 20
-	maxRawReceiptBytes     = 4 << 20
-	maxRawHeaderBytes      = 2 << 20
-	maxDecodedEventBytes   = 1 << 20
-	maxProofNodeBytes      = MaxProofNodeBytes
-	maxSignatureBytes      = MaxSignatureBytes
+	MaxProofBytes             = 16 << 20
+	MaxMerklePathNodes        = 512
+	MaxCanonicalLogs          = 512
+	MaxProofNodeBytes         = 128 << 10
+	MaxCommitSignatures       = 1024
+	MaxSignatureBytes         = 1024
+	maxTransactionAttempts    = 32
+	maxMerklePathNodes        = MaxMerklePathNodes
+	maxCommitSignatures       = MaxCommitSignatures
+	maxRawTransactionBytes    = 4 << 20
+	maxRawReceiptBytes        = 4 << 20
+	maxRawHeaderBytes         = 2 << 20
+	MaxValidatorHistoryBlocks = 4096
+	maxDecodedEventBytes      = 1 << 20
+	maxProofNodeBytes         = MaxProofNodeBytes
+	maxSignatureBytes         = MaxSignatureBytes
 )
 
 type TransactionAttempt struct {
@@ -76,30 +77,54 @@ type FinalityEvidence struct {
 	Signatures []CommitSignature `cbor:"signatures" json:"signatures"`
 }
 
+type TransitionTransactionEvidence struct {
+	Fields          NativeTransactionFields `cbor:"fields" json:"fields"`
+	RawHashPreimage []byte                  `cbor:"raw_hash_preimage" json:"raw_hash_preimage"`
+	TransactionHash []byte                  `cbor:"transaction_hash" json:"transaction_hash"`
+}
+
+type TransitionReceiptEvidence struct {
+	Fields              NativeReceiptFields `cbor:"fields" json:"fields"`
+	RawCanonicalReceipt []byte              `cbor:"raw_canonical_receipt" json:"raw_canonical_receipt"`
+	ReceiptHash         []byte              `cbor:"receipt_hash" json:"receipt_hash"`
+}
+
+// ValidatorHistoryBlock carries one contiguous predecessor block. The first
+// item is the verifier-local trusted checkpoint; the last item immediately
+// precedes AnchorProof.Block. Full transaction/receipt lists are present only
+// when this block activates a different validator set in the next block.
+type ValidatorHistoryBlock struct {
+	Block        BlockEvidence                   `cbor:"block" json:"block"`
+	Finality     FinalityEvidence                `cbor:"finality" json:"finality"`
+	Transactions []TransitionTransactionEvidence `cbor:"transactions,omitempty" json:"transactions,omitempty"`
+	Receipts     []TransitionReceiptEvidence     `cbor:"receipts,omitempty" json:"receipts,omitempty"`
+}
+
 // AnchorProof is an immutable evidence envelope. It carries untrusted chain
 // claims and raw evidence but intentionally carries no validator public keys,
 // certificate roots, endpoint configuration, account provider, or quorum
 // threshold. Those are supplied only through a local TrustConfig.
 type AnchorProof struct {
-	SchemaVersion             string               `cbor:"schema_version" json:"schema_version"`
-	FormatVersion             uint64               `cbor:"format_version" json:"format_version"`
-	CryptoMode                CryptoMode           `cbor:"crypto_mode" json:"crypto_mode"`
-	ProtocolHashAlgorithm     string               `cbor:"protocol_hash_algorithm" json:"protocol_hash_algorithm"`
-	ChainHashAlgorithm        string               `cbor:"chain_hash_algorithm" json:"chain_hash_algorithm"`
-	ChainSignatureAlgorithm   string               `cbor:"chain_signature_algorithm" json:"chain_signature_algorithm"`
-	ChainID                   string               `cbor:"chain_id" json:"chain_id"`
-	GroupID                   string               `cbor:"group_id" json:"group_id"`
-	GenesisHash               []byte               `cbor:"genesis_hash" json:"genesis_hash"`
-	TrustedCheckpoint         BlockCheckpoint      `cbor:"trusted_checkpoint" json:"trusted_checkpoint"`
-	Contract                  ContractBinding      `cbor:"contract" json:"contract"`
-	ChainContextID            []byte               `cbor:"chain_context_id" json:"chain_context_id"`
-	CanonicalPayload          []byte               `cbor:"canonical_payload" json:"canonical_payload"`
-	TransactionAttempts       []TransactionAttempt `cbor:"transaction_attempts" json:"transaction_attempts"`
-	SuccessfulAttemptOrdinal  uint32               `cbor:"successful_attempt_ordinal" json:"successful_attempt_ordinal"`
-	SuccessfulTransactionHash []byte               `cbor:"successful_transaction_hash" json:"successful_transaction_hash"`
-	Receipt                   ReceiptEvidence      `cbor:"receipt" json:"receipt"`
-	Block                     BlockEvidence        `cbor:"block" json:"block"`
-	Finality                  FinalityEvidence     `cbor:"finality" json:"finality"`
+	SchemaVersion             string                  `cbor:"schema_version" json:"schema_version"`
+	FormatVersion             uint64                  `cbor:"format_version" json:"format_version"`
+	CryptoMode                CryptoMode              `cbor:"crypto_mode" json:"crypto_mode"`
+	ProtocolHashAlgorithm     string                  `cbor:"protocol_hash_algorithm" json:"protocol_hash_algorithm"`
+	ChainHashAlgorithm        string                  `cbor:"chain_hash_algorithm" json:"chain_hash_algorithm"`
+	ChainSignatureAlgorithm   string                  `cbor:"chain_signature_algorithm" json:"chain_signature_algorithm"`
+	ChainID                   string                  `cbor:"chain_id" json:"chain_id"`
+	GroupID                   string                  `cbor:"group_id" json:"group_id"`
+	GenesisHash               []byte                  `cbor:"genesis_hash" json:"genesis_hash"`
+	TrustedCheckpoint         BlockCheckpoint         `cbor:"trusted_checkpoint" json:"trusted_checkpoint"`
+	Contract                  ContractBinding         `cbor:"contract" json:"contract"`
+	ChainContextID            []byte                  `cbor:"chain_context_id" json:"chain_context_id"`
+	CanonicalPayload          []byte                  `cbor:"canonical_payload" json:"canonical_payload"`
+	TransactionAttempts       []TransactionAttempt    `cbor:"transaction_attempts" json:"transaction_attempts"`
+	SuccessfulAttemptOrdinal  uint32                  `cbor:"successful_attempt_ordinal" json:"successful_attempt_ordinal"`
+	SuccessfulTransactionHash []byte                  `cbor:"successful_transaction_hash" json:"successful_transaction_hash"`
+	Receipt                   ReceiptEvidence         `cbor:"receipt" json:"receipt"`
+	Block                     BlockEvidence           `cbor:"block" json:"block"`
+	Finality                  FinalityEvidence        `cbor:"finality" json:"finality"`
+	ValidatorHistory          []ValidatorHistoryBlock `cbor:"validator_history,omitempty" json:"validator_history,omitempty"`
 }
 
 func MarshalProof(proof AnchorProof) ([]byte, error) {
@@ -306,6 +331,82 @@ func ValidateProofStructure(proof AnchorProof) error {
 			return fmt.Errorf("%w: duplicate finality signer %q", ErrInvalidProof, signature.ValidatorNodeID)
 		}
 		seenSigners[signature.ValidatorNodeID] = struct{}{}
+	}
+	if len(proof.ValidatorHistory) > MaxValidatorHistoryBlocks {
+		return fmt.Errorf("%w: validator history block count=%d", ErrInvalidProof, len(proof.ValidatorHistory))
+	}
+	for index, item := range proof.ValidatorHistory {
+		if err := validateHistoryBlockStructure(proof, index, item); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateHistoryBlockStructure(proof AnchorProof, index int, item ValidatorHistoryBlock) error {
+	if len(item.Block.RawCanonicalHeader) == 0 ||
+		len(item.Block.RawCanonicalHeader) > maxRawHeaderBytes ||
+		len(item.Block.BlockHash) != identifierBytes ||
+		item.Block.BlockNumber == 0 {
+		return fmt.Errorf("%w: validator history block %d is incomplete or oversized", ErrInvalidProof, index)
+	}
+	canonicalHeader, err := MarshalNativeBlockHeaderPreimage(item.Block.Fields)
+	if err != nil || !bytes.Equal(canonicalHeader, item.Block.RawCanonicalHeader) ||
+		item.Block.Fields.BlockNumber < 0 ||
+		uint64(item.Block.Fields.BlockNumber) != item.Block.BlockNumber {
+		return fmt.Errorf("%w: validator history block %d has a non-canonical header", ErrInvalidProof, index)
+	}
+	blockHash, err := HashNativeEvidence(proof.ChainHashAlgorithm, canonicalHeader)
+	if err != nil || !bytes.Equal(blockHash, item.Block.BlockHash) {
+		return fmt.Errorf("%w: validator history block %d hash mismatch", ErrInvalidProof, index)
+	}
+	if len(item.Finality.Signatures) > maxCommitSignatures {
+		return fmt.Errorf("%w: validator history block %d signature count=%d", ErrInvalidProof, index, len(item.Finality.Signatures))
+	}
+	seenSigners := make(map[string]struct{}, len(item.Finality.Signatures))
+	for signatureIndex, signature := range item.Finality.Signatures {
+		if strings.TrimSpace(signature.ValidatorNodeID) == "" ||
+			len(signature.ValidatorNodeID) > maxConfigString ||
+			len(signature.Signature) == 0 || len(signature.Signature) > maxSignatureBytes {
+			return fmt.Errorf("%w: validator history block %d signature %d is incomplete or oversized", ErrInvalidProof, index, signatureIndex)
+		}
+		if _, duplicate := seenSigners[signature.ValidatorNodeID]; duplicate {
+			return fmt.Errorf("%w: validator history block %d duplicates signer %q", ErrInvalidProof, index, signature.ValidatorNodeID)
+		}
+		seenSigners[signature.ValidatorNodeID] = struct{}{}
+	}
+	if len(item.Transactions) != len(item.Receipts) || len(item.Transactions) > maxNativeEvidenceItems {
+		return fmt.Errorf("%w: validator history block %d transaction/receipt count mismatch", ErrInvalidProof, index)
+	}
+	for transactionIndex := range item.Transactions {
+		transaction := item.Transactions[transactionIndex]
+		preimage, err := MarshalNativeTransactionHashPreimage(transaction.Fields)
+		if err != nil || len(transaction.RawHashPreimage) == 0 ||
+			len(transaction.RawHashPreimage) > maxRawTransactionBytes ||
+			!bytes.Equal(preimage, transaction.RawHashPreimage) ||
+			transaction.Fields.ChainID != proof.ChainID ||
+			transaction.Fields.GroupID != proof.GroupID ||
+			len(transaction.TransactionHash) != identifierBytes {
+			return fmt.Errorf("%w: validator history block %d transaction %d is incomplete", ErrInvalidProof, index, transactionIndex)
+		}
+		transactionHash, err := HashNativeEvidence(proof.ChainHashAlgorithm, preimage)
+		if err != nil || !bytes.Equal(transactionHash, transaction.TransactionHash) {
+			return fmt.Errorf("%w: validator history block %d transaction %d hash mismatch", ErrInvalidProof, index, transactionIndex)
+		}
+		receipt := item.Receipts[transactionIndex]
+		canonicalReceipt, _, err := MarshalNativeReceiptPreimage(receipt.Fields)
+		if err != nil || len(receipt.RawCanonicalReceipt) == 0 ||
+			len(receipt.RawCanonicalReceipt) > maxRawReceiptBytes ||
+			!bytes.Equal(canonicalReceipt, receipt.RawCanonicalReceipt) ||
+			receipt.Fields.BlockNumber < 0 ||
+			uint64(receipt.Fields.BlockNumber) != item.Block.BlockNumber ||
+			len(receipt.ReceiptHash) != identifierBytes {
+			return fmt.Errorf("%w: validator history block %d receipt %d is incomplete", ErrInvalidProof, index, transactionIndex)
+		}
+		receiptHash, err := HashNativeEvidence(proof.ChainHashAlgorithm, canonicalReceipt)
+		if err != nil || !bytes.Equal(receiptHash, receipt.ReceiptHash) {
+			return fmt.Errorf("%w: validator history block %d receipt %d hash mismatch", ErrInvalidProof, index, transactionIndex)
+		}
 	}
 	return nil
 }

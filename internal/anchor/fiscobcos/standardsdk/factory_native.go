@@ -740,6 +740,169 @@ func (d *nativeDriver) GetConsensusSnapshot(ctx context.Context, blockNumber uin
 	}, nil
 }
 
+func (d *nativeDriver) GetValidatorHistoryBlock(
+	ctx context.Context,
+	blockNumber uint64,
+	includeContents bool,
+) (fiscobcos.ValidatorHistoryBlock, error) {
+	header, err := d.GetBlockHeader(ctx, blockNumber)
+	if err != nil {
+		return fiscobcos.ValidatorHistoryBlock{}, err
+	}
+	consensus, err := d.GetConsensusSnapshot(ctx, blockNumber)
+	if err != nil {
+		return fiscobcos.ValidatorHistoryBlock{}, err
+	}
+	result := fiscobcos.ValidatorHistoryBlock{
+		Block: header.Evidence, Finality: consensus.Finality,
+	}
+	if !includeContents {
+		return result, nil
+	}
+	block, err := d.client.GetBlockByNumber(ctx, int64(blockNumber), false, true)
+	if err != nil {
+		return fiscobcos.ValidatorHistoryBlock{}, err
+	}
+	if block == nil || block.Number != blockNumber ||
+		len(block.Transactions) == 0 ||
+		len(block.Transactions) > fiscobcos.MaxNativeEvidenceItems {
+		return fiscobcos.ValidatorHistoryBlock{}, fiscobcos.ErrIncompleteChainEvidence
+	}
+	blockHash, err := strictHex32(block.Hash)
+	if err != nil || !bytes.Equal(blockHash, header.Evidence.BlockHash) {
+		return fiscobcos.ValidatorHistoryBlock{}, fiscobcos.ErrIncompleteChainEvidence
+	}
+	result.Transactions = make([]fiscobcos.TransitionTransactionEvidence, len(block.Transactions))
+	result.Receipts = make([]fiscobcos.TransitionReceiptEvidence, len(block.Transactions))
+	for index, item := range block.Transactions {
+		hashText, ok := item.(string)
+		if !ok || validateTransactionHashText(hashText) != nil {
+			return fiscobcos.ValidatorHistoryBlock{}, fiscobcos.ErrDriverInvalid
+		}
+		hash := common.HexToHash(hashText)
+		transaction, err := d.client.GetTransactionByHash(ctx, hash, false)
+		if err != nil {
+			return fiscobcos.ValidatorHistoryBlock{}, err
+		}
+		receipt, err := d.client.GetTransactionReceipt(ctx, hash, false)
+		if err != nil {
+			return fiscobcos.ValidatorHistoryBlock{}, err
+		}
+		transactionEvidence, err := d.transitionTransactionEvidence(transaction, hash)
+		if err != nil {
+			return fiscobcos.ValidatorHistoryBlock{}, err
+		}
+		receiptEvidence, err := d.transitionReceiptEvidence(receipt, hash, blockNumber)
+		if err != nil {
+			return fiscobcos.ValidatorHistoryBlock{}, err
+		}
+		result.Transactions[index] = transactionEvidence
+		result.Receipts[index] = receiptEvidence
+	}
+	return result, nil
+}
+
+func (d *nativeDriver) transitionTransactionEvidence(
+	transaction *types.TransactionDetail,
+	expectedHash common.Hash,
+) (fiscobcos.TransitionTransactionEvidence, error) {
+	if transaction == nil || transaction.Version != 0 ||
+		transaction.ChainID != d.trust.ChainID || transaction.GroupID != d.trust.GroupID ||
+		transaction.BlockLimit <= 0 || len(transaction.Nonce) > maxSDKTransactionNonceBytes ||
+		len(transaction.Abi) > maxSDKConfigStringBytes {
+		return fiscobcos.TransitionTransactionEvidence{}, fiscobcos.ErrIncompleteChainEvidence
+	}
+	declaredHash, err := strictHex32(transaction.Hash)
+	if err != nil || !bytes.Equal(declaredHash, expectedHash.Bytes()) {
+		return fiscobcos.TransitionTransactionEvidence{}, fiscobcos.ErrIncompleteChainEvidence
+	}
+	to, err := decodeHexBoundedOptional(transaction.To, common.AddressLength)
+	if err != nil || len(to) != 0 && len(to) != common.AddressLength {
+		return fiscobcos.TransitionTransactionEvidence{}, fiscobcos.ErrIncompleteChainEvidence
+	}
+	input, err := decodeHexBoundedOptional(transaction.Input, maxSDKRawTransactionBytes)
+	if err != nil {
+		return fiscobcos.TransitionTransactionEvidence{}, fiscobcos.ErrIncompleteChainEvidence
+	}
+	fields := fiscobcos.NativeTransactionFields{
+		Version: 0, ChainID: transaction.ChainID, GroupID: transaction.GroupID,
+		BlockLimit: transaction.BlockLimit, Nonce: transaction.Nonce,
+		To: to, Input: input, ABI: transaction.Abi,
+	}
+	preimage, err := fiscobcos.MarshalNativeTransactionHashPreimage(fields)
+	if err != nil {
+		return fiscobcos.TransitionTransactionEvidence{}, err
+	}
+	computedHash, err := fiscobcos.HashNativeEvidence(d.trust.ChainHashAlgorithm, preimage)
+	if err != nil || !bytes.Equal(computedHash, expectedHash.Bytes()) {
+		return fiscobcos.TransitionTransactionEvidence{}, fiscobcos.ErrIncompleteChainEvidence
+	}
+	return fiscobcos.TransitionTransactionEvidence{
+		Fields: fields, RawHashPreimage: preimage, TransactionHash: computedHash,
+	}, nil
+}
+
+func (d *nativeDriver) transitionReceiptEvidence(
+	receipt *types.Receipt,
+	expectedTransactionHash common.Hash,
+	blockNumber uint64,
+) (fiscobcos.TransitionReceiptEvidence, error) {
+	if receipt == nil || receipt.Version != 0 || receipt.BlockNumber < 0 ||
+		uint64(receipt.BlockNumber) != blockNumber || receipt.Status < math.MinInt32 ||
+		receipt.Status > math.MaxInt32 || validateReceiptRPCBounds(receipt) != nil {
+		return fiscobcos.TransitionReceiptEvidence{}, fiscobcos.ErrIncompleteChainEvidence
+	}
+	transactionHash, err := strictHex32(receipt.TransactionHash)
+	if err != nil || !bytes.Equal(transactionHash, expectedTransactionHash.Bytes()) {
+		return fiscobcos.TransitionReceiptEvidence{}, fiscobcos.ErrIncompleteChainEvidence
+	}
+	output, err := decodeHexBoundedOptional(receipt.Output, maxSDKRawReceiptBytes)
+	if err != nil {
+		return fiscobcos.TransitionReceiptEvidence{}, fiscobcos.ErrIncompleteChainEvidence
+	}
+	logs := make([]fiscobcos.NativeLogFields, len(receipt.Logs))
+	for index, log := range receipt.Logs {
+		if log == nil || len(log.Address) != 40 || len(log.Topics) > fiscobcos.MaxNativeEvidenceItems {
+			return fiscobcos.TransitionReceiptEvidence{}, fiscobcos.ErrIncompleteChainEvidence
+		}
+		if _, err := strictHexBytes(log.Address, common.AddressLength); err != nil {
+			return fiscobcos.TransitionReceiptEvidence{}, fiscobcos.ErrIncompleteChainEvidence
+		}
+		topics := make([][]byte, len(log.Topics))
+		for topicIndex, topic := range log.Topics {
+			topics[topicIndex], err = strictHex32(topic)
+			if err != nil {
+				return fiscobcos.TransitionReceiptEvidence{}, fiscobcos.ErrIncompleteChainEvidence
+			}
+		}
+		data, err := decodeHexBoundedOptional(log.Data, fiscobcos.MaxNativeEvidenceFieldBytes)
+		if err != nil {
+			return fiscobcos.TransitionReceiptEvidence{}, fiscobcos.ErrIncompleteChainEvidence
+		}
+		logs[index] = fiscobcos.NativeLogFields{Address: log.Address, Topics: topics, Data: data}
+	}
+	fields := fiscobcos.NativeReceiptFields{
+		Version: 0, GasUsed: receipt.GasUsed, ContractAddress: receipt.ContractAddress,
+		Status: int32(receipt.Status), Output: output, Logs: logs,
+		BlockNumber: int64(receipt.BlockNumber),
+	}
+	preimage, _, err := fiscobcos.MarshalNativeReceiptPreimage(fields)
+	if err != nil {
+		return fiscobcos.TransitionReceiptEvidence{}, err
+	}
+	computedHash, err := fiscobcos.HashNativeEvidence(d.trust.ChainHashAlgorithm, preimage)
+	if err != nil {
+		return fiscobcos.TransitionReceiptEvidence{}, err
+	}
+	declaredHash, err := strictHex32(receipt.Hash)
+	if err != nil || !bytes.Equal(declaredHash, computedHash) {
+		return fiscobcos.TransitionReceiptEvidence{}, fiscobcos.ErrIncompleteChainEvidence
+	}
+	return fiscobcos.TransitionReceiptEvidence{
+		Fields: fields, RawCanonicalReceipt: preimage, ReceiptHash: computedHash,
+	}, nil
+}
+
 func (d *nativeDriver) Close() error {
 	if d.client != nil {
 		d.client.Close()

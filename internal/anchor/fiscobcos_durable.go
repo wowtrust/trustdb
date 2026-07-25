@@ -467,6 +467,10 @@ func (s *FISCOBCOSStandardSink) resultFromSuccessfulJournal(
 	if err != nil {
 		return model.STHAnchorResult{}, mapSinkError(err)
 	}
+	validatorHistory, err := s.collectValidatorHistory(ctx, header.Evidence, route)
+	if err != nil {
+		return model.STHAnchorResult{}, mapSinkError(err)
+	}
 	attempts := make([]fiscobcos.TransactionAttempt, len(journal.Attempts))
 	for index, item := range journal.Attempts {
 		attempts[index] = proofTransactionAttempt(item)
@@ -503,8 +507,9 @@ func (s *FISCOBCOSStandardSink) resultFromSuccessfulJournal(
 			AnchorLogIndex:      success.Receipt.AnchorLogIndex,
 			DecodedAnchorEvent:  append([]byte(nil), success.Receipt.DecodedAnchorEvent...),
 		},
-		Block:    header.Evidence,
-		Finality: consensus.Finality,
+		Block:            header.Evidence,
+		Finality:         consensus.Finality,
+		ValidatorHistory: validatorHistory,
 	}
 	proofBytes, err := fiscobcos.MarshalProof(proof)
 	if err != nil {
@@ -531,6 +536,11 @@ func (s *FISCOBCOSStandardSink) resultFromSuccessfulJournal(
 	}
 	if err := fiscobcos.ValidateProofAgainstTrustConfig(sth, result, s.trust); err != nil {
 		return model.STHAnchorResult{}, mapSinkError(ambiguousDriverFailure("validate_anchor_proof", s.drivers[0].Endpoint(), err))
+	}
+	if s.trust.ValidatorTransitionPolicy == fiscobcos.ValidatorPolicyTransitions {
+		if err := fiscobcos.VerifyAuthenticatedPBFTFinality(sth, result, s.trust); err != nil {
+			return model.STHAnchorResult{}, mapSinkError(ambiguousDriverFailure("validate_pbft_finality", s.drivers[0].Endpoint(), err))
+		}
 	}
 	return result, nil
 }

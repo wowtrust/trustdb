@@ -273,6 +273,13 @@ type Driver interface {
 	Close() error
 }
 
+// ValidatorHistoryDriver is implemented by drivers that can collect the
+// complete offline evidence required by ValidatorPolicyTransitions. The base
+// Driver remains stable for static-validator deployments and test doubles.
+type ValidatorHistoryDriver interface {
+	GetValidatorHistoryBlock(context.Context, uint64, bool) (ValidatorHistoryBlock, error)
+}
+
 func ValidateAnchorRecord(payload AnchorPayload, record AnchorRecord) error {
 	if !record.Exists {
 		return fmt.Errorf("%w: anchor record is absent", ErrDriverInvalid)

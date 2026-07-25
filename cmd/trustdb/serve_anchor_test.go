@@ -207,6 +207,7 @@ func testFISCOBCOSTrust(t *testing.T) fiscobcos.TrustConfig {
 			NodeID: "0x" + hex.EncodeToString(publicKey[1:]), Algorithm: fiscobcos.StandardAccountAlg,
 			PublicKeyEncoding: fiscobcos.StandardKeyEncoding,
 			PublicKey:         publicKey,
+			VoteWeight:        1,
 		})
 	}
 	return trust

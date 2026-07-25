@@ -80,7 +80,7 @@ func TestVerifyStaticPBFTFinalityRejectsMutations(t *testing.T) {
 			mutate: func(proof *AnchorProof, _ *TrustConfig) {
 				proof.Finality.Signatures[0].ValidatorNodeID = "0x" + strings.Repeat("ff", 64)
 			},
-			match: "not in the trusted static set",
+			match: "not in the active trusted set",
 		},
 		{
 			name: "wrong signature",
@@ -113,7 +113,7 @@ func TestVerifyStaticPBFTFinalityRejectsMutations(t *testing.T) {
 				proof.Block.Fields.SealerList[3] = bytes.Repeat([]byte{0xff}, 64)
 				rebuildFinalityBlock(t, proof, keys[:3])
 			},
-			match: "not in the trusted static set",
+			match: "does not exactly match trusted order and weight",
 		},
 		{
 			name: "weighted membership",
@@ -121,7 +121,7 @@ func TestVerifyStaticPBFTFinalityRejectsMutations(t *testing.T) {
 				proof.Block.Fields.ConsensusWeights[0] = 2
 				rebuildFinalityBlock(t, proof, keys)
 			},
-			match: "requires unit weights",
+			match: "does not exactly match trusted order and weight",
 		},
 		{
 			name: "invalid sealer index",
@@ -347,6 +347,7 @@ func validStaticFinalityFixture(
 			Algorithm:         params.ChainSignatureAlgorithm,
 			PublicKeyEncoding: params.PublicKeyEncoding,
 			PublicKey:         publicKey,
+			VoteWeight:        1,
 		}
 		proof.Block.Fields.SealerList[index] = append([]byte(nil), rawPublic...)
 	}

@@ -133,7 +133,7 @@ func TestPublishedGoldenVectorFilesMatchImplementation(t *testing.T) {
 		Fixture     json.RawMessage `json:"fixture"`
 		Vectors     []trustVector   `json:"vectors"`
 	}
-	readJSONVector(t, "fisco-bcos-trust-config-v1.json", &trustFile)
+	readJSONVector(t, "fisco-bcos-trust-config-v2.json", &trustFile)
 	if len(trustFile.Vectors) != 2 {
 		t.Fatalf("trust vector count=%d, want 2", len(trustFile.Vectors))
 	}
@@ -219,8 +219,8 @@ func TestTrustConfigGoldenVectorsAndCanonicalOrdering(t *testing.T) {
 		wantDigest    string
 		wantContextID string
 	}{
-		{mode: CryptoModeStandard, wantCBORSHA: "698ec89ec77da4aa09b1ec1e5f98dc8db2dc7f0e3b4b9544c5542679ae57db58", wantDigest: "42321af6d7cf4c914d3ef1141b981065815da62979af918610926272316d5c5d", wantContextID: "11643d2c4f29c8c0e990cb266bc4f1b7b937353308d1d0c9baccb125848d9363"},
-		{mode: CryptoModeGuomi, wantCBORSHA: "ee57d83b494703fd216b10ae567be4ccb1e073aac8400adae3792a0a14e1f230", wantDigest: "1d3f3b1a0ac10851650f78178c78533e7f7db818f076699cfa2a3417925744dd", wantContextID: "a311938565e61c8bd6c3d3875c7991aabaf4d42369d6976794ab3a2edf735766"},
+		{mode: CryptoModeStandard, wantCBORSHA: "482b1d19fbccffcf99c2e24c9b1c9ed365e3b5cbefb6834d16b98ae951132904", wantDigest: "43bbb55c5b7e176535d6259332fc5f58760767b5d6375eb0a5ce78b33de060a3", wantContextID: "0076f75fe3cbe686170c58bcc72a019be0f966460a8b5f440b29f01f509e6051"},
+		{mode: CryptoModeGuomi, wantCBORSHA: "1fc8a02561d40612db4187a54efec29146cd11fc7bcaa0b3dc340b539b03d70b", wantDigest: "63bd339d5bf24d0ab34ba958f8d43effd12a6f14ceaee486aa9349c839b5a4b6", wantContextID: "6390c25496902ddc6ea28f4504ee57952195b41da442e251dca43a06f2401f04"},
 	}
 	for _, tc := range tests {
 		tc := tc
@@ -246,11 +246,16 @@ func TestTrustConfigGoldenVectorsAndCanonicalOrdering(t *testing.T) {
 
 			reordered := cloneTrustConfig(config)
 			reverseStrings(reordered.Endpoints)
-			reverseValidators(reordered.Validators)
+			reorderedValidators := cloneTrustConfig(reordered)
+			reverseValidators(reorderedValidators.Validators)
 			reordered.Certificates.TrustedCACertificateHashes[0], reordered.Certificates.TrustedCACertificateHashes[1] = reordered.Certificates.TrustedCACertificateHashes[1], reordered.Certificates.TrustedCACertificateHashes[0]
 			reorderedBytes, err := MarshalTrustConfig(reordered)
 			if err != nil || !bytes.Equal(canonical, reorderedBytes) {
-				t.Fatalf("set ordering changed canonical config: error=%v", err)
+				t.Fatalf("unordered set fields changed canonical config: error=%v", err)
+			}
+			reorderedValidatorBytes, err := MarshalTrustConfig(reorderedValidators)
+			if err != nil || bytes.Equal(canonical, reorderedValidatorBytes) {
+				t.Fatalf("ordered validator checkpoint did not change canonical config: error=%v", err)
 			}
 			decoded, err := UnmarshalTrustConfig(canonical)
 			if err != nil {
@@ -591,7 +596,7 @@ func testTrustConfig(t *testing.T, mode CryptoMode) TrustConfig {
 		}
 		config.Validators = append(config.Validators, ValidatorDescriptor{
 			NodeID: "0x" + hex.EncodeToString(publicKey[1:]), Algorithm: params.ChainSignatureAlgorithm,
-			PublicKeyEncoding: params.PublicKeyEncoding, PublicKey: publicKey,
+			PublicKeyEncoding: params.PublicKeyEncoding, PublicKey: publicKey, VoteWeight: 1,
 		})
 	}
 	return config

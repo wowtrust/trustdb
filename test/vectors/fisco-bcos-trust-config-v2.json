@@ -1,6 +1,6 @@
 {
-  "schema": "trustdb.test-vector.fisco-bcos-trust-config.v1",
-  "description": "Canonical deterministic-CBOR trust configuration vectors. The configuration is local input and is never embedded in BCOS evidence.",
+  "schema": "trustdb.test-vector.fisco-bcos-trust-config.v2",
+  "description": "Canonical deterministic-CBOR weighted validator checkpoint vectors. The ordered configuration is local input and is never embedded in BCOS evidence.",
   "fixture": {
     "chain_id": "chain0",
     "group_id": "group0",
@@ -25,8 +25,10 @@
     ],
     "read_quorum": 2,
     "account_provider": "keydescriptor",
-    "validator_quorum_policy": "fisco-bcos-pbft-2f-plus-1-v1",
-    "validators": "four deterministic private scalars 1..4; node_id is the canonical 0x-prefixed 64-byte public-key body",
+    "checkpoint_generation": 1,
+    "validator_quorum_policy": "fisco-bcos-weighted-pbft-v2",
+    "validator_transition_policy": "static-validator-set-v1",
+    "validators": "four ordered deterministic private scalars 1..4 with vote_weight=1; node_id is the canonical 0x-prefixed 64-byte public-key body",
     "trusted_ca_hashes": "two 32-byte fixture hashes increasing from 0xa1 and 0xb1",
     "pinned_peer_certificate_hash": "32-byte fixture hash increasing from 0xc1"
   },
@@ -37,9 +39,9 @@
       "chain_hash_algorithm": "keccak256",
       "chain_signature_algorithm": "ecdsa-secp256k1",
       "transport_mode": "tls",
-      "canonical_cbor_sha256": "698ec89ec77da4aa09b1ec1e5f98dc8db2dc7f0e3b4b9544c5542679ae57db58",
-      "trust_config_digest": "42321af6d7cf4c914d3ef1141b981065815da62979af918610926272316d5c5d",
-      "chain_context_id": "11643d2c4f29c8c0e990cb266bc4f1b7b937353308d1d0c9baccb125848d9363"
+      "canonical_cbor_sha256": "482b1d19fbccffcf99c2e24c9b1c9ed365e3b5cbefb6834d16b98ae951132904",
+      "trust_config_digest": "43bbb55c5b7e176535d6259332fc5f58760767b5d6375eb0a5ce78b33de060a3",
+      "chain_context_id": "0076f75fe3cbe686170c58bcc72a019be0f966460a8b5f440b29f01f509e6051"
     },
     {
       "crypto_mode": "guomi",
@@ -48,9 +50,9 @@
       "chain_signature_algorithm": "sm2-sm3",
       "transport_mode": "gm-tls",
       "sm2_user_id": "1234567812345678",
-      "canonical_cbor_sha256": "ee57d83b494703fd216b10ae567be4ccb1e073aac8400adae3792a0a14e1f230",
-      "trust_config_digest": "1d3f3b1a0ac10851650f78178c78533e7f7db818f076699cfa2a3417925744dd",
-      "chain_context_id": "a311938565e61c8bd6c3d3875c7991aabaf4d42369d6976794ab3a2edf735766"
+      "canonical_cbor_sha256": "1fc8a02561d40612db4187a54efec29146cd11fc7bcaa0b3dc340b539b03d70b",
+      "trust_config_digest": "63bd339d5bf24d0ab34ba958f8d43effd12a6f14ceaee486aa9349c839b5a4b6",
+      "chain_context_id": "6390c25496902ddc6ea28f4504ee57952195b41da442e251dca43a06f2401f04"
     }
   ]
 }

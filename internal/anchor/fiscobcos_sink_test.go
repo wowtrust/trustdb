@@ -47,6 +47,9 @@ type fakeBCOSDriver struct {
 	receiptCalls  int
 	state         *fakeBCOSState
 	closed        bool
+	historyBlocks map[uint64]fiscobcos.ValidatorHistoryBlock
+	historyFull   map[uint64]fiscobcos.ValidatorHistoryBlock
+	historyCalls  []bool
 }
 
 func (d *fakeBCOSDriver) Endpoint() string { return d.endpoint }
@@ -249,6 +252,21 @@ func (d *fakeBCOSDriver) GetConsensusSnapshot(context.Context, uint64) (fiscobco
 		}},
 	}, nil
 }
+func (d *fakeBCOSDriver) GetValidatorHistoryBlock(_ context.Context, blockNumber uint64, includeContents bool) (fiscobcos.ValidatorHistoryBlock, error) {
+	d.historyCalls = append(d.historyCalls, includeContents)
+	if includeContents {
+		item, ok := d.historyFull[blockNumber]
+		if !ok {
+			return fiscobcos.ValidatorHistoryBlock{}, fiscobcos.ErrIncompleteChainEvidence
+		}
+		return item, nil
+	}
+	item, ok := d.historyBlocks[blockNumber]
+	if !ok {
+		return fiscobcos.ValidatorHistoryBlock{}, fiscobcos.ErrIncompleteChainEvidence
+	}
+	return item, nil
+}
 func (d *fakeBCOSDriver) Close() error { d.closed = true; return nil }
 
 func fakeBCOSBlockHeader() fiscobcos.BlockHeader {
@@ -338,6 +356,109 @@ func TestFISCOBCOSStandardSinkPublishesCompleteRawEvidence(t *testing.T) {
 	}
 	if err := fiscobcos.ValidateProofAgainstTrustConfig(sth, result, trust); err != nil {
 		t.Fatalf("proof trust binding failed: %v", err)
+	}
+}
+
+func TestFISCOBCOSValidatorHistoryCollectionFetchesContentsOnlyForChanges(t *testing.T) {
+	t.Parallel()
+	for _, changed := range []bool{false, true} {
+		changed := changed
+		t.Run(fmt.Sprintf("changed_%t", changed), func(t *testing.T) {
+			t.Parallel()
+			trust, drivers := fakeBCOSFixture(t)
+			trust.ValidatorTransitionPolicy = fiscobcos.ValidatorPolicyTransitions
+			sealers := make([][]byte, len(trust.Validators))
+			weights := make([]int64, len(trust.Validators))
+			for index, validator := range trust.Validators {
+				sealers[index] = append([]byte(nil), validator.PublicKey[1:]...)
+				weights[index] = int64(validator.VoteWeight)
+			}
+			sourceFields := fiscobcos.NativeBlockHeaderFields{
+				Version: 0,
+				ParentInfo: []fiscobcos.NativeParentInfo{{
+					BlockNumber: 498, BlockHash: bytes.Repeat([]byte{0x44}, 32),
+				}},
+				TransactionsRoot: bytes.Repeat([]byte{0x51}, 32),
+				ReceiptsRoot:     bytes.Repeat([]byte{0x52}, 32),
+				StateRoot:        bytes.Repeat([]byte{0x53}, 32),
+				BlockNumber:      499, GasUsed: "1", Timestamp: 99, Sealer: 0,
+				SealerList: sealers, ConsensusWeights: weights,
+			}
+			sourceRaw, err := fiscobcos.MarshalNativeBlockHeaderPreimage(sourceFields)
+			if err != nil {
+				t.Fatal(err)
+			}
+			sourceHash, err := fiscobcos.HashNativeEvidence(trust.ChainHashAlgorithm, sourceRaw)
+			if err != nil {
+				t.Fatal(err)
+			}
+			trust.TrustedCheckpoint = fiscobcos.BlockCheckpoint{BlockNumber: 499, BlockHash: sourceHash}
+			targetSealers := cloneByteSlices(sealers)
+			targetWeights := append([]int64(nil), weights...)
+			if changed {
+				targetSealers = targetSealers[:len(targetSealers)-1]
+				targetWeights = targetWeights[:len(targetWeights)-1]
+			}
+			targetFields := fiscobcos.NativeBlockHeaderFields{
+				Version:          0,
+				ParentInfo:       []fiscobcos.NativeParentInfo{{BlockNumber: 499, BlockHash: sourceHash}},
+				TransactionsRoot: bytes.Repeat([]byte{0x61}, 32),
+				ReceiptsRoot:     bytes.Repeat([]byte{0x62}, 32),
+				StateRoot:        bytes.Repeat([]byte{0x63}, 32),
+				BlockNumber:      500, GasUsed: "1", Timestamp: 100, Sealer: 0,
+				SealerList: targetSealers, ConsensusWeights: targetWeights,
+			}
+			targetRaw, err := fiscobcos.MarshalNativeBlockHeaderPreimage(targetFields)
+			if err != nil {
+				t.Fatal(err)
+			}
+			targetHash, err := fiscobcos.HashNativeEvidence(trust.ChainHashAlgorithm, targetRaw)
+			if err != nil {
+				t.Fatal(err)
+			}
+			source := fiscobcos.ValidatorHistoryBlock{
+				Block:    fiscobcos.BlockEvidence{Fields: sourceFields, RawCanonicalHeader: sourceRaw, BlockHash: sourceHash, BlockNumber: 499},
+				Finality: fiscobcos.FinalityEvidence{Signatures: []fiscobcos.CommitSignature{{ValidatorNodeID: trust.Validators[0].NodeID, Signature: bytes.Repeat([]byte{1}, 65)}}},
+			}
+			full := source
+			full.Transactions = []fiscobcos.TransitionTransactionEvidence{{}}
+			full.Receipts = []fiscobcos.TransitionReceiptEvidence{{}}
+			for _, driver := range drivers {
+				fake := driver.(*fakeBCOSDriver)
+				fake.probe.CheckpointHash = append([]byte(nil), sourceHash...)
+				fake.historyBlocks = map[uint64]fiscobcos.ValidatorHistoryBlock{499: source}
+				fake.historyFull = map[uint64]fiscobcos.ValidatorHistoryBlock{499: full}
+			}
+			sink, err := NewFISCOBCOSStandardSink(FISCOBCOSStandardSinkConfig{TrustConfig: trust, Drivers: drivers})
+			if err != nil {
+				t.Fatal(err)
+			}
+			route, err := sink.probeQuorum(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			history, err := sink.collectValidatorHistory(context.Background(), fiscobcos.BlockEvidence{
+				Fields: targetFields, RawCanonicalHeader: targetRaw, BlockHash: targetHash, BlockNumber: 500,
+			}, route)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(history) != 1 || len(history[0].Finality.Signatures) != 0 {
+				t.Fatalf("history=%+v", history)
+			}
+			wantCalls := []bool{false}
+			if changed {
+				wantCalls = []bool{false, true}
+				if len(history[0].Transactions) != 1 || len(history[0].Receipts) != 1 {
+					t.Fatalf("changed history omitted full contents: %+v", history[0])
+				}
+			}
+			for _, driver := range drivers {
+				if fmt.Sprint(driver.(*fakeBCOSDriver).historyCalls) != fmt.Sprint(wantCalls) {
+					t.Fatalf("history calls=%v want=%v", driver.(*fakeBCOSDriver).historyCalls, wantCalls)
+				}
+			}
+		})
 	}
 }
 
@@ -1501,7 +1622,7 @@ func fakeBCOSFixtureForMode(t *testing.T, mode fiscobcos.CryptoMode) (fiscobcos.
 		}
 		trust.Validators = append(trust.Validators, fiscobcos.ValidatorDescriptor{
 			NodeID: "0x" + hex.EncodeToString(publicKey[1:]), Algorithm: parameters.ChainSignatureAlgorithm,
-			PublicKeyEncoding: parameters.PublicKeyEncoding, PublicKey: publicKey,
+			PublicKeyEncoding: parameters.PublicKeyEncoding, PublicKey: publicKey, VoteWeight: 1,
 		})
 	}
 	probe := fiscobcos.ChainProbe{

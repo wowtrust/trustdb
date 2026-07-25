@@ -298,6 +298,7 @@ func attachStructuralRawBCOSEvidence(
 		Algorithm:         fiscobcos.StandardAccountAlg,
 		PublicKeyEncoding: fiscobcos.StandardKeyEncoding,
 		PublicKey:         validatorKey,
+		VoteWeight:        1,
 	}}
 	payload, err := fiscobcos.NewAnchorPayload(proof.CryptoSuite, proof.GlobalProof.STH)
 	if err != nil {

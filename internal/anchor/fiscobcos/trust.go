@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/hex"
 	"fmt"
+	"math"
 	"net"
 	"net/netip"
 	"net/url"
@@ -66,29 +67,33 @@ type ValidatorDescriptor struct {
 	Algorithm         string `cbor:"algorithm" json:"algorithm"`
 	PublicKeyEncoding string `cbor:"public_key_encoding" json:"public_key_encoding"`
 	PublicKey         []byte `cbor:"public_key" json:"public_key"`
+	VoteWeight        uint64 `cbor:"vote_weight" json:"vote_weight"`
 }
 
 // TrustConfig is supplied locally by the publisher/verifier. AnchorProof does
 // not contain validators, certificate roots, account references, or endpoint
 // credentials, so evidence can never promote its own trust material.
 type TrustConfig struct {
-	SchemaVersion           string                `cbor:"schema_version" json:"schema_version"`
-	CryptoMode              CryptoMode            `cbor:"crypto_mode" json:"crypto_mode"`
-	ProtocolHashAlgorithm   string                `cbor:"protocol_hash_algorithm" json:"protocol_hash_algorithm"`
-	ChainHashAlgorithm      string                `cbor:"chain_hash_algorithm" json:"chain_hash_algorithm"`
-	ChainSignatureAlgorithm string                `cbor:"chain_signature_algorithm" json:"chain_signature_algorithm"`
-	ChainID                 string                `cbor:"chain_id" json:"chain_id"`
-	GroupID                 string                `cbor:"group_id" json:"group_id"`
-	GenesisHash             []byte                `cbor:"genesis_hash" json:"genesis_hash"`
-	TrustedCheckpoint       BlockCheckpoint       `cbor:"trusted_checkpoint" json:"trusted_checkpoint"`
-	Contract                ContractBinding       `cbor:"contract" json:"contract"`
-	Endpoints               []string              `cbor:"endpoints" json:"endpoints"`
-	ReadQuorum              uint32                `cbor:"read_quorum" json:"read_quorum"`
-	AccountProvider         AccountProviderConfig `cbor:"account_provider" json:"account_provider"`
-	Certificates            CertificateConfig     `cbor:"certificates" json:"certificates"`
-	ValidatorQuorumPolicy   string                `cbor:"validator_quorum_policy" json:"validator_quorum_policy"`
-	Validators              []ValidatorDescriptor `cbor:"validators" json:"validators"`
-	SM2UserID               string                `cbor:"sm2_user_id,omitempty" json:"sm2_user_id,omitempty"`
+	SchemaVersion             string                `cbor:"schema_version" json:"schema_version"`
+	CryptoMode                CryptoMode            `cbor:"crypto_mode" json:"crypto_mode"`
+	ProtocolHashAlgorithm     string                `cbor:"protocol_hash_algorithm" json:"protocol_hash_algorithm"`
+	ChainHashAlgorithm        string                `cbor:"chain_hash_algorithm" json:"chain_hash_algorithm"`
+	ChainSignatureAlgorithm   string                `cbor:"chain_signature_algorithm" json:"chain_signature_algorithm"`
+	ChainID                   string                `cbor:"chain_id" json:"chain_id"`
+	GroupID                   string                `cbor:"group_id" json:"group_id"`
+	GenesisHash               []byte                `cbor:"genesis_hash" json:"genesis_hash"`
+	TrustedCheckpoint         BlockCheckpoint       `cbor:"trusted_checkpoint" json:"trusted_checkpoint"`
+	CheckpointGeneration      uint64                `cbor:"checkpoint_generation" json:"checkpoint_generation"`
+	PreviousConfigDigest      []byte                `cbor:"previous_config_digest,omitempty" json:"previous_config_digest,omitempty"`
+	Contract                  ContractBinding       `cbor:"contract" json:"contract"`
+	Endpoints                 []string              `cbor:"endpoints" json:"endpoints"`
+	ReadQuorum                uint32                `cbor:"read_quorum" json:"read_quorum"`
+	AccountProvider           AccountProviderConfig `cbor:"account_provider" json:"account_provider"`
+	Certificates              CertificateConfig     `cbor:"certificates" json:"certificates"`
+	ValidatorQuorumPolicy     string                `cbor:"validator_quorum_policy" json:"validator_quorum_policy"`
+	ValidatorTransitionPolicy string                `cbor:"validator_transition_policy" json:"validator_transition_policy"`
+	Validators                []ValidatorDescriptor `cbor:"validators" json:"validators"`
+	SM2UserID                 string                `cbor:"sm2_user_id,omitempty" json:"sm2_user_id,omitempty"`
 }
 
 func NewTrustConfig(mode CryptoMode) (TrustConfig, error) {
@@ -97,12 +102,14 @@ func NewTrustConfig(mode CryptoMode) (TrustConfig, error) {
 		return TrustConfig{}, err
 	}
 	config := TrustConfig{
-		SchemaVersion:           SchemaTrustConfig,
-		CryptoMode:              mode,
-		ProtocolHashAlgorithm:   params.ProtocolHashAlgorithm,
-		ChainHashAlgorithm:      params.ChainHashAlgorithm,
-		ChainSignatureAlgorithm: params.ChainSignatureAlgorithm,
-		ValidatorQuorumPolicy:   QuorumPolicyPBFTV1,
+		SchemaVersion:             SchemaTrustConfig,
+		CryptoMode:                mode,
+		ProtocolHashAlgorithm:     params.ProtocolHashAlgorithm,
+		ChainHashAlgorithm:        params.ChainHashAlgorithm,
+		ChainSignatureAlgorithm:   params.ChainSignatureAlgorithm,
+		ValidatorQuorumPolicy:     QuorumPolicyPBFTV2,
+		ValidatorTransitionPolicy: ValidatorPolicyStatic,
+		CheckpointGeneration:      1,
 	}
 	config.AccountProvider.Algorithm = params.ChainSignatureAlgorithm
 	config.Certificates.TransportMode = params.TransportMode
@@ -162,6 +169,7 @@ type chainContextBinding struct {
 	GroupID                 string          `cbor:"group_id"`
 	GenesisHash             []byte          `cbor:"genesis_hash"`
 	TrustedCheckpoint       BlockCheckpoint `cbor:"trusted_checkpoint"`
+	CheckpointGeneration    uint64          `cbor:"checkpoint_generation"`
 	Contract                ContractBinding `cbor:"contract"`
 	ValidatorSetDigest      []byte          `cbor:"validator_set_digest"`
 }
@@ -188,7 +196,7 @@ func ChainContextID(config TrustConfig) ([]byte, error) {
 		return nil, err
 	}
 	context := chainContextBinding{
-		SchemaVersion:           "trustdb.fisco-bcos-chain-context.v1",
+		SchemaVersion:           "trustdb.fisco-bcos-chain-context.v2",
 		CryptoMode:              canonical.CryptoMode,
 		ProtocolHashAlgorithm:   canonical.ProtocolHashAlgorithm,
 		ChainHashAlgorithm:      canonical.ChainHashAlgorithm,
@@ -197,6 +205,7 @@ func ChainContextID(config TrustConfig) ([]byte, error) {
 		GroupID:                 canonical.GroupID,
 		GenesisHash:             canonical.GenesisHash,
 		TrustedCheckpoint:       canonical.TrustedCheckpoint,
+		CheckpointGeneration:    canonical.CheckpointGeneration,
 		Contract:                canonical.Contract,
 		ValidatorSetDigest:      validatorDigest,
 	}
@@ -220,7 +229,6 @@ func canonicalTrustConfig(config TrustConfig) (TrustConfig, error) {
 	sort.Strings(out.Certificates.TrustedCAReferences)
 	sortByteSlices(out.Certificates.TrustedCACertificateHashes)
 	sortByteSlices(out.Certificates.PinnedPeerCertificateHashes)
-	sort.Slice(out.Validators, func(i, j int) bool { return out.Validators[i].NodeID < out.Validators[j].NodeID })
 	return out, nil
 }
 
@@ -256,6 +264,16 @@ func validateTrustConfig(config TrustConfig) error {
 	if len(config.GenesisHash) != identifierBytes || len(config.TrustedCheckpoint.BlockHash) != identifierBytes {
 		return fmt.Errorf("%w: genesis_hash and trusted checkpoint hash must be %d bytes", ErrInvalidTrustConfig, identifierBytes)
 	}
+	if config.CheckpointGeneration == 0 {
+		return fmt.Errorf("%w: checkpoint_generation must be positive", ErrInvalidTrustConfig)
+	}
+	if config.CheckpointGeneration == 1 {
+		if len(config.PreviousConfigDigest) != 0 {
+			return fmt.Errorf("%w: generation 1 must not name a previous config digest", ErrInvalidTrustConfig)
+		}
+	} else if len(config.PreviousConfigDigest) != identifierBytes {
+		return fmt.Errorf("%w: advanced checkpoints require a %d-byte previous config digest", ErrInvalidTrustConfig, identifierBytes)
+	}
 	if len(config.Contract.Address) != 20 || len(config.Contract.CodeHash) != identifierBytes {
 		return fmt.Errorf("%w: contract address must be 20 bytes and code_hash %d bytes", ErrInvalidTrustConfig, identifierBytes)
 	}
@@ -279,17 +297,26 @@ func validateTrustConfig(config TrustConfig) error {
 	if config.ReadQuorum == 0 || int(config.ReadQuorum) > len(config.Endpoints) {
 		return fmt.Errorf("%w: read_quorum=%d exceeds endpoint count %d", ErrInvalidTrustConfig, config.ReadQuorum, len(config.Endpoints))
 	}
-	if config.ValidatorQuorumPolicy != QuorumPolicyPBFTV1 {
+	if config.ValidatorQuorumPolicy != QuorumPolicyPBFTV2 {
 		return fmt.Errorf("%w: validator_quorum_policy=%q", ErrInvalidTrustConfig, config.ValidatorQuorumPolicy)
+	}
+	if config.ValidatorTransitionPolicy != ValidatorPolicyStatic &&
+		config.ValidatorTransitionPolicy != ValidatorPolicyTransitions {
+		return fmt.Errorf("%w: validator_transition_policy=%q", ErrInvalidTrustConfig, config.ValidatorTransitionPolicy)
 	}
 	if len(config.Validators) == 0 || len(config.Validators) > maxValidators {
 		return fmt.Errorf("%w: validators count=%d", ErrInvalidTrustConfig, len(config.Validators))
 	}
 	seenValidators := make(map[string]struct{}, len(config.Validators))
+	var totalVoteWeight uint64
 	for _, validator := range config.Validators {
 		if err := validateValidator(validator, params); err != nil {
 			return err
 		}
+		if totalVoteWeight > math.MaxInt64-validator.VoteWeight {
+			return fmt.Errorf("%w: total validator vote weight exceeds 2^63-1", ErrInvalidTrustConfig)
+		}
+		totalVoteWeight += validator.VoteWeight
 		if _, exists := seenValidators[validator.NodeID]; exists {
 			return fmt.Errorf("%w: duplicate validator node_id %q", ErrInvalidTrustConfig, validator.NodeID)
 		}
@@ -354,6 +381,9 @@ func validateValidator(validator ValidatorDescriptor, params ModeParameters) err
 	}
 	if len(validator.PublicKey) != 65 || validator.PublicKey[0] != 0x04 {
 		return fmt.Errorf("%w: validator %q public key must be canonical 65-byte uncompressed form", ErrInvalidTrustConfig, validator.NodeID)
+	}
+	if validator.VoteWeight == 0 || validator.VoteWeight > uint64(^uint64(0)>>1) {
+		return fmt.Errorf("%w: validator %q vote_weight must be in [1, 2^63-1]", ErrInvalidTrustConfig, validator.NodeID)
 	}
 	switch params.Mode {
 	case CryptoModeStandard:
@@ -490,6 +520,7 @@ func cloneTrustConfig(in TrustConfig) TrustConfig {
 	out := in
 	out.GenesisHash = append([]byte(nil), in.GenesisHash...)
 	out.TrustedCheckpoint.BlockHash = append([]byte(nil), in.TrustedCheckpoint.BlockHash...)
+	out.PreviousConfigDigest = append([]byte(nil), in.PreviousConfigDigest...)
 	out.Contract.Address = append([]byte(nil), in.Contract.Address...)
 	out.Contract.CodeHash = append([]byte(nil), in.Contract.CodeHash...)
 	out.Endpoints = append([]string(nil), in.Endpoints...)
