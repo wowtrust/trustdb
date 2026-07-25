@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/spf13/cobra"
+	"github.com/spf13/viper"
 	"github.com/wowtrust/trustdb/internal/adminauth"
 )
 
@@ -161,4 +162,16 @@ func writeAuditTestConfig(t *testing.T, dir, signerPath string, requireTime bool
 	return configPath
 }
 
-func quoteYAML(value string) string { return `"` + strings.ReplaceAll(value, `"`, `\"`) + `"` }
+func TestQuoteYAMLPreservesWindowsPaths(t *testing.T) {
+	const path = `C:\Users\runneradmin\AppData\Local\Temp\trustdb\security.audit`
+	v := viper.New()
+	v.SetConfigType("yaml")
+	if err := v.ReadConfig(strings.NewReader("path: " + quoteYAML(path))); err != nil {
+		t.Fatal(err)
+	}
+	if got := v.GetString("path"); got != path {
+		t.Fatalf("path=%q want=%q", got, path)
+	}
+}
+
+func quoteYAML(value string) string { return `'` + strings.ReplaceAll(value, `'`, `''`) + `'` }
