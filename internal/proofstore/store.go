@@ -6,6 +6,7 @@ import (
 
 	"github.com/wowtrust/trustdb/internal/cryptosuite"
 	"github.com/wowtrust/trustdb/internal/model"
+	"github.com/wowtrust/trustdb/internal/proofstoremeta"
 	"github.com/wowtrust/trustdb/internal/trusterr"
 )
 
@@ -104,6 +105,14 @@ type CryptoSuiteBindingReader interface {
 	CryptoSuite() cryptosuite.ID
 }
 
+// NamespaceBindingReader exposes the complete immutable V5 namespace marker.
+// Logical backups bind their manifest to this identity so an archive cannot be
+// restored into a different node, log, format generation, or namespace by
+// changing CLI flags alone.
+type NamespaceBindingReader interface {
+	NamespaceBinding() proofstoremeta.Marker
+}
+
 func BoundCryptoSuite(store any) (cryptosuite.ID, error) {
 	reader, ok := store.(CryptoSuiteBindingReader)
 	if !ok {
@@ -114,6 +123,18 @@ func BoundCryptoSuite(store any) (cryptosuite.ID, error) {
 		return "", trusterr.Wrap(trusterr.CodeDataLoss, "proofstore exposes an invalid cryptographic suite binding", err)
 	}
 	return suiteID, nil
+}
+
+func BoundNamespace(store any) (proofstoremeta.Marker, error) {
+	reader, ok := store.(NamespaceBindingReader)
+	if !ok {
+		return proofstoremeta.Marker{}, trusterr.New(trusterr.CodeFailedPrecondition, "proofstore does not expose a namespace binding")
+	}
+	marker := reader.NamespaceBinding()
+	if err := proofstoremeta.ValidateBinding(marker, marker.CryptoSuite, marker.NodeID, marker.LogID, marker.NamespaceID); err != nil {
+		return proofstoremeta.Marker{}, trusterr.Wrap(trusterr.CodeDataLoss, "proofstore exposes an invalid namespace binding", err)
+	}
+	return marker, nil
 }
 
 // WALCheckpointPruneSafety is an optional capability for stores that can make

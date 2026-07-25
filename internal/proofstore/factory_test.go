@@ -71,6 +71,11 @@ func TestOpenFileBackendInitializesAndRequiresCurrentSchema(t *testing.T) {
 	if suite, err := BoundCryptoSuite(store); err != nil || suite != cryptosuite.INTLV1 {
 		t.Fatalf("BoundCryptoSuite = %q, %v", suite, err)
 	}
+	if binding, err := BoundNamespace(store); err != nil || binding.CryptoSuite != cryptosuite.INTLV1 ||
+		binding.NodeID != "test-node" || binding.LogID != "test-log" || binding.NamespaceID != "test-file" ||
+		binding.FormatGeneration != proofstoremeta.FormatGeneration {
+		t.Fatalf("BoundNamespace = %+v, %v", binding, err)
+	}
 }
 
 func TestOpenFileBackendRejectsMissingCorruptUnknownAndMismatchedMarkers(t *testing.T) {

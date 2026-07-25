@@ -27,6 +27,7 @@ import (
 	"github.com/wowtrust/trustdb/internal/backup"
 	"github.com/wowtrust/trustdb/internal/cborx"
 	"github.com/wowtrust/trustdb/internal/cryptosuite"
+	"github.com/wowtrust/trustdb/internal/keyenvelope"
 	"github.com/wowtrust/trustdb/internal/model"
 	"github.com/wowtrust/trustdb/internal/proofstore"
 	"github.com/wowtrust/trustdb/internal/trustcrypto"
@@ -387,49 +388,51 @@ func TestLiveBCOSFourNodeQualification(t *testing.T) {
 		ValidatorHistoryBlockCount: len(rawBCOSProof.ValidatorHistory),
 	}
 	backupPath := filepath.Join(outputDir, "proofstore.tdbackup")
-	if suiteID == cryptosuite.INTLV1 {
-		if _, err := backup.Create(ctx, store, backupPath, backup.Options{Compression: "gzip"}); err != nil {
-			t.Fatalf("create logical backup: %v", err)
-		}
-		if _, err := backup.Verify(ctx, backupPath); err != nil {
-			t.Fatalf("verify logical backup: %v", err)
-		}
-		restored, err := proofstore.OpenLocalStore(
-			filepath.Join(outputDir, "proofstore-restored"),
-			suiteID,
-			attempt.Target.NodeID,
-			attempt.Target.LogID,
-			"bcos-four-node-qualification-restored",
-		)
-		if err != nil {
-			t.Fatal(err)
-		}
-		t.Cleanup(func() { _ = restored.Close() })
-		if _, err := backup.Restore(ctx, restored, backupPath); err != nil {
-			t.Fatalf("restore logical backup: %v", err)
-		}
-		restoredResult, ok, err := restored.GetSTHAnchorResult(ctx, result.TreeSize)
-		if err != nil || !ok {
-			t.Fatalf("read restored anchor result: present=%v error=%v", ok, err)
-		}
-		originalBytes, _ := cborx.Marshal(result)
-		restoredBytes, _ := cborx.Marshal(restoredResult)
-		if !bytes.Equal(originalBytes, restoredBytes) {
-			t.Fatal("logical restore changed immutable BCOS evidence")
-		}
-		if _, err := restored.GetBundle(ctx, fixture.proof.RecordID); err != nil {
-			t.Fatalf("read restored proof bundle: %v", err)
-		}
-		report.BackupPath = filepath.Base(backupPath)
-		report.BackupRestoreVerified = true
-	} else {
-		_, backupErr := backup.Create(ctx, store, backupPath, backup.Options{Compression: "gzip"})
-		if backupErr == nil {
-			t.Fatal("CN_SM_V1 unexpectedly wrote the legacy unauthenticated backup format")
-		}
-		report.StorageFailureStage = "backup_v5_unavailable"
-		report.BackupFailClosedReason = backupErr.Error()
+	backupProvider := keyenvelope.NewPassphraseKEKProvider(func(context.Context) ([]byte, error) {
+		return []byte("qualification-backup-passphrase"), nil
+	})
+	if _, err := backup.Create(ctx, store, backupPath, backup.Options{
+		Compression: "gzip", KEKProvider: backupProvider, KEKKeyID: "qualification-backup-kek",
+	}); err != nil {
+		t.Fatalf("create logical backup: %v", err)
 	}
+	if _, err := backup.Verify(ctx, backupPath, backupProvider); err != nil {
+		t.Fatalf("verify logical backup: %v", err)
+	}
+	binding, err := proofstore.BoundNamespace(store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restored, err := proofstore.OpenLocalStore(
+		filepath.Join(outputDir, "proofstore-restored"),
+		suiteID,
+		attempt.Target.NodeID,
+		attempt.Target.LogID,
+		binding.NamespaceID,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = restored.Close() })
+	if _, err := backup.RestoreWithOptions(ctx, restored, backupPath, backup.RestoreOptions{
+		KEKProviders: []keyenvelope.KEKProvider{backupProvider},
+	}); err != nil {
+		t.Fatalf("restore logical backup: %v", err)
+	}
+	restoredResult, ok, err := restored.GetSTHAnchorResult(ctx, result.TreeSize)
+	if err != nil || !ok {
+		t.Fatalf("read restored anchor result: present=%v error=%v", ok, err)
+	}
+	originalBytes, _ := cborx.Marshal(result)
+	restoredBytes, _ := cborx.Marshal(restoredResult)
+	if !bytes.Equal(originalBytes, restoredBytes) {
+		t.Fatal("logical restore changed immutable BCOS evidence")
+	}
+	if _, err := restored.GetBundle(ctx, fixture.proof.RecordID); err != nil {
+		t.Fatalf("read restored proof bundle: %v", err)
+	}
+	report.BackupPath = filepath.Base(backupPath)
+	report.BackupRestoreVerified = true
 	writeQualificationJSON(t, filepath.Join(outputDir, "live-qualification.json"), report)
 }
 

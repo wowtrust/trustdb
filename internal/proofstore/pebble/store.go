@@ -205,6 +205,13 @@ func (s *Store) CryptoSuite() cryptosuite.ID {
 	return s.binding.CryptoSuite
 }
 
+func (s *Store) NamespaceBinding() proofstoremeta.Marker {
+	if s == nil {
+		return proofstoremeta.Marker{}
+	}
+	return s.binding
+}
+
 func (s *Store) requireSuite(value any) error {
 	if s == nil {
 		return trusterr.New(trusterr.CodeFailedPrecondition, "proofstore store is nil")

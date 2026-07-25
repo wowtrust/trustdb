@@ -59,6 +59,10 @@ func (s LocalStore) CryptoSuite() cryptosuite.ID {
 	return s.binding.CryptoSuite
 }
 
+func (s LocalStore) NamespaceBinding() proofstoremeta.Marker {
+	return s.binding
+}
+
 func (s LocalStore) requireSuite(value any) error {
 	if err := proofstoremeta.ValidateBinding(
 		s.binding,
