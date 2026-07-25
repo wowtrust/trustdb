@@ -244,8 +244,31 @@ func TestLiveBCOSFourNodeQualification(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
-	if err := store.PutBundle(ctx, fixture.proof.ProofBundle); err != nil {
-		t.Fatalf("persist proof bundle: %v", err)
+	for index := range fixture.bundles {
+		if err := store.PutBundle(ctx, fixture.bundles[index]); err != nil {
+			t.Fatalf("persist proof bundle: %v", err)
+		}
+	}
+	// The logical backup only carries proof bundles that a committed batch
+	// manifest references. Register the fixture batch so the backup covers
+	// the bundles exactly as a committed production batch would.
+	recordIDs := make([]string, len(fixture.bundles))
+	for index := range fixture.bundles {
+		recordIDs[index] = fixture.bundles[index].RecordID
+	}
+	if err := store.PutManifest(ctx, model.BatchManifest{
+		SchemaVersion:    model.SchemaBatchManifest,
+		CryptoSuite:      suiteID,
+		BatchID:          fixture.batchRoot.BatchID,
+		State:            model.BatchStateCommitted,
+		TreeAlg:          fixture.batchRoot.TreeAlg(),
+		TreeSize:         fixture.batchRoot.TreeSize,
+		BatchRoot:        append([]byte(nil), fixture.batchRoot.BatchRoot...),
+		RecordIDs:        recordIDs,
+		ClosedAtUnixN:    fixture.batchRoot.ClosedAtUnixN,
+		CommittedAtUnixN: fixture.batchRoot.ClosedAtUnixN,
+	}); err != nil {
+		t.Fatalf("persist committed batch manifest: %v", err)
 	}
 	if err := store.PutSignedTreeHead(ctx, attempt.Target); err != nil {
 		t.Fatalf("persist signed tree head: %v", err)

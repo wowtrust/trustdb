@@ -1386,6 +1386,10 @@ func TestFISCOBCOSDuplicateSubmissionCanExpireAndRefreshBlockLimit(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
+	if result.CryptoSuite != inFlight.Target.CryptoSuite {
+		t.Fatalf("durable result crypto suite=%q, want the anchored STH suite %q",
+			result.CryptoSuite, inFlight.Target.CryptoSuite)
+	}
 	proof, err := fiscobcos.UnmarshalProof(result.Proof)
 	if err != nil {
 		t.Fatal(err)

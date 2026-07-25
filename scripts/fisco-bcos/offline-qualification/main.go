@@ -113,7 +113,12 @@ func main() {
 	report.Cases = append(report.Cases, expectBCOSTamper(
 		"receipt_inclusion_tamper", content, proof, trust,
 		sproof.OfflineStageBCOSReceiptInclusion,
-		func(raw *fiscobcos.AnchorProof) { raw.Receipt.ReceiptHash[0] ^= 1 },
+		// MarshalProof is fail-closed: it recomputes the receipt consensus
+		// hash from the canonical fields, so a tampered ReceiptHash cannot be
+		// re-encoded at all. Corrupt one Merkle path node instead; structural
+		// validation accepts the 32-byte node and the inclusion stage must be
+		// the one to reject it.
+		func(raw *fiscobcos.AnchorProof) { raw.Receipt.ReceiptProof[0][0] ^= 1 },
 	))
 	report.Cases = append(report.Cases, expectBCOSTamper(
 		"pbft_finality_tamper", content, proof, trust,

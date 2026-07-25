@@ -862,9 +862,17 @@ func (d *nativeDriver) transitionTransactionEvidence(
 	if err != nil {
 		return fiscobcos.TransitionTransactionEvidence{}, fiscobcos.ErrIncompleteChainEvidence
 	}
+	// The pinned node serializes the nonce as toHex(nonce) without a 0x
+	// prefix, while the consensus transaction hash preimage (v3.16.3
+	// TarsHashable.h) covers the raw nonce string bytes. Decode the RPC
+	// representation back to the raw string before recomputing the hash.
+	rawNonce, err := decodeHexBoundedOptional(transaction.Nonce, maxSDKTransactionNonceBytes)
+	if err != nil {
+		return fiscobcos.TransitionTransactionEvidence{}, fiscobcos.ErrIncompleteChainEvidence
+	}
 	fields := fiscobcos.NativeTransactionFields{
 		Version: 0, ChainID: transaction.ChainID, GroupID: transaction.GroupID,
-		BlockLimit: transaction.BlockLimit, Nonce: transaction.Nonce,
+		BlockLimit: transaction.BlockLimit, Nonce: string(rawNonce),
 		To: to, Input: input, ABI: transaction.Abi,
 	}
 	preimage, err := fiscobcos.MarshalNativeTransactionHashPreimage(fields)

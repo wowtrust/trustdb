@@ -527,3 +527,57 @@ func TestBoundedHexDecodersPreserveOptionalNativeFields(t *testing.T) {
 		t.Fatal("decodeHexBounded accepted an empty required field")
 	}
 }
+
+func TestTransitionTransactionEvidenceDecodesRPCNonceHex(t *testing.T) {
+	t.Parallel()
+
+	// Recorded from a live v3.16.3 four-node Air network: the JSON-RPC
+	// getTransactionByHash nonce is toHex(raw nonce string) without a 0x
+	// prefix, while the consensus transaction hash covers the raw nonce
+	// string bytes. The expected hash is the on-chain transaction hash of
+	// the setWeight consensus precompile call in block 5.
+	const (
+		rawNonce  = "1470614449897024475616799902516882132264"
+		rpcNonce  = "31343730363134343439383937303234343735363136373939393032353136383832313332323634"
+		rpcTo     = "0000000000000000000000000000000000001003"
+		rpcInput  = "0xce6fa5c50000000000000000000000000000000000000000000000000000000000000040000000000000000000000000000000000000000000000000000000000000000200000000000000000000000000000000000000000000000000000000000000806430666361313838656333306331353234653161303666316235623730646262316261663336316536643739363761306332633034366363303733646364636530366434383564303764656636336135363362666132616636326365376361666231653436316261663433633737373562346435313930316530353239636536"
+		chainHash = "0x11096782747441dfc1f15b1989c99a89f02c0b3c61419dcd5709d732c1b09786"
+	)
+	if hex.EncodeToString([]byte(rawNonce)) != rpcNonce {
+		t.Fatal("test fixture nonce encoding is inconsistent")
+	}
+	driver := &nativeDriver{trust: fiscobcos.TrustConfig{
+		ChainID: "chain0", GroupID: "group0",
+		ChainHashAlgorithm: fiscobcos.HashKeccak256,
+	}}
+	transaction := &types.TransactionDetail{
+		Version: 0, ChainID: "chain0", GroupID: "group0",
+		BlockLimit: 604, Nonce: rpcNonce,
+		To: rpcTo, Input: rpcInput, Hash: chainHash,
+	}
+	evidence, err := driver.transitionTransactionEvidence(transaction, common.HexToHash(chainHash))
+	if err != nil {
+		t.Fatalf("decode live-recorded transition transaction: %v", err)
+	}
+	if evidence.Fields.Nonce != rawNonce {
+		t.Fatalf("nonce=%q, want the raw string %q", evidence.Fields.Nonce, rawNonce)
+	}
+	if !bytes.Equal(evidence.TransactionHash, common.HexToHash(chainHash).Bytes()) {
+		t.Fatalf("transaction hash %x does not match the on-chain hash", evidence.TransactionHash)
+	}
+
+	// A verbatim nonce string (not hex-encoded) is the pre-fix wire shape:
+	// the recomputed hash must not match and the evidence must fail closed.
+	stale := *transaction
+	stale.Nonce = rawNonce
+	if _, err := driver.transitionTransactionEvidence(&stale, common.HexToHash(chainHash)); !errors.Is(err, fiscobcos.ErrIncompleteChainEvidence) {
+		t.Fatalf("verbatim nonce error=%v, want incomplete chain evidence", err)
+	}
+
+	// Non-hex nonce text is outside the pinned RPC contract and must fail.
+	hostile := *transaction
+	hostile.Nonce = "zz"
+	if _, err := driver.transitionTransactionEvidence(&hostile, common.HexToHash(chainHash)); !errors.Is(err, fiscobcos.ErrIncompleteChainEvidence) {
+		t.Fatalf("non-hex nonce error=%v, want incomplete chain evidence", err)
+	}
+}

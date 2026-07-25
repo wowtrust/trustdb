@@ -521,6 +521,7 @@ func (s *FISCOBCOSStandardSink) resultFromSuccessfulJournal(
 	}
 	result := model.STHAnchorResult{
 		SchemaVersion: model.SchemaSTHAnchorResult,
+		CryptoSuite:   sth.CryptoSuite,
 		NodeID:        sth.NodeID,
 		LogID:         sth.LogID,
 		TreeSize:      sth.TreeSize,
