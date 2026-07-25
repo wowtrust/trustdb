@@ -1,27 +1,29 @@
 # ADR-0013: Versioned FISCO BCOS anchor payload and local trust configuration
 
-- Status: Accepted protocol boundary; receipt and static PBFT verification are
-  completed by ADR-0015 and ADR-0016
+- Status: Accepted protocol boundary; receipt, static PBFT, and authenticated
+  validator-transition verification are completed by ADR-0015, ADR-0016, and
+  ADR-0017
 - Date: 2026-07-24
 - Issue: [#462](https://github.com/wowtrust/trustdb/issues/462)
 - Compatibility baseline: [ADR-0012](ADR-0012-FISCO-BCOS-3X-COMPATIBILITY-BASELINE.md)
-- Golden vectors: [`fisco-bcos-anchor-payload-v1.json`](../../test/vectors/fisco-bcos-anchor-payload-v1.json) and [`fisco-bcos-trust-config-v1.json`](../../test/vectors/fisco-bcos-trust-config-v1.json)
+- Golden vectors: [`fisco-bcos-anchor-payload-v1.json`](../../test/vectors/fisco-bcos-anchor-payload-v1.json) and [`fisco-bcos-trust-config-v2.json`](../../test/vectors/fisco-bcos-trust-config-v2.json)
 
 ## Decision
 
 TrustDB defines three independent versioned objects for FISCO BCOS anchoring:
 
 1. `AnchorPayload v1` is a chain-neutral, canonical binary binding to one exact TrustDB Signed STH.
-2. `TrustConfig v1` is local configuration that pins one BCOS chain, group, checkpoint, contract, validator set, certificate configuration, endpoint quorum, and account provider.
-3. `AnchorProof v2` is the immutable evidence envelope carried in `STHAnchorResult.Proof` and therefore in `.sproof`. It combines the canonical payload with untrusted chain claims, all signed transaction attempts, receipt and Merkle material, a block header, and PBFT commit signatures.
+2. `TrustConfig v2` is local configuration that pins one BCOS chain, group, weighted validator checkpoint, transition policy, contract, certificate configuration, endpoint quorum, and account provider.
+3. `AnchorProof v3` is the immutable evidence envelope carried in `STHAnchorResult.Proof` and therefore in `.sproof`. It combines the canonical payload with untrusted chain claims, all signed transaction attempts, receipt and Merkle material, a block header, PBFT commit signatures, and the validator history defined by ADR-0017.
 
 The same `AnchorPayload` bytes can be published to a standard or Guomi BCOS network. The proof is not portable across those networks: `ChainContextID` binds the explicit mode and locally pinned chain context. This separation preserves TrustDB cryptographic semantics while allowing BCOS-native transaction and consensus cryptography to vary independently.
 
 This ADR originally defined the boundary without implementing a BCOS sink,
 native receipt verification, or PBFT finality. A structurally valid
-`AnchorProof` is still not an L5 success by itself. ADR-0015 and ADR-0016 now
+`AnchorProof` is still not an L5 success by itself. ADR-0015 through ADR-0017
 require offline verification to pass separate exact-STH, receipt-inclusion,
-static-finality, and exact-anchor-binding stages using local trust material.
+locally selected static or authenticated-transition finality, and
+exact-anchor-binding stages using local trust material.
 
 ## Cryptographic modes are explicit
 
@@ -114,28 +116,31 @@ The ID is chain-neutral so retries and multi-network publication keep one logica
 
 ## Local trust configuration
 
-`TrustConfig v1` uses RFC 8949 Core Deterministic CBOR with duplicate-key, indefinite-length, unknown-field, and trailing-data rejection. Canonicalization sorts set-like endpoint, CA, certificate-pin, and validator collections before encoding.
+`TrustConfig v2` uses RFC 8949 Core Deterministic CBOR with duplicate-key, indefinite-length, unknown-field, and trailing-data rejection. Canonicalization sorts set-like endpoint, CA, and certificate-pin collections. Validator order is preserved because BCOS commit signer indices refer to the ordered sealer list.
 
 The configuration includes:
 
 - explicit mode and protocol/native algorithm identifiers;
 - chain ID and group ID;
-- genesis hash and a trusted block number/hash checkpoint;
+- genesis hash, a trusted block number/hash checkpoint, checkpoint generation,
+  and previous-config digest after the first advancement;
 - exact contract address, code hash, protocol version, and event signature;
 - RPC endpoints and a required read quorum;
 - a non-secret account provider, KeyID, and key reference;
 - TLS or GM TLS certificate references and local CA/peer certificate hashes;
-- a fixed `fisco-bcos-pbft-2f-plus-1-v1` validator quorum policy;
-- locally pinned validator NodeIDs, algorithms, encodings, and public keys;
+- a fixed `fisco-bcos-weighted-pbft-v2` validator quorum policy and a locally
+  selected static or authenticated-transition policy;
+- locally pinned ordered validator NodeIDs, algorithms, encodings, public keys,
+  and positive vote weights;
 - the fixed SM2 user ID `1234567812345678` in Guomi mode.
 
 Private keys are never serialized into this configuration. Guomi mode requires separate signing and encryption certificate/key references. Standard mode rejects those Guomi-only encryption references.
 
-`TrustConfigDigest` covers the complete canonical local configuration. `ChainContextID` covers the immutable offline chain trust boundary: mode and algorithms, chain/group, genesis/checkpoint, contract, quorum policy, SM2 user ID, and validator-set digest. Runtime endpoint order, account provider references, and transport-certificate rotation do not change the chain context.
+`TrustConfigDigest` covers the complete canonical local configuration. `ChainContextID` covers the immutable offline chain trust boundary: mode and algorithms, chain/group, genesis/checkpoint and generation, contract, quorum policy, SM2 user ID, and ordered weighted validator-set digest. Runtime endpoint order, account provider references, and transport-certificate rotation do not change the chain context.
 
 ## Evidence cannot supply trust roots
 
-`AnchorProof v2` deliberately does not contain:
+`AnchorProof v3` deliberately does not contain:
 
 - validator public keys or a validator-set threshold;
 - CA roots or peer certificate pins;
@@ -149,7 +154,7 @@ Certificate pins remain a local transport control rather than part of offline bl
 
 ## Complete proof envelope
 
-`trustdb.fisco-bcos-anchor-proof.v2` contains:
+`trustdb.fisco-bcos-anchor-proof.v3` contains:
 
 - explicit mode and algorithm identifiers;
 - chain/group/genesis/checkpoint and contract claims;
@@ -159,6 +164,7 @@ Certificate pins remain a local transport control rather than part of offline bl
 - the successful transaction hash;
 - raw canonical receipt, receipt hash, transaction/receipt indexes and Merkle paths, log index, and decoded anchor event;
 - raw canonical block header, block hash, and block number;
+- the sparse contiguous validator history defined by [ADR-0017](ADR-0017-FISCO-BCOS-VALIDATOR-SET-TRANSITIONS.md);
 - unique block validator-node signatures. A live PBFT view is not persisted as
   block evidence, because the SDK cannot bind that RPC value to the block.
 
@@ -178,8 +184,8 @@ verify those semantic and finality bindings in separately reported stages.
 
 - `AnchorID` is lowercase hexadecimal `AnchorPayload.anchor_id`;
 - NodeID, LogID, TreeSize, RootHash, and the complete Signed STH must exactly match the Global Log proof STH;
-- `Proof` is deterministic CBOR `AnchorProof v2`;
-- `.sproof v1` can carry the proof without ambiguity and now strictly decodes the provider proof during container validation.
+- `Proof` is deterministic CBOR `AnchorProof v3`;
+- `.sproof v2` can carry the proof without ambiguity and strictly decodes the provider proof during container validation.
 
 No rule is relaxed to `anchor.TreeSize >= proof.TreeSize`. A historical batch may use a later covering STH only when the Global Log inclusion path targets that exact later STH and the anchor result binds that same STH.
 
@@ -191,7 +197,9 @@ The final offline verifier must report and enforce these stages separately:
 2. Verify the batch inclusion path into that exact Signed STH.
 3. Recompute and compare the canonical payload, StreamID, AnchorID, and local ChainContextID.
 4. Decode the BCOS transaction and receipt, recompute native hashes and Merkle inclusion, and match the pinned contract event.
-5. Decode the block header and verify PBFT finality against the locally pinned checkpoint and validator set.
+5. Decode the block headers and verify weighted PBFT finality against the
+   locally pinned checkpoint under the locally selected static or
+   authenticated-transition policy.
 
 Only success at every stage may produce L5. Transaction existence, receipt existence, a transaction hash reference, multiple agreeing RPC nodes, or a block timestamp is not an offline finality proof. BCOS block time is consensus metadata and must not be represented as an RFC 3161 trusted timestamp.
 
@@ -205,5 +213,8 @@ Only success at every stage may produce L5. Transaction existence, receipt exist
 - #467 independently verifies static-validator PBFT finality and exact anchor
   binding as documented in ADR-0016.
 - #468 adds Guomi-native account, dual-certificate, hash, receipt, block, proof, and finality handling without changing the chain-neutral TrustDB payload.
+- #469 adds weighted validator-set transitions, complete transition-block
+  transaction/receipt evidence, and explicit checkpoint advancement as
+  documented in ADR-0017.
 
-The golden vectors are protocol artifacts. Any intentional byte change requires a new payload/proof/config version and reviewed vector replacement; it must not silently rewrite v1.
+The golden vectors are protocol artifacts. Any intentional byte change requires a new payload/proof/config version and reviewed vector replacement; it must not silently rewrite AnchorPayload v1.

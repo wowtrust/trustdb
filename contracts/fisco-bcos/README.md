@@ -104,7 +104,7 @@ Collect the values from at least two mutually trusted endpoints:
    account provider reference for a plugin that advertises
    `FISCO_BCOS_GUOMI_V1`; the example uses SDF key index 7.
 
-Create the canonical `trustdb.fisco-bcos-trust-config.v1` CBOR file and record
+Create the canonical `trustdb.fisco-bcos-trust-config.v2` CBOR file and record
 both derived trust identities:
 
 ```bash
@@ -121,6 +121,13 @@ user-ID field from `crypto_mode`; unknown JSON fields, malformed hex, invalid
 curve points, node-ID/public-key mismatch, wrong endpoint schemes, and mixed
 standard/Guomi values fail before the CBOR file is written. The output is
 written atomically with mode `0600`.
+
+Every validator entry must include its exact positive `vote_weight`. Set
+`validator_transition_policy` to `authenticated-validator-transitions-v1` for
+offline-authenticated membership and weight changes, or to
+`static-validator-set-v1` for a deliberately static committee. The evidence
+and explicit checkpoint-advancement procedure are specified in
+[`ADR-0017`](../../docs/integrations/ADR-0017-FISCO-BCOS-VALIDATOR-SET-TRANSITIONS.md).
 
 The resulting config contains:
 

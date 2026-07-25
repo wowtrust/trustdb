@@ -13,7 +13,7 @@ TrustDB persists two different FISCO BCOS objects for one logical anchor:
 1. `trustdb.fisco-bcos-attempt-journal.v1` is mutable, append-only provider
    recovery state attached to the scheduler's one immutable `InFlight` Signed
    Tree Head.
-2. `trustdb.fisco-bcos-anchor-proof.v2` is the immutable result evidence copied
+2. `trustdb.fisco-bcos-anchor-proof.v3` is the immutable result evidence copied
    into `STHAnchorResult.Proof` after one journaled transaction is proven to
    have emitted the exact expected contract event.
 
