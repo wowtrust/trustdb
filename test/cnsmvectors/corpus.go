@@ -14,10 +14,10 @@ import (
 	"io"
 	"strings"
 
-	"github.com/wowtrust/trustdb/internal/cborx"
-	"github.com/wowtrust/trustdb/internal/keydescriptor"
-	"github.com/wowtrust/trustdb/internal/model"
-	"github.com/wowtrust/trustdb/internal/trustcrypto"
+	"github.com/wowtrust/trustdb/v2/internal/cborx"
+	"github.com/wowtrust/trustdb/v2/internal/keydescriptor"
+	"github.com/wowtrust/trustdb/v2/internal/model"
+	"github.com/wowtrust/trustdb/v2/internal/trustcrypto"
 )
 
 const (

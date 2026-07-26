@@ -11,10 +11,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/wowtrust/trustdb/internal/cryptosuite"
-	"github.com/wowtrust/trustdb/internal/model"
-	"github.com/wowtrust/trustdb/internal/trustcrypto"
-	"github.com/wowtrust/trustdb/internal/trusterr"
+	"github.com/wowtrust/trustdb/v2/internal/cryptosuite"
+	"github.com/wowtrust/trustdb/v2/internal/model"
+	"github.com/wowtrust/trustdb/v2/internal/trustcrypto"
+	"github.com/wowtrust/trustdb/v2/internal/trusterr"
 )
 
 // FileSinkName is the stable Sink identifier recorded in every

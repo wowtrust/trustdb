@@ -6,10 +6,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wowtrust/trustdb/internal/merkle"
-	"github.com/wowtrust/trustdb/internal/model"
-	"github.com/wowtrust/trustdb/internal/receipt"
-	"github.com/wowtrust/trustdb/internal/trustcrypto"
+	"github.com/wowtrust/trustdb/v2/internal/merkle"
+	"github.com/wowtrust/trustdb/v2/internal/model"
+	"github.com/wowtrust/trustdb/v2/internal/receipt"
+	"github.com/wowtrust/trustdb/v2/internal/trustcrypto"
 )
 
 func TestComputeBatchPlanOnlyAndMaterialized(t *testing.T) {

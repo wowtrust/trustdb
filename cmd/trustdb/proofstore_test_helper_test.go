@@ -4,9 +4,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/wowtrust/trustdb/internal/cryptosuite"
-	"github.com/wowtrust/trustdb/internal/proofstore"
-	"github.com/wowtrust/trustdb/internal/wal"
+	"github.com/wowtrust/trustdb/v2/internal/cryptosuite"
+	"github.com/wowtrust/trustdb/v2/internal/proofstore"
+	"github.com/wowtrust/trustdb/v2/internal/wal"
 )
 
 func newBoundTestLocalStore(t testing.TB, root string) proofstore.LocalStore {

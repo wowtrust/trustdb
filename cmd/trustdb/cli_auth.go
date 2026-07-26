@@ -8,8 +8,8 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
-	"github.com/wowtrust/trustdb/internal/adminauth"
-	"github.com/wowtrust/trustdb/internal/securityaudit"
+	"github.com/wowtrust/trustdb/v2/internal/adminauth"
+	"github.com/wowtrust/trustdb/v2/internal/securityaudit"
 )
 
 const permissionAnnotation = "trustdb.admin.permission"

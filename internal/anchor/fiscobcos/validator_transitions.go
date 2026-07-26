@@ -8,7 +8,7 @@ import (
 	"math/bits"
 	"strings"
 
-	"github.com/wowtrust/trustdb/internal/model"
+	"github.com/wowtrust/trustdb/v2/internal/model"
 )
 
 var consensusPrecompileAddress = func() []byte {

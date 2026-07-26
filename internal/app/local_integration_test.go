@@ -9,14 +9,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wowtrust/trustdb/internal/claim"
-	"github.com/wowtrust/trustdb/internal/cryptosuite"
-	"github.com/wowtrust/trustdb/internal/keydescriptor"
-	"github.com/wowtrust/trustdb/internal/keystore"
-	"github.com/wowtrust/trustdb/internal/model"
-	"github.com/wowtrust/trustdb/internal/trustcrypto"
-	"github.com/wowtrust/trustdb/internal/verify"
-	"github.com/wowtrust/trustdb/internal/wal"
+	"github.com/wowtrust/trustdb/v2/internal/claim"
+	"github.com/wowtrust/trustdb/v2/internal/cryptosuite"
+	"github.com/wowtrust/trustdb/v2/internal/keydescriptor"
+	"github.com/wowtrust/trustdb/v2/internal/keystore"
+	"github.com/wowtrust/trustdb/v2/internal/model"
+	"github.com/wowtrust/trustdb/v2/internal/trustcrypto"
+	"github.com/wowtrust/trustdb/v2/internal/verify"
+	"github.com/wowtrust/trustdb/v2/internal/wal"
 )
 
 func TestLocalEngineSubmitCommitVerify(t *testing.T) {

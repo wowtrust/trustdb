@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/wowtrust/trustdb/sdk/signerplugin"
+	"github.com/wowtrust/trustdb/v2/sdk/signerplugin"
 )
 
 func TestLoadEnvironmentRequiresExplicitSM2Profile(t *testing.T) {

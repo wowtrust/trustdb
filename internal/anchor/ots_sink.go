@@ -13,9 +13,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/wowtrust/trustdb/internal/cryptosuite"
-	"github.com/wowtrust/trustdb/internal/model"
-	"github.com/wowtrust/trustdb/internal/trusterr"
+	"github.com/wowtrust/trustdb/v2/internal/cryptosuite"
+	"github.com/wowtrust/trustdb/v2/internal/model"
+	"github.com/wowtrust/trustdb/v2/internal/trusterr"
 )
 
 // OtsSinkName is the stable identifier recorded on every

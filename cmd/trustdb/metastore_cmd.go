@@ -5,12 +5,12 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
-	"github.com/wowtrust/trustdb/internal/adminauth"
-	"github.com/wowtrust/trustdb/internal/anchorschedule"
-	"github.com/wowtrust/trustdb/internal/cryptosuite"
-	"github.com/wowtrust/trustdb/internal/model"
-	"github.com/wowtrust/trustdb/internal/proofstore"
-	"github.com/wowtrust/trustdb/internal/trusterr"
+	"github.com/wowtrust/trustdb/v2/internal/adminauth"
+	"github.com/wowtrust/trustdb/v2/internal/anchorschedule"
+	"github.com/wowtrust/trustdb/v2/internal/cryptosuite"
+	"github.com/wowtrust/trustdb/v2/internal/model"
+	"github.com/wowtrust/trustdb/v2/internal/proofstore"
+	"github.com/wowtrust/trustdb/v2/internal/trusterr"
 )
 
 const metastoreScanPageSize = 1024

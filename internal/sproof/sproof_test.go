@@ -11,13 +11,13 @@ import (
 
 	"github.com/fxamacker/cbor/v2"
 
-	"github.com/wowtrust/trustdb/internal/anchor/fiscobcos"
-	"github.com/wowtrust/trustdb/internal/cborx"
-	"github.com/wowtrust/trustdb/internal/cryptosuite"
-	"github.com/wowtrust/trustdb/internal/formatregistry"
-	"github.com/wowtrust/trustdb/internal/globallog"
-	"github.com/wowtrust/trustdb/internal/keydescriptor"
-	"github.com/wowtrust/trustdb/internal/model"
+	"github.com/wowtrust/trustdb/v2/internal/anchor/fiscobcos"
+	"github.com/wowtrust/trustdb/v2/internal/cborx"
+	"github.com/wowtrust/trustdb/v2/internal/cryptosuite"
+	"github.com/wowtrust/trustdb/v2/internal/formatregistry"
+	"github.com/wowtrust/trustdb/v2/internal/globallog"
+	"github.com/wowtrust/trustdb/v2/internal/keydescriptor"
+	"github.com/wowtrust/trustdb/v2/internal/model"
 )
 
 func TestNewBuildsAvailableV2Generation(t *testing.T) {

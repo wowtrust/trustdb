@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/wowtrust/trustdb/internal/cborx"
-	"github.com/wowtrust/trustdb/internal/model"
+	"github.com/wowtrust/trustdb/v2/internal/cborx"
+	"github.com/wowtrust/trustdb/v2/internal/model"
 )
 
 func BenchmarkLocalStoreLatestRoot4096(b *testing.B) {

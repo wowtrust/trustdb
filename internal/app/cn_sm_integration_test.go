@@ -7,13 +7,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wowtrust/trustdb/internal/claim"
-	"github.com/wowtrust/trustdb/internal/cryptosuite"
-	"github.com/wowtrust/trustdb/internal/globallog"
-	"github.com/wowtrust/trustdb/internal/model"
-	"github.com/wowtrust/trustdb/internal/receipt"
-	"github.com/wowtrust/trustdb/internal/trustcrypto"
-	"github.com/wowtrust/trustdb/internal/wal"
+	"github.com/wowtrust/trustdb/v2/internal/claim"
+	"github.com/wowtrust/trustdb/v2/internal/cryptosuite"
+	"github.com/wowtrust/trustdb/v2/internal/globallog"
+	"github.com/wowtrust/trustdb/v2/internal/model"
+	"github.com/wowtrust/trustdb/v2/internal/receipt"
+	"github.com/wowtrust/trustdb/v2/internal/trustcrypto"
+	"github.com/wowtrust/trustdb/v2/internal/wal"
 )
 
 func TestCNSMV1ClaimReceiptBatchAndSTHEndToEnd(t *testing.T) {

@@ -11,11 +11,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wowtrust/trustdb/internal/cryptosuite"
-	"github.com/wowtrust/trustdb/internal/keydescriptor"
-	"github.com/wowtrust/trustdb/internal/pkcs11signer"
-	"github.com/wowtrust/trustdb/internal/trustcrypto"
-	"github.com/wowtrust/trustdb/sdk/signerplugin"
+	"github.com/wowtrust/trustdb/v2/internal/cryptosuite"
+	"github.com/wowtrust/trustdb/v2/internal/keydescriptor"
+	"github.com/wowtrust/trustdb/v2/internal/pkcs11signer"
+	"github.com/wowtrust/trustdb/v2/internal/trustcrypto"
+	"github.com/wowtrust/trustdb/v2/sdk/signerplugin"
 )
 
 func TestSoftHSMEd25519ProviderEndToEnd(t *testing.T) {

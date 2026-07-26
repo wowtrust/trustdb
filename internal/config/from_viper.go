@@ -5,7 +5,7 @@ import (
 	"strings"
 
 	"github.com/spf13/viper"
-	"github.com/wowtrust/trustdb/transporttls"
+	"github.com/wowtrust/trustdb/v2/transporttls"
 )
 
 // FromViper maps a populated viper instance into Config. It mirrors the

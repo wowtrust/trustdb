@@ -14,10 +14,10 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/wowtrust/trustdb/internal/cryptosuite"
-	"github.com/wowtrust/trustdb/internal/keyenvelope"
-	"github.com/wowtrust/trustdb/internal/model"
-	"github.com/wowtrust/trustdb/internal/trustcrypto"
+	"github.com/wowtrust/trustdb/v2/internal/cryptosuite"
+	"github.com/wowtrust/trustdb/v2/internal/keyenvelope"
+	"github.com/wowtrust/trustdb/v2/internal/model"
+	"github.com/wowtrust/trustdb/v2/internal/trustcrypto"
 )
 
 func TestSoftwareResolverLoadsDescriptorRelativeMaterial(t *testing.T) {

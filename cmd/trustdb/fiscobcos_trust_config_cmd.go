@@ -14,10 +14,10 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/wowtrust/trustdb/internal/adminauth"
-	"github.com/wowtrust/trustdb/internal/anchor/fiscobcos"
-	"github.com/wowtrust/trustdb/internal/sproof"
-	"github.com/wowtrust/trustdb/internal/trusterr"
+	"github.com/wowtrust/trustdb/v2/internal/adminauth"
+	"github.com/wowtrust/trustdb/v2/internal/anchor/fiscobcos"
+	"github.com/wowtrust/trustdb/v2/internal/sproof"
+	"github.com/wowtrust/trustdb/v2/internal/trusterr"
 )
 
 const maxFISCOBCOSTrustConfigJSONBytes = 4 << 20

@@ -1,6 +1,6 @@
 package model
 
-import "github.com/wowtrust/trustdb/internal/cryptosuite"
+import "github.com/wowtrust/trustdb/v2/internal/cryptosuite"
 
 // SchemaIdempotencyDecision identifies the durable projection that preserves
 // an accepted ingest decision independently of WAL retention and replay.

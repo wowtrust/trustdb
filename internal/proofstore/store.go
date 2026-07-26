@@ -4,10 +4,10 @@ import (
 	"context"
 	"io"
 
-	"github.com/wowtrust/trustdb/internal/cryptosuite"
-	"github.com/wowtrust/trustdb/internal/model"
-	"github.com/wowtrust/trustdb/internal/proofstoremeta"
-	"github.com/wowtrust/trustdb/internal/trusterr"
+	"github.com/wowtrust/trustdb/v2/internal/cryptosuite"
+	"github.com/wowtrust/trustdb/v2/internal/model"
+	"github.com/wowtrust/trustdb/v2/internal/proofstoremeta"
+	"github.com/wowtrust/trustdb/v2/internal/trusterr"
 )
 
 // Store is the unified persistence interface implemented by every proof

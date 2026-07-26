@@ -1,4 +1,4 @@
-module github.com/wowtrust/trustdb/scripts/fisco-bcos/contract-test
+module github.com/wowtrust/trustdb/v2/scripts/fisco-bcos/contract-test
 
 go 1.26.5
 

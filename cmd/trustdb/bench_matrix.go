@@ -11,8 +11,8 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
-	"github.com/wowtrust/trustdb/internal/trustcrypto"
-	"github.com/wowtrust/trustdb/sdk"
+	"github.com/wowtrust/trustdb/v2/internal/trustcrypto"
+	"github.com/wowtrust/trustdb/v2/sdk"
 )
 
 const (

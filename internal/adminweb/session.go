@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/wowtrust/trustdb/internal/adminauth"
+	"github.com/wowtrust/trustdb/v2/internal/adminauth"
 )
 
 const sessionCookieName = "trustdb_admin_session"

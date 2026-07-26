@@ -16,9 +16,9 @@ import (
 	"github.com/emmansun/gmsm/sm2"
 	ethcrypto "github.com/ethereum/go-ethereum/crypto"
 
-	"github.com/wowtrust/trustdb/internal/cborx"
-	"github.com/wowtrust/trustdb/internal/cryptosuite"
-	"github.com/wowtrust/trustdb/internal/trustcrypto"
+	"github.com/wowtrust/trustdb/v2/internal/cborx"
+	"github.com/wowtrust/trustdb/v2/internal/cryptosuite"
+	"github.com/wowtrust/trustdb/v2/internal/trustcrypto"
 )
 
 const (

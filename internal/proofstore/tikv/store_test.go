@@ -18,16 +18,16 @@ import (
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/txnkv"
 
-	"github.com/wowtrust/trustdb/internal/anchorschedule"
-	"github.com/wowtrust/trustdb/internal/cborx"
-	"github.com/wowtrust/trustdb/internal/claim"
-	"github.com/wowtrust/trustdb/internal/cryptosuite"
-	"github.com/wowtrust/trustdb/internal/idempotency"
-	"github.com/wowtrust/trustdb/internal/model"
-	"github.com/wowtrust/trustdb/internal/proofstoremeta"
-	"github.com/wowtrust/trustdb/internal/proofstoremeta/proofstoremetatest"
-	"github.com/wowtrust/trustdb/internal/trustcrypto"
-	"github.com/wowtrust/trustdb/internal/trusterr"
+	"github.com/wowtrust/trustdb/v2/internal/anchorschedule"
+	"github.com/wowtrust/trustdb/v2/internal/cborx"
+	"github.com/wowtrust/trustdb/v2/internal/claim"
+	"github.com/wowtrust/trustdb/v2/internal/cryptosuite"
+	"github.com/wowtrust/trustdb/v2/internal/idempotency"
+	"github.com/wowtrust/trustdb/v2/internal/model"
+	"github.com/wowtrust/trustdb/v2/internal/proofstoremeta"
+	"github.com/wowtrust/trustdb/v2/internal/proofstoremeta/proofstoremetatest"
+	"github.com/wowtrust/trustdb/v2/internal/trustcrypto"
+	"github.com/wowtrust/trustdb/v2/internal/trusterr"
 )
 
 func TestTiKVSuiteBindingConformance(t *testing.T) {

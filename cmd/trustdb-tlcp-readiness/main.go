@@ -12,8 +12,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/wowtrust/trustdb/internal/tlcpprofile"
-	"github.com/wowtrust/trustdb/internal/tlcpready"
+	"github.com/wowtrust/trustdb/v2/internal/tlcpprofile"
+	"github.com/wowtrust/trustdb/v2/internal/tlcpready"
 )
 
 const (

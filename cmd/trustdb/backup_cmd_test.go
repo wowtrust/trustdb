@@ -3,8 +3,8 @@ package main
 import (
 	"testing"
 
-	"github.com/wowtrust/trustdb/internal/keyenvelope"
-	"github.com/wowtrust/trustdb/internal/trusterr"
+	"github.com/wowtrust/trustdb/v2/internal/keyenvelope"
+	"github.com/wowtrust/trustdb/v2/internal/trusterr"
 )
 
 func TestBackupCommandsDoNotAcceptPassphraseFlags(t *testing.T) {

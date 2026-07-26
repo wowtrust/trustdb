@@ -11,7 +11,7 @@ import (
 
 	"github.com/emmansun/gmsm/sm3"
 
-	"github.com/wowtrust/trustdb/internal/cryptosuite"
+	"github.com/wowtrust/trustdb/v2/internal/cryptosuite"
 )
 
 func testWALOptions(opts Options) Options {

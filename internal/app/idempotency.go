@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"sync"
 
-	durableidempotency "github.com/wowtrust/trustdb/internal/idempotency"
-	"github.com/wowtrust/trustdb/internal/model"
-	"github.com/wowtrust/trustdb/internal/trusterr"
+	durableidempotency "github.com/wowtrust/trustdb/v2/internal/idempotency"
+	"github.com/wowtrust/trustdb/v2/internal/model"
+	"github.com/wowtrust/trustdb/v2/internal/trusterr"
 )
 
 // DurableIdempotencyReader provides the bounded point lookup used when a

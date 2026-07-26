@@ -9,17 +9,17 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/wowtrust/trustdb/internal/anchor/fiscobcos"
-	"github.com/wowtrust/trustdb/internal/cborx"
-	"github.com/wowtrust/trustdb/internal/cryptosuite"
-	"github.com/wowtrust/trustdb/internal/formatregistry"
-	"github.com/wowtrust/trustdb/internal/keydescriptor"
-	"github.com/wowtrust/trustdb/internal/model"
-	"github.com/wowtrust/trustdb/internal/modelsuite"
-	"github.com/wowtrust/trustdb/internal/prooflevel"
-	"github.com/wowtrust/trustdb/internal/trustcrypto"
-	"github.com/wowtrust/trustdb/internal/trusterr"
-	"github.com/wowtrust/trustdb/internal/verify"
+	"github.com/wowtrust/trustdb/v2/internal/anchor/fiscobcos"
+	"github.com/wowtrust/trustdb/v2/internal/cborx"
+	"github.com/wowtrust/trustdb/v2/internal/cryptosuite"
+	"github.com/wowtrust/trustdb/v2/internal/formatregistry"
+	"github.com/wowtrust/trustdb/v2/internal/keydescriptor"
+	"github.com/wowtrust/trustdb/v2/internal/model"
+	"github.com/wowtrust/trustdb/v2/internal/modelsuite"
+	"github.com/wowtrust/trustdb/v2/internal/prooflevel"
+	"github.com/wowtrust/trustdb/v2/internal/trustcrypto"
+	"github.com/wowtrust/trustdb/v2/internal/trusterr"
+	"github.com/wowtrust/trustdb/v2/internal/verify"
 )
 
 const (

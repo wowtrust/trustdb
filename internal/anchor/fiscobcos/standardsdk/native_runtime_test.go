@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/wowtrust/trustdb/internal/anchor/fiscobcos"
+	"github.com/wowtrust/trustdb/v2/internal/anchor/fiscobcos"
 )
 
 const nativeVersionFixture = `FISCO BCOS C SDK Version : 3.6.0

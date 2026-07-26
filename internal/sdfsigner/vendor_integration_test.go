@@ -17,10 +17,10 @@ import (
 
 	"github.com/emmansun/gmsm/sm2"
 
-	"github.com/wowtrust/trustdb/internal/cryptosuite"
-	"github.com/wowtrust/trustdb/internal/keydescriptor"
-	"github.com/wowtrust/trustdb/internal/sdfsigner"
-	"github.com/wowtrust/trustdb/sdk/signerplugin"
+	"github.com/wowtrust/trustdb/v2/internal/cryptosuite"
+	"github.com/wowtrust/trustdb/v2/internal/keydescriptor"
+	"github.com/wowtrust/trustdb/v2/internal/sdfsigner"
+	"github.com/wowtrust/trustdb/v2/sdk/signerplugin"
 )
 
 func TestQualifiedSDFProviderEndToEnd(t *testing.T) {

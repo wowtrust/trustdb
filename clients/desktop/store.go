@@ -13,7 +13,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/wowtrust/trustdb/internal/model"
+	"github.com/wowtrust/trustdb/v2/internal/model"
 )
 
 // Identity stores only the location of a canonical V2 signer descriptor and

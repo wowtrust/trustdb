@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/wowtrust/trustdb/internal/cryptosuite"
+	"github.com/wowtrust/trustdb/v2/internal/cryptosuite"
 )
 
 func TestSignatureInputForSuitePinsFraming(t *testing.T) {

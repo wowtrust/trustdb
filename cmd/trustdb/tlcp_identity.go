@@ -7,9 +7,9 @@ import (
 	"fmt"
 	"path/filepath"
 
-	"github.com/wowtrust/trustdb/internal/keydescriptor"
-	"github.com/wowtrust/trustdb/internal/tlcpprofile"
-	"github.com/wowtrust/trustdb/internal/trustcrypto"
+	"github.com/wowtrust/trustdb/v2/internal/keydescriptor"
+	"github.com/wowtrust/trustdb/v2/internal/tlcpprofile"
+	"github.com/wowtrust/trustdb/v2/internal/trustcrypto"
 )
 
 func configureTLCPIdentityBoundary(

@@ -7,11 +7,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/wowtrust/trustdb/internal/app"
-	"github.com/wowtrust/trustdb/internal/cryptosuite"
-	"github.com/wowtrust/trustdb/internal/keystore"
-	"github.com/wowtrust/trustdb/internal/trustcrypto"
-	"github.com/wowtrust/trustdb/internal/trusterr"
+	"github.com/wowtrust/trustdb/v2/internal/app"
+	"github.com/wowtrust/trustdb/v2/internal/cryptosuite"
+	"github.com/wowtrust/trustdb/v2/internal/keystore"
+	"github.com/wowtrust/trustdb/v2/internal/trustcrypto"
+	"github.com/wowtrust/trustdb/v2/internal/trusterr"
 )
 
 // TestResolveClientKeysPrefersExplicitPubKey guards the bug where a non-empty

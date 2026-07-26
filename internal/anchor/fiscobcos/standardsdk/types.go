@@ -7,7 +7,7 @@ import (
 	"errors"
 	"time"
 
-	"github.com/wowtrust/trustdb/internal/anchor/fiscobcos"
+	"github.com/wowtrust/trustdb/v2/internal/anchor/fiscobcos"
 )
 
 var ErrSDKNotBuilt = errors.New("FISCO BCOS SDK support is not present in this build")

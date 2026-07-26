@@ -14,7 +14,7 @@ import (
 
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
-	"github.com/wowtrust/trustdb/internal/config"
+	"github.com/wowtrust/trustdb/v2/internal/config"
 )
 
 const connectionName = "trustdb-nats-ingress"

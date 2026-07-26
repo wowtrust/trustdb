@@ -17,11 +17,11 @@ import (
 	"github.com/fxamacker/cbor/v2"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
-	"github.com/wowtrust/trustdb/internal/anchor/fiscobcos"
-	"github.com/wowtrust/trustdb/internal/cborx"
-	"github.com/wowtrust/trustdb/internal/cryptosuite"
-	"github.com/wowtrust/trustdb/internal/model"
-	"github.com/wowtrust/trustdb/internal/observability"
+	"github.com/wowtrust/trustdb/v2/internal/anchor/fiscobcos"
+	"github.com/wowtrust/trustdb/v2/internal/cborx"
+	"github.com/wowtrust/trustdb/v2/internal/cryptosuite"
+	"github.com/wowtrust/trustdb/v2/internal/model"
+	"github.com/wowtrust/trustdb/v2/internal/observability"
 )
 
 type fakeBCOSState struct {

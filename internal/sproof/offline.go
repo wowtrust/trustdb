@@ -4,11 +4,11 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/wowtrust/trustdb/internal/anchor/fiscobcos"
-	"github.com/wowtrust/trustdb/internal/keydescriptor"
-	"github.com/wowtrust/trustdb/internal/model"
-	"github.com/wowtrust/trustdb/internal/prooflevel"
-	"github.com/wowtrust/trustdb/internal/verify"
+	"github.com/wowtrust/trustdb/v2/internal/anchor/fiscobcos"
+	"github.com/wowtrust/trustdb/v2/internal/keydescriptor"
+	"github.com/wowtrust/trustdb/v2/internal/model"
+	"github.com/wowtrust/trustdb/v2/internal/prooflevel"
+	"github.com/wowtrust/trustdb/v2/internal/verify"
 )
 
 type OfflineStageStatus string

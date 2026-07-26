@@ -4,9 +4,9 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/wowtrust/trustdb/internal/keydescriptor"
-	"github.com/wowtrust/trustdb/sdk"
-	"github.com/wowtrust/trustdb/test/cnsmvectors"
+	"github.com/wowtrust/trustdb/v2/internal/keydescriptor"
+	"github.com/wowtrust/trustdb/v2/sdk"
+	"github.com/wowtrust/trustdb/v2/test/cnsmvectors"
 )
 
 func TestGoSDKConsumesSharedCNSMInteropProof(t *testing.T) {

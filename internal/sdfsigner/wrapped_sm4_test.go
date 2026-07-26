@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/wowtrust/trustdb/internal/cborx"
+	"github.com/wowtrust/trustdb/v2/internal/cborx"
 )
 
 func TestWrappedSM4KeyDeterministicCBORRoundTrip(t *testing.T) {

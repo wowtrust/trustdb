@@ -12,14 +12,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wowtrust/trustdb/internal/cryptosuite"
-	"github.com/wowtrust/trustdb/internal/globallog"
-	"github.com/wowtrust/trustdb/internal/model"
-	"github.com/wowtrust/trustdb/internal/proofstore"
-	"github.com/wowtrust/trustdb/internal/proofstore/proofstoretest"
-	tikvstore "github.com/wowtrust/trustdb/internal/proofstore/tikv"
-	"github.com/wowtrust/trustdb/internal/trustcrypto"
-	"github.com/wowtrust/trustdb/internal/trusterr"
+	"github.com/wowtrust/trustdb/v2/internal/cryptosuite"
+	"github.com/wowtrust/trustdb/v2/internal/globallog"
+	"github.com/wowtrust/trustdb/v2/internal/model"
+	"github.com/wowtrust/trustdb/v2/internal/proofstore"
+	"github.com/wowtrust/trustdb/v2/internal/proofstore/proofstoretest"
+	tikvstore "github.com/wowtrust/trustdb/v2/internal/proofstore/tikv"
+	"github.com/wowtrust/trustdb/v2/internal/trustcrypto"
+	"github.com/wowtrust/trustdb/v2/internal/trusterr"
 )
 
 func TestTiKVConcurrentSuiteInitializationHasOneWinner(t *testing.T) {

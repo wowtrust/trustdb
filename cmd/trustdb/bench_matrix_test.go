@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wowtrust/trustdb/sdk"
+	"github.com/wowtrust/trustdb/v2/sdk"
 )
 
 func TestReadBenchMatrixFile(t *testing.T) {

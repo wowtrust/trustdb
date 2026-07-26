@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wowtrust/trustdb/internal/cryptosuite"
-	"github.com/wowtrust/trustdb/internal/model"
+	"github.com/wowtrust/trustdb/v2/internal/cryptosuite"
+	"github.com/wowtrust/trustdb/v2/internal/model"
 )
 
 func TestExamplePluginExecutablePublishAndVerify(t *testing.T) {

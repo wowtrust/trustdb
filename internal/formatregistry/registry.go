@@ -10,7 +10,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/wowtrust/trustdb/internal/cryptosuite"
+	"github.com/wowtrust/trustdb/v2/internal/cryptosuite"
 )
 
 type Family string

@@ -7,15 +7,15 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
-	"github.com/wowtrust/trustdb/internal/app"
-	"github.com/wowtrust/trustdb/internal/cborx"
-	"github.com/wowtrust/trustdb/internal/cryptosuite"
-	"github.com/wowtrust/trustdb/internal/keystore"
-	"github.com/wowtrust/trustdb/internal/model"
-	"github.com/wowtrust/trustdb/internal/prooflevel"
-	"github.com/wowtrust/trustdb/internal/trustcrypto"
-	"github.com/wowtrust/trustdb/internal/trusterr"
-	"github.com/wowtrust/trustdb/internal/wal"
+	"github.com/wowtrust/trustdb/v2/internal/app"
+	"github.com/wowtrust/trustdb/v2/internal/cborx"
+	"github.com/wowtrust/trustdb/v2/internal/cryptosuite"
+	"github.com/wowtrust/trustdb/v2/internal/keystore"
+	"github.com/wowtrust/trustdb/v2/internal/model"
+	"github.com/wowtrust/trustdb/v2/internal/prooflevel"
+	"github.com/wowtrust/trustdb/v2/internal/trustcrypto"
+	"github.com/wowtrust/trustdb/v2/internal/trusterr"
+	"github.com/wowtrust/trustdb/v2/internal/wal"
 )
 
 func newCommitCommand(rt *runtimeConfig) *cobra.Command {

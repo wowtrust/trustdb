@@ -1,6 +1,6 @@
 package proofstore
 
-import "github.com/wowtrust/trustdb/internal/cryptosuite"
+import "github.com/wowtrust/trustdb/v2/internal/cryptosuite"
 
 func testStoreConfig(cfg Config) Config {
 	if cfg.Kind == "" {

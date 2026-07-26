@@ -12,12 +12,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/wowtrust/trustdb/internal/claim"
-	"github.com/wowtrust/trustdb/internal/cryptosuite"
-	"github.com/wowtrust/trustdb/internal/keydescriptor"
-	"github.com/wowtrust/trustdb/internal/model"
-	"github.com/wowtrust/trustdb/internal/trustcrypto"
-	"github.com/wowtrust/trustdb/sdk"
+	"github.com/wowtrust/trustdb/v2/internal/claim"
+	"github.com/wowtrust/trustdb/v2/internal/cryptosuite"
+	"github.com/wowtrust/trustdb/v2/internal/keydescriptor"
+	"github.com/wowtrust/trustdb/v2/internal/model"
+	"github.com/wowtrust/trustdb/v2/internal/trustcrypto"
+	"github.com/wowtrust/trustdb/v2/sdk"
 )
 
 const pollInterval = 100 * time.Millisecond

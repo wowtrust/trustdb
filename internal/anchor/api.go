@@ -3,10 +3,10 @@ package anchor
 import (
 	"context"
 
-	"github.com/wowtrust/trustdb/internal/anchorschedule"
-	"github.com/wowtrust/trustdb/internal/model"
-	"github.com/wowtrust/trustdb/internal/proofstore"
-	"github.com/wowtrust/trustdb/internal/trusterr"
+	"github.com/wowtrust/trustdb/v2/internal/anchorschedule"
+	"github.com/wowtrust/trustdb/v2/internal/model"
+	"github.com/wowtrust/trustdb/v2/internal/proofstore"
+	"github.com/wowtrust/trustdb/v2/internal/trusterr"
 )
 
 // API exposes immutable anchor results to transport layers. It is a thin

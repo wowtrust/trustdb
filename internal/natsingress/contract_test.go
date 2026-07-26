@@ -7,11 +7,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/wowtrust/trustdb/internal/cborx"
-	"github.com/wowtrust/trustdb/internal/cryptosuite"
-	"github.com/wowtrust/trustdb/internal/model"
-	"github.com/wowtrust/trustdb/internal/submission"
-	"github.com/wowtrust/trustdb/internal/trusterr"
+	"github.com/wowtrust/trustdb/v2/internal/cborx"
+	"github.com/wowtrust/trustdb/v2/internal/cryptosuite"
+	"github.com/wowtrust/trustdb/v2/internal/model"
+	"github.com/wowtrust/trustdb/v2/internal/submission"
+	"github.com/wowtrust/trustdb/v2/internal/trusterr"
 )
 
 func TestMessageIDAndRoutingKeyAreDeterministicAndScoped(t *testing.T) {

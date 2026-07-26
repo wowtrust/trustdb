@@ -7,16 +7,16 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/wowtrust/trustdb/internal/anchor"
-	"github.com/wowtrust/trustdb/internal/claim"
-	"github.com/wowtrust/trustdb/internal/cryptosuite"
-	"github.com/wowtrust/trustdb/internal/globallog"
-	"github.com/wowtrust/trustdb/internal/merkle"
-	"github.com/wowtrust/trustdb/internal/model"
-	"github.com/wowtrust/trustdb/internal/modelsuite"
-	"github.com/wowtrust/trustdb/internal/prooflevel"
-	"github.com/wowtrust/trustdb/internal/receipt"
-	"github.com/wowtrust/trustdb/internal/trustcrypto"
+	"github.com/wowtrust/trustdb/v2/internal/anchor"
+	"github.com/wowtrust/trustdb/v2/internal/claim"
+	"github.com/wowtrust/trustdb/v2/internal/cryptosuite"
+	"github.com/wowtrust/trustdb/v2/internal/globallog"
+	"github.com/wowtrust/trustdb/v2/internal/merkle"
+	"github.com/wowtrust/trustdb/v2/internal/model"
+	"github.com/wowtrust/trustdb/v2/internal/modelsuite"
+	"github.com/wowtrust/trustdb/v2/internal/prooflevel"
+	"github.com/wowtrust/trustdb/v2/internal/receipt"
+	"github.com/wowtrust/trustdb/v2/internal/trustcrypto"
 )
 
 type TrustedKeys struct {

@@ -21,17 +21,17 @@ import (
 
 	"github.com/emmansun/gmsm/sm3"
 
-	"github.com/wowtrust/trustdb/internal/anchor"
-	"github.com/wowtrust/trustdb/internal/anchor/fiscobcos"
-	"github.com/wowtrust/trustdb/internal/anchor/fiscobcos/standardsdk"
-	"github.com/wowtrust/trustdb/internal/backup"
-	"github.com/wowtrust/trustdb/internal/cborx"
-	"github.com/wowtrust/trustdb/internal/cryptosuite"
-	"github.com/wowtrust/trustdb/internal/keyenvelope"
-	"github.com/wowtrust/trustdb/internal/model"
-	"github.com/wowtrust/trustdb/internal/proofstore"
-	"github.com/wowtrust/trustdb/internal/trustcrypto"
-	"github.com/wowtrust/trustdb/scripts/fisco-bcos/qualificationformat"
+	"github.com/wowtrust/trustdb/v2/internal/anchor"
+	"github.com/wowtrust/trustdb/v2/internal/anchor/fiscobcos"
+	"github.com/wowtrust/trustdb/v2/internal/anchor/fiscobcos/standardsdk"
+	"github.com/wowtrust/trustdb/v2/internal/backup"
+	"github.com/wowtrust/trustdb/v2/internal/cborx"
+	"github.com/wowtrust/trustdb/v2/internal/cryptosuite"
+	"github.com/wowtrust/trustdb/v2/internal/keyenvelope"
+	"github.com/wowtrust/trustdb/v2/internal/model"
+	"github.com/wowtrust/trustdb/v2/internal/proofstore"
+	"github.com/wowtrust/trustdb/v2/internal/trustcrypto"
+	"github.com/wowtrust/trustdb/v2/scripts/fisco-bcos/qualificationformat"
 )
 
 type liveBCOSClientEvidence struct {

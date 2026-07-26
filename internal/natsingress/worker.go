@@ -13,9 +13,9 @@ import (
 
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
-	"github.com/wowtrust/trustdb/internal/config"
-	"github.com/wowtrust/trustdb/internal/submission"
-	"github.com/wowtrust/trustdb/internal/trusterr"
+	"github.com/wowtrust/trustdb/v2/internal/config"
+	"github.com/wowtrust/trustdb/v2/internal/submission"
+	"github.com/wowtrust/trustdb/v2/internal/trusterr"
 )
 
 // OutcomeSink durably stores accepted results and terminal rejections. Store

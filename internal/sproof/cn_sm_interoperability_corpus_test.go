@@ -4,11 +4,11 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/wowtrust/trustdb/internal/cryptosuite"
-	"github.com/wowtrust/trustdb/internal/sproof"
-	"github.com/wowtrust/trustdb/internal/trustcrypto"
-	"github.com/wowtrust/trustdb/internal/verify"
-	"github.com/wowtrust/trustdb/test/cnsmvectors"
+	"github.com/wowtrust/trustdb/v2/internal/cryptosuite"
+	"github.com/wowtrust/trustdb/v2/internal/sproof"
+	"github.com/wowtrust/trustdb/v2/internal/trustcrypto"
+	"github.com/wowtrust/trustdb/v2/internal/verify"
+	"github.com/wowtrust/trustdb/v2/test/cnsmvectors"
 )
 
 func TestOfflineVerifierConsumesSharedCNSMInteropProofWithoutExternalAccess(t *testing.T) {

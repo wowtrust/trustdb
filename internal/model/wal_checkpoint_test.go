@@ -3,8 +3,8 @@ package model
 import (
 	"testing"
 
-	"github.com/wowtrust/trustdb/internal/cborx"
-	"github.com/wowtrust/trustdb/internal/cryptosuite"
+	"github.com/wowtrust/trustdb/v2/internal/cborx"
+	"github.com/wowtrust/trustdb/v2/internal/cryptosuite"
 )
 
 // legacyWALCheckpoint pins the pre-suite wire shape so the V3 cutover can

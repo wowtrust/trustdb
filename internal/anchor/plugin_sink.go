@@ -7,8 +7,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/wowtrust/trustdb/internal/model"
-	"github.com/wowtrust/trustdb/sdk/anchorplugin"
+	"github.com/wowtrust/trustdb/v2/internal/model"
+	"github.com/wowtrust/trustdb/v2/sdk/anchorplugin"
 )
 
 type PluginSinkOptions struct {

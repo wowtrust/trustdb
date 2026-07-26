@@ -9,7 +9,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/wowtrust/trustdb/sdk/signerplugin"
+	"github.com/wowtrust/trustdb/v2/sdk/signerplugin"
 )
 
 const (

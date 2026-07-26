@@ -7,7 +7,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/wowtrust/trustdb/test/cnsmvectors"
+	"github.com/wowtrust/trustdb/v2/test/cnsmvectors"
 )
 
 func main() {

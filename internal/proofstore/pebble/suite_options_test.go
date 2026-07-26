@@ -1,7 +1,7 @@
 package pebble
 
-import "github.com/wowtrust/trustdb/internal/cryptosuite"
-import "github.com/wowtrust/trustdb/internal/proofstoremeta"
+import "github.com/wowtrust/trustdb/v2/internal/cryptosuite"
+import "github.com/wowtrust/trustdb/v2/internal/proofstoremeta"
 
 func testStoreOptions(opts Options) Options {
 	if opts.CryptoSuite == "" {

@@ -20,7 +20,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wowtrust/trustdb/internal/grpcapi"
+	"github.com/wowtrust/trustdb/v2/internal/grpcapi"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 )

@@ -10,7 +10,7 @@ import (
 	"github.com/emmansun/gmsm/sm3"
 	"golang.org/x/crypto/sha3"
 
-	"github.com/wowtrust/trustdb/internal/cborx"
+	"github.com/wowtrust/trustdb/v2/internal/cborx"
 )
 
 const (

@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wowtrust/trustdb/internal/cryptosuite"
+	"github.com/wowtrust/trustdb/v2/internal/cryptosuite"
 )
 
 const (

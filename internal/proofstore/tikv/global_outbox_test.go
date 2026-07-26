@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/wowtrust/trustdb/internal/cborx"
-	"github.com/wowtrust/trustdb/internal/model"
-	"github.com/wowtrust/trustdb/internal/trusterr"
+	"github.com/wowtrust/trustdb/v2/internal/cborx"
+	"github.com/wowtrust/trustdb/v2/internal/model"
+	"github.com/wowtrust/trustdb/v2/internal/trusterr"
 )
 
 func TestReadGlobalLogOutboxItemsBatchGetsSnapshot(t *testing.T) {

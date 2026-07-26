@@ -16,9 +16,9 @@ import (
 	ethcrypto "github.com/ethereum/go-ethereum/crypto"
 	"github.com/fxamacker/cbor/v2"
 
-	"github.com/wowtrust/trustdb/internal/cborx"
-	"github.com/wowtrust/trustdb/internal/cryptosuite"
-	"github.com/wowtrust/trustdb/internal/model"
+	"github.com/wowtrust/trustdb/v2/internal/cborx"
+	"github.com/wowtrust/trustdb/v2/internal/cryptosuite"
+	"github.com/wowtrust/trustdb/v2/internal/model"
 )
 
 func TestAnchorPayloadGoldenVectors(t *testing.T) {

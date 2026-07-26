@@ -1,6 +1,6 @@
 package batch
 
-import "github.com/wowtrust/trustdb/internal/cryptosuite"
+import "github.com/wowtrust/trustdb/v2/internal/cryptosuite"
 
 // CryptoSuite returns the immutable suite bound to this service instance.
 // Transports use it to parse suite-specific request fields without guessing

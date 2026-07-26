@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/wowtrust/trustdb/internal/cborx"
+	"github.com/wowtrust/trustdb/v2/internal/cborx"
 )
 
 func TestCBORCodecRejectsOversizedCollections(t *testing.T) {

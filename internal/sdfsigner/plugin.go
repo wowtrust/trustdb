@@ -15,7 +15,7 @@ import (
 
 	"github.com/emmansun/gmsm/sm2"
 
-	"github.com/wowtrust/trustdb/sdk/signerplugin"
+	"github.com/wowtrust/trustdb/v2/sdk/signerplugin"
 )
 
 type Plugin struct {

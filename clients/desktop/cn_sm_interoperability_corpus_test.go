@@ -5,8 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/wowtrust/trustdb/internal/keydescriptor"
-	"github.com/wowtrust/trustdb/test/cnsmvectors"
+	"github.com/wowtrust/trustdb/v2/internal/keydescriptor"
+	"github.com/wowtrust/trustdb/v2/test/cnsmvectors"
 )
 
 func TestDesktopConsumesSharedCNSMInteropProofOffline(t *testing.T) {

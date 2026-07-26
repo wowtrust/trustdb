@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wowtrust/trustdb/internal/model"
+	"github.com/wowtrust/trustdb/v2/internal/model"
 )
 
 func TestAppendPreparedAtDoesNotPersistWhenPreparationFails(t *testing.T) {

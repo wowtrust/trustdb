@@ -1,7 +1,7 @@
 package proofstore
 
 import (
-	"github.com/wowtrust/trustdb/internal/cryptosuite"
+	"github.com/wowtrust/trustdb/v2/internal/cryptosuite"
 )
 
 func testLocalStore(root string) LocalStore {

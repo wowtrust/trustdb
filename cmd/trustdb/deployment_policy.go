@@ -5,11 +5,11 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/wowtrust/trustdb/internal/anchor/fiscobcos"
-	trustconfig "github.com/wowtrust/trustdb/internal/config"
-	"github.com/wowtrust/trustdb/internal/keydescriptor"
-	"github.com/wowtrust/trustdb/internal/securityaudit"
-	"github.com/wowtrust/trustdb/internal/trustcrypto"
+	"github.com/wowtrust/trustdb/v2/internal/anchor/fiscobcos"
+	trustconfig "github.com/wowtrust/trustdb/v2/internal/config"
+	"github.com/wowtrust/trustdb/v2/internal/keydescriptor"
+	"github.com/wowtrust/trustdb/v2/internal/securityaudit"
+	"github.com/wowtrust/trustdb/v2/internal/trustcrypto"
 )
 
 func (rt *runtimeConfig) resolvePolicyCheckedSigner(

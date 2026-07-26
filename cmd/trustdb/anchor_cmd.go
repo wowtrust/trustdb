@@ -7,11 +7,11 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
-	"github.com/wowtrust/trustdb/internal/adminauth"
-	"github.com/wowtrust/trustdb/internal/anchor"
-	"github.com/wowtrust/trustdb/internal/model"
-	"github.com/wowtrust/trustdb/internal/proofstore"
-	"github.com/wowtrust/trustdb/internal/trusterr"
+	"github.com/wowtrust/trustdb/v2/internal/adminauth"
+	"github.com/wowtrust/trustdb/v2/internal/anchor"
+	"github.com/wowtrust/trustdb/v2/internal/model"
+	"github.com/wowtrust/trustdb/v2/internal/proofstore"
+	"github.com/wowtrust/trustdb/v2/internal/trusterr"
 )
 
 const anchorResultLookupPageSize = 100

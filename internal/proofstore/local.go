@@ -18,14 +18,14 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/wowtrust/trustdb/internal/anchorschedule"
-	"github.com/wowtrust/trustdb/internal/cborx"
-	"github.com/wowtrust/trustdb/internal/cryptosuite"
-	"github.com/wowtrust/trustdb/internal/l5coverage"
-	"github.com/wowtrust/trustdb/internal/model"
-	"github.com/wowtrust/trustdb/internal/modelsuite"
-	"github.com/wowtrust/trustdb/internal/proofstoremeta"
-	"github.com/wowtrust/trustdb/internal/trusterr"
+	"github.com/wowtrust/trustdb/v2/internal/anchorschedule"
+	"github.com/wowtrust/trustdb/v2/internal/cborx"
+	"github.com/wowtrust/trustdb/v2/internal/cryptosuite"
+	"github.com/wowtrust/trustdb/v2/internal/l5coverage"
+	"github.com/wowtrust/trustdb/v2/internal/model"
+	"github.com/wowtrust/trustdb/v2/internal/modelsuite"
+	"github.com/wowtrust/trustdb/v2/internal/proofstoremeta"
+	"github.com/wowtrust/trustdb/v2/internal/trusterr"
 )
 
 const (

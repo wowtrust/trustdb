@@ -1,4 +1,4 @@
-module github.com/wowtrust/trustdb/scripts/fisco-bcos/smoke-client
+module github.com/wowtrust/trustdb/v2/scripts/fisco-bcos/smoke-client
 
 go 1.25.0
 

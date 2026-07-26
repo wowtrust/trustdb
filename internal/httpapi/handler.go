@@ -15,16 +15,16 @@ import (
 	"sync"
 	"time"
 
-	"github.com/wowtrust/trustdb/internal/cborx"
-	"github.com/wowtrust/trustdb/internal/cryptosuite"
-	"github.com/wowtrust/trustdb/internal/ingest"
-	"github.com/wowtrust/trustdb/internal/model"
-	"github.com/wowtrust/trustdb/internal/observability"
-	"github.com/wowtrust/trustdb/internal/prooflevel"
-	"github.com/wowtrust/trustdb/internal/statusnotify"
-	"github.com/wowtrust/trustdb/internal/submission"
-	"github.com/wowtrust/trustdb/internal/trusterr"
-	"github.com/wowtrust/trustdb/transporttls"
+	"github.com/wowtrust/trustdb/v2/internal/cborx"
+	"github.com/wowtrust/trustdb/v2/internal/cryptosuite"
+	"github.com/wowtrust/trustdb/v2/internal/ingest"
+	"github.com/wowtrust/trustdb/v2/internal/model"
+	"github.com/wowtrust/trustdb/v2/internal/observability"
+	"github.com/wowtrust/trustdb/v2/internal/prooflevel"
+	"github.com/wowtrust/trustdb/v2/internal/statusnotify"
+	"github.com/wowtrust/trustdb/v2/internal/submission"
+	"github.com/wowtrust/trustdb/v2/internal/trusterr"
+	"github.com/wowtrust/trustdb/v2/transporttls"
 )
 
 const (

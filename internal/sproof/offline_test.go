@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wowtrust/trustdb/internal/cryptosuite"
-	"github.com/wowtrust/trustdb/internal/verify"
+	"github.com/wowtrust/trustdb/v2/internal/cryptosuite"
+	"github.com/wowtrust/trustdb/v2/internal/verify"
 )
 
 func TestVerifyOfflineReportsContainerFailureAndStops(t *testing.T) {

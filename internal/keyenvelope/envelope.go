@@ -17,7 +17,7 @@ import (
 
 	"github.com/emmansun/gmsm/sm4"
 
-	"github.com/wowtrust/trustdb/internal/cborx"
+	"github.com/wowtrust/trustdb/v2/internal/cborx"
 )
 
 const (

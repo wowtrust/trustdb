@@ -10,8 +10,8 @@ import (
 
 	"github.com/rs/zerolog"
 	"github.com/spf13/cobra"
-	"github.com/wowtrust/trustdb/internal/adminauth"
-	trustconfig "github.com/wowtrust/trustdb/internal/config"
+	"github.com/wowtrust/trustdb/v2/internal/adminauth"
+	trustconfig "github.com/wowtrust/trustdb/v2/internal/config"
 	"golang.org/x/crypto/bcrypt"
 )
 
