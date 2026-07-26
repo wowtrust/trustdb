@@ -30,6 +30,7 @@ type runtimeConfig struct {
 	logCloser      io.Closer
 	signerResolver *keydescriptor.Resolver
 	auditor        *securityaudit.Writer
+	auditKey       keydescriptor.Descriptor
 	auditActor     string
 	auditRoles     []string
 	auditPolicy    uint64
@@ -130,6 +131,12 @@ func setDefaults(v *viper.Viper) {
 
 	defaults := trustconfig.Default()
 	v.SetDefault("run_profile", defaults.RunProfile)
+	v.SetDefault("deployment_policy.egress_mode", defaults.DeploymentPolicy.EgressMode)
+	v.SetDefault("deployment_policy.allowed_endpoints", defaults.DeploymentPolicy.AllowedEndpoints)
+	v.SetDefault("deployment_policy.dns_allowlist", defaults.DeploymentPolicy.DNSAllowlist)
+	v.SetDefault("deployment_policy.telemetry_enabled", defaults.DeploymentPolicy.TelemetryEnabled)
+	v.SetDefault("deployment_policy.update_checks_enabled", defaults.DeploymentPolicy.UpdateChecksEnabled)
+	v.SetDefault("deployment_policy.exceptions", defaults.DeploymentPolicy.Exceptions)
 	v.SetDefault("paths.data_dir", defaults.Paths.DataDir)
 	v.SetDefault("paths.key_registry", defaults.Paths.KeyRegistry)
 	v.SetDefault("paths.wal", defaults.Paths.WAL)
@@ -421,6 +428,11 @@ func setDefaults(v *viper.Viper) {
 	bindEnv(v, "audit.time_max_sample_age", "TRUSTDB_AUDIT_TIME_MAX_SAMPLE_AGE")
 	bindEnv(v, "audit.time_max_drift", "TRUSTDB_AUDIT_TIME_MAX_DRIFT")
 	bindEnv(v, "audit.require_synchronized_time", "TRUSTDB_AUDIT_REQUIRE_SYNCHRONIZED_TIME")
+	bindEnv(v, "deployment_policy.egress_mode", "TRUSTDB_DEPLOYMENT_POLICY_EGRESS_MODE")
+	bindEnv(v, "deployment_policy.allowed_endpoints", "TRUSTDB_DEPLOYMENT_POLICY_ALLOWED_ENDPOINTS")
+	bindEnv(v, "deployment_policy.dns_allowlist", "TRUSTDB_DEPLOYMENT_POLICY_DNS_ALLOWLIST")
+	bindEnv(v, "deployment_policy.telemetry_enabled", "TRUSTDB_DEPLOYMENT_POLICY_TELEMETRY_ENABLED")
+	bindEnv(v, "deployment_policy.update_checks_enabled", "TRUSTDB_DEPLOYMENT_POLICY_UPDATE_CHECKS_ENABLED")
 	bindEnv(v, "keys.client_private", "TRUSTDB_KEYS_CLIENT_PRIVATE")
 	bindEnv(v, "keys.client_public", "TRUSTDB_KEYS_CLIENT_PUBLIC")
 	bindEnv(v, "keys.server_private", "TRUSTDB_KEYS_SERVER_PRIVATE")
@@ -508,6 +520,7 @@ func (rt *runtimeConfig) close() error {
 			errs = append(errs, err)
 		}
 		rt.auditor = nil
+		rt.auditKey = keydescriptor.Descriptor{}
 	}
 	if err := rt.closeSignerResolver(); err != nil {
 		errs = append(errs, err)

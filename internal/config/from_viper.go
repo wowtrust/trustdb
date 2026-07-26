@@ -32,8 +32,18 @@ func FromViper(v *viper.Viper) Config {
 	remoteSignerPlugin := signerPluginFromViper(v, "remote", defaults.Crypto.SignerPlugins.Remote)
 	pkcs11SignerPlugin := signerPluginFromViper(v, "pkcs11", defaults.Crypto.SignerPlugins.PKCS11)
 	sdfSignerPlugin := signerPluginFromViper(v, "sdf", defaults.Crypto.SignerPlugins.SDF)
+	var policyExceptions []PolicyException
+	_ = v.UnmarshalKey("deployment_policy.exceptions", &policyExceptions)
 	return Config{
 		RunProfile: v.GetString("run_profile"),
+		DeploymentPolicy: DeploymentPolicy{
+			EgressMode:          v.GetString("deployment_policy.egress_mode"),
+			AllowedEndpoints:    append([]string(nil), v.GetStringSlice("deployment_policy.allowed_endpoints")...),
+			DNSAllowlist:        append([]string(nil), v.GetStringSlice("deployment_policy.dns_allowlist")...),
+			TelemetryEnabled:    v.GetBool("deployment_policy.telemetry_enabled"),
+			UpdateChecksEnabled: v.GetBool("deployment_policy.update_checks_enabled"),
+			Exceptions:          policyExceptions,
+		},
 		Paths: Paths{
 			DataDir:     v.GetString("paths.data_dir"),
 			KeyRegistry: v.GetString("paths.key_registry"),

@@ -42,7 +42,11 @@ func (rt *runtimeConfig) initAudit(command *cobra.Command) error {
 	if err != nil {
 		return err
 	}
-	signer, _, err := rt.readSigner(command.Context(), rt.cfg.Audit.SigningKey)
+	signer, descriptor, err := rt.resolvePolicyCheckedSigner(
+		command.Context(),
+		rt.cfg.Audit.SigningKey,
+		"audit",
+	)
 	if err != nil {
 		return fmt.Errorf("initialize security audit signer: %w", err)
 	}
@@ -54,6 +58,7 @@ func (rt *runtimeConfig) initAudit(command *cobra.Command) error {
 		return fmt.Errorf("initialize security audit trail: %w", err)
 	}
 	rt.auditor = writer
+	rt.auditKey = descriptor.Clone()
 	rt.auditActor = localAuditActor()
 	rt.auditRequestID = newAuditRequestID()
 	if _, err := rt.auditor.Record(command.Context(), securityaudit.Draft{
