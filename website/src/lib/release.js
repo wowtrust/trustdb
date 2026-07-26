@@ -5,6 +5,7 @@ export const release = {
   prerelease: true,
   pageUrl: "https://github.com/wowtrust/trustdb/releases/tag/v2.0.0-rc.1",
   containerImage: "ghcr.io/wowtrust/trustdb",
+  containerDigest: "sha256:1c4cba5b0ffe3347bab196c99ef363f4783681942b6a128e5f643d72b302d06d",
   containerUrl: "https://github.com/wowtrust/trustdb/pkgs/container/trustdb",
   dockerHubUrl: "https://hub.docker.com/r/wsy19990317/trustdb",
 };
