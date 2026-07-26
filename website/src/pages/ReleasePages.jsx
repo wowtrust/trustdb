@@ -99,10 +99,11 @@ export function DownloadsPage() {
         <div data-reveal><p>Use the release</p><h2>直接使用发布产物</h2></div>
         <div className="source-build__steps" data-reveal><p><span>01</span><strong>验证来源</strong><code>Sigstore provenance</code></p><p><span>02</span><strong>核对文件</strong><code>SHA-256 · SM3</code></p><p><span>03</span><strong>固定版本</strong><code>{release.tag} · OCI digest</code></p></div>
         <div className="source-build__note"><Check /><span>RC.2 的 manifest media type 由产物文件名确定，不依赖宿主 MIME 数据库；macOS、Linux 与 Windows 随包 verifier 会执行同一套精确文件集合和双摘要校验。</span></div>
+        <div className="source-build__note"><WarningCircle /><span>RC.2 镜像内二进制与不可变 digest 已验证，但随包 docker.yaml 错误声明 production profile，导致默认 entrypoint 因缺少 audit 配置而 fail closed。信息命令需显式使用镜像内 trustdb entrypoint；评估启动需设置 development profile。发布资产保持不可变，完整命令见服务部署教程。</span></div>
         <div className="source-build__note"><WarningCircle /><span>V2/V5 是一次性破坏性切换：不要让 v2 进程打开 v1 数据目录，也不要把 v1 backup、SDK 请求或 .sproof 输入 v2。升级前保留历史环境用于审计，然后使用新 namespace 与空数据目录部署。</span></div>
         <div className="source-build__note"><Check /><span>桌面安装包仍采用自签名证书，尚未取得 Apple 或 Microsoft 商业签名。必须先验证签名 manifest 与双摘要；证书和指纹只用于核对本次发布的签名完整性。</span></div>
         <div className="source-build__note"><Check /><span>通用发布包支持 FISCO BCOS 离线证据验证。真实链上发布所需的 provider-enabled 变体不在通用产物中；只有明确需要该能力时才进入单独的源码构建指南。</span></div>
-        <div className="source-build__links"><InlineLink href="/docs/quick-start">快速开始</InlineLink><InlineLink href="/docs/supply-chain">发布验签与国产镜像</InlineLink><InlineLink href="/docs/desktop-install">安装桌面客户端</InlineLink><InlineLink href="/docs/source-build">从源码构建</InlineLink><InlineLink href="/changelog">开发日志</InlineLink></div>
+        <div className="source-build__links"><InlineLink href="/docs/quick-start">快速开始</InlineLink><InlineLink href="/docs/server">服务部署与 RC.2 容器说明</InlineLink><InlineLink href="/docs/supply-chain">发布验签与国产镜像</InlineLink><InlineLink href="/docs/desktop-install">安装桌面客户端</InlineLink><InlineLink href="/docs/source-build">从源码构建</InlineLink><InlineLink href="/changelog">开发日志</InlineLink></div>
       </section>
     </>
   );
