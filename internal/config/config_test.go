@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/spf13/viper"
 )
@@ -20,7 +21,7 @@ func TestDefaultConfigIsValid(t *testing.T) {
 func TestDefaultYAMLIsStructured(t *testing.T) {
 	t.Parallel()
 
-	for _, section := range []string{"paths:", "identity:", "server:", "nats:", "registry:", "batch:", "wal:", "crypto:", "proofstore:", "log:", "keys:"} {
+	for _, section := range []string{"paths:", "identity:", "server:", "deployment_policy:", "nats:", "registry:", "batch:", "wal:", "crypto:", "proofstore:", "log:", "keys:"} {
 		if !strings.Contains(DefaultYAML, section) {
 			t.Fatalf("default yaml missing section %q", section)
 		}
@@ -613,17 +614,25 @@ func TestValidateRejectsInvalidProofstoreConfig(t *testing.T) {
 func TestValidateRunProfileAliases(t *testing.T) {
 	t.Parallel()
 
-	for _, raw := range []string{"", "development", "DEV", "single_node_production", "prod", "benchmark", "bench"} {
+	for _, raw := range []string{
+		"", "development", "DEV", "single_node_production", "prod",
+		"china_production", "cn-prod", "offline_isolated", "air-gapped",
+		"assessment", "assess", "benchmark", "bench",
+	} {
 		raw := raw
 		t.Run(raw, func(t *testing.T) {
 			t.Parallel()
 			cfg := Default()
+			profile := NormalizeRunProfile(raw)
 			cfg.RunProfile = raw
-			if NormalizeRunProfile(raw) == RunProfileSingleNodeProduction {
+			if profile == RunProfileSingleNodeProduction {
 				enableProductionAudit(&cfg)
 				cfg.Server.Transport.Mode = "tls"
 				cfg.Server.Transport.CertFile = "/run/trustdb/server.crt"
 				cfg.Server.Transport.KeyFile = "/run/trustdb/server.key"
+			}
+			if IsStrictDeploymentProfile(profile) {
+				enableStrictDeployment(&cfg, profile)
 			}
 			if err := cfg.Validate(); err != nil {
 				t.Fatalf("Validate: %v", err)
@@ -749,6 +758,279 @@ func enableProductionAudit(cfg *Config) {
 	cfg.Audit.SigningKey = "/keys/audit.tdkey"
 	cfg.Audit.TimeReferencePath = "/run/time-reference.json"
 	cfg.Audit.RequireSynchronizedTime = true
+}
+
+func enableStrictDeployment(cfg *Config, profile string) {
+	cfg.RunProfile = profile
+	enableProductionAudit(cfg)
+	cfg.Server.Transport = ServerTransport{
+		Mode:               "mtls",
+		CertFile:           "/tls/server.crt",
+		KeyFile:            "/tls/server.key",
+		ClientCAFile:       "/tls/client-ca.crt",
+		ClientCAPinsSHA256: []string{strings.Repeat("ab", 32)},
+		MinVersion:         "1.2",
+		ReloadInterval:     "1m",
+	}
+	cfg.DeploymentPolicy.EgressMode = EgressAllowlist
+	cfg.Backup.KeyProvider = "sdf-kek-v1"
+	cfg.Backup.KeyID = "backup-key-1"
+	cfg.Anchor.Sink = "fisco-bcos"
+	cfg.Anchor.FISCOBCOS.TrustConfigFile = "/etc/trustdb/fisco-bcos-trust.cbor"
+	if profile == RunProfileOfflineIsolated {
+		cfg.DeploymentPolicy.EgressMode = EgressDenyAll
+		cfg.Anchor.Sink = "off"
+		cfg.Anchor.FISCOBCOS.TrustConfigFile = ""
+	}
+}
+
+func TestStrictDeploymentPolicyRejectsUnsafeStaticConfiguration(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name   string
+		mutate func(*Config)
+		want   string
+	}{
+		{
+			name: "unrestricted egress",
+			mutate: func(cfg *Config) {
+				cfg.DeploymentPolicy.EgressMode = EgressUnrestricted
+			},
+			want: "egress_mode",
+		},
+		{
+			name: "missing client CA pins",
+			mutate: func(cfg *Config) {
+				cfg.Server.Transport.ClientCAPinsSHA256 = nil
+			},
+			want: "client_ca_pins_sha256",
+		},
+		{
+			name: "development backup key",
+			mutate: func(cfg *Config) {
+				cfg.Backup.KeyProvider = "passphrase-dev-v1"
+			},
+			want: "passphrase-dev-v1",
+		},
+		{
+			name: "public timestamp sink",
+			mutate: func(cfg *Config) {
+				cfg.Anchor.Sink = "ots"
+			},
+			want: "fisco-bcos",
+		},
+		{
+			name: "global log disabled",
+			mutate: func(cfg *Config) {
+				cfg.GlobalLog.Enabled = false
+			},
+			want: "global_log.enabled",
+		},
+		{
+			name: "plaintext NATS",
+			mutate: func(cfg *Config) {
+				cfg.NATS.Enabled = true
+			},
+			want: "nats TLS",
+		},
+		{
+			name: "telemetry enabled",
+			mutate: func(cfg *Config) {
+				cfg.DeploymentPolicy.TelemetryEnabled = true
+			},
+			want: "telemetry_enabled",
+		},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			cfg := Default()
+			enableStrictDeployment(&cfg, RunProfileChinaProduction)
+			test.mutate(&cfg)
+			err := cfg.Validate()
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("Validate() error = %v, want %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestOfflineIsolatedRejectsAnyConfiguredOutboundService(t *testing.T) {
+	t.Parallel()
+	cfg := Default()
+	enableStrictDeployment(&cfg, RunProfileOfflineIsolated)
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("baseline offline config: %v", err)
+	}
+	cfg.NATS.Enabled = true
+	cfg.NATS.TLS.Enabled = true
+	cfg.NATS.TLS.CAFile = "/tls/nats-ca.crt"
+	cfg.NATS.URLs = []string{"tls://127.0.0.1:4222"}
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "nats.enabled") {
+		t.Fatalf("offline NATS error = %v", err)
+	}
+}
+
+func TestOfflineIsolatedRuntimeAllowsNoOutboundAndRejectsAnyEndpoint(t *testing.T) {
+	t.Parallel()
+	policy := DeploymentPolicy{EgressMode: EgressDenyAll}
+	runtime := DeploymentRuntime{
+		ServerCryptoSuite: "CN_SM_V1",
+		ServerKeyProvider: "sdf",
+		AuditCryptoSuite:  "CN_SM_V1",
+		AuditKeyProvider:  "pkcs11",
+		AnchorSink:        "off",
+		StorageBackend:    "pebble",
+	}
+	if err := ValidateDeploymentRuntime(
+		RunProfileOfflineIsolated,
+		policy,
+		runtime,
+	); err != nil {
+		t.Fatalf("offline runtime without outbound rejected: %v", err)
+	}
+	runtime.Outbound = []OutboundEndpoint{{
+		Source: "unexpected service", Endpoint: "https://127.0.0.1:443",
+	}}
+	err := ValidateDeploymentRuntime(RunProfileOfflineIsolated, policy, runtime)
+	if err == nil || !strings.Contains(err.Error(), "deny_all") {
+		t.Fatalf("offline runtime outbound error = %v", err)
+	}
+}
+
+func TestValidateDeploymentRuntimeFailsClosed(t *testing.T) {
+	t.Parallel()
+	policy := DeploymentPolicy{
+		EgressMode:       EgressAllowlist,
+		AllowedEndpoints: []string{"gm-tls://10.0.0.20:20200", "https://kms.internal:443"},
+		DNSAllowlist:     []string{"kms.internal"},
+	}
+	baseline := DeploymentRuntime{
+		ServerCryptoSuite: "CN_SM_V1",
+		ServerKeyProvider: "sdf",
+		AuditCryptoSuite:  "CN_SM_V1",
+		AuditKeyProvider:  "pkcs11",
+		FISCOCryptoMode:   "guomi",
+		FISCOKeyProvider:  "sdf",
+		FISCOPeerPins:     true,
+		AnchorSink:        "fisco-bcos",
+		StorageBackend:    "pebble",
+		Outbound: []OutboundEndpoint{
+			{Source: "fisco-bcos", Endpoint: "gm-tls://10.0.0.20:20200"},
+			{Source: "server signer", Endpoint: "https://kms.internal/v1"},
+		},
+	}
+	if err := ValidateDeploymentRuntime(RunProfileChinaProduction, policy, baseline); err != nil {
+		t.Fatalf("baseline runtime rejected: %v", err)
+	}
+	tests := []struct {
+		name   string
+		mutate func(*DeploymentRuntime)
+		want   string
+	}{
+		{name: "wrong server suite", mutate: func(runtime *DeploymentRuntime) {
+			runtime.ServerCryptoSuite = "INTL_V1"
+		}, want: "CN_SM_V1"},
+		{name: "software audit key", mutate: func(runtime *DeploymentRuntime) {
+			runtime.AuditKeyProvider = "software"
+		}, want: "software"},
+		{name: "standard BCOS mode", mutate: func(runtime *DeploymentRuntime) {
+			runtime.FISCOCryptoMode = "standard"
+		}, want: "guomi"},
+		{name: "missing BCOS peer pins", mutate: func(runtime *DeploymentRuntime) {
+			runtime.FISCOPeerPins = false
+		}, want: "pinned peer"},
+		{name: "unknown endpoint", mutate: func(runtime *DeploymentRuntime) {
+			runtime.Outbound = append(runtime.Outbound, OutboundEndpoint{
+				Source: "unknown", Endpoint: "https://10.0.0.99:443",
+			})
+		}, want: "not in deployment_policy.allowed_endpoints"},
+		{name: "development storage backend", mutate: func(runtime *DeploymentRuntime) {
+			runtime.StorageBackend = "file"
+		}, want: "proofstore backend"},
+		{name: "effective anchor override", mutate: func(runtime *DeploymentRuntime) {
+			runtime.AnchorSink = "off"
+		}, want: "effective anchor sink"},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			runtime := baseline
+			runtime.Outbound = append([]OutboundEndpoint(nil), baseline.Outbound...)
+			test.mutate(&runtime)
+			err := ValidateDeploymentRuntime(RunProfileChinaProduction, policy, runtime)
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("ValidateDeploymentRuntime() error = %v, want %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestPolicyExceptionsAreNarrowAuthorizedAndTimeBounded(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 7, 26, 0, 0, 0, 0, time.UTC)
+	valid := PolicyException{
+		ID:         "CAB-2026-0042",
+		Control:    PolicyControlServerKeyCustody,
+		Reason:     "assessment fixture only",
+		ApprovedBy: "security@example.cn",
+		Ticket:     "SEC-42",
+		ExpiresAt:  now.Add(7 * 24 * time.Hour).Format(time.RFC3339),
+	}
+	if err := validatePolicyExceptions(now, []PolicyException{valid}); err != nil {
+		t.Fatalf("valid exception rejected: %v", err)
+	}
+	for _, test := range []struct {
+		name   string
+		mutate func(*PolicyException)
+		want   string
+	}{
+		{name: "expired", mutate: func(exception *PolicyException) {
+			exception.ExpiresAt = now.Format(time.RFC3339)
+		}, want: "expired"},
+		{name: "too long", mutate: func(exception *PolicyException) {
+			exception.ExpiresAt = now.Add(31 * 24 * time.Hour).Format(time.RFC3339)
+		}, want: "30 days"},
+		{name: "unknown control", mutate: func(exception *PolicyException) {
+			exception.Control = "anything"
+		}, want: "unsupported"},
+		{name: "missing approver", mutate: func(exception *PolicyException) {
+			exception.ApprovedBy = ""
+		}, want: "approved_by"},
+	} {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			exception := valid
+			test.mutate(&exception)
+			err := validatePolicyExceptions(now, []PolicyException{exception})
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("exception error = %v, want %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestFromViperMapsDeploymentPolicy(t *testing.T) {
+	t.Parallel()
+	v := viper.New()
+	v.Set("deployment_policy.egress_mode", EgressAllowlist)
+	v.Set("deployment_policy.allowed_endpoints", []string{"gm-tls://10.0.0.20:20200"})
+	v.Set("deployment_policy.dns_allowlist", []string{"bcos.internal"})
+	v.Set("deployment_policy.telemetry_enabled", true)
+	v.Set("deployment_policy.exceptions", []map[string]any{{
+		"id": "CAB-1", "control": PolicyControlAnchor, "reason": "test",
+		"approved_by": "security", "ticket": "SEC-1", "expires_at": "2026-08-01T00:00:00Z",
+	}})
+	got := FromViper(v).DeploymentPolicy
+	if got.EgressMode != EgressAllowlist || len(got.AllowedEndpoints) != 1 ||
+		len(got.DNSAllowlist) != 1 || !got.TelemetryEnabled || len(got.Exceptions) != 1 {
+		t.Fatalf("deployment policy = %+v", got)
+	}
+	if got.Exceptions[0].Control != PolicyControlAnchor {
+		t.Fatalf("policy exception = %+v", got.Exceptions[0])
+	}
 }
 
 func TestValidateRunProfileRejectsUnknown(t *testing.T) {

@@ -818,6 +818,9 @@ func TestShippedProfileConfigsLoad(t *testing.T) {
 	for _, name := range []string{
 		"development.yaml",
 		"production.yaml",
+		"china-production.yaml",
+		"offline-isolated.yaml",
+		"assessment.yaml",
 		"benchmark.yaml",
 		"benchmark-extreme.yaml",
 		"benchmark-burst.yaml",

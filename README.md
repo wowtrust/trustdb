@@ -357,6 +357,7 @@ The screenshot below is rendered directly from the current desktop client code:
 
 - [ARCHITECTURE.zh-CN.md](ARCHITECTURE.zh-CN.md): detailed TrustDB server, persistence, Global Log, anchoring, SDK, backup, and offline-verification architecture (Chinese).
 - [docs/compliance/ADMINISTRATIVE_RBAC.md](docs/compliance/ADMINISTRATIVE_RBAC.md): administrative roles, permission enforcement, bootstrap, policy history, mTLS/OIDC/MFA hooks, CLI authorization, and emergency recovery.
+- [docs/compliance/CHINA_DEPLOYMENT_PROFILES.md](docs/compliance/CHINA_DEPLOYMENT_PROFILES.md): enforced China production, offline-isolated, and assessment profiles; exact egress/DNS policy, key/transport/BCOS gates, audited temporary exceptions, and negative tests.
 - [docs/zh-CN/ADMINISTRATIVE_RBAC.md](docs/zh-CN/ADMINISTRATIVE_RBAC.md): 管理 RBAC、三员分立、会话锁定、CLI 鉴权与紧急恢复手册。
 - [docs/integrations/NATS_INGRESS.md](docs/integrations/NATS_INGRESS.md): optional JetStream ingress topology, configuration, security, backpressure, result recovery, and Go SDK workflow.
 - [docs/integrations/PKCS11_SIGNER.md](docs/integrations/PKCS11_SIGNER.md): isolated native PKCS#11 signer, PIN-file and mechanism gates, rotation, SoftHSM interoperability, and production-token qualification.

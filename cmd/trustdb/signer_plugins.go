@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -85,6 +86,23 @@ func (rt *runtimeConfig) readSigner(ctx context.Context, path string) (trustcryp
 		return nil, keydescriptor.Descriptor{}, err
 	}
 	return signer, descriptor, nil
+}
+
+func (rt *runtimeConfig) resolveSignerDescriptor(
+	ctx context.Context,
+	descriptorPath string,
+	descriptor keydescriptor.Descriptor,
+) (trustcrypto.Signer, error) {
+	resolver, err := rt.signerResolverForConfig()
+	if err != nil {
+		return nil, err
+	}
+	signer, err := resolver.ResolveSigner(ctx, descriptor, filepath.Dir(descriptorPath))
+	if err != nil {
+		_ = rt.closeSignerResolver()
+		return nil, err
+	}
+	return signer, nil
 }
 
 func (rt *runtimeConfig) readLifecycleSigner(ctx context.Context, path string) (trustcrypto.Signer, keydescriptor.Descriptor, error) {

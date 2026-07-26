@@ -489,7 +489,7 @@ func (h *handler) putConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	if protectedChanged {
 		writeJSON(w, http.StatusForbidden, map[string]any{
-			"ok": false, "error": "admin authorization and security audit settings cannot be changed through the generic config endpoint",
+			"ok": false, "error": "admin authorization, security audit, and deployment policy settings cannot be changed through the generic config endpoint",
 		})
 		return
 	}
@@ -520,7 +520,7 @@ func (h *handler) putConfig(w http.ResponseWriter, r *http.Request) {
 }
 
 func protectedConfigChanged(previous []byte, next *viper.Viper) (bool, error) {
-	var currentAdmin, currentAudit any
+	var currentAdmin, currentAudit, currentDeploymentPolicy, currentRunProfile any
 	if len(previous) > 0 {
 		current := viper.New()
 		current.SetConfigType("yaml")
@@ -529,13 +529,38 @@ func protectedConfigChanged(previous []byte, next *viper.Viper) (bool, error) {
 		}
 		currentAdmin = current.AllSettings()["admin"]
 		currentAudit = current.AllSettings()["audit"]
+		currentDeploymentPolicy = current.AllSettings()["deployment_policy"]
+		currentRunProfile = current.AllSettings()["run_profile"]
 	}
 	nextSettings := next.AllSettings()
 	auditChanged := !reflect.DeepEqual(currentAudit, nextSettings["audit"])
 	if currentAudit == nil && !auditSectionEnabled(nextSettings["audit"]) {
 		auditChanged = false
 	}
-	return !reflect.DeepEqual(currentAdmin, nextSettings["admin"]) || auditChanged, nil
+	deploymentPolicyChanged := !reflect.DeepEqual(
+		currentDeploymentPolicy,
+		nextSettings["deployment_policy"],
+	)
+	if currentDeploymentPolicy == nil &&
+		defaultDeploymentPolicy(trustconfig.FromViper(next).DeploymentPolicy) {
+		deploymentPolicyChanged = false
+	}
+	return !reflect.DeepEqual(currentAdmin, nextSettings["admin"]) ||
+		auditChanged ||
+		deploymentPolicyChanged ||
+		!reflect.DeepEqual(currentRunProfile, nextSettings["run_profile"]), nil
+}
+
+func defaultDeploymentPolicy(policy trustconfig.DeploymentPolicy) bool {
+	return strings.EqualFold(
+		strings.TrimSpace(policy.EgressMode),
+		trustconfig.EgressUnrestricted,
+	) &&
+		len(policy.AllowedEndpoints) == 0 &&
+		len(policy.DNSAllowlist) == 0 &&
+		!policy.TelemetryEnabled &&
+		!policy.UpdateChecksEnabled &&
+		len(policy.Exceptions) == 0
 }
 
 func auditSectionEnabled(value any) bool {

@@ -720,6 +720,25 @@ admin:
 	if recorder.Code != http.StatusForbidden {
 		t.Fatalf("changed audit block status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
+
+	changed = strings.Replace(
+		current,
+		`  egress_mode: "unrestricted"`,
+		`  egress_mode: "allowlist"`,
+		1,
+	)
+	recorder = httptest.NewRecorder()
+	h.putConfig(recorder, httptest.NewRequest(http.MethodPut, "/api/config", strings.NewReader(changed)))
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("changed deployment policy status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+
+	changed = strings.Replace(current, `# run_profile: ""`, `run_profile: development`, 1)
+	recorder = httptest.NewRecorder()
+	h.putConfig(recorder, httptest.NewRequest(http.MethodPut, "/api/config", strings.NewReader(changed)))
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("changed run profile status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
 }
 
 func TestPutConfigIgnoresStaleFixedTempPathAndWritesBackup(t *testing.T) {

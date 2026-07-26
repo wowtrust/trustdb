@@ -265,7 +265,11 @@ func newServeCommand(rt *runtimeConfig) *cobra.Command {
 			if batchProofWorkers < 0 {
 				return usageError("batch-proof-workers must be zero or greater")
 			}
-			serverSigner, serverKey, err := rt.readSigner(cmd.Context(), serverKeyPath)
+			serverSigner, serverKey, err := rt.resolvePolicyCheckedSigner(
+				cmd.Context(),
+				serverKeyPath,
+				"server",
+			)
 			if err != nil {
 				return err
 			}
@@ -326,6 +330,37 @@ func newServeCommand(rt *runtimeConfig) *cobra.Command {
 			}
 			cryptoProvider, err := trustcrypto.ProviderForSuite(serverKey.CryptoSuite)
 			if err != nil {
+				return err
+			}
+			metaKind := strings.ToLower(strings.TrimSpace(metastoreKind))
+			if metaKind == "" {
+				metaKind = string(proofstore.BackendPebble)
+			}
+			metaPath := metastorePath
+			if metaPath == "" {
+				metaPath = proofDir
+			}
+			if metaKind == string(proofstore.BackendPebble) && metastorePath == "" {
+				metaPath = proofDir + "/pebble"
+			}
+			var anchorFISCOBCOSTrust *fiscobcos.TrustConfig
+			if rt.cfg.GlobalLog.Enabled &&
+				strings.EqualFold(strings.TrimSpace(anchorSinkKind), "fisco-bcos") {
+				trust, err := loadCanonicalFISCOBCOSTrustConfig(anchorFISCOBCOSTrustConfigFile)
+				if err != nil {
+					return err
+				}
+				anchorFISCOBCOSTrust = &trust
+			}
+			if err := validateServeDeploymentPolicy(
+				cmd.Context(),
+				rt,
+				serverKey,
+				metaKind,
+				tikvPDAddresses,
+				anchorSinkKind,
+				anchorFISCOBCOSTrust,
+			); err != nil {
 				return err
 			}
 			walMaxSegmentBytes = int64OrLiteral(cmd, "wal-max-segment-bytes", walMaxSegmentBytes, rt.cfg.WAL.MaxSegmentBytes)
@@ -434,17 +469,6 @@ func newServeCommand(rt *runtimeConfig) *cobra.Command {
 			// back to the proof_dir/pebble sub-directory so the Pebble
 			// WAL/manifests do not accidentally collide with the file
 			// backend's files living in the same directory.
-			metaPath := metastorePath
-			if metaPath == "" {
-				metaPath = proofDir
-			}
-			metaKind := metastoreKind
-			if metaKind == "" {
-				metaKind = string(proofstore.BackendPebble)
-			}
-			if metaKind == string(proofstore.BackendPebble) && metastorePath == "" {
-				metaPath = proofDir + "/pebble"
-			}
 			logServeRunProfile(rt, metaKind, anchorSinkKind)
 			if metaKind == string(proofstore.BackendFile) {
 				rt.logger.Warn().Msg("file proofstore is intended for development/small datasets; use --metastore=pebble for production-scale attestations")
@@ -624,6 +648,7 @@ func newServeCommand(rt *runtimeConfig) *cobra.Command {
 				TimeoutText: anchorOtsTimeoutText,
 			}, fiscoBCOSSinkParams{
 				TrustConfigFile: anchorFISCOBCOSTrustConfigFile,
+				TrustConfig:     anchorFISCOBCOSTrust,
 				Factory:         standardsdk.NativeFactory{},
 				SignerBuilder:   newFISCOBCOSPluginAccountSigner,
 				SignerPlugins:   rt.cfg.Crypto.SignerPlugins,
@@ -1078,6 +1103,7 @@ type pluginSinkParams struct {
 
 type fiscoBCOSSinkParams struct {
 	TrustConfigFile string
+	TrustConfig     *fiscobcos.TrustConfig
 	Factory         standardsdk.Factory
 	AccountSigner   standardsdk.AccountSigner
 	SignerBuilder   fiscoBCOSAccountSignerBuilder
@@ -1093,9 +1119,15 @@ func newFISCOBCOSStandardSinkFromParams(ctx context.Context, metrics *observabil
 	if params.Factory == nil {
 		return nil, nil, trusterr.New(trusterr.CodeFailedPrecondition, "FISCO BCOS SDK driver factory is not configured")
 	}
-	trust, err := loadCanonicalFISCOBCOSTrustConfig(path)
-	if err != nil {
-		return nil, nil, err
+	var trust fiscobcos.TrustConfig
+	var err error
+	if params.TrustConfig != nil {
+		trust = *params.TrustConfig
+	} else {
+		trust, err = loadCanonicalFISCOBCOSTrustConfig(path)
+		if err != nil {
+			return nil, nil, err
+		}
 	}
 	accountSigner := params.AccountSigner
 	var signerCloser io.Closer

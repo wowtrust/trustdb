@@ -14,6 +14,7 @@ V2/V5 实现。它不是 v1.0.0 发布包的兼容说明：v1.0.0 发布于 V2/V
 | 部署服务器 | [功能与配置](FEATURES_AND_CONFIGURATION.md) | [生产运维](OPERATIONS.md) |
 | 设计备份与灾备 | [备份与恢复](BACKUP_AND_RECOVERY.md) | [生产运维](OPERATIONS.md) |
 | 启用国密与 FISCO BCOS | [FISCO BCOS 中文指南](FISCO_BCOS.md) | [国密合规边界](../compliance/CHINA_COMPLIANCE_SCOPE_AND_CONTROL_MATRIX.zh-CN.md) |
+| 启用国产生产/离线/测评门禁 | [国产化部署 Profile](CHINA_DEPLOYMENT_PROFILES.md) | [安全审计](IMMUTABLE_SECURITY_AUDIT.md) |
 | 接入 NATS / JetStream | [NATS 中文指南](../integrations/NATS_INGRESS.zh-CN.md) | [功能与配置](FEATURES_AND_CONFIGURATION.md#nats--jetstream-入口) |
 | 配置 TLS/mTLS/TLCP | [功能与配置](FEATURES_AND_CONFIGURATION.md#传输安全与管理入口) | [TLCP 网关](../integrations/TLCP_GATEWAY.md) |
 | 排查故障 | [生产运维](OPERATIONS.md#故障分流表) | 官网[故障排查](https://www.trustdb.ryan-wong.cn/docs/troubleshooting) |

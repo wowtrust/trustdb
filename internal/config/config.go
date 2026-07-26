@@ -14,8 +14,8 @@ import (
 )
 
 const DefaultYAML = `# TrustDB local client configuration.
-# Optional: run_profile labels the deployment for serve-time hints only
-# (development | single_node_production | benchmark). See configs/README.md.
+# Optional run profile. Strict China/offline/assessment profiles enforce
+# startup policy; development and benchmark remain operator-selected modes.
 # run_profile: ""
 
 paths:
@@ -75,6 +75,14 @@ server:
 tlcp:
   gateway_profile: ""
   identity_manifest: ""
+
+deployment_policy:
+  egress_mode: "unrestricted"
+  allowed_endpoints: []
+  dns_allowlist: []
+  telemetry_enabled: false
+  update_checks_enabled: false
+  exceptions: []
 
 # Optional JetStream ingress. Disabled means TrustDB does not connect to NATS
 # or create any broker resources; the existing HTTP and gRPC transports remain
@@ -247,27 +255,28 @@ keys:
 `
 
 type Config struct {
-	// RunProfile is an optional operator label (development | single_node_production | benchmark)
-	// used only for startup guidance; it does not change behavior by itself.
-	RunProfile string     `mapstructure:"run_profile" json:"run_profile"`
-	Paths      Paths      `mapstructure:"paths" json:"paths"`
-	Identity   Identity   `mapstructure:"identity" json:"identity"`
-	Server     Server     `mapstructure:"server" json:"server"`
-	TLCP       TLCP       `mapstructure:"tlcp" json:"tlcp"`
-	NATS       NATS       `mapstructure:"nats" json:"nats"`
-	Registry   Registry   `mapstructure:"registry" json:"registry"`
-	Batch      Batch      `mapstructure:"batch" json:"batch"`
-	GlobalLog  GlobalLog  `mapstructure:"global_log" json:"global_log"`
-	Anchor     Anchor     `mapstructure:"anchor" json:"anchor"`
-	Crypto     Crypto     `mapstructure:"crypto" json:"crypto"`
-	History    History    `mapstructure:"history" json:"history"`
-	Backup     Backup     `mapstructure:"backup" json:"backup"`
-	Proofstore Proofstore `mapstructure:"proofstore" json:"proofstore"`
-	WAL        WAL        `mapstructure:"wal" json:"wal"`
-	Log        Log        `mapstructure:"log" json:"log"`
-	Audit      Audit      `mapstructure:"audit" json:"audit"`
-	Keys       Keys       `mapstructure:"keys" json:"keys"`
-	Admin      Admin      `mapstructure:"admin" json:"admin"`
+	// RunProfile selects startup policy. Custom/development/benchmark profiles
+	// retain flexible behavior; strict profiles fail closed.
+	RunProfile       string           `mapstructure:"run_profile" json:"run_profile"`
+	DeploymentPolicy DeploymentPolicy `mapstructure:"deployment_policy" json:"deployment_policy"`
+	Paths            Paths            `mapstructure:"paths" json:"paths"`
+	Identity         Identity         `mapstructure:"identity" json:"identity"`
+	Server           Server           `mapstructure:"server" json:"server"`
+	TLCP             TLCP             `mapstructure:"tlcp" json:"tlcp"`
+	NATS             NATS             `mapstructure:"nats" json:"nats"`
+	Registry         Registry         `mapstructure:"registry" json:"registry"`
+	Batch            Batch            `mapstructure:"batch" json:"batch"`
+	GlobalLog        GlobalLog        `mapstructure:"global_log" json:"global_log"`
+	Anchor           Anchor           `mapstructure:"anchor" json:"anchor"`
+	Crypto           Crypto           `mapstructure:"crypto" json:"crypto"`
+	History          History          `mapstructure:"history" json:"history"`
+	Backup           Backup           `mapstructure:"backup" json:"backup"`
+	Proofstore       Proofstore       `mapstructure:"proofstore" json:"proofstore"`
+	WAL              WAL              `mapstructure:"wal" json:"wal"`
+	Log              Log              `mapstructure:"log" json:"log"`
+	Audit            Audit            `mapstructure:"audit" json:"audit"`
+	Keys             Keys             `mapstructure:"keys" json:"keys"`
+	Admin            Admin            `mapstructure:"admin" json:"admin"`
 }
 
 type TLCP struct {
@@ -548,6 +557,9 @@ type Keys struct {
 func Default() Config {
 	return Config{
 		RunProfile: "",
+		DeploymentPolicy: DeploymentPolicy{
+			EgressMode: EgressUnrestricted,
+		},
 		Paths: Paths{
 			DataDir:     ".trustdb",
 			KeyRegistry: ".trustdb/keys.tdkeys",
@@ -939,16 +951,20 @@ func (c Config) Validate() error {
 	if err := validateAudit(c.RunProfile, c.Audit); err != nil {
 		return err
 	}
+	if err := c.validateDeploymentPolicy(time.Now()); err != nil {
+		return err
+	}
 	return nil
 }
 
 func validateAudit(runProfile string, audit Audit) error {
-	production := NormalizeRunProfile(runProfile) == RunProfileSingleNodeProduction
+	profile := NormalizeRunProfile(runProfile)
+	production := profile == RunProfileSingleNodeProduction || IsStrictDeploymentProfile(profile)
 	if audit.Required && !audit.Enabled {
 		return fmt.Errorf("audit.enabled must be true when audit.required is true")
 	}
 	if production && (!audit.Enabled || !audit.Required) {
-		return fmt.Errorf("audit.enabled and audit.required must be true for single_node_production")
+		return fmt.Errorf("audit.enabled and audit.required must be true for %s", profile)
 	}
 	if !audit.Enabled {
 		return nil
@@ -976,7 +992,7 @@ func validateAudit(runProfile string, audit Audit) error {
 		return fmt.Errorf("audit.time_reference_path is required when synchronized time is required")
 	}
 	if production && !audit.RequireSynchronizedTime {
-		return fmt.Errorf("audit.require_synchronized_time must be true for single_node_production")
+		return fmt.Errorf("audit.require_synchronized_time must be true for %s", profile)
 	}
 	return nil
 }
@@ -992,7 +1008,9 @@ func ValidateServerTransportPolicy(runProfile, httpListen, grpcListen string, co
 	if mode == "" {
 		mode = transporttls.ModePlaintext
 	}
-	if mode != transporttls.ModePlaintext || NormalizeRunProfile(runProfile) != RunProfileSingleNodeProduction {
+	profile := NormalizeRunProfile(runProfile)
+	production := profile == RunProfileSingleNodeProduction || IsStrictDeploymentProfile(profile)
+	if mode != transporttls.ModePlaintext || !production {
 		return nil
 	}
 	if !config.AllowLocalPlaintext {

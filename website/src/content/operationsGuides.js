@@ -3,7 +3,7 @@ const zhCN = {
     eyebrow: "Docs / Operations / 01",
     title: "功能开关与配置全表",
     lead: "不是参数清单，而是每项能力的用途、开启、验收、关闭和持久化边界。先在这里决定要启用什么，再进入专项教程。",
-    updated: "更新于 2026.07.25 · 适用于当前 main（V2 / proofstore schema v5）",
+    updated: "更新于 2026.07.26 · 适用于当前 main（V2 / proofstore schema v5）",
     summary: [["配置原则", "YAML 为基线，环境变量覆盖，CLI 显式参数最高"], ["证据套件", "INTL_V1 / CN_SM_V1；一个 namespace 只能选择一个"], ["证明交付", "L1–L5 与 .sproof v2 完整离线复算"]],
     sections: [
       {
@@ -63,11 +63,23 @@ const zhCN = {
         ],
       },
       {
+        title: "国产生产、离线隔离与测评 Profile",
+        body: ["china_production、offline_isolated 和 assessment 不只是标签。TrustDB 在打开 WAL、proofstore 和监听端口之前，读取真实 signer descriptor 与 FISCO BCOS TrustConfig 并执行 fail-closed 门禁。"],
+        cards: [
+          ["国产生产", "强制 CN_SM_V1、非 software 服务/审计/BCOS 账户密钥、带 pin 的 mTLS 或受验证 TLCP、可信时间审计、国密 BCOS 和精确出站清单。"],
+          ["离线隔离", "强制 deny_all，关闭 NATS 和网络 anchor；仍可生成 L4、导出 .sproof v2 并在完全断网环境验证。"],
+          ["测评", "与国产生产同等门禁；例外必须单项、具名审批、关联工单、最长 30 天，并在监听前写入签名安全审计。"],
+          ["出站与 DNS", "NATS、TiKV、BCOS、remote signer 的 scheme://host:port 必须精确列入 allowed_endpoints；域名还必须进入 dns_allowlist。"],
+        ],
+        code: "run_profile: china_production\ndeployment_policy:\n  egress_mode: allowlist\n  allowed_endpoints:\n    - gm-tls://10.0.0.20:20200\n  dns_allowlist: []\n  telemetry_enabled: false\n  update_checks_enabled: false\n  exceptions: []",
+        note: "应用清单不能替代防火墙、NetworkPolicy、安全组和 DNS 策略；生产中应下发同一目的地址集合并监控配置漂移。",
+      },
+      {
         title: "变更后的最低验收",
         bullets: ["健康检查和关键 metrics 正常", "提交固定 canary 并达到目标 L2/L3/L4/L5", "导出 .sproof v2，在服务停止和断网环境验证", "错误原文件、公钥和 anchor trust config 必须失败", "涉及存储、suite、WAL 或 anchor 时完成备份与恢复演练"],
       },
     ],
-    links: [["管理 RBAC 手册", "https://github.com/wowtrust/trustdb/blob/main/docs/zh-CN/ADMINISTRATIVE_RBAC.md"], ["不可变安全审计", "/docs/security-audit"], ["备份与恢复", "/docs/backup-recovery"], ["生产运维", "/docs/operations"], ["FISCO BCOS", "/docs/fisco-bcos"]],
+    links: [["国产化部署 Profile", "https://github.com/wowtrust/trustdb/blob/main/docs/zh-CN/CHINA_DEPLOYMENT_PROFILES.md"], ["管理 RBAC 手册", "https://github.com/wowtrust/trustdb/blob/main/docs/zh-CN/ADMINISTRATIVE_RBAC.md"], ["不可变安全审计", "/docs/security-audit"], ["备份与恢复", "/docs/backup-recovery"], ["生产运维", "/docs/operations"], ["FISCO BCOS", "/docs/fisco-bcos"]],
   },
   backupRecovery: {
     eyebrow: "Docs / Operations / 02",
