@@ -1,16 +1,15 @@
 export const release = {
-  version: "2.0.0-rc.1",
-  tag: "v2.0.0-rc.1",
+  version: "2.0.0-rc.2",
+  tag: "v2.0.0-rc.2",
   published: "2026.07.26",
   prerelease: true,
-  pageUrl: "https://github.com/wowtrust/trustdb/releases/tag/v2.0.0-rc.1",
+  pageUrl: "https://github.com/wowtrust/trustdb/releases/tag/v2.0.0-rc.2",
   containerImage: "ghcr.io/wowtrust/trustdb",
-  containerDigest: "sha256:1c4cba5b0ffe3347bab196c99ef363f4783681942b6a128e5f643d72b302d06d",
   containerUrl: "https://github.com/wowtrust/trustdb/pkgs/container/trustdb",
   dockerHubUrl: "https://hub.docker.com/r/wsy19990317/trustdb",
 };
 
-const releaseBase = "https://github.com/wowtrust/trustdb/releases/download/v2.0.0-rc.1";
+const releaseBase = `https://github.com/wowtrust/trustdb/releases/download/${release.tag}`;
 
 export function assetUrl(filename) {
   return `${releaseBase}/${filename}`;
