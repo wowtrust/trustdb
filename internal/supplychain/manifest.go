@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
-	"mime"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -536,10 +535,13 @@ func mediaType(name string) string {
 		return "application/vnd.apple.installer+xml"
 	case strings.HasSuffix(name, ".msi"):
 		return "application/x-msi"
+	case strings.HasSuffix(name, ".cer"):
+		return "application/pkix-cert"
+	case strings.HasSuffix(name, ".txt"):
+		return "text/plain"
+	case strings.HasSuffix(name, ".exe"), strings.HasSuffix(name, ".wixpdb"):
+		return "application/octet-stream"
 	default:
-		if value := mime.TypeByExtension(filepath.Ext(name)); value != "" {
-			return strings.Split(value, ";")[0]
-		}
 		return "application/octet-stream"
 	}
 }

@@ -108,6 +108,40 @@ func TestGenerateRejectsUnsafeBundleShapes(t *testing.T) {
 	}
 }
 
+func TestReleaseArtifactClassificationIsDeterministic(t *testing.T) {
+	tests := []struct {
+		name      string
+		kind      string
+		mediaType string
+	}{
+		{name: "trustdb-linux-amd64.tar.gz", kind: "distribution", mediaType: "application/gzip"},
+		{name: "trustdb-windows-amd64.zip", kind: "distribution", mediaType: "application/zip"},
+		{name: "trustdb-desktop.dmg", kind: "distribution", mediaType: "application/x-apple-diskimage"},
+		{name: "trustdb-desktop.pkg", kind: "distribution", mediaType: "application/vnd.apple.installer+xml"},
+		{name: "trustdb-desktop.msi", kind: "distribution", mediaType: "application/x-msi"},
+		{name: "trustdb-desktop-setup.exe", kind: "distribution", mediaType: "application/octet-stream"},
+		{name: "trustdb-desktop.cer", kind: "release-metadata", mediaType: "application/pkix-cert"},
+		{name: "trustdb-desktop-certificate.txt", kind: "release-metadata", mediaType: "text/plain"},
+		{name: "trustdb-desktop.wixpdb", kind: "release-metadata", mediaType: "application/octet-stream"},
+		{name: "TRUSTDB_RELEASE_METADATA.json", kind: "release-metadata", mediaType: "application/json"},
+		{name: "trustdb-release.spdx.json", kind: "sbom", mediaType: "application/spdx+json"},
+		{name: "TRUSTDB_VULNERABILITY_REPORT.json", kind: "vulnerability-report", mediaType: "application/json"},
+		{name: ProductionInputsFile, kind: "release-metadata", mediaType: "application/json"},
+		{name: "TRUSTDB_CONTAINER_DIGESTS.json", kind: "release-metadata", mediaType: "application/json"},
+		{name: "artifact.unknown", kind: "release-metadata", mediaType: "application/octet-stream"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := artifactKind(test.name); got != test.kind {
+				t.Fatalf("artifactKind(%q) = %q, want %q", test.name, got, test.kind)
+			}
+			if got := mediaType(test.name); got != test.mediaType {
+				t.Fatalf("mediaType(%q) = %q, want %q", test.name, got, test.mediaType)
+			}
+		})
+	}
+}
+
 func TestValidateManifestRequiresBuiltInDocumentsAndRejectsReservedArtifacts(t *testing.T) {
 	manifest := Manifest{
 		Schema:  ManifestSchema,
