@@ -24,6 +24,7 @@ export function ChangelogPage() {
         <div className="page-hero__actions"><Link className="button button--solid" href="/downloads">下载 2.0.0-rc.1 <ArrowRight /></Link><a className="button button--ghost" href="https://github.com/wowtrust/trustdb/commits/main" target="_blank" rel="noreferrer">全部提交</a></div>
       </PageHero>
       <section className="release-state section-shell" data-reveal><WarningCircle /><div><p>Release status</p><h2>2.0.0-rc.1 发布候选版</h2><span>这是破坏性 V2/V5 候选版本，不读取 v1 存储、备份、API 请求或证据文件。新部署请使用空数据目录并固定 `/v2` Go module。</span></div><Link href="/downloads">查看全部产物 <ArrowRight /></Link></section>
+      <section className="release-state section-shell" data-reveal><WarningCircle /><div><p>Known issue</p><h2>RC.1 跨平台 verifier 可能误报</h2><span>随包提供的 macOS/Windows release verifier 可能因宿主 MIME 数据库差异误判 `.exe`。发布资产、双摘要、Sigstore provenance 与 OCI digest 已独立验证；确定性修复已合入 #608，将随下一候选版交付。</span></div><a href="https://github.com/wowtrust/trustdb/pull/608" target="_blank" rel="noreferrer">查看修复 <ArrowRight /></a></section>
       <section className="timeline section-shell">
         <div className="timeline__heading" data-reveal><p>Development milestones</p><h2>版本变更</h2></div>
         <div className="timeline__list">{milestones.map(([date, title, description, ref], index) => <article key={`${date}-${title}`} data-reveal><span>{String(index + 1).padStart(2, "0")}</span><time>{date}</time><div><h3>{title}</h3><p>{description}</p></div><b>{ref}</b></article>)}</div>
@@ -97,6 +98,7 @@ export function DownloadsPage() {
       <section className="source-build section-shell">
         <div data-reveal><p>Build from source</p><h2>源码构建</h2></div>
         <div className="source-build__steps" data-reveal><p><span>01</span><strong>服务器与 CLI</strong><code>Go 1.26.5</code></p><p><span>02</span><strong>桌面客户端</strong><code>Wails 2.12.0 · Node.js 24</code></p><p><span>03</span><strong>测试</strong><code>go test ./...</code></p></div>
+        <div className="source-build__note"><WarningCircle /><span>RC.1 已知限制：随包提供的 macOS/Windows `trustdb release verify` 可能因宿主 MIME 数据库差异误报有效 manifest 不一致。资产、SHA-256/SM3、Sigstore provenance 与 OCI digest 已独立验证；修复已合入 #608，并将在下一候选版交付。不要覆盖 RC.1 标签或资产，也不要把 RC.1 自带 verifier 作为跨平台准入工具。</span></div>
         <div className="source-build__note"><WarningCircle /><span>V2/V5 是一次性破坏性切换：不要让 v2 进程打开 v1 数据目录，也不要把 v1 backup、SDK 请求或 .sproof 输入 v2。升级前保留历史环境用于审计，然后使用新 namespace 与空数据目录部署。</span></div>
         <div className="source-build__note"><Check /><span>桌面安装包仍采用自签名证书，尚未取得 Apple 或 Microsoft 商业签名。必须先验证签名 manifest 与双摘要；证书和指纹只用于核对本次发布的签名完整性。</span></div>
         <div className="source-build__note"><Check /><span>通用发布包支持 FISCO BCOS 离线证据验证；需要真实链上发布时，必须按固定 C SDK v3.6.0、Go SDK v3.0.2 和 `fiscobcos_sdk` build tag 构建并验证原生运行时。</span></div>

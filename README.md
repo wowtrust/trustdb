@@ -111,6 +111,15 @@ inventory, immutable container digests, and downloadable Sigstore bundles.
 Release Actions and base images are pinned to commits or OCI digests, and the
 gate rejects unmanifested files or changed production inputs.
 
+> **v2.0.0-rc.1 known limitation:** the packaged macOS and Windows
+> `trustdb release verify` commands can misclassify `.exe` files through the
+> host MIME database and reject an otherwise valid manifest. The release
+> assets, SHA-256/SM3 lists, Sigstore provenance, and OCI digest have been
+> independently verified. The deterministic fix is merged in
+> [#608](https://github.com/wowtrust/trustdb/pull/608) and will ship in the
+> next release candidate. Do not overwrite the RC.1 tag or assets, and do not
+> admit the RC.1-packaged verifier as a cross-platform release verifier.
+
 Offline operators verify the manifest with a separately provisioned trusted
 root, then run `trustdb release verify --dir <release-directory>` to enforce
 exact file coverage and both hashes. Domestic Go/npm/OCI mirrors remain
