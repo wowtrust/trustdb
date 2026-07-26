@@ -1,5 +1,6 @@
-# Container baseline. Override any value with TRUSTDB_* environment variables.
-run_profile: single_node_production
+# Secure mTLS container evaluation baseline. Promote to production.yaml only
+# after provisioning the dedicated audit signer and synchronized time evidence.
+run_profile: development
 
 paths:
   data_dir: "/var/lib/trustdb"

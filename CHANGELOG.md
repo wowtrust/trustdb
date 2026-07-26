@@ -6,7 +6,23 @@ TrustDB follows semantic versioning for stable releases. Proof, backup, storage,
 
 ## [Unreleased]
 
-No user-visible changes after the v2.0.0-rc.2 release candidate.
+### Fixed
+
+- The Docker entrypoint no longer forces the service configuration onto
+  informational commands such as `version` or `release verify`.
+- `configs/docker.yaml` now declares the development/evaluation profile it
+  actually implements. Production deployments continue to use
+  `configs/production.yaml` with a dedicated audit signer and synchronized
+  time evidence.
+
+### v2.0.0-rc.2 container note
+
+The immutable RC.2 image contains the correct TrustDB binary, but its bundled
+`config/docker.yaml` declares `single_node_production` without the required
+security-audit configuration. Use `--entrypoint /usr/local/bin/trustdb` for
+informational commands. For an RC.2 container evaluation, explicitly set
+`TRUSTDB_RUN_PROFILE=development`; do not represent that override as a
+production deployment.
 
 ## [2.0.0-rc.2] - 2026-07-26
 

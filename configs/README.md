@@ -100,6 +100,7 @@ semantics and recovery boundaries.
 | File | `run_profile` | Purpose |
 | --- | --- | --- |
 | `development.yaml` | `development` | Local demos: file proofstore, `noop` anchor, debug-friendly logging. |
+| `docker.yaml` | `development` | Secure mTLS container evaluation with Pebble and first-run development keys; move to `production.yaml` before production traffic. |
 | `production.yaml` | `single_node_production` | Single-node baseline: Pebble (or TiKV) proofstore, OTS anchor, JSON logs. |
 | `china-production.yaml` | `china_production` | Enforced CN_SM_V1, non-software keys, pinned mTLS/TLCP boundary, explicit egress, signed audit, and Guomi FISCO BCOS. |
 | `offline-isolated.yaml` | `offline_isolated` | Internet-independent runtime with all TrustDB outbound connections denied. |

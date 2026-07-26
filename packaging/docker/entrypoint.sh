@@ -57,4 +57,4 @@ fi
 if [ "$1" = "trustdb" ]; then
   shift
 fi
-exec trustdb --config "$config_path" "$@"
+exec trustdb "$@"
