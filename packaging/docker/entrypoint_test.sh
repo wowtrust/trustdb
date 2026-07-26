@@ -86,4 +86,24 @@ if [ "$(wc -l <"$test_dir/calls.log" | tr -d ' ')" -ne 3 ]; then
   exit 1
 fi
 
+rm -f "$test_dir/calls.log"
+PATH="$test_dir/bin:$PATH" \
+  TRUSTDB_CONFIG="$test_dir/invalid-service-config.yaml" \
+  TRUSTDB_ENTRYPOINT_TEST_LOG="$test_dir/calls.log" \
+  sh "$entrypoint" version
+if [ "$(cat "$test_dir/calls.log")" != "version" ]; then
+  echo "entrypoint injected service configuration into an informational command" >&2
+  exit 1
+fi
+
+rm -f "$test_dir/calls.log"
+PATH="$test_dir/bin:$PATH" \
+  TRUSTDB_CONFIG="$test_dir/invalid-service-config.yaml" \
+  TRUSTDB_ENTRYPOINT_TEST_LOG="$test_dir/calls.log" \
+  sh "$entrypoint" trustdb release verify --dir /release
+if [ "$(cat "$test_dir/calls.log")" != "release verify --dir /release" ]; then
+  echo "entrypoint did not preserve an explicit trustdb CLI command" >&2
+  exit 1
+fi
+
 printf 'entrypoint secret-source tests passed\n'

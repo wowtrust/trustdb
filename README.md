@@ -76,25 +76,18 @@ V2 does not read or migrate v1 storage, backups, API objects, or evidence files.
 
 ```bash
 docker pull wsy19990317/trustdb:2.0.0-rc.2
-printf 'Development key passphrase: '
-IFS= read -r -s TRUSTDB_DEV_KEY_PASSPHRASE
-printf '\n'
-export TRUSTDB_DEV_KEY_PASSPHRASE
-docker run -d --name trustdb \
-  -e TRUSTDB_DEV_KEY_PASSPHRASE \
-  -p 127.0.0.1:8080:8080 \
-  -v trustdb-data:/var/lib/trustdb \
-  wsy19990317/trustdb:2.0.0-rc.2
-unset TRUSTDB_DEV_KEY_PASSPHRASE
-docker logs trustdb
-curl --fail http://127.0.0.1:8080/healthz
+docker run --rm \
+  --entrypoint /usr/local/bin/trustdb \
+  wsy19990317/trustdb:2.0.0-rc.2 \
+  version
 ```
 
-The value is forwarded from the shell without appearing in the `docker run`
-arguments. For a long-running service, prefer
-`TRUSTDB_DEV_KEY_PASSPHRASE_FILE` pointing to an owner-only secret-manager
-mount outside `/var/lib/trustdb`; configure exactly one passphrase source and
-never store the KEK beside the envelope or in the same backup volume.
+RC.2 requires the explicit entrypoint above for informational commands because
+its bundled service config fails closed on missing production audit settings.
+The image binary and immutable digest are valid; the assets remain unchanged.
+Follow the [server deployment guide](https://www.trustdb.ryan-wong.cn/docs/server)
+for the RC.2 evaluation override, mTLS mounts, health check, and the separate
+production profile with an audit signer and synchronized time evidence.
 
 Desktop packages carry a release-specific self-signed certificate and its public `.cer` file. The certificate lets you inspect the signer used for this release, but does not establish Apple or Microsoft trust, so Gatekeeper or SmartScreen may still show an unknown-developer warning. Verify the downloaded file against `SHA256SUMS` before installing.
 

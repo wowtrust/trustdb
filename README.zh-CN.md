@@ -76,21 +76,16 @@ V2 不读取或迁移 v1 存储、备份、API 对象和证据文件。升级前
 
 ```bash
 docker pull wsy19990317/trustdb:2.0.0-rc.2
-printf '开发密钥口令：'
-IFS= read -r -s TRUSTDB_DEV_KEY_PASSPHRASE
-printf '\n'
-export TRUSTDB_DEV_KEY_PASSPHRASE
-docker run -d --name trustdb \
-  -e TRUSTDB_DEV_KEY_PASSPHRASE \
-  -p 127.0.0.1:8080:8080 \
-  -v trustdb-data:/var/lib/trustdb \
-  wsy19990317/trustdb:2.0.0-rc.2
-unset TRUSTDB_DEV_KEY_PASSPHRASE
-docker logs trustdb
-curl --fail http://127.0.0.1:8080/healthz
+docker run --rm \
+  --entrypoint /usr/local/bin/trustdb \
+  wsy19990317/trustdb:2.0.0-rc.2 \
+  version
 ```
 
-这里仅把当前 shell 中的值转交给容器，口令不会出现在 `docker run` 参数中。长期运行的服务应优先使用 `TRUSTDB_DEV_KEY_PASSPHRASE_FILE`，令其指向 `/var/lib/trustdb` 之外、由 secret manager 注入且仅 owner 可读的文件；两个口令来源必须恰好配置一个，KEK 不得与 envelope 放在同一目录或备份卷。
+RC.2 随包服务配置因缺少生产审计参数而 fail closed，因此信息类命令必须显式
+使用上面的 entrypoint。镜像二进制和不可变 digest 均有效，发布资产保持不变。
+RC.2 评估环境所需的 profile 覆盖、mTLS 挂载和健康检查，以及带独立审计 signer
+与同步时间证据的生产配置，请跟随[服务部署教程](https://www.trustdb.ryan-wong.cn/docs/server)。
 
 桌面包使用本次发版临时生成的自签名证书，并附带公开 `.cer` 文件，可供用户核对本次发布所用的签名证书。它不会取得 Apple 或 Microsoft 的系统信任；Gatekeeper 或 SmartScreen 仍可能提示未知开发者。安装前请用 `SHA256SUMS` 核对下载文件。
 
