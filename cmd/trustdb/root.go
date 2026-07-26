@@ -117,6 +117,7 @@ func newRootCommand(out, errOut io.Writer) *cobra.Command {
 	root.AddCommand(newGlobalLogCommand(rt))
 	root.AddCommand(newBackupCommand(rt))
 	root.AddCommand(newBenchCommand(rt))
+	root.AddCommand(newReleaseCommand(rt))
 	root.AddCommand(newVersionCommand(rt))
 	root.AddCommand(newDoctorCommand(rt))
 	root.AddCommand(newCompletionCommand(rt))

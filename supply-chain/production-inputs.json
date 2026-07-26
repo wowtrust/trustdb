@@ -1,0 +1,196 @@
+{
+  "schema": "trustdb.production-inputs.v1",
+  "inputs": [
+    {
+      "id": "admin-web-lock",
+      "kind": "npm-lock",
+      "version": "lockfileVersion=3",
+      "path": "clients/web/package-lock.json",
+      "sha256": "325dca385eab8e010ea16704df1315f94dbc466bdb23ae0019ad7c5ed1bdbe08",
+      "license_expression": "LicenseRef-SBOM-Resolved",
+      "license_evidence_path": "clients/web/package-lock.json",
+      "architectures": [
+        "all"
+      ]
+    },
+    {
+      "id": "desktop-go-lock",
+      "kind": "go-checksum-lock",
+      "version": "go1.26.5",
+      "path": "clients/desktop/go.sum",
+      "sha256": "7d05d43420a9059763a27a3b0c8788a14a54a2a1335676f91b2e81316c7c7531",
+      "license_expression": "LicenseRef-SBOM-Resolved",
+      "license_evidence_path": "clients/desktop/go.sum",
+      "architectures": [
+        "darwin/amd64",
+        "darwin/arm64",
+        "windows/amd64",
+        "windows/arm64"
+      ]
+    },
+    {
+      "id": "desktop-web-lock",
+      "kind": "npm-lock",
+      "version": "lockfileVersion=3",
+      "path": "clients/desktop/frontend/package-lock.json",
+      "sha256": "8650d9c516ddeb87086b737b65475e1596e32ae3fe324c3083eacc774e372745",
+      "license_expression": "LicenseRef-SBOM-Resolved",
+      "license_evidence_path": "clients/desktop/frontend/package-lock.json",
+      "architectures": [
+        "darwin/amd64",
+        "darwin/arm64",
+        "windows/amd64",
+        "windows/arm64"
+      ]
+    },
+    {
+      "id": "fisco-bcos-c-sdk",
+      "kind": "native-sdk",
+      "version": "commit=a278b4749e34",
+      "path": "third_party/fisco-bcos/bcos-c-sdk-a278b4749e34",
+      "sha256": "4f07c59603f9edfa4a6a98ad52991173d7238c8da052eaf96a7a7f42f7e669b9",
+      "license_expression": "Apache-2.0",
+      "license_evidence_path": "third_party/fisco-bcos/bcos-c-sdk-a278b4749e34/LICENSE",
+      "architectures": [
+        "darwin/amd64",
+        "darwin/arm64",
+        "linux/amd64",
+        "linux/arm64",
+        "windows/amd64"
+      ]
+    },
+    {
+      "id": "fisco-bcos-contracts",
+      "kind": "contract-artifacts",
+      "version": "TrustDBAnchorV1/solc-0.8.11",
+      "path": "contracts/fisco-bcos",
+      "sha256": "969d5b5a39fa55a56613ff814859188e363002a54527105aac3748319d055c82",
+      "license_expression": "Apache-2.0",
+      "license_evidence_path": "contracts/fisco-bcos/TrustDBAnchorV1.sol",
+      "architectures": [
+        "all"
+      ]
+    },
+    {
+      "id": "fisco-bcos-go-sdk",
+      "kind": "source-sdk",
+      "version": "v3.0.2",
+      "path": "third_party/fisco-bcos/go-sdk-v3.0.2",
+      "sha256": "64214ff18f52aea48db8763d191b1642d3523ca9c4c0f3b573c4e28783f81b5f",
+      "license_expression": "Apache-2.0",
+      "license_evidence_path": "third_party/fisco-bcos/go-sdk-v3.0.2/LICENSE",
+      "architectures": [
+        "all"
+      ]
+    },
+    {
+      "id": "go-lock",
+      "kind": "go-checksum-lock",
+      "version": "go1.26.5",
+      "path": "go.sum",
+      "sha256": "f7b5af518d2e72ca2f2df719f46ddbb566e53e1c35ac994fe58a002c22be8209",
+      "license_expression": "LicenseRef-SBOM-Resolved",
+      "license_evidence_path": "go.sum",
+      "architectures": [
+        "all"
+      ]
+    },
+    {
+      "id": "pkcs11-interface",
+      "kind": "native-interface",
+      "version": "miekg/pkcs11-v1.1.2",
+      "path": "internal/pkcs11signer",
+      "sha256": "e0faec75360494a47df973ca9d52e023eb4e62fd5d8e8289b0614abad1c7ee15",
+      "license_expression": "AGPL-3.0-only AND BSD-3-Clause",
+      "license_evidence_path": "supply-chain/licenses/miekg-pkcs11-v1.1.2.LICENSE",
+      "architectures": [
+        "linux/amd64",
+        "linux/arm64"
+      ]
+    },
+    {
+      "id": "sdf-interface",
+      "kind": "native-interface",
+      "version": "trustdb-sdf-adapter-abi-v1",
+      "path": "internal/sdfsigner",
+      "sha256": "84dd054f74e9d263294ac7b99b80e41585aef865a0ad424361cc769839f69cfd",
+      "license_expression": "AGPL-3.0-only",
+      "license_evidence_path": "LICENSE",
+      "architectures": [
+        "linux/amd64",
+        "linux/arm64"
+      ]
+    },
+    {
+      "id": "tlcp-gateway",
+      "kind": "native-gateway-build",
+      "version": "Tengine-2.3.4+Tongsuo-8.4.0",
+      "path": "packaging/tlcp-gateway",
+      "sha256": "44b200e1637dd441a55a52d9d3148f8bbb3edcfa93e228514df480d942dd60fa",
+      "license_expression": "BSD-2-Clause AND Apache-2.0",
+      "license_evidence_path": "packaging/tlcp-gateway/baseline.json",
+      "architectures": [
+        "linux/amd64",
+        "linux/arm64"
+      ]
+    },
+    {
+      "id": "website-lock",
+      "kind": "npm-lock",
+      "version": "lockfileVersion=3",
+      "path": "website/package-lock.json",
+      "sha256": "18b1529f9a300ed2f8cf1a010d5d7585fd78cd535efbf106792e550c8f7d8a6a",
+      "license_expression": "LicenseRef-SBOM-Resolved",
+      "license_evidence_path": "website/package-lock.json",
+      "architectures": [
+        "all"
+      ]
+    }
+  ],
+  "containers": [
+    {
+      "id": "go-builder",
+      "reference": "docker.io/library/golang:1.26.5-bookworm@sha256:1ecb7edf62a0408027bd5729dfd6b1b8766e578e8df93995b225dfd0944eb651",
+      "mirror_build_arg": "GO_IMAGE",
+      "architectures": [
+        "linux/amd64",
+        "linux/arm64"
+      ]
+    },
+    {
+      "id": "node-builder",
+      "reference": "docker.io/library/node:24-bookworm-slim@sha256:6f7b03f7c2c8e2e784dcf9295400527b9b1270fd37b7e9a7285cf83b6951452d",
+      "mirror_build_arg": "NODE_IMAGE",
+      "architectures": [
+        "linux/amd64",
+        "linux/arm64"
+      ]
+    },
+    {
+      "id": "runtime",
+      "reference": "docker.io/library/debian:bookworm-slim@sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818",
+      "mirror_build_arg": "RUNTIME_IMAGE",
+      "architectures": [
+        "linux/amd64",
+        "linux/arm64"
+      ]
+    }
+  ],
+  "mirrors": [
+    {
+      "kind": "gomod",
+      "override_env": "GOPROXY",
+      "integrity_required": "sha256-or-stronger"
+    },
+    {
+      "kind": "npm",
+      "override_env": "NPM_CONFIG_REGISTRY",
+      "integrity_required": "sha256-or-stronger"
+    },
+    {
+      "kind": "oci",
+      "override_env": "TRUSTDB_OCI_MIRROR_PREFIX",
+      "integrity_required": "sha256-or-stronger"
+    }
+  ]
+}

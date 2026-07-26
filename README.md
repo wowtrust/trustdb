@@ -98,6 +98,22 @@ never store the KEK beside the envelope or in the same backup volume.
 
 Desktop packages carry a release-specific self-signed certificate and its public `.cer` file. The certificate lets you inspect the signer used for this release, but does not establish Apple or Microsoft trust, so Gatekeeper or SmartScreen may still show an unknown-developer warning. Verify the downloaded file against `SHA256SUMS` before installing.
 
+## Release supply-chain evidence
+
+Releases produced by the current `main` workflow add a signed
+`TRUSTDB_RELEASE_MANIFEST.json`, `SHA256SUMS`, `SM3SUMS`, an SPDX SBOM,
+retained vulnerability results, the exact native/contract/license/architecture
+inventory, immutable container digests, and downloadable Sigstore bundles.
+Release Actions and base images are pinned to commits or OCI digests, and the
+gate rejects unmanifested files or changed production inputs.
+
+Offline operators verify the manifest with a separately provisioned trusted
+root, then run `trustdb release verify --dir <release-directory>` to enforce
+exact file coverage and both hashes. Domestic Go/npm/OCI mirrors remain
+acquisition routes: lockfile integrity and immutable digests stay authoritative.
+Follow the complete [release supply-chain and air-gap
+runbook](docs/compliance/SUPPLY_CHAIN_RELEASES.md).
+
 ## What It Provides
 
 - Deterministic CBOR models for claims, receipts, proof bundles, global-log proofs, STHs, anchor results, backups, and `.sproof` files.

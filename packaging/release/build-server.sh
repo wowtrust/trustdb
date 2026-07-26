@@ -50,9 +50,8 @@ cp configs/docker.yaml "$root/config/docker.yaml"
 cp packaging/RELEASE_PACKAGE.md "$root/README.md"
 cp LICENSE "$root/LICENSE"
 
-if [ "$archive_kind" = "zip" ]; then
-  powershell -NoProfile -Command \
-    "Compress-Archive -Path 'release-stage/$package' -DestinationPath 'release-output/$package.zip' -CompressionLevel Optimal"
-else
-  tar -C release-stage -czf "release-output/$package.tar.gz" "$package"
-fi
+"$output" release archive \
+  --source "$root" \
+  --output "release-output/$package.$archive_kind" \
+  --format "$archive_kind" \
+  --timestamp "$BUILD_DATE"

@@ -4,6 +4,7 @@ import { binaryDownloads, checksumsAsset, desktopDownloads, release } from "../l
 import { Link } from "../router";
 
 const milestones = [
+  ["2026.07.26", "Release supply-chain gates", "当前 main 为下一正式版增加签名 manifest、SHA-256/SM3、SPDX SBOM、漏洞留存、不可变 OCI digest、国产镜像与隔离区导入手册。", "#478"],
   ["2026.07.22", "v1.0.0", "首个正式版：新 Go module 路径、持久化 STH 合并锚定、完整离线证据、存储 schema v4 与逻辑备份。", "Stable"],
   ["2026.07.20", "v1.0.0-beta.1", "第二个公开测试版：官网、桌面客户端与 Admin Web 支持六种语言，官网按语言展示真实客户端画面，并补齐页签图标。", "Beta.1"],
   ["2026.07.20", "v1.0.0-beta", "首个公开测试版：跨平台服务器与 CLI、四种桌面客户端、自签名安装包、SHA-256 校验和多架构 Docker 镜像。", "Beta"],
@@ -89,7 +90,8 @@ export function DownloadsPage() {
         <div data-reveal><p>Build from source</p><h2>源码构建</h2></div>
         <div className="source-build__steps" data-reveal><p><span>01</span><strong>服务器与 CLI</strong><code>Go 1.26.5</code></p><p><span>02</span><strong>桌面客户端</strong><code>Wails 2.12.0 · Node.js 24</code></p><p><span>03</span><strong>测试</strong><code>go test ./...</code></p></div>
         <div className="source-build__note"><Check /><span>正式版桌面安装包仍采用自签名证书，尚未取得 Apple 或 Microsoft 商业签名。请用 SHA256SUMS 核对下载文件；随包提供的证书和指纹可用于核对本次发布所用的签名证书。</span></div>
-        <div className="source-build__links"><InlineLink href="/docs/quick-start">快速开始</InlineLink><InlineLink href="/docs/desktop-install">安装桌面客户端</InlineLink><InlineLink href="/docs/source-build">从源码构建</InlineLink><InlineLink href="/changelog">开发日志</InlineLink></div>
+        <div className="source-build__note"><Check /><span>历史 v1.0.0 只有 SHA256SUMS；当前 main 的下一正式版会携带签名 manifest、SHA-256/SM3、SPDX SBOM、漏洞报告和不可变容器 digest。按新流程部署前请阅读完整验签手册。</span></div>
+        <div className="source-build__links"><InlineLink href="/docs/quick-start">快速开始</InlineLink><InlineLink href="/docs/supply-chain">发布验签与国产镜像</InlineLink><InlineLink href="/docs/desktop-install">安装桌面客户端</InlineLink><InlineLink href="/docs/source-build">从源码构建</InlineLink><InlineLink href="/changelog">开发日志</InlineLink></div>
       </section>
     </>
   );
