@@ -3,7 +3,7 @@ const zhCN = {
     eyebrow: "Docs / Operations / 01",
     title: "功能开关与配置全表",
     lead: "不是参数清单，而是每项能力的用途、开启、验收、关闭和持久化边界。先在这里决定要启用什么，再进入专项教程。",
-    updated: "更新于 2026.07.26 · 适用于当前 main（V2 / proofstore schema v5）",
+    updated: "更新于 2026.07.26 · 适用于当前 V2 发布候选版（proofstore schema v5）",
     summary: [["配置原则", "YAML 为基线，环境变量覆盖，CLI 显式参数最高"], ["证据套件", "INTL_V1 / CN_SM_V1；一个 namespace 只能选择一个"], ["证明交付", "L1–L5 与 .sproof v2 完整离线复算"]],
     sections: [
       {
@@ -133,7 +133,7 @@ const zhCN = {
     eyebrow: "Docs / Operations / 03",
     title: "生产部署与日常运维",
     lead: "从目录、身份和上线门禁开始，覆盖启动、停止、容量、日常巡检、升级、回退和事故分流。",
-    updated: "更新于 2026.07.25 · 适用于当前 main（V2 / V5 写入代际）",
+    updated: "更新于 2026.07.26 · 适用于当前 V2 发布候选版（V5 写入代际）",
     summary: [["上线门禁", "validate + doctor + canary + offline verify"], ["日常核心", "队列、WAL、proof、STH、anchor、容量"], ["恢复原则", "保留现场，禁止删除状态掩盖错误"]],
     sections: [
       {
@@ -167,7 +167,7 @@ const zhCN = {
       },
       {
         title: "升级与破坏性边界",
-        body: ["当前 main 只接受 V2 model/WAL/API/.sproof 和 proofstore schema v5。v1/schema v4 不双读、不迁移、不回退。保留旧版本与旧 LogID 作为历史验证环境；新版本使用新密钥、新 LogID、新 namespace 和新 WAL。"],
+        body: ["当前 V2 发布候选版只接受 V2 model/WAL/API/.sproof 和 proofstore schema v5。v1/schema v4 不双读、不迁移、不回退。保留旧版本与旧 LogID 作为历史验证环境；新版本使用新密钥、新 LogID、新 namespace 和新 WAL。"],
         note: "旧二进制不能打开已经写入 V2/V5 的目录；也不能把旧对象重新编码后声称密码学身份不变。",
       },
       {
@@ -238,7 +238,7 @@ const zhCN = {
     eyebrow: "Docs / Operations / Release supply chain",
     title: "正式版验签、国产镜像与隔离区导入",
     lead: "不要只看下载页上的文件名。先验证来源，再验证 manifest 中的每一个 SHA-256/SM3，最后按不可变 digest 导入目标环境。",
-    updated: "更新于 2026.07.26 · 适用于当前 main 的新发布证据包",
+    updated: "更新于 2026.07.26 · 适用于当前 V2 发布候选版的发布证据包",
     summary: [["来源", "Sigstore bundle + 独立下发 trusted root"], ["完整性", "签名 manifest + SHA-256 + SM3"], ["隔离区", "精确文件集合 + OCI digest + 可留存报告"]],
     sections: [
       {
@@ -266,9 +266,9 @@ const zhCN = {
         body: ["inspect 结果必须精确等于发布证据中的 DIGEST。把 OCI archive 的 SHA-256 加入受控介质清单；断网区再次 inspect 后再复制到 docker-daemon 或内部 registry。"],
       },
       {
-        title: "4. 切换国产依赖与制品镜像",
-        code: "GOPROXY=https://goproxy.cn,direct\nNPM_CONFIG_REGISTRY=https://registry.npmmirror.com\nNODE_IMAGE=registry.example.cn/mirror/node:24-bookworm-slim@sha256:<same-digest>\nGO_IMAGE=registry.example.cn/mirror/golang:1.26.5-bookworm@sha256:<same-digest>\nRUNTIME_IMAGE=registry.example.cn/mirror/debian:bookworm-slim@sha256:<same-digest>",
-        body: ["镜像只改变获取路线。Go 仍由 go.sum 校验，npm 仍由 lock integrity 校验，OCI 镜像必须保持 production-inputs.json 中完全相同的 digest。"],
+        title: "4. 镜像已准入的发布产物",
+        code: "DIGEST=\"$(jq -r .digest trustdb-release/TRUSTDB_CONTAINER_DIGESTS.json)\"\nskopeo copy --all \\\n  \"docker://ghcr.io/wowtrust/trustdb@${DIGEST}\" \\\n  \"docker://registry.internal.example/wowtrust/trustdb@${DIGEST}\"",
+        body: ["内网镜像只改变分发路线，不重新构建 TrustDB。目标 registry 的 manifest digest 必须与发布证据完全相同；服务器和 CLI 归档同样直接镜像 GitHub Release 原文件并保留双摘要。"],
       },
       {
         title: "5. 上线与演练",
@@ -328,7 +328,7 @@ const en = {
   featureCatalog: {
     eyebrow: "Docs / Operations / 01", title: "Feature and configuration catalog",
     lead: "Choose capabilities by purpose, enablement, verification, shutdown, and persistence boundary—not by copying an unexplained YAML block.",
-    updated: "Updated 2026.07.25 · current main (V2 / proofstore schema v5)",
+    updated: "Updated 2026.07.26 · current V2 release candidate (proofstore schema v5)",
     summary: [["Precedence", "YAML baseline, environment override, explicit CLI flag wins"], ["Suites", "INTL_V1 / CN_SM_V1; one suite per namespace"], ["Delivery", "L1–L5 and fully offline .sproof v2 verification"]],
     sections: [
       { title: "One change method", body: ["Validate and display the merged configuration, preserve the previous digest and evidence sample, change one boundary, run a canary, then test shutdown and recovery. Disabling future behavior never authorizes deleting historical evidence or trust material."], code: "trustdb config validate --config /etc/trustdb/production.yaml\ntrustdb config show --config /etc/trustdb/production.yaml\ntrustdb doctor --config /etc/trustdb/production.yaml" },
@@ -389,7 +389,7 @@ const en = {
   supplyChain: {
     eyebrow: "Docs / Operations / Release supply chain", title: "Verify releases, use domestic mirrors, and import offline",
     lead: "Verify provenance first, enforce every SHA-256 and SM3 in the signed manifest, then import the exact platform package or immutable OCI digest.",
-    updated: "Updated 2026.07.26 · new release-evidence bundle on current main",
+    updated: "Updated 2026.07.26 · release-evidence bundle for the current V2 candidate",
     summary: [["Provenance", "Sigstore bundle + separately provisioned trusted root"], ["Integrity", "signed manifest + SHA-256 + SM3"], ["Air gap", "exact file set + OCI digest + retained reports"]],
     sections: [
       { title: "Know the bundle", cards: [["Manifest", "Source commit, policy digest, required documents, size, SHA-256, and SM3 for every file."], ["Attestations", "Downloadable provenance for the manifest and OCI digest."], ["SBOM", "SPDX dependency and license inventory."], ["Production inputs", "BCOS SDK/contracts, PKCS#11, SDF, TLCP, locks, images, and architecture matrix."], ["Security results", "Retained npm and govulncheck fail-on-high output."], ["Container digest", "Immutable linux/amd64 + linux/arm64 manifest digest."]], note: "A root shipped beside a release cannot authorize itself. Provision and register the trusted-root digest through an independent channel." },
@@ -400,7 +400,7 @@ const en = {
         windows: ".\\trusted\\trustdb.exe release verify --dir .\\trustdb-release",
       }, bullets: ["Use a previously admitted verifier; do not let the new binary be its only trust authority", "The RC.1-packaged macOS/Windows verifier can misclassify .exe through the host MIME database; do not admit it as a cross-platform release verifier. The deterministic fix is merged in #608 and will ship in the next candidate", "Extra files, directories, symlinks, missing reports, duplicate checksums, and either digest mismatch fail", "Review version, source commit, policy digest, SBOM, and vulnerability result together"] },
       { title: "3. Export and import the OCI image", code: "DIGEST=\"$(jq -r .digest trustdb-release/TRUSTDB_CONTAINER_DIGESTS.json)\"\nskopeo copy --all \\\n  \"docker://ghcr.io/wowtrust/trustdb@${DIGEST}\" \\\n  oci-archive:trustdb-X.Y.Z.oci.tar\nskopeo inspect --format '{{.Digest}}' \\\n  oci-archive:trustdb-X.Y.Z.oci.tar", body: ["The inspected digest must equal DIGEST. Add the archive SHA-256 to controlled-media inventory and inspect it again before offline import."] },
-      { title: "4. Route through domestic mirrors", code: "GOPROXY=https://goproxy.cn,direct\nNPM_CONFIG_REGISTRY=https://registry.npmmirror.com\nNODE_IMAGE=registry.example.cn/mirror/node:24-bookworm-slim@sha256:<same-digest>\nGO_IMAGE=registry.example.cn/mirror/golang:1.26.5-bookworm@sha256:<same-digest>\nRUNTIME_IMAGE=registry.example.cn/mirror/debian:bookworm-slim@sha256:<same-digest>", body: ["Mirrors change acquisition only. go.sum, npm lock integrity, and the exact OCI digests in production-inputs.json remain authoritative."] },
+      { title: "4. Mirror the admitted release artifacts", code: "DIGEST=\"$(jq -r .digest trustdb-release/TRUSTDB_CONTAINER_DIGESTS.json)\"\nskopeo copy --all \\\n  \"docker://ghcr.io/wowtrust/trustdb@${DIGEST}\" \\\n  \"docker://registry.internal.example/wowtrust/trustdb@${DIGEST}\"", body: ["An internal mirror changes distribution only and never rebuilds TrustDB. The target manifest digest must equal the release evidence; mirror Server/CLI archives byte-for-byte with both digests retained."] },
       { title: "5. Admit and rehearse", bullets: ["Transfer the release, trusted verifier, root, media inventory, and OCI archive", "Repeat provenance, dual-digest, and OCI verification offline", "Extract only the matching OS/architecture", "Run version, config validate, doctor, and a canary", "Export .sproof v2 and verify it with separate evidence trust roots", "Tamper package, manifest, attestation, root, OCI digest, and SBOM/policy and require staged failures"] },
     ], links: [["Full runbook", "https://github.com/wowtrust/trustdb/blob/main/docs/compliance/SUPPLY_CHAIN_RELEASES.md"], ["Operations", "/docs/operations"], ["Offline evidence verification", "/docs/offline-verification"], ["Downloads", "/downloads"]],
   },
@@ -409,13 +409,13 @@ const en = {
     summary: [["Admitted", "Air · Linux/amd64 · four nodes"], ["Modes", "independent standard and Guomi qualification"], ["Offline", "receipt inclusion + PBFT finality + exact STH binding"]],
     sections: [
       { title: "Check admission", body: ["Production admission currently covers four-node Air on Linux/amd64. macOS is development-only; Linux arm64 is artifact-only; Pro, Max, and containers require separate admission."], code: "python3 scripts/fisco-bcos/compatibility.py validate\npython3 scripts/fisco-bcos/compatibility.py check --deployment air --crypto standard --platform linux/amd64" },
-      { title: "Verify artifacts and contract", code: "python3 scripts/fisco-bcos/compatibility.py verify-artifacts --platform linux/amd64 --cache-dir /var/cache/trustdb/fisco-bcos\npython3 scripts/fisco-bcos/build_anchor_contract.py --platform linux/amd64 --cache-dir /var/cache/trustdb/fisco-bcos --check", body: ["Build with CGO, the fiscobcos_sdk tag, and the pinned C SDK. Match deployed runtime code to the mode-specific manifest digest."] },
+      { title: "Choose the published capability boundary", code: "trustdb version\ntrustdb anchor plugin capabilities --endpoint unix:///run/trustdb/bcos-anchor.sock", body: ["The generic release verifies FISCO BCOS evidence offline. Real publication uses a separately qualified provider-enabled binary described only in the source-build guide; never improvise a build in this operations runbook. Match deployed runtime code to the mode-specific manifest digest."] },
       { title: "Run qualification", code: "scripts/fisco-bcos/smoke-air.sh --mode standard --qualification --work-dir /tmp/trustdb-bcos-standard --cache-dir /var/cache/trustdb/fisco-bcos\nscripts/fisco-bcos/smoke-air.sh --mode guomi --qualification --work-dir /tmp/trustdb-bcos-guomi --cache-dir /var/cache/trustdb/fisco-bcos", body: ["Standard and Guomi evidence are independent. The gate includes faults, transitions, durable replay, node shutdown, network isolation, and stage-specific tampering."] },
       { title: "Create TrustConfig", code: "trustdb anchor fisco-bcos trust-config create --input /etc/trustdb/fisco/trust-config.json --out /etc/trustdb/fisco/trust-config.cbor\ntrustdb anchor fisco-bcos trust-config inspect --input /etc/trustdb/fisco/trust-config.cbor", bullets: ["Pin chain/group/genesis/checkpoint", "Pin contract runtime hash", "At least two endpoints and read_quorum >= 2", "Pin provider, certificates, and validators", "Record the canonical config digest"] },
       { title: "Enable", code: "anchor:\n  sink: \"fisco-bcos\"\n  max_delay: \"5m\"\n  fisco_bcos:\n    trust_config_file: \"/etc/trustdb/fisco/trust-config.cbor\"", body: ["Production publisher keys belong in remote, PKCS#11, or SDF providers. Startup probes every endpoint identity, checkpoint, crypto mode, contract code, and conservative quorum height."] },
       { title: "Prove offline L5", bullets: ["Submit a canary and wait for the fixed anchor window", "Observe Pending/InFlight complete into an immutable result", "Export .sproof v2", "Supply verifier-local keys and canonical TrustConfig", "Stop TrustDB and BCOS nodes and verify offline", "Tamper receipt/block/finality/STH/TrustConfig and require the matching stage to fail"], note: "Evidence-carried keys and validators never authorize themselves. BCOS block time is not automatically a trusted timestamp." },
       { title: "Advance or disable", code: "trustdb anchor fisco-bcos trust-config advance --input /etc/trustdb/fisco/trust-config.cbor --evidence ./transition.sproof --expect-current-digest <digest> --out /etc/trustdb/fisco/trust-config.cbor", body: ["Checkpoint advancement requires a complete authenticated transition chain. To disable new anchoring, inspect unknown outcomes/InFlight first, then set anchor.sink=off and retain every historical trust and journal object."] },
-    ], links: [["Full operator runbook", "https://github.com/wowtrust/trustdb/blob/main/docs/integrations/FISCO_BCOS_OPERATIONS.md"], ["Chinese repository guide", "https://github.com/wowtrust/trustdb/blob/main/docs/zh-CN/FISCO_BCOS.md"], ["Offline verification", "/docs/offline-verification"]],
+    ], links: [["Full operator runbook", "https://github.com/wowtrust/trustdb/blob/main/docs/integrations/FISCO_BCOS_OPERATIONS.md"], ["Chinese repository guide", "https://github.com/wowtrust/trustdb/blob/main/docs/zh-CN/FISCO_BCOS.md"], ["Provider-enabled source build", "/docs/source-build"], ["Offline verification", "/docs/offline-verification"]],
   },
 };
 

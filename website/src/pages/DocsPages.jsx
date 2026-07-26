@@ -2,7 +2,7 @@ import { ArrowRight, Desktop, DownloadSimple, HardDrives, Package, Wrench } from
 import { useEffect, useRef, useState } from "react";
 import { CodeBlock, InlineLink, PageHero } from "../components/SiteChrome";
 import { useDocsOnboarding } from "../content/docsOnboarding";
-import { checksumsAsset, desktopDownloads, release } from "../lib/release";
+import { assetUrl, checksumsAsset, desktopDownloads, release } from "../lib/release";
 import { natsIngressContent } from "../content/natsIngress";
 import { operationsGuides } from "../content/operationsGuides";
 import { productExplanation } from "../content/productExplanation";
@@ -262,16 +262,17 @@ export function ConceptsDocsPage({ route }) {
 export function QuickStartPage({ route }) {
   const locale = useLocale();
   const { lang, ui, quickStart } = useDocsOnboarding(locale);
+  const releaseBaseUrl = assetUrl("").replace(/\/$/, "");
   const commandSets = {
     download: {
-      macos: `git clone --branch v2.0.0-rc.1 --depth 1 https://github.com/wowtrust/trustdb.git trustdb-quickstart\ncd trustdb-quickstart\ngit rev-parse --short HEAD\ngo version`,
-      linux: `git clone --branch v2.0.0-rc.1 --depth 1 https://github.com/wowtrust/trustdb.git trustdb-quickstart\ncd trustdb-quickstart\ngit rev-parse --short HEAD\ngo version`,
-      windows: `git clone --branch v2.0.0-rc.1 --depth 1 https://github.com/wowtrust/trustdb.git trustdb-quickstart\nSet-Location trustdb-quickstart\ngit rev-parse --short HEAD\ngo version`,
+      macos: `VERSION=${release.version}\ncase "$(uname -m)" in\n  arm64) ARCH=arm64 ;;\n  x86_64) ARCH=amd64 ;;\n  *) printf 'Unsupported architecture\\n' >&2; exit 1 ;;\nesac\nARCHIVE="trustdb-$VERSION-darwin-$ARCH.tar.gz"\nmkdir trustdb-quickstart && cd trustdb-quickstart\ncurl --fail --location --remote-name "${releaseBaseUrl}/SHA256SUMS"\ncurl --fail --location --remote-name "${releaseBaseUrl}/$ARCHIVE"\ngrep "  $ARCHIVE$" SHA256SUMS | shasum -a 256 --check\ntar -xzf "$ARCHIVE"\ncd "trustdb-$VERSION-darwin-$ARCH"\n./bin/trustdb version`,
+      linux: `VERSION=${release.version}\ncase "$(uname -m)" in\n  aarch64|arm64) ARCH=arm64 ;;\n  x86_64) ARCH=amd64 ;;\n  *) printf 'Unsupported architecture\\n' >&2; exit 1 ;;\nesac\nARCHIVE="trustdb-$VERSION-linux-$ARCH.tar.gz"\nmkdir trustdb-quickstart && cd trustdb-quickstart\ncurl --fail --location --remote-name "${releaseBaseUrl}/SHA256SUMS"\ncurl --fail --location --remote-name "${releaseBaseUrl}/$ARCHIVE"\ngrep "  $ARCHIVE$" SHA256SUMS | sha256sum --check\ntar -xzf "$ARCHIVE"\ncd "trustdb-$VERSION-linux-$ARCH"\n./bin/trustdb version`,
+      windows: `$Version = '${release.version}'\n$Arch = switch ($env:PROCESSOR_ARCHITECTURE) {\n  'ARM64' { 'arm64' }\n  'AMD64' { 'amd64' }\n  default { throw "Unsupported architecture: $env:PROCESSOR_ARCHITECTURE" }\n}\n$Archive = "trustdb-$Version-windows-$Arch.zip"\n$BaseUrl = '${releaseBaseUrl}'\nNew-Item -ItemType Directory -Path trustdb-quickstart | Out-Null\nSet-Location trustdb-quickstart\nInvoke-WebRequest -Uri "$BaseUrl/SHA256SUMS" -OutFile SHA256SUMS\nInvoke-WebRequest -Uri "$BaseUrl/$Archive" -OutFile $Archive\n$Expected = ((Select-String -Path SHA256SUMS -SimpleMatch "  $Archive").Line -split '\\s+')[0].ToLowerInvariant()\n$Actual = (Get-FileHash -Path $Archive -Algorithm SHA256).Hash.ToLowerInvariant()\nif ($Actual -ne $Expected) { throw 'SHA-256 mismatch' }\nExpand-Archive -Path $Archive -DestinationPath .\nSet-Location "trustdb-$Version-windows-$Arch"\n.\\bin\\trustdb.exe version`,
     },
     extract: {
-      macos: `mkdir -p bin .trustdb-dev\ngo build -trimpath -o ./bin/trustdb ./cmd/trustdb\n./bin/trustdb version\nprintf 'hello TrustDB\\n' > example.txt`,
-      linux: `mkdir -p bin .trustdb-dev\ngo build -trimpath -o ./bin/trustdb ./cmd/trustdb\n./bin/trustdb version\nprintf 'hello TrustDB\\n' > example.txt`,
-      windows: `New-Item -ItemType Directory -Force -Path bin, .trustdb-dev | Out-Null\ngo build -trimpath -o .\\bin\\trustdb.exe .\\cmd\\trustdb\n.\\bin\\trustdb.exe version\nSet-Content -Path .\\example.txt -Value 'hello TrustDB' -Encoding ascii`,
+      macos: `mkdir -p .trustdb-dev\nprintf 'hello TrustDB\\n' > example.txt\n./bin/trustdb version`,
+      linux: `mkdir -p .trustdb-dev\nprintf 'hello TrustDB\\n' > example.txt\n./bin/trustdb version`,
+      windows: `New-Item -ItemType Directory -Force -Path .trustdb-dev | Out-Null\nSet-Content -Path .\\example.txt -Value 'hello TrustDB' -Encoding ascii\n.\\bin\\trustdb.exe version`,
     },
     keys: {
       macos: `printf 'Development key passphrase: '\nIFS= read -r -s TRUSTDB_DEV_KEY_PASSPHRASE\nprintf '\\n'\nexport TRUSTDB_DEV_KEY_PASSPHRASE\n./bin/trustdb key generate --out .trustdb-dev --prefix client\n./bin/trustdb key generate --out .trustdb-dev --prefix server\nls -la .trustdb-dev`,
@@ -302,7 +303,7 @@ export function QuickStartPage({ route }) {
   const keyFlagHelp = locale === "zh-CN" ? {
     title: "这条命令会写出什么？",
     rows: [
-      ["--out", "输出目录。这里是当前源码仓库根目录下的 .trustdb-dev，不是上传地址，也不是证明文件名。"],
+      ["--out", "输出目录。这里是解压后的发布目录中的 .trustdb-dev，不是上传地址，也不是证明文件名。"],
       ["--prefix", "文件名前缀和默认 key ID 的来源。client 会生成 client.key、client.pub、client.material。"],
       ["--suite", "密码套件，默认 INTL_V1；CN_SM_V1 必须从全新 suite-bound namespace 开始。"],
       ["--protection", "私钥 material 的保护方式。macOS/Linux 默认 sm4-envelope-v1；plaintext-dev-v1 只用于可丢弃练习。"],
@@ -310,7 +311,7 @@ export function QuickStartPage({ route }) {
   } : {
     title: "What does this command write?",
     rows: [
-      ["--out", "Output directory. Here it is .trustdb-dev under the current source checkout—not an upload URL or proof filename."],
+      ["--out", "Output directory. Here it is .trustdb-dev under the extracted release—not an upload URL or proof filename."],
       ["--prefix", "Filename prefix and source of the default key ID. client creates client.key, client.pub, and client.material."],
       ["--suite", "Cryptographic suite; defaults to INTL_V1. CN_SM_V1 starts in a fresh suite-bound namespace."],
       ["--protection", "Private material protection. macOS/Linux default to sm4-envelope-v1; plaintext-dev-v1 is disposable practice only."],
@@ -325,7 +326,7 @@ export function QuickStartPage({ route }) {
           <h2>{quickStart.downloadTitle}</h2><p>{quickStart.downloadBody}</p>
           <PlatformCodeBlock commands={commandSets.download} />
           <ExpectedResult label={ui.expected}>{quickStart.downloadExpected}</ExpectedResult>
-          <div className="doc-download-links"><a href="https://github.com/wowtrust/trustdb/tree/v2.0.0-rc.1" target="_blank" rel="noreferrer">v2.0.0-rc.1 <ArrowRight /></a><Link href="/docs/source-build">{quickStart.allPlatforms} <ArrowRight /></Link><Link href="/downloads">{locale === "zh-CN" ? "发布文件" : "Release assets"} <DownloadSimple /></Link></div>
+          <div className="doc-download-links"><a href={release.pageUrl} target="_blank" rel="noreferrer">{release.tag} <ArrowRight /></a><Link href="/docs/source-build">{quickStart.allPlatforms} <ArrowRight /></Link><Link href="/downloads">{locale === "zh-CN" ? "发布文件" : "Release assets"} <DownloadSimple /></Link></div>
           <Note title={quickStart.platformNoteTitle}>{quickStart.platformNoteBody}</Note>
         </section>
         <section className="doc-section">
@@ -371,7 +372,7 @@ export function ServerDocsPage({ route }) {
   const locale = useLocale();
   const { lang, ui, server, troubleshooting } = useDocsOnboarding(locale);
   const natsCopy = natsIngressContent(locale);
-  const dockerImage = "trustdb:main";
+  const dockerImage = `${release.containerImage}@${release.containerDigest}`;
   const posixLocalServer = `printf 'Development key passphrase: '\nIFS= read -r -s TRUSTDB_DEV_KEY_PASSPHRASE\nprintf '\\n'\nexport TRUSTDB_DEV_KEY_PASSPHRASE\n./bin/trustdb serve \\\n  --server-private-key .trustdb-dev/server.key \\\n  --client-public-key .trustdb-dev/client.pub \\\n  --wal .trustdb-dev/server/wal \\\n  --metastore pebble \\\n  --metastore-path .trustdb-dev/server/pebble \\\n  --proof-dir .trustdb-dev/server/proofs \\\n  --listen 127.0.0.1:8080`;
   const localServerCommands = {
     macos: posixLocalServer,
@@ -384,13 +385,13 @@ export function ServerDocsPage({ route }) {
     linux: posixDiagnostics,
     windows: "$ready = $false\nfor ($attempt = 0; $attempt -lt 50; $attempt++) {\n  curl.exe --fail --silent http://127.0.0.1:8080/healthz\n  if ($LASTEXITCODE -eq 0) { $ready = $true; break }\n  Start-Sleep -Milliseconds 200\n}\nif (-not $ready) { throw 'TrustDB did not become ready within 10 seconds' }\ncurl.exe --fail --silent \"http://127.0.0.1:8080/v2/records?limit=10&direction=desc\"\ncurl.exe --fail --silent http://127.0.0.1:8080/metrics",
   };
-  const dockerBuild = `docker build -t ${dockerImage} .\ndocker run --rm ${dockerImage} version`;
-  const dockerBuildCommands = { macos: dockerBuild, linux: dockerBuild, windows: dockerBuild };
-  const posixDockerRun = "mkdir -p .trustdb-dev/docker/tls\ncp configs/docker.yaml .trustdb-dev/docker/config.yaml\n# Before continuing, add these files under .trustdb-dev/docker/tls:\n# server.crt, server.key, client-ca.crt, server-ca.crt,\n# health-client.crt and health-client.key.\numask 077\nprintf 'Container key passphrase: '\nIFS= read -r -s TRUSTDB_CONTAINER_KEY_PASSPHRASE\nprintf '\\n'\nprintf '%s' \"$TRUSTDB_CONTAINER_KEY_PASSPHRASE\" > .trustdb-dev/docker/trustdb-kek\nunset TRUSTDB_CONTAINER_KEY_PASSPHRASE\n\ndocker volume create trustdb-data\ndocker run -d --name trustdb \\\n  -e TRUSTDB_DEV_KEY_PASSPHRASE_FILE=/run/secrets/trustdb-kek \\\n  --mount \"type=bind,src=$(pwd)/.trustdb-dev/docker/config.yaml,dst=/etc/trustdb/config.yaml,readonly\" \\\n  --mount \"type=bind,src=$(pwd)/.trustdb-dev/docker/tls,dst=/etc/trustdb/tls,readonly\" \\\n  --mount \"type=bind,src=$(pwd)/.trustdb-dev/docker/trustdb-kek,dst=/run/secrets/trustdb-kek,readonly\" \\\n  --mount type=volume,src=trustdb-data,dst=/var/lib/trustdb \\\n  -p 127.0.0.1:8080:8080 \\\n  trustdb:main\n\ndocker_health=\nfor attempt in $(seq 1 60); do\n  docker_health=$(docker inspect --format '{{.State.Health.Status}}' trustdb)\n  [ \"$docker_health\" = healthy ] && break\n  [ \"$docker_health\" = unhealthy ] && break\n  sleep 1\ndone\nif [ \"$docker_health\" != healthy ]; then\n  docker logs trustdb\n  exit 1\nfi\ncurl --fail --silent \\\n  --cacert .trustdb-dev/docker/tls/server-ca.crt \\\n  --cert .trustdb-dev/docker/tls/health-client.crt \\\n  --key .trustdb-dev/docker/tls/health-client.key \\\n  --resolve trustdb:8080:127.0.0.1 \\\n  https://trustdb:8080/healthz";
+  const dockerPull = `docker pull ${dockerImage}\ndocker run --rm ${dockerImage} version`;
+  const dockerPullCommands = { macos: dockerPull, linux: dockerPull, windows: dockerPull };
+  const posixDockerRun = "mkdir -p .trustdb-dev/docker/tls\ncp config/docker.yaml .trustdb-dev/docker/config.yaml\n# Before continuing, add these files under .trustdb-dev/docker/tls:\n# server.crt, server.key, client-ca.crt, server-ca.crt,\n# health-client.crt and health-client.key.\numask 077\nprintf 'Container key passphrase: '\nIFS= read -r -s TRUSTDB_CONTAINER_KEY_PASSPHRASE\nprintf '\\n'\nprintf '%s' \"$TRUSTDB_CONTAINER_KEY_PASSPHRASE\" > .trustdb-dev/docker/trustdb-kek\nunset TRUSTDB_CONTAINER_KEY_PASSPHRASE\n\ndocker volume create trustdb-data\ndocker run -d --name trustdb \\\n  -e TRUSTDB_DEV_KEY_PASSPHRASE_FILE=/run/secrets/trustdb-kek \\\n  --mount \"type=bind,src=$(pwd)/.trustdb-dev/docker/config.yaml,dst=/etc/trustdb/config.yaml,readonly\" \\\n  --mount \"type=bind,src=$(pwd)/.trustdb-dev/docker/tls,dst=/etc/trustdb/tls,readonly\" \\\n  --mount \"type=bind,src=$(pwd)/.trustdb-dev/docker/trustdb-kek,dst=/run/secrets/trustdb-kek,readonly\" \\\n  --mount type=volume,src=trustdb-data,dst=/var/lib/trustdb \\\n  -p 127.0.0.1:8080:8080 \\\n  __TRUSTDB_IMAGE__\n\ndocker_health=\nfor attempt in $(seq 1 60); do\n  docker_health=$(docker inspect --format '{{.State.Health.Status}}' trustdb)\n  [ \"$docker_health\" = healthy ] && break\n  [ \"$docker_health\" = unhealthy ] && break\n  sleep 1\ndone\nif [ \"$docker_health\" != healthy ]; then\n  docker logs trustdb\n  exit 1\nfi\ncurl --fail --silent \\\n  --cacert .trustdb-dev/docker/tls/server-ca.crt \\\n  --cert .trustdb-dev/docker/tls/health-client.crt \\\n  --key .trustdb-dev/docker/tls/health-client.key \\\n  --resolve trustdb:8080:127.0.0.1 \\\n  https://trustdb:8080/healthz".replaceAll("__TRUSTDB_IMAGE__", dockerImage);
   const dockerRunCommands = {
     macos: posixDockerRun,
     linux: posixDockerRun,
-    windows: "New-Item -ItemType Directory -Force -Path .\\.trustdb-dev\\docker\\tls | Out-Null\nCopy-Item .\\configs\\docker.yaml .\\.trustdb-dev\\docker\\config.yaml\n# Before continuing, add these files under .trustdb-dev\\docker\\tls:\n# server.crt, server.key, client-ca.crt, server-ca.crt,\n# health-client.crt and health-client.key.\n$secret = Read-Host 'Container key passphrase' -AsSecureString\n$pointer = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secret)\ntry {\n  [IO.File]::WriteAllText((Join-Path $PWD '.trustdb-dev\\docker\\trustdb-kek'), [Runtime.InteropServices.Marshal]::PtrToStringBSTR($pointer))\n} finally {\n  [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($pointer)\n  Remove-Variable secret\n}\n$dockerFiles = (Resolve-Path .\\.trustdb-dev\\docker).Path\n\ndocker volume create trustdb-data\ndocker run -d --name trustdb `\n  -e TRUSTDB_DEV_KEY_PASSPHRASE_FILE=/run/secrets/trustdb-kek `\n  --mount \"type=bind,src=$dockerFiles\\config.yaml,dst=/etc/trustdb/config.yaml,readonly\" `\n  --mount \"type=bind,src=$dockerFiles\\tls,dst=/etc/trustdb/tls,readonly\" `\n  --mount \"type=bind,src=$dockerFiles\\trustdb-kek,dst=/run/secrets/trustdb-kek,readonly\" `\n  --mount type=volume,src=trustdb-data,dst=/var/lib/trustdb `\n  -p 127.0.0.1:8080:8080 `\n  trustdb:main\n\n$dockerHealth = ''\nfor ($attempt = 0; $attempt -lt 60; $attempt++) {\n  $dockerHealth = docker inspect --format '{{.State.Health.Status}}' trustdb\n  if ($dockerHealth -in @('healthy', 'unhealthy')) { break }\n  Start-Sleep -Seconds 1\n}\nif ($dockerHealth -ne 'healthy') { docker logs trustdb; throw \"TrustDB container health is $dockerHealth\" }\ncurl.exe --fail --silent `\n  --cacert .\\.trustdb-dev\\docker\\tls\\server-ca.crt `\n  --cert .\\.trustdb-dev\\docker\\tls\\health-client.crt `\n  --key .\\.trustdb-dev\\docker\\tls\\health-client.key `\n  --resolve trustdb:8080:127.0.0.1 `\n  https://trustdb:8080/healthz",
+    windows: "New-Item -ItemType Directory -Force -Path .\\.trustdb-dev\\docker\\tls | Out-Null\nCopy-Item .\\config\\docker.yaml .\\.trustdb-dev\\docker\\config.yaml\n# Before continuing, add these files under .trustdb-dev\\docker\\tls:\n# server.crt, server.key, client-ca.crt, server-ca.crt,\n# health-client.crt and health-client.key.\n$secret = Read-Host 'Container key passphrase' -AsSecureString\n$pointer = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secret)\ntry {\n  [IO.File]::WriteAllText((Join-Path $PWD '.trustdb-dev\\docker\\trustdb-kek'), [Runtime.InteropServices.Marshal]::PtrToStringBSTR($pointer))\n} finally {\n  [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($pointer)\n  Remove-Variable secret\n}\n$dockerFiles = (Resolve-Path .\\.trustdb-dev\\docker).Path\n\ndocker volume create trustdb-data\ndocker run -d --name trustdb `\n  -e TRUSTDB_DEV_KEY_PASSPHRASE_FILE=/run/secrets/trustdb-kek `\n  --mount \"type=bind,src=$dockerFiles\\config.yaml,dst=/etc/trustdb/config.yaml,readonly\" `\n  --mount \"type=bind,src=$dockerFiles\\tls,dst=/etc/trustdb/tls,readonly\" `\n  --mount \"type=bind,src=$dockerFiles\\trustdb-kek,dst=/run/secrets/trustdb-kek,readonly\" `\n  --mount type=volume,src=trustdb-data,dst=/var/lib/trustdb `\n  -p 127.0.0.1:8080:8080 `\n  __TRUSTDB_IMAGE__\n\n$dockerHealth = ''\nfor ($attempt = 0; $attempt -lt 60; $attempt++) {\n  $dockerHealth = docker inspect --format '{{.State.Health.Status}}' trustdb\n  if ($dockerHealth -in @('healthy', 'unhealthy')) { break }\n  Start-Sleep -Seconds 1\n}\nif ($dockerHealth -ne 'healthy') { docker logs trustdb; throw \"TrustDB container health is $dockerHealth\" }\ncurl.exe --fail --silent `\n  --cacert .\\.trustdb-dev\\docker\\tls\\server-ca.crt `\n  --cert .\\.trustdb-dev\\docker\\tls\\health-client.crt `\n  --key .\\.trustdb-dev\\docker\\tls\\health-client.key `\n  --resolve trustdb:8080:127.0.0.1 `\n  https://trustdb:8080/healthz".replaceAll("__TRUSTDB_IMAGE__", dockerImage),
   };
   return (
     <DocsShell route={route}>
@@ -405,7 +406,7 @@ export function ServerDocsPage({ route }) {
         </section>
         <section className="doc-section">
           <h2>{server.dockerTitle}</h2><p>{server.dockerBody}</p>
-          <PlatformCodeBlock commands={dockerBuildCommands} />
+          <PlatformCodeBlock commands={dockerPullCommands} />
           <PlatformCodeBlock commands={dockerRunCommands} />
           <ExpectedResult label={ui.expected}>{server.dockerExpected}</ExpectedResult>
           <Note tone="warn" title={ui.checkpoint}>{server.dockerBoundary}</Note>
@@ -416,11 +417,11 @@ export function ServerDocsPage({ route }) {
         <section className="doc-section">
           <h2>{server.templateTitle}</h2><p>{server.templateBody}</p>
           <PlatformCodeBlock commands={{
-            macos: `./bin/trustdb config validate --config ./configs/production.yaml\n./bin/trustdb doctor --config ./configs/production.yaml`,
-            linux: `./bin/trustdb config validate --config ./configs/production.yaml\n./bin/trustdb doctor --config ./configs/production.yaml`,
-            windows: `.\\bin\\trustdb.exe config validate --config .\\configs\\production.yaml\n.\\bin\\trustdb.exe doctor --config .\\configs\\production.yaml`,
+            macos: `./bin/trustdb config validate --config ./config/production.yaml\n./bin/trustdb doctor --config ./config/production.yaml`,
+            linux: `./bin/trustdb config validate --config ./config/production.yaml\n./bin/trustdb doctor --config ./config/production.yaml`,
+            windows: `.\\bin\\trustdb.exe config validate --config .\\config\\production.yaml\n.\\bin\\trustdb.exe doctor --config .\\config\\production.yaml`,
           }} />
-          <InlineLink href="https://github.com/wowtrust/trustdb/tree/main/configs">{server.templatesLabel}</InlineLink>
+          <InlineLink href={`${release.pageUrl}#assets`}>{server.templatesLabel}</InlineLink>
         </section>
         <section className="doc-section">
           <h2>{server.profilesTitle}</h2>
@@ -466,7 +467,7 @@ export function SdkDocsPage({ route }) {
   const natsCopy = natsIngressContent(locale);
   const sdkServerCommands = { macos: "printf 'Development key passphrase: '\nIFS= read -r -s TRUSTDB_DEV_KEY_PASSPHRASE\nprintf '\\n'\nexport TRUSTDB_DEV_KEY_PASSPHRASE\n./bin/trustdb serve \\\n  --server-private-key .trustdb-dev/server.key \\\n  --client-public-key .trustdb-dev/client.pub \\\n  --wal .trustdb-dev/server/wal \\\n  --metastore pebble \\\n  --metastore-path .trustdb-dev/server/pebble \\\n  --proof-dir .trustdb-dev/server/proofs \\\n  --batch-max-delay 100ms \\\n  --listen 127.0.0.1:8080", linux: "printf 'Development key passphrase: '\nIFS= read -r -s TRUSTDB_DEV_KEY_PASSPHRASE\nprintf '\\n'\nexport TRUSTDB_DEV_KEY_PASSPHRASE\n./bin/trustdb serve \\\n  --server-private-key .trustdb-dev/server.key \\\n  --client-public-key .trustdb-dev/client.pub \\\n  --wal .trustdb-dev/server/wal \\\n  --metastore pebble \\\n  --metastore-path .trustdb-dev/server/pebble \\\n  --proof-dir .trustdb-dev/server/proofs \\\n  --batch-max-delay 100ms \\\n  --listen 127.0.0.1:8080", windows: ".\\bin\\trustdb.exe serve `\n  --server-private-key .trustdb-dev\\server.key `\n  --client-public-key .trustdb-dev\\client.pub `\n  --wal .trustdb-dev\\server\\wal `\n  --metastore pebble `\n  --metastore-path .trustdb-dev\\server\\pebble `\n  --proof-dir .trustdb-dev\\server\\proofs `\n  --batch-max-delay 100ms `\n  --listen 127.0.0.1:8080" };
   const sdkHealthCommands = { macos: "ready=0\nfor attempt in $(seq 1 50); do\n  if curl --fail --silent http://127.0.0.1:8080/healthz; then ready=1; break; fi\n  sleep 0.2\ndone\n[ \"$ready\" -eq 1 ] || { printf 'TrustDB did not become ready within 10 seconds\\n' >&2; exit 1; }", linux: "ready=0\nfor attempt in $(seq 1 50); do\n  if curl --fail --silent http://127.0.0.1:8080/healthz; then ready=1; break; fi\n  sleep 0.2\ndone\n[ \"$ready\" -eq 1 ] || { printf 'TrustDB did not become ready within 10 seconds\\n' >&2; exit 1; }", windows: "$ready = $false\nfor ($attempt = 0; $attempt -lt 50; $attempt++) {\n  curl.exe --fail --silent http://127.0.0.1:8080/healthz\n  if ($LASTEXITCODE -eq 0) { $ready = $true; break }\n  Start-Sleep -Milliseconds 200\n}\nif (-not $ready) { throw 'TrustDB did not become ready within 10 seconds' }" };
-  const sdkProjectCommands = { macos: "mkdir -p .trustdb-dev/sdk-demo\ncd .trustdb-dev/sdk-demo\ngo mod init example.com/trustdb-sdk-demo\ngo mod edit -require=github.com/wowtrust/trustdb/v2@v2.0.0\ngo mod edit -replace=github.com/wowtrust/trustdb/v2=../..", linux: "mkdir -p .trustdb-dev/sdk-demo\ncd .trustdb-dev/sdk-demo\ngo mod init example.com/trustdb-sdk-demo\ngo mod edit -require=github.com/wowtrust/trustdb/v2@v2.0.0\ngo mod edit -replace=github.com/wowtrust/trustdb/v2=../..", windows: "New-Item -ItemType Directory -Force -Path .trustdb-dev\\sdk-demo | Out-Null\nSet-Location .trustdb-dev\\sdk-demo\ngo mod init example.com/trustdb-sdk-demo\ngo mod edit -require=github.com/wowtrust/trustdb/v2@v2.0.0\ngo mod edit -replace=github.com/wowtrust/trustdb/v2=../.." };
+  const sdkProjectCommands = { macos: `mkdir -p .trustdb-dev/sdk-demo\ncd .trustdb-dev/sdk-demo\ngo mod init example.com/trustdb-sdk-demo\ngo get github.com/wowtrust/trustdb/v2@${release.tag}`, linux: `mkdir -p .trustdb-dev/sdk-demo\ncd .trustdb-dev/sdk-demo\ngo mod init example.com/trustdb-sdk-demo\ngo get github.com/wowtrust/trustdb/v2@${release.tag}`, windows: `New-Item -ItemType Directory -Force -Path .trustdb-dev\\sdk-demo | Out-Null\nSet-Location .trustdb-dev\\sdk-demo\ngo mod init example.com/trustdb-sdk-demo\ngo get github.com/wowtrust/trustdb/v2@${release.tag}` };
   const sdkRunCommands = { macos: "printf 'Development key passphrase: '\nIFS= read -r -s TRUSTDB_DEV_KEY_PASSPHRASE\nprintf '\\n'\nexport TRUSTDB_DEV_KEY_PASSPHRASE\ngo run . \\\n  --server http://127.0.0.1:8080 \\\n  --file ../../example.txt \\\n  --client-private-key ../client.key \\\n  --client-public-key ../client.pub \\\n  --server-public-key ../server.pub \\\n  --output ./record.sproof\nunset TRUSTDB_DEV_KEY_PASSPHRASE", linux: "printf 'Development key passphrase: '\nIFS= read -r -s TRUSTDB_DEV_KEY_PASSPHRASE\nprintf '\\n'\nexport TRUSTDB_DEV_KEY_PASSPHRASE\ngo run . \\\n  --server http://127.0.0.1:8080 \\\n  --file ../../example.txt \\\n  --client-private-key ../client.key \\\n  --client-public-key ../client.pub \\\n  --server-public-key ../server.pub \\\n  --output ./record.sproof\nunset TRUSTDB_DEV_KEY_PASSPHRASE", windows: "go run . `\n  --server http://127.0.0.1:8080 `\n  --file ..\\..\\example.txt `\n  --client-private-key ..\\client.key `\n  --client-public-key ..\\client.pub `\n  --server-public-key ..\\server.pub `\n  --output .\\record.sproof" };
   const sdkOfflineCommands = { macos: "printf 'Development key passphrase: '\nIFS= read -r -s TRUSTDB_DEV_KEY_PASSPHRASE\nprintf '\\n'\nexport TRUSTDB_DEV_KEY_PASSPHRASE\n../../bin/trustdb verify \\\n  --file ../../example.txt \\\n  --sproof ./record.sproof \\\n  --server-public-key ../server.pub \\\n  --client-public-key ../client.pub\nunset TRUSTDB_DEV_KEY_PASSPHRASE", linux: "printf 'Development key passphrase: '\nIFS= read -r -s TRUSTDB_DEV_KEY_PASSPHRASE\nprintf '\\n'\nexport TRUSTDB_DEV_KEY_PASSPHRASE\n../../bin/trustdb verify \\\n  --file ../../example.txt \\\n  --sproof ./record.sproof \\\n  --server-public-key ../server.pub \\\n  --client-public-key ../client.pub\nunset TRUSTDB_DEV_KEY_PASSPHRASE", windows: "..\\..\\bin\\trustdb.exe verify `\n  --file ..\\..\\example.txt `\n  --sproof .\\record.sproof `\n  --server-public-key ..\\server.pub `\n  --client-public-key ..\\client.pub" };
   return (
@@ -490,7 +491,7 @@ export function SdkDocsPage({ route }) {
           <details className="doc-source"><summary>main.go · {sdkOnboardingSource.split("\n").length} LOC</summary><CodeBlock label="go" reveal={false}>{sdkOnboardingSource}</CodeBlock></details>
           <PlatformCodeBlock commands={sdkRunCommands} />
           <ExpectedResult label={ui.expected}>{sdk.codeExpected}</ExpectedResult>
-          <InlineLink href="https://github.com/wowtrust/trustdb/tree/main/examples/sdk-onboarding">{sdk.sourceLabel}</InlineLink>
+          <InlineLink href={`https://github.com/wowtrust/trustdb/tree/${release.tag}/examples/sdk-onboarding`}>{sdk.sourceLabel}</InlineLink>
         </section>
         <section className="doc-section"><h2>{sdk.asyncTitle}</h2><p>{sdk.asyncBody}</p><Note title={ui.checkpoint}>{sdk.idempotencyTitle}: {sdk.idempotencyBody}</Note><InlineLink href="/docs/nats-ingress">{natsCopy.sdkLinkLabel}</InlineLink></section>
         <section className="doc-section">
@@ -523,7 +524,6 @@ export function NATSIngressDocsPage({ route }) {
     "  provision: true",
   ].join("\n");
   const serverCommand = [
-    "go build -o ./bin/trustdb ./cmd/trustdb",
     "./bin/trustdb --config ./trustdb.yaml config validate",
     "./bin/trustdb --config ./trustdb.yaml serve",
   ].join("\n");
@@ -634,7 +634,7 @@ export function TroubleshootingPage({ route }) {
       <div lang={lang} data-i18n-ignore>
         <GuideTitle index="06" title={troubleshooting.title} lead={troubleshooting.lead} copy={ui} />
         <GuideSummary copy={ui} duration={troubleshooting.duration} outcome={troubleshooting.outcome} prerequisites={[troubleshooting.introBody]} />
-        <section className="doc-section"><h2>{troubleshooting.introTitle}</h2><p>{troubleshooting.introBody}</p><PlatformCodeBlock commands={{ macos: "./bin/trustdb version\n./bin/trustdb config validate --config ./configs/production.yaml\n./bin/trustdb doctor --config ./configs/production.yaml\ncurl --fail --silent http://127.0.0.1:8080/healthz", linux: "./bin/trustdb version\n./bin/trustdb config validate --config ./configs/production.yaml\n./bin/trustdb doctor --config ./configs/production.yaml\ncurl --fail --silent http://127.0.0.1:8080/healthz", windows: ".\\bin\\trustdb.exe version\n.\\bin\\trustdb.exe config validate --config .\\configs\\production.yaml\n.\\bin\\trustdb.exe doctor --config .\\configs\\production.yaml\ncurl.exe --fail --silent http://127.0.0.1:8080/healthz" }} /></section>
+        <section className="doc-section"><h2>{troubleshooting.introTitle}</h2><p>{troubleshooting.introBody}</p><PlatformCodeBlock commands={{ macos: "./bin/trustdb version\n./bin/trustdb config validate --config ./config/production.yaml\n./bin/trustdb doctor --config ./config/production.yaml\ncurl --fail --silent http://127.0.0.1:8080/healthz", linux: "./bin/trustdb version\n./bin/trustdb config validate --config ./config/production.yaml\n./bin/trustdb doctor --config ./config/production.yaml\ncurl --fail --silent http://127.0.0.1:8080/healthz", windows: ".\\bin\\trustdb.exe version\n.\\bin\\trustdb.exe config validate --config .\\config\\production.yaml\n.\\bin\\trustdb.exe doctor --config .\\config\\production.yaml\ncurl.exe --fail --silent http://127.0.0.1:8080/healthz" }} /></section>
         <section className="doc-section">
           <h2>{troubleshooting.diagnosticsTitle}</h2>
           <div className="troubleshooting-list">{troubleshooting.cards.map(([symptom, cause, action], index) => <article key={symptom} data-reveal><span>{String(index + 1).padStart(2, "0")}</span><h3>{symptom}</h3><div><strong>{troubleshooting.causeLabel}</strong><p>{cause}</p><strong>{troubleshooting.actionLabel}</strong><p>{action}</p></div></article>)}</div>
@@ -675,10 +675,15 @@ export function DesktopInstallPage({ route }) {
 }
 
 export function SourceBuildPage({ route }) {
+  const sourceCommands = {
+    macos: `git clone --branch ${release.tag} --depth 1 https://github.com/wowtrust/trustdb.git\ncd trustdb\ngit rev-parse HEAD\ngo test ./...\nmkdir -p bin\ngo build -trimpath -o ./bin/trustdb ./cmd/trustdb\n./bin/trustdb version`,
+    linux: `git clone --branch ${release.tag} --depth 1 https://github.com/wowtrust/trustdb.git\ncd trustdb\ngit rev-parse HEAD\ngo test ./...\nmkdir -p bin\ngo build -trimpath -o ./bin/trustdb ./cmd/trustdb\n./bin/trustdb version`,
+    windows: `git clone --branch ${release.tag} --depth 1 https://github.com/wowtrust/trustdb.git\nSet-Location trustdb\ngit rev-parse HEAD\ngo test ./...\nNew-Item -ItemType Directory -Force bin | Out-Null\ngo build -trimpath -o .\\bin\\trustdb.exe .\\cmd\\trustdb\n.\\bin\\trustdb.exe version`,
+  };
   return (
     <DocsShell route={route}>
-      <ArticleTitle index="10" title="从源码构建" lead="服务器、CLI 与桌面客户端的构建环境和命令。" updated="2026.07.26" version="适用于 v2.0.0-rc.1" />
-      <section className="doc-section"><h2>服务器与 CLI</h2><p>需要 Git 与 go.mod 指定的 Go 版本。固定 RC 标签、记录 commit、运行测试，再生成本机 <code>trustdb</code> 二进制。</p><PlatformCodeBlock commands={{ macos: "git clone --branch v2.0.0-rc.1 --depth 1 https://github.com/wowtrust/trustdb.git\ncd trustdb\ngit rev-parse HEAD\ngo test ./...\nmkdir -p bin\ngo build -trimpath -o ./bin/trustdb ./cmd/trustdb\n./bin/trustdb version", linux: "git clone --branch v2.0.0-rc.1 --depth 1 https://github.com/wowtrust/trustdb.git\ncd trustdb\ngit rev-parse HEAD\ngo test ./...\nmkdir -p bin\ngo build -trimpath -o ./bin/trustdb ./cmd/trustdb\n./bin/trustdb version", windows: "git clone --branch v2.0.0-rc.1 --depth 1 https://github.com/wowtrust/trustdb.git\nSet-Location trustdb\ngit rev-parse HEAD\ngo test ./...\nNew-Item -ItemType Directory -Force bin | Out-Null\ngo build -trimpath -o .\\bin\\trustdb.exe .\\cmd\\trustdb\n.\\bin\\trustdb.exe version" }} /></section>
+      <ArticleTitle index="10" title="从源码构建" lead="服务器、CLI 与桌面客户端的构建环境和命令。" updated="2026.07.26" version={`适用于 ${release.tag}`} />
+      <section className="doc-section"><h2>服务器与 CLI</h2><p>需要 Git 与 go.mod 指定的 Go 版本。固定 RC 标签、记录 commit、运行测试，再生成本机 <code>trustdb</code> 二进制。</p><PlatformCodeBlock commands={sourceCommands} /></section>
       <section className="doc-section"><h2>桌面客户端</h2><p>桌面端还需要 Node.js 24、平台原生编译工具和 Wails 2.12.0。先安装当前系统的 Wails 依赖，再构建前端与原生壳。</p><CodeBlock>go install github.com/wailsapp/wails/v2/cmd/wails@v2.12.0{"\n"}cd clients/desktop/frontend{"\n"}npm ci{"\n"}npm run build{"\n"}cd ..{"\n"}wails doctor{"\n"}wails build</CodeBlock><InlineLink href="https://wails.io/docs/gettingstarted/installation/">Wails 平台依赖</InlineLink></section>
       <section className="doc-section"><h2>开发运行</h2><p>从 <code>clients/desktop</code> 运行 <code>wails dev</code> 才能使用签名、文件选择和本地数据库等原生能力。只启动 Vite 适合检查界面，不等同于完整客户端。</p><CodeBlock>cd clients/desktop{"\n"}go test ./...{"\n"}wails dev</CodeBlock><InlineLink href="/downloads">下载预编译版本</InlineLink></section>
       <div className="doc-next"><span>继续阅读</span><Link href="/sproof">.sproof v2 格式 <ArrowRight /></Link></div>

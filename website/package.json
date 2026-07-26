@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
+    "check:release-guides": "node scripts/check-release-guides.mjs",
+    "build": "npm run check:release-guides && vite build",
     "preview": "vite preview"
   },
   "dependencies": {
