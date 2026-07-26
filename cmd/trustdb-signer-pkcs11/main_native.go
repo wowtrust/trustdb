@@ -8,8 +8,8 @@ import (
 	"os"
 	"os/signal"
 
-	"github.com/wowtrust/trustdb/internal/pkcs11signer"
-	"github.com/wowtrust/trustdb/sdk/signerplugin"
+	"github.com/wowtrust/trustdb/v2/internal/pkcs11signer"
+	"github.com/wowtrust/trustdb/v2/sdk/signerplugin"
 )
 
 func main() {

@@ -4,8 +4,9 @@ This runbook defines how TrustDB release inputs are admitted, how release
 evidence is generated, and how an operator verifies and imports a release when
 the target environment has no network access.
 
-It applies to releases produced by the current `main` workflow. The historical
-`v1.0.0` release predates this bundle and contains only `SHA256SUMS`.
+It applies to `v2.0.0-rc.1` and later releases produced by the gated workflow.
+The historical `v1.0.0` release predates this bundle and contains only
+`SHA256SUMS`.
 
 ## What a gated release contains
 

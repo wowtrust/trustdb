@@ -20,7 +20,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wowtrust/trustdb/sdk/signerplugin"
+	"github.com/wowtrust/trustdb/v2/sdk/signerplugin"
 )
 
 func TestNewFailsFastWhenConfiguredMechanismCannotSign(t *testing.T) {

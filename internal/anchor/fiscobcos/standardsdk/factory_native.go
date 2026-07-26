@@ -39,10 +39,10 @@ import (
 	ethcrypto "github.com/ethereum/go-ethereum/crypto"
 	"golang.org/x/crypto/sha3"
 
-	"github.com/wowtrust/trustdb/internal/anchor/fiscobcos"
-	"github.com/wowtrust/trustdb/internal/cryptosuite"
-	"github.com/wowtrust/trustdb/internal/tlcpprofile"
-	"github.com/wowtrust/trustdb/internal/trustcrypto"
+	"github.com/wowtrust/trustdb/v2/internal/anchor/fiscobcos"
+	"github.com/wowtrust/trustdb/v2/internal/cryptosuite"
+	"github.com/wowtrust/trustdb/v2/internal/tlcpprofile"
+	"github.com/wowtrust/trustdb/v2/internal/trustcrypto"
 )
 
 const (

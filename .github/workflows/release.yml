@@ -9,7 +9,7 @@ on:
       version:
         description: "Version without the leading v"
         required: true
-        default: "1.0.0"
+        default: "2.0.0-rc.1"
 
 permissions:
   contents: write
@@ -40,13 +40,17 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
 
-      - name: Validate version
+      - name: Validate version and immutable release source
         id: meta
         shell: bash
         env:
           DISPATCH_VERSION: ${{ inputs.version }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          set -euo pipefail
           if [ "$GITHUB_REF_TYPE" = "tag" ]; then
             version="${GITHUB_REF_NAME#v}"
           else
@@ -55,6 +59,37 @@ jobs:
           if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
             echo "::error::invalid release version: $version"
             exit 1
+          fi
+          git fetch --no-tags origin main
+          main_sha="$(git rev-parse FETCH_HEAD)"
+          if [ "$GITHUB_SHA" != "$main_sha" ]; then
+            echo "::error::release source $GITHUB_SHA is not the current main commit $main_sha"
+            exit 1
+          fi
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            if [ "$GITHUB_REF_NAME" != "v$version" ]; then
+              echo "::error::release tag and version disagree"
+              exit 1
+            fi
+            if [ "$(git cat-file -t "$GITHUB_REF")" != "tag" ]; then
+              echo "::error::release tags must be annotated"
+              exit 1
+            fi
+            if gh api "repos/$GITHUB_REPOSITORY/releases/tags/$GITHUB_REF_NAME" \
+              >/dev/null 2>&1; then
+              echo "::error::GitHub Release $GITHUB_REF_NAME already exists"
+              exit 1
+            fi
+          else
+            if [ "$GITHUB_REF_TYPE" != "branch" ] || [ "$GITHUB_REF_NAME" != "main" ]; then
+              echo "::error::manual release preflight must run from main"
+              exit 1
+            fi
+            if git ls-remote --exit-code --tags origin "refs/tags/v$version" \
+              >/dev/null 2>&1; then
+              echo "::error::release tag v$version already exists"
+              exit 1
+            fi
           fi
           numeric_version="${version%%-*}"
           if [[ "$version" == *-* ]]; then
@@ -435,7 +470,7 @@ jobs:
     needs:
       - prepare
       - supply-chain
-    if: github.ref_type == 'tag' || github.event_name == 'workflow_dispatch'
+    if: github.ref_type == 'tag'
     runs-on: ubuntu-24.04
     timeout-minutes: 60
 
@@ -443,7 +478,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          ref: ${{ github.ref_type == 'tag' && github.ref || format('refs/tags/v{0}', needs.prepare.outputs.version) }}
+          ref: ${{ github.ref }}
 
       - name: Login to Docker Hub
         uses: docker/login-action@abd2ef45e78c5afb21d64d4ca52ee8550d9572c7 # v4
@@ -463,6 +498,22 @@ jobs:
 
       - name: Setup Docker Buildx
         uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
+
+      - name: Reject an existing immutable version tag
+        shell: bash
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+          DOCKERHUB_IMAGE: ${{ vars.DOCKERHUB_USERNAME }}/trustdb
+          GHCR_IMAGE: ghcr.io/${{ github.repository_owner }}/trustdb
+        run: |
+          set -euo pipefail
+          for image in "$DOCKERHUB_IMAGE" "$GHCR_IMAGE"; do
+            if docker buildx imagetools inspect "$image:$VERSION" \
+              >/dev/null 2>&1; then
+              echo "::error::immutable image tag already exists: $image:$VERSION"
+              exit 1
+            fi
+          done
 
       - name: Build and push multi-architecture image
         id: image
@@ -595,9 +646,16 @@ jobs:
         run: |
           cp "$ATTESTATION_BUNDLE" \
             release-assets/trustdb-release-attestation.sigstore.json
+          gh attestation verify \
+            release-assets/TRUSTDB_RELEASE_MANIFEST.json \
+            --repo "$GITHUB_REPOSITORY" \
+            --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release.yml" \
+            --source-digest "$GITHUB_SHA" \
+            --deny-self-hosted-runners \
+            --bundle release-assets/trustdb-release-attestation.sigstore.json
           go run ./cmd/trustdb release verify --dir release-assets
 
-      - name: Publish prerelease
+      - name: Publish GitHub release
         uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3
         with:
           name: TrustDB v${{ needs.prepare.outputs.version }}

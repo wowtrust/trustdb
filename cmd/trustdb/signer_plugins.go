@@ -8,10 +8,10 @@ import (
 	"strings"
 	"time"
 
-	trustconfig "github.com/wowtrust/trustdb/internal/config"
-	"github.com/wowtrust/trustdb/internal/keydescriptor"
-	"github.com/wowtrust/trustdb/internal/keyenvelope"
-	"github.com/wowtrust/trustdb/internal/trustcrypto"
+	trustconfig "github.com/wowtrust/trustdb/v2/internal/config"
+	"github.com/wowtrust/trustdb/v2/internal/keydescriptor"
+	"github.com/wowtrust/trustdb/v2/internal/keyenvelope"
+	"github.com/wowtrust/trustdb/v2/internal/trustcrypto"
 )
 
 func (rt *runtimeConfig) signerResolverForConfig() (*keydescriptor.Resolver, error) {

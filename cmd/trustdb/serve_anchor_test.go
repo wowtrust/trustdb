@@ -15,12 +15,12 @@ import (
 	ethcrypto "github.com/ethereum/go-ethereum/crypto"
 	"github.com/rs/zerolog"
 	"github.com/spf13/cobra"
-	"github.com/wowtrust/trustdb/internal/anchor"
-	"github.com/wowtrust/trustdb/internal/anchor/fiscobcos"
-	"github.com/wowtrust/trustdb/internal/anchor/fiscobcos/standardsdk"
-	trustconfig "github.com/wowtrust/trustdb/internal/config"
-	"github.com/wowtrust/trustdb/internal/wal"
-	"github.com/wowtrust/trustdb/sdk/signerplugin"
+	"github.com/wowtrust/trustdb/v2/internal/anchor"
+	"github.com/wowtrust/trustdb/v2/internal/anchor/fiscobcos"
+	"github.com/wowtrust/trustdb/v2/internal/anchor/fiscobcos/standardsdk"
+	trustconfig "github.com/wowtrust/trustdb/v2/internal/config"
+	"github.com/wowtrust/trustdb/v2/internal/wal"
+	"github.com/wowtrust/trustdb/v2/sdk/signerplugin"
 )
 
 // newTestRuntime returns a runtimeConfig minimal enough to drive the

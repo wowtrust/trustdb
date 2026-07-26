@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/wowtrust/trustdb/internal/model"
+	"github.com/wowtrust/trustdb/v2/internal/model"
 )
 
 func TestNoopSinkProducesLocalOnlyL4Result(t *testing.T) {

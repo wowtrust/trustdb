@@ -7,8 +7,8 @@ import (
 
 	"github.com/emmansun/gmsm/sm3"
 
-	"github.com/wowtrust/trustdb/internal/cborx"
-	"github.com/wowtrust/trustdb/sdk/signerplugin"
+	"github.com/wowtrust/trustdb/v2/internal/cborx"
+	"github.com/wowtrust/trustdb/v2/sdk/signerplugin"
 )
 
 const (

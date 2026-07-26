@@ -7,11 +7,11 @@ import (
 	"time"
 
 	"github.com/rs/zerolog"
-	trustconfig "github.com/wowtrust/trustdb/internal/config"
-	"github.com/wowtrust/trustdb/internal/natsingress"
-	"github.com/wowtrust/trustdb/internal/observability"
-	"github.com/wowtrust/trustdb/internal/submission"
-	"github.com/wowtrust/trustdb/internal/trusterr"
+	trustconfig "github.com/wowtrust/trustdb/v2/internal/config"
+	"github.com/wowtrust/trustdb/v2/internal/natsingress"
+	"github.com/wowtrust/trustdb/v2/internal/observability"
+	"github.com/wowtrust/trustdb/v2/internal/submission"
+	"github.com/wowtrust/trustdb/v2/internal/trusterr"
 )
 
 // serveNATSIngress owns the optional NATS transport lifecycle without owning

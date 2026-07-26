@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wowtrust/trustdb/internal/adminauth"
+	"github.com/wowtrust/trustdb/v2/internal/adminauth"
 )
 
 func TestVerifySessionTokenExpirationBoundary(t *testing.T) {

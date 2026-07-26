@@ -3,7 +3,7 @@ package app_test
 import (
 	"testing"
 
-	"github.com/wowtrust/trustdb/test/cnsmvectors"
+	"github.com/wowtrust/trustdb/v2/test/cnsmvectors"
 )
 
 func TestServerGenerationMatchesSharedCNSMInteropCorpus(t *testing.T) {

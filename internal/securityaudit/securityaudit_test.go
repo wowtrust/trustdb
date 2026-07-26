@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wowtrust/trustdb/internal/trustcrypto"
+	"github.com/wowtrust/trustdb/v2/internal/trustcrypto"
 )
 
 func TestSignedAuditChainAndExportAcrossSuites(t *testing.T) {

@@ -31,11 +31,11 @@ import (
 
 	"github.com/emmansun/gmsm/sm2"
 	"github.com/emmansun/gmsm/smx509"
-	"github.com/wowtrust/trustdb/internal/cryptosuite"
-	"github.com/wowtrust/trustdb/internal/keydescriptor"
-	"github.com/wowtrust/trustdb/internal/keystore"
-	"github.com/wowtrust/trustdb/internal/tlcpprofile"
-	"github.com/wowtrust/trustdb/internal/trustcrypto"
+	"github.com/wowtrust/trustdb/v2/internal/cryptosuite"
+	"github.com/wowtrust/trustdb/v2/internal/keydescriptor"
+	"github.com/wowtrust/trustdb/v2/internal/keystore"
+	"github.com/wowtrust/trustdb/v2/internal/tlcpprofile"
+	"github.com/wowtrust/trustdb/v2/internal/trustcrypto"
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/hpack"
 )

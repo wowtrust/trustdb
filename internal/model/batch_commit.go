@@ -1,6 +1,6 @@
 package model
 
-import "github.com/wowtrust/trustdb/internal/cryptosuite"
+import "github.com/wowtrust/trustdb/v2/internal/cryptosuite"
 
 const (
 	BatchComputePlanOnly     = "plan_only"

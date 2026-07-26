@@ -1,14 +1,15 @@
 export const release = {
-  version: "1.0.0",
-  tag: "v1.0.0",
-  published: "2026.07.22",
-  pageUrl: "https://github.com/wowtrust/trustdb/releases/tag/v1.0.0",
+  version: "2.0.0-rc.1",
+  tag: "v2.0.0-rc.1",
+  published: "2026.07.26",
+  prerelease: true,
+  pageUrl: "https://github.com/wowtrust/trustdb/releases/tag/v2.0.0-rc.1",
   containerImage: "ghcr.io/wowtrust/trustdb",
   containerUrl: "https://github.com/wowtrust/trustdb/pkgs/container/trustdb",
   dockerHubUrl: "https://hub.docker.com/r/wsy19990317/trustdb",
 };
 
-const releaseBase = "https://github.com/wowtrust/trustdb/releases/download/v1.0.0";
+const releaseBase = "https://github.com/wowtrust/trustdb/releases/download/v2.0.0-rc.1";
 
 export function assetUrl(filename) {
   return `${releaseBase}/${filename}`;
@@ -19,6 +20,21 @@ export const checksumsAsset = {
   filename: "SHA256SUMS",
   url: assetUrl("SHA256SUMS"),
 };
+
+export const sm3ChecksumsAsset = {
+  label: "SM3SUMS",
+  filename: "SM3SUMS",
+  url: assetUrl("SM3SUMS"),
+};
+
+export const releaseEvidence = [
+  { label: "签名发布清单", filename: "TRUSTDB_RELEASE_MANIFEST.json" },
+  { label: "Sigstore 来源证明", filename: "trustdb-release-attestation.sigstore.json" },
+  { label: "SPDX SBOM", filename: "trustdb-release.spdx.json" },
+  { label: "漏洞检查报告", filename: "TRUSTDB_VULNERABILITY_REPORT.json" },
+  { label: "生产输入清单", filename: "TRUSTDB_PRODUCTION_INPUTS.json" },
+  { label: "容器不可变摘要", filename: "TRUSTDB_CONTAINER_DIGESTS.json" },
+].map((asset) => ({ ...asset, url: assetUrl(asset.filename) }));
 
 const desktopAsset = (os, arch, extension, label) => ({
   label,

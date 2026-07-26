@@ -3,7 +3,7 @@ package model
 import (
 	"testing"
 
-	"github.com/wowtrust/trustdb/internal/cryptosuite"
+	"github.com/wowtrust/trustdb/v2/internal/cryptosuite"
 )
 
 func TestDefaultCryptographyMatchesINTLV1Registry(t *testing.T) {

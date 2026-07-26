@@ -11,8 +11,8 @@ import (
 	gmsm2 "github.com/emmansun/gmsm/sm2"
 	"github.com/ethereum/go-ethereum/crypto"
 
-	"github.com/wowtrust/trustdb/internal/cryptosuite"
-	"github.com/wowtrust/trustdb/internal/model"
+	"github.com/wowtrust/trustdb/v2/internal/cryptosuite"
+	"github.com/wowtrust/trustdb/v2/internal/model"
 )
 
 const (

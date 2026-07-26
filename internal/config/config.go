@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/wowtrust/trustdb/transporttls"
+	"github.com/wowtrust/trustdb/v2/transporttls"
 )
 
 const DefaultYAML = `# TrustDB local client configuration.

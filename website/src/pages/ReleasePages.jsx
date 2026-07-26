@@ -1,10 +1,12 @@
 import { ArrowRight, Check, DownloadSimple, GithubLogo, Package, WarningCircle } from "@phosphor-icons/react";
 import { InlineLink, PageHero } from "../components/SiteChrome";
-import { binaryDownloads, checksumsAsset, desktopDownloads, release } from "../lib/release";
+import { useLocale } from "../i18n";
+import { binaryDownloads, checksumsAsset, desktopDownloads, release, releaseEvidence, sm3ChecksumsAsset } from "../lib/release";
 import { Link } from "../router";
 
 const milestones = [
-  ["2026.07.26", "Release supply-chain gates", "当前 main 为下一正式版增加签名 manifest、SHA-256/SM3、SPDX SBOM、漏洞留存、不可变 OCI digest、国产镜像与隔离区导入手册。", "#478"],
+  ["2026.07.26", "v2.0.0-rc.1", "首个 V2/V5 发布候选版：国密证据套件、FISCO BCOS 证据验证、破坏性新格式、签名发布清单与完整离线验真资料。", "RC.1"],
+  ["2026.07.26", "Release supply-chain gates", "发布链路新增签名 manifest、SHA-256/SM3、SPDX SBOM、漏洞留存、不可变 OCI digest、国产镜像与隔离区导入手册。", "#478"],
   ["2026.07.22", "v1.0.0", "首个正式版：新 Go module 路径、持久化 STH 合并锚定、完整离线证据、存储 schema v4 与逻辑备份。", "Stable"],
   ["2026.07.20", "v1.0.0-beta.1", "第二个公开测试版：官网、桌面客户端与 Admin Web 支持六种语言，官网按语言展示真实客户端画面，并补齐页签图标。", "Beta.1"],
   ["2026.07.20", "v1.0.0-beta", "首个公开测试版：跨平台服务器与 CLI、四种桌面客户端、自签名安装包、SHA-256 校验和多架构 Docker 镜像。", "Beta"],
@@ -18,10 +20,10 @@ const milestones = [
 export function ChangelogPage() {
   return (
     <>
-      <PageHero eyebrow="Development log" title={<>TrustDB<br />版本记录。</>} lead="按版本记录功能变化、兼容性要求、已知问题和下载信息。" meta="开发日志 · 更新于 2026.07.22">
-        <div className="page-hero__actions"><Link className="button button--solid" href="/downloads">下载 1.0.0 <ArrowRight /></Link><a className="button button--ghost" href="https://github.com/wowtrust/trustdb/commits/main" target="_blank" rel="noreferrer">全部提交</a></div>
+      <PageHero eyebrow="Development log" title={<>TrustDB<br />版本记录。</>} lead="按版本记录功能变化、兼容性要求、已知问题和下载信息。" meta="开发日志 · 更新于 2026.07.26">
+        <div className="page-hero__actions"><Link className="button button--solid" href="/downloads">下载 2.0.0-rc.1 <ArrowRight /></Link><a className="button button--ghost" href="https://github.com/wowtrust/trustdb/commits/main" target="_blank" rel="noreferrer">全部提交</a></div>
       </PageHero>
-      <section className="release-state section-shell" data-reveal><WarningCircle /><div><p>Release status</p><h2>1.0.0 正式版已发布</h2><span>服务端、CLI、SDK 与证据格式进入首个稳定版本；桌面客户端仍采用自签名证书，请从 GitHub Release 下载并核对 SHA-256。</span></div><Link href="/downloads">查看全部产物 <ArrowRight /></Link></section>
+      <section className="release-state section-shell" data-reveal><WarningCircle /><div><p>Release status</p><h2>2.0.0-rc.1 发布候选版</h2><span>这是破坏性 V2/V5 候选版本，不读取 v1 存储、备份、API 请求或证据文件。新部署请使用空数据目录并固定 `/v2` Go module。</span></div><Link href="/downloads">查看全部产物 <ArrowRight /></Link></section>
       <section className="timeline section-shell">
         <div className="timeline__heading" data-reveal><p>Development milestones</p><h2>版本变更</h2></div>
         <div className="timeline__list">{milestones.map(([date, title, description, ref], index) => <article key={`${date}-${title}`} data-reveal><span>{String(index + 1).padStart(2, "0")}</span><time>{date}</time><div><h3>{title}</h3><p>{description}</p></div><b>{ref}</b></article>)}</div>
@@ -47,14 +49,15 @@ const releaseGroups = [
 ];
 
 export function DownloadsPage() {
+  const locale = useLocale();
   return (
     <>
-      <PageHero eyebrow="Downloads" title={<>{release.version}，<br />开放下载。</>} lead="桌面客户端、服务器、CLI 和 Docker 镜像使用同一份版本与提交。按系统直接下载；安装前可用 SHA256SUMS 核对文件。" meta={`正式版 · ${release.published}`}>
-        <div className="page-hero__actions"><a className="button button--solid" href={checksumsAsset.url}><DownloadSimple /> 下载 SHA256SUMS</a><a className="button button--ghost" href={release.containerUrl} target="_blank" rel="noreferrer">GitHub Container Registry</a></div>
+      <PageHero eyebrow="Downloads" title={<>{release.version}{locale === "zh-CN" ? "，" : ","}<br />开放下载。</>} lead="桌面客户端、服务器、CLI 和 Docker 镜像绑定同一份签名清单与源提交。下载后先验证 provenance，再核对 SHA-256 与 SM3。" meta={`候选版 · ${release.published}`}>
+        <div className="page-hero__actions"><a className="button button--solid" href={checksumsAsset.url}><DownloadSimple /> SHA256SUMS</a><a className="button button--ghost" href={sm3ChecksumsAsset.url}><DownloadSimple /> SM3SUMS</a></div>
       </PageHero>
       <section className="empty-release section-shell">
         <div className="empty-release__mark" data-reveal><DownloadSimple /></div>
-        <div className="empty-release__copy" data-reveal><p>Stable release</p><h2>按系统选择。</h2><span>GitHub Release 提供安装包、服务端与 CLI 归档以及统一校验文件；WowTrust GHCR 提供 amd64 与 arm64 组织镜像。</span></div>
+        <div className="empty-release__copy" data-reveal><p>Release candidate</p><h2>先验真，再运行。</h2><span>GitHub Release 提供跨平台安装包、Server/CLI、签名清单、双摘要、SBOM 与漏洞报告；GHCR 和 Docker Hub 提供同一不可变多架构镜像。</span></div>
         <a className="empty-release__watch" href={release.pageUrl} target="_blank" rel="noreferrer"><GithubLogo weight="fill" /> 打开 GitHub Release <ArrowRight /></a>
       </section>
       <section className="asset-plan" id="release-assets">
@@ -82,15 +85,21 @@ export function DownloadsPage() {
           <section className="release-support" data-reveal>
             <div><span>03</span><Package /><h3>容器与校验资料</h3></div>
             <p>WowTrust GHCR 是默认组织镜像，Docker Hub 同步保留同版本的 linux/amd64 与 linux/arm64 镜像。</p>
-            <div><a href={release.containerUrl} target="_blank" rel="noreferrer">GHCR <ArrowRight /></a><a href={release.dockerHubUrl} target="_blank" rel="noreferrer">Docker Hub <ArrowRight /></a><a href={checksumsAsset.url}>SHA256SUMS <DownloadSimple /></a></div>
+            <div><a href={release.containerUrl} target="_blank" rel="noreferrer">GHCR <ArrowRight /></a><a href={release.dockerHubUrl} target="_blank" rel="noreferrer">Docker Hub <ArrowRight /></a><a href={checksumsAsset.url}>SHA256SUMS <DownloadSimple /></a><a href={sm3ChecksumsAsset.url}>SM3SUMS <DownloadSimple /></a></div>
+          </section>
+          <section className="release-support" data-reveal>
+            <div><span>04</span><Check /><h3>离线验真资料</h3></div>
+            <p>先验证签名发布清单的 GitHub Actions provenance，再用已准入的 TrustDB CLI 检查精确文件集合、SHA-256 与 SM3。证据文件自带内容不能替代独立 trust root。</p>
+            <div>{releaseEvidence.map((asset) => <a href={asset.url} key={asset.filename} title={asset.filename}>{asset.label} <DownloadSimple /></a>)}</div>
           </section>
         </div>
       </section>
       <section className="source-build section-shell">
         <div data-reveal><p>Build from source</p><h2>源码构建</h2></div>
         <div className="source-build__steps" data-reveal><p><span>01</span><strong>服务器与 CLI</strong><code>Go 1.26.5</code></p><p><span>02</span><strong>桌面客户端</strong><code>Wails 2.12.0 · Node.js 24</code></p><p><span>03</span><strong>测试</strong><code>go test ./...</code></p></div>
-        <div className="source-build__note"><Check /><span>正式版桌面安装包仍采用自签名证书，尚未取得 Apple 或 Microsoft 商业签名。请用 SHA256SUMS 核对下载文件；随包提供的证书和指纹可用于核对本次发布所用的签名证书。</span></div>
-        <div className="source-build__note"><Check /><span>历史 v1.0.0 只有 SHA256SUMS；当前 main 的下一正式版会携带签名 manifest、SHA-256/SM3、SPDX SBOM、漏洞报告和不可变容器 digest。按新流程部署前请阅读完整验签手册。</span></div>
+        <div className="source-build__note"><WarningCircle /><span>V2/V5 是一次性破坏性切换：不要让 v2 进程打开 v1 数据目录，也不要把 v1 backup、SDK 请求或 .sproof 输入 v2。升级前保留历史环境用于审计，然后使用新 namespace 与空数据目录部署。</span></div>
+        <div className="source-build__note"><Check /><span>桌面安装包仍采用自签名证书，尚未取得 Apple 或 Microsoft 商业签名。必须先验证签名 manifest 与双摘要；证书和指纹只用于核对本次发布的签名完整性。</span></div>
+        <div className="source-build__note"><Check /><span>通用发布包支持 FISCO BCOS 离线证据验证；需要真实链上发布时，必须按固定 C SDK v3.6.0、Go SDK v3.0.2 和 `fiscobcos_sdk` build tag 构建并验证原生运行时。</span></div>
         <div className="source-build__links"><InlineLink href="/docs/quick-start">快速开始</InlineLink><InlineLink href="/docs/supply-chain">发布验签与国产镜像</InlineLink><InlineLink href="/docs/desktop-install">安装桌面客户端</InlineLink><InlineLink href="/docs/source-build">从源码构建</InlineLink><InlineLink href="/changelog">开发日志</InlineLink></div>
       </section>
     </>

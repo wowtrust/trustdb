@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wowtrust/trustdb/internal/trustcrypto"
+	"github.com/wowtrust/trustdb/v2/internal/trustcrypto"
 )
 
 func BenchmarkNativeLogBatch256(b *testing.B) {

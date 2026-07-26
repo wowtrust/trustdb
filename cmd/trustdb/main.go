@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/wowtrust/trustdb/internal/trusterr"
+	"github.com/wowtrust/trustdb/v2/internal/trusterr"
 )
 
 func main() {

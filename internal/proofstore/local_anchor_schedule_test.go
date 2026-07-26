@@ -10,9 +10,9 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/wowtrust/trustdb/internal/anchorschedule"
-	"github.com/wowtrust/trustdb/internal/model"
-	"github.com/wowtrust/trustdb/internal/trusterr"
+	"github.com/wowtrust/trustdb/v2/internal/anchorschedule"
+	"github.com/wowtrust/trustdb/v2/internal/model"
+	"github.com/wowtrust/trustdb/v2/internal/trusterr"
 )
 
 func TestLocalStoreSTHAnchorScheduleUsesEncodedTuplePath(t *testing.T) {

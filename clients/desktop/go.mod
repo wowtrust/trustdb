@@ -1,14 +1,14 @@
-module github.com/wowtrust/trustdb/clients/desktop
+module github.com/wowtrust/trustdb/v2/clients/desktop
 
 go 1.26.5
 
 require (
 	github.com/cockroachdb/pebble v1.1.5
 	github.com/wailsapp/wails/v2 v2.12.0
-	github.com/wowtrust/trustdb v0.0.0-00010101000000-000000000000
+	github.com/wowtrust/trustdb/v2 v2.0.0-00010101000000-000000000000
 )
 
-replace github.com/wowtrust/trustdb => ../..
+replace github.com/wowtrust/trustdb/v2 => ../..
 
 require (
 	git.sr.ht/~jackmordaunt/go-toast/v2 v2.0.3 // indirect

@@ -10,8 +10,8 @@ import (
 	pdb "github.com/cockroachdb/pebble"
 	"github.com/golang/snappy"
 
-	"github.com/wowtrust/trustdb/internal/cborx"
-	"github.com/wowtrust/trustdb/internal/model"
+	"github.com/wowtrust/trustdb/v2/internal/cborx"
+	"github.com/wowtrust/trustdb/v2/internal/model"
 )
 
 func BenchmarkPebblePutBatchArtifacts1024(b *testing.B) {

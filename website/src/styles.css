@@ -263,6 +263,7 @@ html:not([lang="zh-CN"]) .home-use-cases__heading h2 { font-size: clamp(44px, 4.
 .home-download-card > div a:hover { padding-left: 8px; color: var(--acid); }
 .home-download-card > div svg { flex: none; width: 14px; height: 14px; color: var(--acid); }
 .home-downloads__footer { min-height: 98px; display: flex; align-items: flex-end; justify-content: space-between; gap: 30px; }
+.home-downloads__footer > div { display: flex; align-items: center; gap: 24px; }
 .home-downloads__footer a { display: inline-flex; align-items: center; gap: 12px; color: var(--acid); font-size: 11px; font-weight: 700; }
 .home-downloads__footer svg { width: 15px; height: 15px; }
 .knowledge { padding-top: 142px; padding-bottom: 150px; }
@@ -750,6 +751,7 @@ html:not([lang="zh-CN"]) .home-use-cases__heading h2 { font-size: clamp(44px, 4.
   .home-download-card { min-height: 320px; }
   .home-download-card h3 { margin-top: 64px; }
   .home-downloads__footer { min-height: 130px; align-items: flex-start; justify-content: center; flex-direction: column; }
+  .home-downloads__footer > div { flex-wrap: wrap; }
   .knowledge { padding-top: 90px; padding-bottom: 90px; }
   .knowledge__heading, .docs-index__intro, .docs-principle .section-shell, .perf-overview__heading, .profile-section__heading, .grade-rules__heading, .asset-plan__heading, .source-build > div:first-child, .timeline__heading { grid-template-columns: 1fr; gap: 22px; }
   .knowledge__grid { grid-template-columns: 1fr; margin-top: 60px; }

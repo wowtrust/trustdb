@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/wowtrust/trustdb/internal/anchor/fiscobcos"
+	"github.com/wowtrust/trustdb/v2/internal/anchor/fiscobcos"
 )
 
 func TestFISCOBCOSTrustConfigCreateAndInspect(t *testing.T) {

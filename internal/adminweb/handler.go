@@ -19,9 +19,9 @@ import (
 
 	"github.com/rs/zerolog"
 	"github.com/spf13/viper"
-	"github.com/wowtrust/trustdb/internal/adminauth"
-	trustconfig "github.com/wowtrust/trustdb/internal/config"
-	"github.com/wowtrust/trustdb/internal/securityaudit"
+	"github.com/wowtrust/trustdb/v2/internal/adminauth"
+	trustconfig "github.com/wowtrust/trustdb/v2/internal/config"
+	"github.com/wowtrust/trustdb/v2/internal/securityaudit"
 )
 
 type MFAVerifier interface {

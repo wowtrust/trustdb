@@ -8,8 +8,8 @@ import (
 
 	pdb "github.com/cockroachdb/pebble"
 
-	"github.com/wowtrust/trustdb/internal/model"
-	"github.com/wowtrust/trustdb/internal/trusterr"
+	"github.com/wowtrust/trustdb/v2/internal/model"
+	"github.com/wowtrust/trustdb/v2/internal/trusterr"
 )
 
 func TestBatchTreeSnapshotUsesFortyTiles(t *testing.T) {

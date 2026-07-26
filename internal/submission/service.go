@@ -6,9 +6,9 @@ import (
 	"context"
 	"reflect"
 
-	"github.com/wowtrust/trustdb/internal/model"
-	"github.com/wowtrust/trustdb/internal/prooflevel"
-	"github.com/wowtrust/trustdb/internal/trusterr"
+	"github.com/wowtrust/trustdb/v2/internal/model"
+	"github.com/wowtrust/trustdb/v2/internal/prooflevel"
+	"github.com/wowtrust/trustdb/v2/internal/trusterr"
 )
 
 // Ingest accepts one signed claim into the durable TrustDB ingest boundary.

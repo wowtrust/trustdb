@@ -14,9 +14,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/wowtrust/trustdb/internal/cborx"
-	"github.com/wowtrust/trustdb/internal/cryptosuite"
-	"github.com/wowtrust/trustdb/internal/trustcrypto"
+	"github.com/wowtrust/trustdb/v2/internal/cborx"
+	"github.com/wowtrust/trustdb/v2/internal/cryptosuite"
+	"github.com/wowtrust/trustdb/v2/internal/trustcrypto"
 )
 
 var auditFileMagic = [8]byte{'T', 'D', 'B', 'A', 'U', 'D', '1', '\n'}

@@ -57,25 +57,25 @@ For prebuilt binaries, Docker, Windows instructions, L4/L5 evidence, and product
 Module:
 
 ```text
-github.com/wowtrust/trustdb
+github.com/wowtrust/trustdb/v2
 ```
 
 License: AGPL-3.0-only. See [LICENSE](LICENSE).
 
-## v1.0.0
+## v2.0.0-rc.1
 
-The first stable release is distributed through [GitHub Releases](https://github.com/wowtrust/trustdb/releases/tag/v1.0.0). It includes Server/CLI archives for Linux, macOS, and Windows, four self-signed desktop packages, a multi-architecture Docker image, and a single `SHA256SUMS` file.
+The first V2 release candidate is distributed through [GitHub Releases](https://github.com/wowtrust/trustdb/releases/tag/v2.0.0-rc.1). It includes Server/CLI archives for Linux, macOS, and Windows; four self-signed desktop packages; multi-architecture images on GHCR and Docker Hub; and a signed manifest with SHA-256, SM3, SBOM, vulnerability, production-input, container-digest, and Sigstore evidence.
 
-The v1.0.0 release established the `github.com/wowtrust/trustdb` module path, durable coalesced STH anchoring, covering-anchor offline evidence export, resumable L5 coverage projection, storage schema v4, and `.sproof v1`. Current `main` has since made the intentional V2/V5 cutover: proofstore schema v5, suite-bound wire/storage objects, `.sproof v2`, and end-to-end `INTL_V1` / `CN_SM_V1` evidence generation. The v1.0.0 tag remains the latest published binary/SDK release:
+This release makes the intentional V2/V5 cutover: proofstore schema v5, suite-bound wire and storage objects, `.sproof v2`, encrypted `.tdbackup v5`, and end-to-end `INTL_V1` / `CN_SM_V1` evidence. The Go module follows semantic import versioning:
 
 ```bash
-go get github.com/wowtrust/trustdb@v1.0.0
+go get github.com/wowtrust/trustdb/v2@v2.0.0-rc.1
 ```
 
-The multi-architecture Docker image is published with both immutable and stable-channel tags:
+V2 does not read or migrate v1 storage, backups, API objects, or evidence files. Preserve the old environment for audit, then deploy the RC with a new namespace, LogID, and empty data directory. The multi-architecture image is published with an immutable version tag and the prerelease `beta` channel; it does not move `latest`:
 
 ```bash
-docker pull wsy19990317/trustdb:1.0.0
+docker pull wsy19990317/trustdb:2.0.0-rc.1
 printf 'Development key passphrase: '
 IFS= read -r -s TRUSTDB_DEV_KEY_PASSPHRASE
 printf '\n'
@@ -84,7 +84,7 @@ docker run -d --name trustdb \
   -e TRUSTDB_DEV_KEY_PASSPHRASE \
   -p 127.0.0.1:8080:8080 \
   -v trustdb-data:/var/lib/trustdb \
-  wsy19990317/trustdb:1.0.0
+  wsy19990317/trustdb:2.0.0-rc.1
 unset TRUSTDB_DEV_KEY_PASSPHRASE
 docker logs trustdb
 curl --fail http://127.0.0.1:8080/healthz
@@ -98,9 +98,13 @@ never store the KEK beside the envelope or in the same backup volume.
 
 Desktop packages carry a release-specific self-signed certificate and its public `.cer` file. The certificate lets you inspect the signer used for this release, but does not establish Apple or Microsoft trust, so Gatekeeper or SmartScreen may still show an unknown-developer warning. Verify the downloaded file against `SHA256SUMS` before installing.
 
+The generic packages verify FISCO BCOS evidence offline. Publishing anchors to a real FISCO BCOS network requires a source build with the pinned C SDK v3.6.0, Go SDK v3.0.2, and `fiscobcos_sdk` build tag; the generic binary intentionally fails closed instead of silently substituting another sink.
+
+The historical [v1.0.0 release](https://github.com/wowtrust/trustdb/releases/tag/v1.0.0) remains available for existing v1 evidence environments. Its module path is `github.com/wowtrust/trustdb`, storage schema is v4, and proof container is `.sproof v1`; those artifacts are not compatible with V2.
+
 ## Release supply-chain evidence
 
-Releases produced by the current `main` workflow add a signed
+The v2.0.0-rc.1 release includes a signed
 `TRUSTDB_RELEASE_MANIFEST.json`, `SHA256SUMS`, `SM3SUMS`, an SPDX SBOM,
 retained vulnerability results, the exact native/contract/license/architecture
 inventory, immutable container digests, and downloadable Sigstore bundles.
@@ -180,10 +184,10 @@ Recovery accepts only the V2 WAL and checkpoint generation bound to the configur
 
 ## Quick Start
 
-The README and website tutorial track the latest V2 code on `main`. Shallow-clone it, record the exact commit, and build with the Go version declared by `go.mod`; do not run this section with the older `v1.0.0` binary. No server is required. Windows users should follow the platform-specific [website quick start](https://www.trustdb.ryan-wong.cn/docs/quick-start).
+The README and website tutorial are pinned to `v2.0.0-rc.1`. Shallow-clone the tag, record the exact commit, and build with the Go version declared by `go.mod`; do not run this section with a v1 binary. No server is required. Windows users should follow the platform-specific [website quick start](https://www.trustdb.ryan-wong.cn/docs/quick-start).
 
 ```bash
-git clone --depth 1 https://github.com/wowtrust/trustdb.git trustdb-quickstart
+git clone --branch v2.0.0-rc.1 --depth 1 https://github.com/wowtrust/trustdb.git trustdb-quickstart
 cd trustdb-quickstart
 git rev-parse HEAD
 mkdir -p bin

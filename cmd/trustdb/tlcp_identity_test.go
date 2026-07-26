@@ -6,9 +6,9 @@ import (
 	"crypto/rand"
 	"testing"
 
-	"github.com/wowtrust/trustdb/internal/cryptosuite"
-	"github.com/wowtrust/trustdb/internal/keydescriptor"
-	"github.com/wowtrust/trustdb/internal/trustcrypto"
+	"github.com/wowtrust/trustdb/v2/internal/cryptosuite"
+	"github.com/wowtrust/trustdb/v2/internal/keydescriptor"
+	"github.com/wowtrust/trustdb/v2/internal/trustcrypto"
 )
 
 func TestActiveProofDescriptorUsesTheResolvedTrustDBSigner(t *testing.T) {

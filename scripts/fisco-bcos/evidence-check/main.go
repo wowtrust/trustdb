@@ -17,9 +17,9 @@ import (
 
 	"github.com/FISCO-BCOS/go-sdk/v3/types"
 
-	"github.com/wowtrust/trustdb/internal/anchor/fiscobcos"
-	"github.com/wowtrust/trustdb/internal/cryptosuite"
-	"github.com/wowtrust/trustdb/internal/tlcpprofile"
+	"github.com/wowtrust/trustdb/v2/internal/anchor/fiscobcos"
+	"github.com/wowtrust/trustdb/v2/internal/cryptosuite"
+	"github.com/wowtrust/trustdb/v2/internal/tlcpprofile"
 )
 
 type smokeEvidence struct {

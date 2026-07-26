@@ -3,8 +3,8 @@ package batch
 import (
 	"testing"
 
-	"github.com/wowtrust/trustdb/internal/cryptosuite"
-	"github.com/wowtrust/trustdb/internal/proofstore"
+	"github.com/wowtrust/trustdb/v2/internal/cryptosuite"
+	"github.com/wowtrust/trustdb/v2/internal/proofstore"
 )
 
 func newBoundTestLocalStore(t testing.TB, root string) proofstore.LocalStore {

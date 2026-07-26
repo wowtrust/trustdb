@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/nats-io/nats.go"
-	"github.com/wowtrust/trustdb/internal/model"
+	"github.com/wowtrust/trustdb/v2/internal/model"
 )
 
 const StatusRefreshContentType = "application/vnd.trustdb.status-refresh+cbor"

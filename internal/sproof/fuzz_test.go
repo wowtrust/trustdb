@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/wowtrust/trustdb/internal/model"
+	"github.com/wowtrust/trustdb/v2/internal/model"
 )
 
 func FuzzUnmarshalV2(f *testing.F) {

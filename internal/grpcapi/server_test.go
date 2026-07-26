@@ -7,10 +7,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wowtrust/trustdb/internal/anchorschedule"
-	"github.com/wowtrust/trustdb/internal/httpapi"
-	"github.com/wowtrust/trustdb/internal/ingest"
-	"github.com/wowtrust/trustdb/internal/model"
+	"github.com/wowtrust/trustdb/v2/internal/anchorschedule"
+	"github.com/wowtrust/trustdb/v2/internal/httpapi"
+	"github.com/wowtrust/trustdb/v2/internal/ingest"
+	"github.com/wowtrust/trustdb/v2/internal/model"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )

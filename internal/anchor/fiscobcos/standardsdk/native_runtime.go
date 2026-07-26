@@ -15,7 +15,7 @@ import (
 
 	"github.com/FISCO-BCOS/bcos-c-sdk/bindings/go/csdk"
 
-	"github.com/wowtrust/trustdb/internal/anchor/fiscobcos"
+	"github.com/wowtrust/trustdb/v2/internal/anchor/fiscobcos"
 )
 
 type nativeArtifactPin struct {

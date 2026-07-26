@@ -3,9 +3,9 @@ package proofstore_test
 import (
 	"testing"
 
-	"github.com/wowtrust/trustdb/internal/cryptosuite"
-	"github.com/wowtrust/trustdb/internal/proofstore"
-	"github.com/wowtrust/trustdb/internal/proofstore/proofstoretest"
+	"github.com/wowtrust/trustdb/v2/internal/cryptosuite"
+	"github.com/wowtrust/trustdb/v2/internal/proofstore"
+	"github.com/wowtrust/trustdb/v2/internal/proofstore/proofstoretest"
 )
 
 // TestLocalStoreConformance runs the shared conformance suite against

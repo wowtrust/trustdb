@@ -4,7 +4,7 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/wowtrust/trustdb/internal/model"
+	"github.com/wowtrust/trustdb/v2/internal/model"
 )
 
 func TestRecordPageFromEnvelopeTransfersDecodedRecords(t *testing.T) {

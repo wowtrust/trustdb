@@ -7,8 +7,8 @@ import (
 
 	tikverr "github.com/tikv/client-go/v2/error"
 
-	"github.com/wowtrust/trustdb/internal/model"
-	"github.com/wowtrust/trustdb/internal/trusterr"
+	"github.com/wowtrust/trustdb/v2/internal/model"
+	"github.com/wowtrust/trustdb/v2/internal/trusterr"
 )
 
 func TestGlobalLogCommitErrorMapsWriteConflictsForServiceRetry(t *testing.T) {

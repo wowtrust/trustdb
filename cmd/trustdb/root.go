@@ -13,10 +13,10 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
-	trustconfig "github.com/wowtrust/trustdb/internal/config"
-	"github.com/wowtrust/trustdb/internal/keydescriptor"
-	"github.com/wowtrust/trustdb/internal/logx"
-	"github.com/wowtrust/trustdb/internal/securityaudit"
+	trustconfig "github.com/wowtrust/trustdb/v2/internal/config"
+	"github.com/wowtrust/trustdb/v2/internal/keydescriptor"
+	"github.com/wowtrust/trustdb/v2/internal/logx"
+	"github.com/wowtrust/trustdb/v2/internal/securityaudit"
 	"gopkg.in/natefinch/lumberjack.v2"
 )
 

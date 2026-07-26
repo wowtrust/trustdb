@@ -8,9 +8,9 @@ import (
 	"testing"
 
 	"github.com/nats-io/nats.go"
-	"github.com/wowtrust/trustdb/internal/cborx"
-	"github.com/wowtrust/trustdb/internal/formatregistry"
-	"github.com/wowtrust/trustdb/internal/trusterr"
+	"github.com/wowtrust/trustdb/v2/internal/cborx"
+	"github.com/wowtrust/trustdb/v2/internal/formatregistry"
+	"github.com/wowtrust/trustdb/v2/internal/trusterr"
 )
 
 func TestDeadLetterCanonicalRoundTripPreservesCompleteRejection(t *testing.T) {

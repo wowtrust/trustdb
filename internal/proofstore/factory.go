@@ -7,11 +7,11 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/wowtrust/trustdb/internal/cryptosuite"
-	pebblestore "github.com/wowtrust/trustdb/internal/proofstore/pebble"
-	tikvstore "github.com/wowtrust/trustdb/internal/proofstore/tikv"
-	"github.com/wowtrust/trustdb/internal/proofstoremeta"
-	"github.com/wowtrust/trustdb/internal/trusterr"
+	"github.com/wowtrust/trustdb/v2/internal/cryptosuite"
+	pebblestore "github.com/wowtrust/trustdb/v2/internal/proofstore/pebble"
+	tikvstore "github.com/wowtrust/trustdb/v2/internal/proofstore/tikv"
+	"github.com/wowtrust/trustdb/v2/internal/proofstoremeta"
+	"github.com/wowtrust/trustdb/v2/internal/trusterr"
 )
 
 // Backend enumerates the supported proof store implementations.

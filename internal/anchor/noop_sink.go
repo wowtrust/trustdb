@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/wowtrust/trustdb/internal/model"
+	"github.com/wowtrust/trustdb/v2/internal/model"
 )
 
 // NoopSinkName is the stable identifier for the NoopSink. It is

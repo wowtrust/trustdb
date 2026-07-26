@@ -6,7 +6,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/wowtrust/trustdb/internal/anchor/fiscobcos"
+	"github.com/wowtrust/trustdb/v2/internal/anchor/fiscobcos"
 )
 
 func (NativeFactory) NewDrivers(context.Context, Config) ([]fiscobcos.Driver, error) {

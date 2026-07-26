@@ -1,7 +1,7 @@
 package grpcapi
 
 import (
-	"github.com/wowtrust/trustdb/internal/cborx"
+	"github.com/wowtrust/trustdb/v2/internal/cborx"
 	"google.golang.org/grpc/encoding"
 )
 

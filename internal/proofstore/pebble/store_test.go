@@ -7,13 +7,13 @@ import (
 
 	pdb "github.com/cockroachdb/pebble"
 
-	"github.com/wowtrust/trustdb/internal/cryptosuite"
-	"github.com/wowtrust/trustdb/internal/model"
-	"github.com/wowtrust/trustdb/internal/proofstore"
-	pebblestore "github.com/wowtrust/trustdb/internal/proofstore/pebble"
-	"github.com/wowtrust/trustdb/internal/proofstore/proofstoretest"
-	"github.com/wowtrust/trustdb/internal/proofstoremeta/proofstoremetatest"
-	"github.com/wowtrust/trustdb/internal/trusterr"
+	"github.com/wowtrust/trustdb/v2/internal/cryptosuite"
+	"github.com/wowtrust/trustdb/v2/internal/model"
+	"github.com/wowtrust/trustdb/v2/internal/proofstore"
+	pebblestore "github.com/wowtrust/trustdb/v2/internal/proofstore/pebble"
+	"github.com/wowtrust/trustdb/v2/internal/proofstore/proofstoretest"
+	"github.com/wowtrust/trustdb/v2/internal/proofstoremeta/proofstoremetatest"
+	"github.com/wowtrust/trustdb/v2/internal/trusterr"
 )
 
 func TestPebbleSuiteBindingConformance(t *testing.T) {

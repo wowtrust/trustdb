@@ -57,25 +57,25 @@
 当前 Go module：
 
 ```text
-github.com/wowtrust/trustdb
+github.com/wowtrust/trustdb/v2
 ```
 
 许可证：AGPL-3.0-only，见 [LICENSE](LICENSE)。
 
-## v1.0.0
+## v2.0.0-rc.1
 
-首个正式版通过 [GitHub Releases](https://github.com/wowtrust/trustdb/releases/tag/v1.0.0) 发布，包含 Linux、macOS、Windows 的服务器与 CLI、四种自签名桌面客户端、多架构 Docker 镜像和统一的 `SHA256SUMS`。
+首个 V2 发布候选版通过 [GitHub Releases](https://github.com/wowtrust/trustdb/releases/tag/v2.0.0-rc.1) 发布，包含 Linux、macOS、Windows 的服务器与 CLI、四种自签名桌面客户端、同步发布到 GHCR 与 Docker Hub 的多架构镜像，以及带 SHA-256、SM3、SBOM、漏洞报告、生产输入、容器摘要和 Sigstore 来源证明的签名发布清单。
 
-v1.0.0 发布时正式确立了 `github.com/wowtrust/trustdb` module 路径，并包含持久化 STH 合并锚定、covering anchor 离线证据导出、可恢复 L5 coverage 投影、存储 schema v4 与 `.sproof v1`。当前 `main` 此后已经完成一次明确的破坏性 V2/V5 切换：proofstore schema v5、全链路 suite 绑定对象、`.sproof v2`，以及 `INTL_V1` / `CN_SM_V1` 端到端证据生成。v1.0.0 仍是当前最新正式发布的二进制与 SDK 标签：
+这个版本完成明确的 V2/V5 破坏性切换：proofstore schema v5、全链路 suite 绑定对象、`.sproof v2`、加密 `.tdbackup v5`，以及 `INTL_V1` / `CN_SM_V1` 端到端证据生成。Go module 遵循语义化主版本路径：
 
 ```bash
-go get github.com/wowtrust/trustdb@v1.0.0
+go get github.com/wowtrust/trustdb/v2@v2.0.0-rc.1
 ```
 
-Docker Hub 同步发布 amd64 与 arm64 镜像，并提供不可变版本标签与稳定通道标签：
+V2 不读取或迁移 v1 存储、备份、API 对象和证据文件。升级前保留旧环境用于审计，再使用新 namespace、新 LogID 和空数据目录部署 RC。Docker Hub 同步发布 amd64 与 arm64 镜像；发布候选版更新不可变版本标签和 `beta` 通道，不移动 `latest`：
 
 ```bash
-docker pull wsy19990317/trustdb:1.0.0
+docker pull wsy19990317/trustdb:2.0.0-rc.1
 printf '开发密钥口令：'
 IFS= read -r -s TRUSTDB_DEV_KEY_PASSPHRASE
 printf '\n'
@@ -84,7 +84,7 @@ docker run -d --name trustdb \
   -e TRUSTDB_DEV_KEY_PASSPHRASE \
   -p 127.0.0.1:8080:8080 \
   -v trustdb-data:/var/lib/trustdb \
-  wsy19990317/trustdb:1.0.0
+  wsy19990317/trustdb:2.0.0-rc.1
 unset TRUSTDB_DEV_KEY_PASSPHRASE
 docker logs trustdb
 curl --fail http://127.0.0.1:8080/healthz
@@ -94,9 +94,13 @@ curl --fail http://127.0.0.1:8080/healthz
 
 桌面包使用本次发版临时生成的自签名证书，并附带公开 `.cer` 文件，可供用户核对本次发布所用的签名证书。它不会取得 Apple 或 Microsoft 的系统信任；Gatekeeper 或 SmartScreen 仍可能提示未知开发者。安装前请用 `SHA256SUMS` 核对下载文件。
 
+通用发布包支持 FISCO BCOS 证据的离线验证。向真实 FISCO BCOS 网络发布锚点时，必须按固定 C SDK v3.6.0、Go SDK v3.0.2 和 `fiscobcos_sdk` build tag 从源码构建；通用二进制会明确失败，不会静默替换为其他 sink。
+
+历史 [v1.0.0 版本](https://github.com/wowtrust/trustdb/releases/tag/v1.0.0)仍可用于既有 v1 证据环境。它的 module 路径是 `github.com/wowtrust/trustdb`，存储 schema 是 v4，证明容器是 `.sproof v1`；这些产物与 V2 不兼容。
+
 ## 发布供应链证据
 
-当前 `main` 的正式发布工作流会新增已签名的
+v2.0.0-rc.1 包含已签名的
 `TRUSTDB_RELEASE_MANIFEST.json`、`SHA256SUMS`、`SM3SUMS`、SPDX SBOM、
 漏洞扫描留存结果、精确的原生库/合约/许可证/架构矩阵、不可变容器 digest
 与可下载 Sigstore bundle。Release Actions 和基础镜像分别固定到 commit 或
@@ -166,10 +170,10 @@ file、Pebble 和每个 TiKV namespace 使用 proofstore storage schema v5。旧
 
 ## 快速开始
 
-当前 README 与官网教程始终对应最新 `main` 的 V2 代码。先浅克隆、记录 commit，并用 `go.mod` 指定的 Go 版本构建 CLI；不要拿旧 `v1.0.0` 二进制执行本节命令。这个本地 L3 流程无需启动服务；Windows 用户可直接跟随官网的[平台化快速开始](https://www.trustdb.ryan-wong.cn/docs/quick-start)。
+当前 README 与官网教程固定到 `v2.0.0-rc.1`。先浅克隆该标签、记录 commit，并用 `go.mod` 指定的 Go 版本构建 CLI；不要拿 v1 二进制执行本节命令。这个本地 L3 流程无需启动服务；Windows 用户可直接跟随官网的[平台化快速开始](https://www.trustdb.ryan-wong.cn/docs/quick-start)。
 
 ```bash
-git clone --depth 1 https://github.com/wowtrust/trustdb.git trustdb-quickstart
+git clone --branch v2.0.0-rc.1 --depth 1 https://github.com/wowtrust/trustdb.git trustdb-quickstart
 cd trustdb-quickstart
 git rev-parse HEAD
 mkdir -p bin

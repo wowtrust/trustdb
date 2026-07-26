@@ -8,7 +8,7 @@ import (
 	"io"
 	"os"
 
-	"github.com/wowtrust/trustdb/internal/tlcpbuild"
+	"github.com/wowtrust/trustdb/v2/internal/tlcpbuild"
 )
 
 func main() {

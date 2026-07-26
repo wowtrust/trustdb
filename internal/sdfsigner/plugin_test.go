@@ -20,7 +20,7 @@ import (
 
 	"github.com/emmansun/gmsm/sm2"
 	"github.com/emmansun/gmsm/sm4"
-	"github.com/wowtrust/trustdb/sdk/signerplugin"
+	"github.com/wowtrust/trustdb/v2/sdk/signerplugin"
 )
 
 func TestNewFailsClosedWhenAdapterMissesCapability(t *testing.T) {

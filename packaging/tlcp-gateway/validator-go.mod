@@ -1,4 +1,4 @@
-module github.com/wowtrust/trustdb
+module github.com/wowtrust/trustdb/v2
 
 go 1.26.5
 

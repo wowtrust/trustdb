@@ -7,7 +7,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/wowtrust/trustdb/internal/trusterr"
+	"github.com/wowtrust/trustdb/v2/internal/trusterr"
 )
 
 func TestLoadBalancedDispatchRoundRobinOrder(t *testing.T) {

@@ -10,7 +10,7 @@ import (
 
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
-	"github.com/wowtrust/trustdb/internal/config"
+	"github.com/wowtrust/trustdb/v2/internal/config"
 )
 
 var ErrOutcomeConflict = errors.New("NATS outcome conflicts with immutable stored outcome")

@@ -12,11 +12,11 @@ import (
 
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
-	"github.com/wowtrust/trustdb/internal/cryptosuite"
-	"github.com/wowtrust/trustdb/internal/formatregistry"
-	"github.com/wowtrust/trustdb/internal/modelsuite"
-	"github.com/wowtrust/trustdb/internal/natsingress"
-	"github.com/wowtrust/trustdb/internal/trusterr"
+	"github.com/wowtrust/trustdb/v2/internal/cryptosuite"
+	"github.com/wowtrust/trustdb/v2/internal/formatregistry"
+	"github.com/wowtrust/trustdb/v2/internal/modelsuite"
+	"github.com/wowtrust/trustdb/v2/internal/natsingress"
+	"github.com/wowtrust/trustdb/v2/internal/trusterr"
 )
 
 const (

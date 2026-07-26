@@ -11,7 +11,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
-	"github.com/wowtrust/trustdb/internal/adminauth"
+	"github.com/wowtrust/trustdb/v2/internal/adminauth"
 )
 
 func TestCommandAuditActionsCoverSensitiveDomains(t *testing.T) {

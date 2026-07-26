@@ -17,7 +17,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/wowtrust/trustdb/sdk/anchorplugin"
+	"github.com/wowtrust/trustdb/v2/sdk/anchorplugin"
 )
 
 const (

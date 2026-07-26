@@ -3,7 +3,7 @@ package trustcrypto
 import (
 	"fmt"
 
-	"github.com/wowtrust/trustdb/internal/cryptosuite"
+	"github.com/wowtrust/trustdb/v2/internal/cryptosuite"
 )
 
 type SignaturePurpose string

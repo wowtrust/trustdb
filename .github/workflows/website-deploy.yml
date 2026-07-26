@@ -7,6 +7,9 @@ on:
     paths:
       - website/**
       - .github/workflows/website-deploy.yml
+  release:
+    types:
+      - published
   workflow_dispatch:
 
 permissions:
@@ -98,7 +101,7 @@ jobs:
         id: deploy
         shell: bash
         env:
-          RELEASE_ID: ${{ github.sha }}-${{ github.run_attempt }}
+          RELEASE_ID: ${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
         run: |
           set -euo pipefail
           target="${DEPLOY_USER}@${DEPLOY_HOST}"

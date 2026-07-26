@@ -16,10 +16,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/wowtrust/trustdb/internal/cborx"
-	"github.com/wowtrust/trustdb/internal/model"
-	"github.com/wowtrust/trustdb/internal/statusnotify"
-	"github.com/wowtrust/trustdb/transporttls"
+	"github.com/wowtrust/trustdb/v2/internal/cborx"
+	"github.com/wowtrust/trustdb/v2/internal/model"
+	"github.com/wowtrust/trustdb/v2/internal/statusnotify"
+	"github.com/wowtrust/trustdb/v2/transporttls"
 )
 
 type httpTransport struct {

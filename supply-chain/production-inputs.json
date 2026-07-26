@@ -100,7 +100,7 @@
       "kind": "native-interface",
       "version": "miekg/pkcs11-v1.1.2",
       "path": "internal/pkcs11signer",
-      "sha256": "e0faec75360494a47df973ca9d52e023eb4e62fd5d8e8289b0614abad1c7ee15",
+      "sha256": "605916cd99a1d81f29392873e36d809dab577fe64127ebb560794a4de0013412",
       "license_expression": "AGPL-3.0-only AND BSD-3-Clause",
       "license_evidence_path": "supply-chain/licenses/miekg-pkcs11-v1.1.2.LICENSE",
       "architectures": [
@@ -113,7 +113,7 @@
       "kind": "native-interface",
       "version": "trustdb-sdf-adapter-abi-v1",
       "path": "internal/sdfsigner",
-      "sha256": "84dd054f74e9d263294ac7b99b80e41585aef865a0ad424361cc769839f69cfd",
+      "sha256": "e6dc73e915de80c940e87fada37bcfc8edb18c72d6fb9375974245523a32ab70",
       "license_expression": "AGPL-3.0-only",
       "license_evidence_path": "LICENSE",
       "architectures": [
@@ -126,7 +126,7 @@
       "kind": "native-gateway-build",
       "version": "Tengine-2.3.4+Tongsuo-8.4.0",
       "path": "packaging/tlcp-gateway",
-      "sha256": "44b200e1637dd441a55a52d9d3148f8bbb3edcfa93e228514df480d942dd60fa",
+      "sha256": "b46c1a39290b5f1124db78f0f9f0cba1c532ed1f34635ec210ef6da1a73696b8",
       "license_expression": "BSD-2-Clause AND Apache-2.0",
       "license_evidence_path": "packaging/tlcp-gateway/baseline.json",
       "architectures": [

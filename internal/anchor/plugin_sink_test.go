@@ -6,8 +6,8 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/wowtrust/trustdb/internal/model"
-	"github.com/wowtrust/trustdb/sdk/anchorplugin"
+	"github.com/wowtrust/trustdb/v2/internal/model"
+	"github.com/wowtrust/trustdb/v2/sdk/anchorplugin"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )

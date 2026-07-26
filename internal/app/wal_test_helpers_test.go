@@ -1,8 +1,8 @@
 package app
 
 import (
-	"github.com/wowtrust/trustdb/internal/cryptosuite"
-	"github.com/wowtrust/trustdb/internal/wal"
+	"github.com/wowtrust/trustdb/v2/internal/cryptosuite"
+	"github.com/wowtrust/trustdb/v2/internal/wal"
 )
 
 func testWALOptions(namespace string) wal.Options {

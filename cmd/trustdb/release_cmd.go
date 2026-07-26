@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 
 	"github.com/spf13/cobra"
-	"github.com/wowtrust/trustdb/internal/supplychain"
+	"github.com/wowtrust/trustdb/v2/internal/supplychain"
 )
 
 func newReleaseCommand(rt *runtimeConfig) *cobra.Command {
