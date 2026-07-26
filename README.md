@@ -62,20 +62,20 @@ github.com/wowtrust/trustdb/v2
 
 License: AGPL-3.0-only. See [LICENSE](LICENSE).
 
-## v2.0.0-rc.1
+## v2.0.0-rc.2
 
-The first V2 release candidate is distributed through [GitHub Releases](https://github.com/wowtrust/trustdb/releases/tag/v2.0.0-rc.1). It includes Server/CLI archives for Linux, macOS, and Windows; four self-signed desktop packages; multi-architecture images on GHCR and Docker Hub; and a signed manifest with SHA-256, SM3, SBOM, vulnerability, production-input, container-digest, and Sigstore evidence.
+The corrected V2 release candidate is distributed through [GitHub Releases](https://github.com/wowtrust/trustdb/releases/tag/v2.0.0-rc.2). It includes Server/CLI archives for Linux, macOS, and Windows; four self-signed desktop packages; multi-architecture images on GHCR and Docker Hub; and a signed manifest with SHA-256, SM3, SBOM, vulnerability, production-input, container-digest, and Sigstore evidence. RC.2 also makes release verification deterministic across macOS, Linux, and Windows.
 
 This release makes the intentional V2/V5 cutover: proofstore schema v5, suite-bound wire and storage objects, `.sproof v2`, encrypted `.tdbackup v5`, and end-to-end `INTL_V1` / `CN_SM_V1` evidence. The Go module follows semantic import versioning:
 
 ```bash
-go get github.com/wowtrust/trustdb/v2@v2.0.0-rc.1
+go get github.com/wowtrust/trustdb/v2@v2.0.0-rc.2
 ```
 
 V2 does not read or migrate v1 storage, backups, API objects, or evidence files. Preserve the old environment for audit, then deploy the RC with a new namespace, LogID, and empty data directory. The multi-architecture image is published with an immutable version tag and the prerelease `beta` channel; it does not move `latest`:
 
 ```bash
-docker pull wsy19990317/trustdb:2.0.0-rc.1
+docker pull wsy19990317/trustdb:2.0.0-rc.2
 printf 'Development key passphrase: '
 IFS= read -r -s TRUSTDB_DEV_KEY_PASSPHRASE
 printf '\n'
@@ -84,7 +84,7 @@ docker run -d --name trustdb \
   -e TRUSTDB_DEV_KEY_PASSPHRASE \
   -p 127.0.0.1:8080:8080 \
   -v trustdb-data:/var/lib/trustdb \
-  wsy19990317/trustdb:2.0.0-rc.1
+  wsy19990317/trustdb:2.0.0-rc.2
 unset TRUSTDB_DEV_KEY_PASSPHRASE
 docker logs trustdb
 curl --fail http://127.0.0.1:8080/healthz
@@ -104,21 +104,17 @@ The historical [v1.0.0 release](https://github.com/wowtrust/trustdb/releases/tag
 
 ## Release supply-chain evidence
 
-The v2.0.0-rc.1 release includes a signed
+The v2.0.0-rc.2 release includes a signed
 `TRUSTDB_RELEASE_MANIFEST.json`, `SHA256SUMS`, `SM3SUMS`, an SPDX SBOM,
 retained vulnerability results, the exact native/contract/license/architecture
 inventory, immutable container digests, and downloadable Sigstore bundles.
 Release Actions and base images are pinned to commits or OCI digests, and the
 gate rejects unmanifested files or changed production inputs.
 
-> **v2.0.0-rc.1 known limitation:** the packaged macOS and Windows
-> `trustdb release verify` commands can misclassify `.exe` files through the
-> host MIME database and reject an otherwise valid manifest. The release
-> assets, SHA-256/SM3 lists, Sigstore provenance, and OCI digest have been
-> independently verified. The deterministic fix is merged in
-> [#608](https://github.com/wowtrust/trustdb/pull/608) and will ship in the
-> next release candidate. Do not overwrite the RC.1 tag or assets, and do not
-> admit the RC.1-packaged verifier as a cross-platform release verifier.
+RC.2 derives manifest media types from deterministic artifact names rather
+than host MIME databases, so the packaged verifier enforces the same release
+manifest on macOS, Linux, and Windows. RC.1 remains immutable and available
+for historical audit.
 
 Offline operators verify the manifest with a separately provisioned trusted
 root, then run `trustdb release verify --dir <release-directory>` to enforce
@@ -193,14 +189,33 @@ Recovery accepts only the V2 WAL and checkpoint generation bound to the configur
 
 ## Quick Start
 
-The README and website tutorial are pinned to `v2.0.0-rc.1`. Shallow-clone the tag, record the exact commit, and build with the Go version declared by `go.mod`; do not run this section with a v1 binary. No server is required. Windows users should follow the platform-specific [website quick start](https://www.trustdb.ryan-wong.cn/docs/quick-start).
+The README and website tutorial are pinned to `v2.0.0-rc.2`. Download the
+published Server/CLI archive for your platform, verify it against the
+published checksum set, and extract it before use. No Go toolchain or server
+is required. Windows users should follow the copyable PowerShell commands in
+the platform-specific [website quick start](https://www.trustdb.ryan-wong.cn/docs/quick-start).
 
 ```bash
-git clone --branch v2.0.0-rc.1 --depth 1 https://github.com/wowtrust/trustdb.git trustdb-quickstart
-cd trustdb-quickstart
-git rev-parse HEAD
-mkdir -p bin
-go build -trimpath -o ./bin/trustdb ./cmd/trustdb
+VERSION=2.0.0-rc.2
+case "$(uname -s)-$(uname -m)" in
+  Darwin-arm64) PLATFORM=darwin-arm64 ;;
+  Darwin-x86_64) PLATFORM=darwin-amd64 ;;
+  Linux-aarch64|Linux-arm64) PLATFORM=linux-arm64 ;;
+  Linux-x86_64) PLATFORM=linux-amd64 ;;
+  *) printf 'Unsupported platform\n' >&2; exit 1 ;;
+esac
+ARCHIVE="trustdb-$VERSION-$PLATFORM.tar.gz"
+BASE_URL="https://github.com/wowtrust/trustdb/releases/download/v$VERSION"
+mkdir trustdb-quickstart && cd trustdb-quickstart
+curl --fail --location --remote-name "$BASE_URL/SHA256SUMS"
+curl --fail --location --remote-name "$BASE_URL/$ARCHIVE"
+if command -v sha256sum >/dev/null 2>&1; then
+  grep "  $ARCHIVE$" SHA256SUMS | sha256sum --check
+else
+  grep "  $ARCHIVE$" SHA256SUMS | shasum -a 256 --check
+fi
+tar -xzf "$ARCHIVE"
+cd "trustdb-$VERSION-$PLATFORM"
 ./bin/trustdb version
 ```
 
