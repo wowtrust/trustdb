@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { ArrowRight, Check, Copy, DownloadSimple, GithubLogo, Package, ShieldCheck } from "@phosphor-icons/react";
 import { Link } from "../router";
-import { checksumsAsset, homeDownloadGroups, release } from "../lib/release";
+import { checksumsAsset, homeDownloadGroups, release, sm3ChecksumsAsset } from "../lib/release";
 import heroLandscape from "../assets/generated/trustdb-hero-landscape.webp";
 import evidenceField from "../assets/generated/trustdb-evidence-field.webp";
 import terminalLandscape from "../assets/generated/trustdb-terminal-landscape.webp";
@@ -28,7 +28,7 @@ const knowledgeItems = [
   ["01", "文档中心", "从本地启动到服务部署、CLI、Go SDK 与桌面客户端。", "/docs"],
   ["02", "性能基线", "基于当前版本 731.1 万次提交的双机多语义评估。", "/performance"],
   ["03", ".sproof v2", "支持 INTL_V1 / CN_SM_V1 的确定性 CBOR 单文件证据格式与离线验证算法。", "/sproof"],
-  ["04", "版本与下载", "查看 1.0.0 正式版的各平台构建产物与校验资料。", "/downloads"],
+  ["04", "版本与下载", "下载 2.0.0-rc.1，并核对签名清单、SHA-256、SM3、SBOM 与不可变容器摘要。", "/downloads"],
 ];
 
 function FlowCanvas({ mode = "hero" }) {
@@ -286,7 +286,7 @@ export function HomePage() {
         <div className="section-shell">
           <header className="home-downloads__heading" data-reveal>
             <div><p>Release / {release.version}</p><h2>各平台<br />发布文件。</h2></div>
-            <div><Package weight="duotone" /><p>桌面客户端、服务器与 CLI 已为常用系统和架构打包。所有文件来自同一次发布，并提供统一的 SHA-256 校验清单。</p></div>
+            <div><Package weight="duotone" /><p>桌面客户端、服务器与 CLI 来自同一个已签名发布清单，同时提供 SHA-256、SM3、SBOM、漏洞报告与不可变容器摘要。</p></div>
           </header>
           <div className="home-downloads__grid">
             {homeDownloadGroups.map((group) => (
@@ -306,7 +306,7 @@ export function HomePage() {
           </div>
           <footer className="home-downloads__footer" data-reveal>
             <Link href="/downloads">查看全部发布产物 <ArrowRight /></Link>
-            <a href={checksumsAsset.url}>下载 SHA256SUMS <DownloadSimple /></a>
+            <div><a href={checksumsAsset.url}>SHA256SUMS <DownloadSimple /></a><a href={sm3ChecksumsAsset.url}>SM3SUMS <DownloadSimple /></a></div>
           </footer>
         </div>
       </section>

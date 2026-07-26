@@ -6,8 +6,26 @@ TrustDB follows semantic versioning for stable releases. Proof, backup, storage,
 
 ## [Unreleased]
 
+No user-visible changes after the v2.0.0-rc.1 release candidate.
+
+## [2.0.0-rc.1] - 2026-07-26
+
+First V2 release candidate. This is an intentional breaking generation and is
+not an in-place upgrade from v1.0.0.
+
 ### Added
 
+- `INTL_V1` and `CN_SM_V1` suite-bound claims, receipts, Merkle trees, STHs,
+  anchor results, backups, APIs, key registries, and `.sproof v2` evidence.
+- SM2/SM3 interoperability vectors, deterministic encoding rules, provider
+  contracts, TLCP deployment profiles, SDF/PKCS#11 signer sidecars, and
+  FISCO BCOS 3.x anchor evidence with offline receipt/finality verification.
+- Encrypted `.tdbackup v5` with authenticated SM4-GCM frames, provider-wrapped
+  DEKs, suite-selected entry digests, resumable restore, and source/target
+  namespace binding.
+- A signed release manifest, SHA-256 and SM3 checksum sets, SPDX SBOM,
+  vulnerability results, production-input inventory, immutable container
+  digest inventory, and downloadable Sigstore provenance bundles.
 - Isolated, build-tagged PKCS#11 signer sidecar with non-exportable key-policy
   enforcement, explicit Ed25519/SM2 mechanisms, certificate/public-key
   binding, sanitized provider errors, rotation guards, and a SoftHSM
@@ -18,6 +36,13 @@ TrustDB follows semantic versioning for stable releases. Proof, backup, storage,
 
 ### Changed
 
+- The public Go module is now `github.com/wowtrust/trustdb/v2`; consumers must
+  import `/v2` and pin `v2.0.0-rc.1`.
+- Proofstore schema v5, V2 WAL/checkpoints, V2 wire objects, `.sproof v2`, and
+  `.tdbackup v5` replace the v1 generations. Old storage, backups, API objects,
+  and proof files are rejected without dual-read, migration, or fallback.
+- Release-candidate container images update immutable `2.0.0-rc.1` and `beta`
+  tags while leaving `latest` unchanged.
 - `trustdb key generate` now defaults to `sm4-envelope-v1` and requires
   exactly one direct or owner-only file passphrase source;
   `plaintext-dev-v1` remains an explicit development-only compatibility
@@ -33,6 +58,20 @@ TrustDB follows semantic versioning for stable releases. Proof, backup, storage,
   replacement, preventing concurrent or stale writers from overwriting a
   winning rotation. Windows software-envelope persistence fails closed pending
   continuously runtime-qualified owner-only DACL handling.
+- The release workflow refuses a source other than current `main`, an existing
+  Git tag or container version, a lightweight tag, or any source/manifest/
+  provenance mismatch.
+
+### Known limitations
+
+- Desktop packages use release-specific self-signed certificates and may
+  trigger Gatekeeper or SmartScreen warnings.
+- Generic release packages verify FISCO BCOS evidence offline. Real network
+  publication requires a source build with the pinned C SDK v3.6.0, Go SDK
+  v3.0.2, and `fiscobcos_sdk` build tag.
+- This release candidate must use a new namespace, LogID, and empty data
+  directory. Keep a v1 environment available when historical v1 evidence must
+  still be verified.
 
 ## [1.0.0] - 2026-07-22
 
@@ -70,3 +109,4 @@ First stable release.
 - Desktop packages may trigger Gatekeeper or SmartScreen warnings because the release certificates are self-signed.
 
 [1.0.0]: https://github.com/wowtrust/trustdb/releases/tag/v1.0.0
+[2.0.0-rc.1]: https://github.com/wowtrust/trustdb/releases/tag/v2.0.0-rc.1

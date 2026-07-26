@@ -9,8 +9,37 @@ export const localeOptions = [
   { code: "ko", label: "한국어", short: "한" },
 ];
 
+// Release-critical copy is kept as complete sentences so the DOM translator
+// never produces a partially translated security or compatibility statement.
+// English is also the deliberate fallback for new release copy in secondary
+// locales until a reviewed native translation is added.
+const releaseMessagesEnglish = {
+  "首个 V2/V5 发布候选版：国密证据套件、FISCO BCOS 证据验证、破坏性新格式、签名发布清单与完整离线验真资料。": "First V2/V5 release candidate: national-cryptography evidence suites, FISCO BCOS evidence verification, new breaking formats, a signed release manifest, and complete offline verification material.",
+  "发布链路新增签名 manifest、SHA-256/SM3、SPDX SBOM、漏洞留存、不可变 OCI digest、国产镜像与隔离区导入手册。": "The release pipeline now produces a signed manifest, SHA-256/SM3, an SPDX SBOM, retained vulnerability results, immutable OCI digests, domestic mirrors, and an air-gap import runbook.",
+  "这是破坏性 V2/V5 候选版本，不读取 v1 存储、备份、API 请求或证据文件。新部署请使用空数据目录并固定 `/v2` Go module。": "This is a breaking V2/V5 release candidate. It does not read v1 storage, backups, API requests, or evidence files. Deploy with an empty data directory and pin the `/v2` Go module.",
+  "下载 2.0.0-rc.1，并核对签名清单、SHA-256、SM3、SBOM 与不可变容器摘要。": "Download 2.0.0-rc.1 and verify the signed manifest, SHA-256, SM3, SBOM, and immutable container digest.",
+  "桌面客户端、服务器与 CLI 来自同一个已签名发布清单，同时提供 SHA-256、SM3、SBOM、漏洞报告与不可变容器摘要。": "The desktop client, server, and CLI share one signed release manifest, with SHA-256, SM3, an SBOM, a vulnerability report, and immutable container digests.",
+  "桌面客户端、服务器、CLI 和 Docker 镜像绑定同一份签名清单与源提交。下载后先验证 provenance，再核对 SHA-256 与 SM3。": "The desktop client, server, CLI, and Docker images are bound to one signed manifest and source commit. Verify provenance first, then check SHA-256 and SM3.",
+  "候选版 ·": "Release candidate ·",
+  "先验真，再运行。": "Verify first. Run second.",
+  "GitHub Release 提供跨平台安装包、Server/CLI、签名清单、双摘要、SBOM 与漏洞报告；GHCR 和 Docker Hub 提供同一不可变多架构镜像。": "GitHub Releases provides cross-platform packages, Server/CLI archives, the signed manifest, dual hashes, an SBOM, and vulnerability results. GHCR and Docker Hub provide the same immutable multi-architecture image.",
+  "离线验真资料": "Offline verification material",
+  "先验证签名发布清单的 GitHub Actions provenance，再用已准入的 TrustDB CLI 检查精确文件集合、SHA-256 与 SM3。证据文件自带内容不能替代独立 trust root。": "Verify the signed manifest's GitHub Actions provenance first, then use an admitted TrustDB CLI to enforce the exact file set, SHA-256, and SM3. Evidence-bundled data cannot replace an independent trust root.",
+  "V2/V5 是一次性破坏性切换：不要让 v2 进程打开 v1 数据目录，也不要把 v1 backup、SDK 请求或 .sproof 输入 v2。升级前保留历史环境用于审计，然后使用新 namespace 与空数据目录部署。": "V2/V5 is a one-way breaking cutover. Never open a v1 data directory with v2 or feed v1 backups, SDK requests, or .sproof files into v2. Preserve the historical environment for audit, then deploy with a new namespace and empty data directory.",
+  "桌面安装包仍采用自签名证书，尚未取得 Apple 或 Microsoft 商业签名。必须先验证签名 manifest 与双摘要；证书和指纹只用于核对本次发布的签名完整性。": "Desktop packages remain self-signed and do not have Apple or Microsoft commercial signing. Verify the signed manifest and both hashes first; the certificate and fingerprint only identify this release's signing material.",
+  "通用发布包支持 FISCO BCOS 离线证据验证；需要真实链上发布时，必须按固定 C SDK v3.6.0、Go SDK v3.0.2 和 `fiscobcos_sdk` build tag 构建并验证原生运行时。": "Generic packages support offline FISCO BCOS evidence verification. Real on-chain publication requires a source build and native-runtime validation with pinned C SDK v3.6.0, Go SDK v3.0.2, and the `fiscobcos_sdk` build tag.",
+  "签名发布清单": "Signed release manifest",
+  "Sigstore 来源证明": "Sigstore provenance",
+  "漏洞检查报告": "Vulnerability report",
+  "生产输入清单": "Production-input inventory",
+  "容器不可变摘要": "Immutable container digests",
+  "查看全部发布产物": "View all release assets",
+  "2.0.0-rc.1 发布候选版": "2.0.0-rc.1 release candidate",
+};
+
 const manualMessages = {
   en: {
+    ...releaseMessagesEnglish,
     "可验证证据数据库": "Verifiable evidence database",
     "产品": "Product", "文档": "Docs", "性能": "Performance", "版本": "Releases", "下载": "Download",
     "文档中心": "Documentation", "版本与下载": "Releases & downloads", "源码": "Source", "参与贡献": "Contribute",
@@ -40,6 +69,7 @@ const manualMessages = {
     "v1.0.0-beta.1 发布于迁移前，仍保留旧 module identity。评估项目应固定 go.mod 解析出的 pseudo-version；新路径标签发布后再固定到该标签。": "v1.0.0-beta.1 predates the migration and retains the previous module identity. Evaluation projects should pin the pseudo-version resolved in go.mod, then switch to a fixed new-path tag after it is released.",
   },
   ru: {
+    ...releaseMessagesEnglish,
     "可验证证据数据库": "База проверяемых доказательств",
     "产品": "Продукт", "文档": "Документация", "性能": "Производительность", "版本": "Версии", "下载": "Скачать",
     "文档中心": "Документация", "版本与下载": "Версии и загрузки", "源码": "Исходный код", "参与贡献": "Участвовать",
@@ -69,6 +99,7 @@ const manualMessages = {
     "v1.0.0-beta.1 发布于迁移前，仍保留旧 module identity。评估项目应固定 go.mod 解析出的 pseudo-version；新路径标签发布后再固定到该标签。": "v1.0.0-beta.1 выпущена до миграции и сохраняет прежнюю идентичность модуля. Для тестовых проектов закрепите pseudo-version, записанную в go.mod, а после выпуска нового тега закрепите этот тег.",
   },
   ja: {
+    ...releaseMessagesEnglish,
     "可验证证据数据库": "検証可能な証拠データベース",
     "产品": "製品", "文档": "ドキュメント", "性能": "性能", "版本": "リリース", "下载": "ダウンロード",
     "文档中心": "ドキュメント", "版本与下载": "リリースとダウンロード", "源码": "ソースコード", "参与贡献": "コントリビュート",
@@ -98,6 +129,7 @@ const manualMessages = {
     "v1.0.0-beta.1 发布于迁移前，仍保留旧 module identity。评估项目应固定 go.mod 解析出的 pseudo-version；新路径标签发布后再固定到该标签。": "v1.0.0-beta.1 は移行前に公開されたため、以前の module identity を保持しています。評価プロジェクトでは go.mod に解決された pseudo-version を固定し、新しいパスのタグ公開後にそのタグへ切り替えてください。",
   },
   fr: {
+    ...releaseMessagesEnglish,
     "可验证证据数据库": "Base de preuves vérifiables",
     "产品": "Produit", "文档": "Documentation", "性能": "Performances", "版本": "Versions", "下载": "Télécharger",
     "文档中心": "Documentation", "版本与下载": "Versions et téléchargements", "源码": "Code source", "参与贡献": "Contribuer",
@@ -127,6 +159,7 @@ const manualMessages = {
     "v1.0.0-beta.1 发布于迁移前，仍保留旧 module identity。评估项目应固定 go.mod 解析出的 pseudo-version；新路径标签发布后再固定到该标签。": "v1.0.0-beta.1 est antérieure à la migration et conserve l’ancienne identité de module. Les projets d’évaluation doivent figer la pseudo-version résolue dans go.mod, puis passer à un tag fixe utilisant le nouveau chemin dès sa publication.",
   },
   ko: {
+    ...releaseMessagesEnglish,
     "可验证证据数据库": "검증 가능한 증거 데이터베이스",
     "产品": "제품", "文档": "문서", "性能": "성능", "版本": "릴리스", "下载": "다운로드",
     "文档中心": "문서", "版本与下载": "릴리스 및 다운로드", "源码": "소스 코드", "参与贡献": "기여하기",

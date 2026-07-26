@@ -9,7 +9,7 @@ TrustDB 支持把自定义 L5 provider 作为独立 Go 子进程运行。TrustDB
 - 插件可以独立构建、发布和升级，不需要重新链接 TrustDB。
 - 插件 panic、退出或返回畸形数据不会直接破坏 TrustDB 进程。
 - 外部调用失败继续使用现有 durable anchor retry 语义。
-- 插件只依赖公共包 `github.com/wowtrust/trustdb/sdk/anchorplugin`，不导入
+- 插件只依赖公共包 `github.com/wowtrust/trustdb/v2/sdk/anchorplugin`，不导入
   `internal/model`。
 
 当前 v1 SDK 使用 loopback gRPC 和确定性 CBOR 消息。启动时 TrustDB 生成
