@@ -258,7 +258,7 @@ const zhCN = {
           linux: "./trusted/trustdb release verify --dir ./trustdb-release",
           windows: ".\\trusted\\trustdb.exe release verify --dir .\\trustdb-release",
         },
-        bullets: ["使用此前已准入的 verifier，避免让新二进制自证可信", "任何额外文件、子目录、symlink、缺失报告、重复 checksum 或双摘要不一致都会失败", "检查 version、source commit、policy digest、SBOM 与漏洞报告属于同一版本"],
+        bullets: ["使用此前已准入的 verifier，避免让新二进制自证可信", "RC.1 自带的 macOS/Windows verifier 可能因宿主 MIME 数据库误判 .exe；不要将其准入为跨平台发布 verifier。确定性修复已合入 #608，并将在下一候选版交付", "任何额外文件、子目录、symlink、缺失报告、重复 checksum 或双摘要不一致都会失败", "检查 version、source commit、policy digest、SBOM 与漏洞报告属于同一版本"],
       },
       {
         title: "3. 导出并导入 OCI 镜像",
@@ -398,7 +398,7 @@ const en = {
         macos: "./trusted/trustdb release verify --dir ./trustdb-release",
         linux: "./trusted/trustdb release verify --dir ./trustdb-release",
         windows: ".\\trusted\\trustdb.exe release verify --dir .\\trustdb-release",
-      }, bullets: ["Use a previously admitted verifier; do not let the new binary be its only trust authority", "Extra files, directories, symlinks, missing reports, duplicate checksums, and either digest mismatch fail", "Review version, source commit, policy digest, SBOM, and vulnerability result together"] },
+      }, bullets: ["Use a previously admitted verifier; do not let the new binary be its only trust authority", "The RC.1-packaged macOS/Windows verifier can misclassify .exe through the host MIME database; do not admit it as a cross-platform release verifier. The deterministic fix is merged in #608 and will ship in the next candidate", "Extra files, directories, symlinks, missing reports, duplicate checksums, and either digest mismatch fail", "Review version, source commit, policy digest, SBOM, and vulnerability result together"] },
       { title: "3. Export and import the OCI image", code: "DIGEST=\"$(jq -r .digest trustdb-release/TRUSTDB_CONTAINER_DIGESTS.json)\"\nskopeo copy --all \\\n  \"docker://ghcr.io/wowtrust/trustdb@${DIGEST}\" \\\n  oci-archive:trustdb-X.Y.Z.oci.tar\nskopeo inspect --format '{{.Digest}}' \\\n  oci-archive:trustdb-X.Y.Z.oci.tar", body: ["The inspected digest must equal DIGEST. Add the archive SHA-256 to controlled-media inventory and inspect it again before offline import."] },
       { title: "4. Route through domestic mirrors", code: "GOPROXY=https://goproxy.cn,direct\nNPM_CONFIG_REGISTRY=https://registry.npmmirror.com\nNODE_IMAGE=registry.example.cn/mirror/node:24-bookworm-slim@sha256:<same-digest>\nGO_IMAGE=registry.example.cn/mirror/golang:1.26.5-bookworm@sha256:<same-digest>\nRUNTIME_IMAGE=registry.example.cn/mirror/debian:bookworm-slim@sha256:<same-digest>", body: ["Mirrors change acquisition only. go.sum, npm lock integrity, and the exact OCI digests in production-inputs.json remain authoritative."] },
       { title: "5. Admit and rehearse", bullets: ["Transfer the release, trusted verifier, root, media inventory, and OCI archive", "Repeat provenance, dual-digest, and OCI verification offline", "Extract only the matching OS/architecture", "Run version, config validate, doctor, and a canary", "Export .sproof v2 and verify it with separate evidence trust roots", "Tamper package, manifest, attestation, root, OCI digest, and SBOM/policy and require staged failures"] },

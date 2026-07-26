@@ -106,6 +106,14 @@ v2.0.0-rc.1 包含已签名的
 与可下载 Sigstore bundle。Release Actions 和基础镜像分别固定到 commit 或
 OCI digest；未进入 manifest 的文件、内容漂移的生产输入都会阻断发版。
 
+> **v2.0.0-rc.1 已知限制：**随包提供的 macOS 和 Windows
+> `trustdb release verify` 会受宿主机 MIME 数据库影响，可能把 `.exe`
+> 重新分类并误报有效 manifest 不一致。发布资产、SHA-256/SM3 清单、
+> Sigstore provenance 和 OCI digest 已完成独立验证；确定性修复已合入
+> [#608](https://github.com/wowtrust/trustdb/pull/608)，并将在下一候选版交付。
+> 不得覆盖 RC.1 标签或资产，也不要把 RC.1 自带 verifier 准入为跨平台发布
+> 校验工具。
+
 断网运维人员先用独立下发的 trusted root 验证 manifest，再执行
 `trustdb release verify --dir <release目录>` 检查精确文件集合与双摘要。
 国产 Go/npm/OCI 镜像只改变获取路线，lockfile integrity 与不可变 digest
