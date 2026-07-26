@@ -1,0 +1,78 @@
+# Strict CN_SM_V1 production baseline. Replace every example address, path,
+# certificate pin, and descriptor with deployment-owned material.
+run_profile: china_production
+
+paths:
+  data_dir: "/var/lib/trustdb"
+  key_registry: "/etc/trustdb/keys.tdkeys"
+  wal: "/var/lib/trustdb/wal"
+  object_dir: "/var/lib/trustdb/objects"
+  proof_dir: "/var/lib/trustdb/proofs"
+
+metastore: "pebble"
+metastore_path: "/var/lib/trustdb/proofs/pebble"
+
+deployment_policy:
+  egress_mode: "allowlist"
+  # These must exactly match the canonical FISCO BCOS TrustConfig endpoints.
+  allowed_endpoints:
+    - "gm-tls://10.0.0.20:20200"
+    - "gm-tls://10.0.0.21:20200"
+  dns_allowlist: []
+  telemetry_enabled: false
+  update_checks_enabled: false
+  exceptions: []
+
+server:
+  listen: "0.0.0.0:8080"
+  grpc_listen: "0.0.0.0:9090"
+  id: "trustdb-cn-prod-1"
+  key_id: "trustdb-cn-server-sm2"
+  transport:
+    mode: "mtls"
+    allow_local_plaintext: false
+    cert_file: "/etc/trustdb/tls/server.crt"
+    key_file: "/etc/trustdb/tls/server.key"
+    client_ca_file: "/etc/trustdb/tls/client-ca.crt"
+    client_ca_pins_sha256:
+      - "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    min_version: "1.2"
+    reload_interval: "1m"
+    revocation:
+      mode: "serial_denylist"
+      serial_file: "/etc/trustdb/tls/revoked-serials.txt"
+
+nats:
+  enabled: false
+
+anchor:
+  scope: "global"
+  sink: "fisco-bcos"
+  max_delay: "5m"
+  poll_interval: "2s"
+  fisco_bcos:
+    trust_config_file: "/etc/trustdb/fisco-bcos/trust-config.cbor"
+
+backup:
+  compression: "gzip"
+  key_provider: "sdf-kek-v1"
+  key_id: "trustdb-backup-kek-1"
+  frame_bytes: 1048576
+
+audit:
+  enabled: true
+  required: true
+  path: "/var/lib/trustdb/audit/security.audit"
+  checkpoint_path: "/var/lib/trustdb/audit/security.checkpoint"
+  signing_key: "/etc/trustdb/keys/audit-signer.tdkey"
+  max_bytes: 4294967296
+  retention: "4380h"
+  time_reference_path: "/run/trustdb/trusted-time.json"
+  time_max_sample_age: "2m"
+  time_max_drift: "5s"
+  require_synchronized_time: true
+
+keys:
+  server_private: "/etc/trustdb/keys/server-signer.tdkey"
+  server_public: "/etc/trustdb/keys/server-verifier.tdkey"
+  registry_public: "/etc/trustdb/keys/registry-verifier.tdkey"

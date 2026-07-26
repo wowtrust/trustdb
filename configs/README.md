@@ -101,6 +101,9 @@ semantics and recovery boundaries.
 | --- | --- | --- |
 | `development.yaml` | `development` | Local demos: file proofstore, `noop` anchor, debug-friendly logging. |
 | `production.yaml` | `single_node_production` | Single-node baseline: Pebble (or TiKV) proofstore, OTS anchor, JSON logs. |
+| `china-production.yaml` | `china_production` | Enforced CN_SM_V1, non-software keys, pinned mTLS/TLCP boundary, explicit egress, signed audit, and Guomi FISCO BCOS. |
+| `offline-isolated.yaml` | `offline_isolated` | Internet-independent runtime with all TrustDB outbound connections denied. |
+| `assessment.yaml` | `assessment` | China production controls with signed, approved, maximum-30-day exceptions. |
 | `benchmark.yaml` | `benchmark` | Throughput experiments: Pebble, `wal.fsync_mode: batch`, async batch proofs, `noop` anchor. |
 | `benchmark-extreme.yaml` | `benchmark` | Absolute L2 ceiling with on-demand proofs and intentionally unsafe durability. |
 | `benchmark-burst.yaml` | `benchmark` | Maximum short-lived L2 burst absorption; 32 ingest workers, large queue, L4/L5 disabled. |
@@ -118,13 +121,22 @@ deleting or migrating them.
 
 ## `run_profile`
 
-Optional top-level string. It **does not change behavior**; `trustdb serve` logs the label and short risk hints so operators know which template mindset they started from.
+Optional top-level string. `development`, `single_node_production`, and
+`benchmark` retain their existing flexible behavior and guidance. The
+`china_production`, `offline_isolated`, and `assessment` profiles are enforced
+startup policies: TrustDB rejects unsafe transports, suites, key providers,
+egress, anchor trust, audit, and backup custody before serving traffic.
 
-Allowed values (aliases accepted): `development` (`dev`), `single_node_production` (`prod`, `production`, `single-node-prod`), `benchmark` (`bench`, `loadtest`).
+Allowed values include `development`, `single_node_production`,
+`china_production`, `offline_isolated`, `assessment`, and `benchmark`.
 
 Override via `TRUSTDB_RUN_PROFILE`.
 
 If omitted, serve logs that the deployment is treated as **custom**.
+
+See [China deployment profiles](../docs/compliance/CHINA_DEPLOYMENT_PROFILES.md)
+for the exact policy, egress/DNS syntax, offline mirror inventory, exception
+contract, deployment sequence, and required negative tests.
 
 ## Software key envelopes
 
