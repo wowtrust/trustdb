@@ -166,6 +166,10 @@ export function SecurityAuditDocsPage({ route }) {
   return <OperationsGuidePage route={route} pageKey="securityAudit" />;
 }
 
+export function SupplyChainDocsPage({ route }) {
+  return <OperationsGuidePage route={route} pageKey="supplyChain" />;
+}
+
 export function FISCOBCOSDocsPage({ route }) {
   return <OperationsGuidePage route={route} pageKey="fiscoBCOS" />;
 }

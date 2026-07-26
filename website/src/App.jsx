@@ -6,7 +6,7 @@ import { ArrowRight } from "@phosphor-icons/react";
 import { SiteFooter, SiteHeader, PageHero } from "./components/SiteChrome";
 import { useRoute, Link } from "./router";
 import { HomePage } from "./pages/HomePage";
-import { BackupRecoveryDocsPage, CliDocsPage, ConceptsDocsPage, DesktopDocsPage, DesktopInstallPage, DocsIndexPage, FeatureCatalogDocsPage, FISCOBCOSDocsPage, MissingDocsPage, NATSIngressDocsPage, OfflineVerificationPage, OperationsDocsPage, QuickStartPage, SdkDocsPage, SecurityAuditDocsPage, ServerDocsPage, SourceBuildPage, TroubleshootingPage } from "./pages/DocsPages";
+import { BackupRecoveryDocsPage, CliDocsPage, ConceptsDocsPage, DesktopDocsPage, DesktopInstallPage, DocsIndexPage, FeatureCatalogDocsPage, FISCOBCOSDocsPage, MissingDocsPage, NATSIngressDocsPage, OfflineVerificationPage, OperationsDocsPage, QuickStartPage, SdkDocsPage, SecurityAuditDocsPage, ServerDocsPage, SourceBuildPage, SupplyChainDocsPage, TroubleshootingPage } from "./pages/DocsPages";
 import { PerformancePage } from "./pages/PerformancePage";
 import { SproofPage } from "./pages/SproofPage";
 import { ChangelogPage, DownloadsPage } from "./pages/ReleasePages";
@@ -28,6 +28,7 @@ const titles = {
   "/docs/backup-recovery": "备份与恢复 · TrustDB 文档",
   "/docs/operations": "生产运维 · TrustDB 文档",
   "/docs/security-audit": "安全审计 · TrustDB 文档",
+  "/docs/supply-chain": "发布供应链 · TrustDB 文档",
   "/docs/fisco-bcos": "FISCO BCOS · TrustDB 文档",
   "/docs/cli": "CLI · TrustDB 文档",
   "/docs/sdk": "Go SDK · TrustDB 文档",
@@ -53,6 +54,7 @@ function RouteView({ route }) {
   if (route === "/docs/backup-recovery") return <BackupRecoveryDocsPage route={route} />;
   if (route === "/docs/operations") return <OperationsDocsPage route={route} />;
   if (route === "/docs/security-audit") return <SecurityAuditDocsPage route={route} />;
+  if (route === "/docs/supply-chain") return <SupplyChainDocsPage route={route} />;
   if (route === "/docs/fisco-bcos") return <FISCOBCOSDocsPage route={route} />;
   if (route === "/docs/cli") return <CliDocsPage route={route} />;
   if (route === "/docs/sdk") return <SdkDocsPage route={route} />;
@@ -90,6 +92,7 @@ export function App() {
       "/docs/backup-recovery": operationsCopy.backupRecovery.title,
       "/docs/operations": operationsCopy.operations.title,
       "/docs/security-audit": operationsCopy.securityAudit.title,
+      "/docs/supply-chain": operationsCopy.supplyChain.title,
       "/docs/fisco-bcos": operationsCopy.fiscoBCOS.title,
     };
     document.title = route === "/docs/concepts"

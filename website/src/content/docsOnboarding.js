@@ -33,6 +33,7 @@ const zhCN = {
         ["功能开关与配置", "/docs/features"],
         ["备份与恢复", "/docs/backup-recovery"],
         ["不可变安全审计", "/docs/security-audit"],
+        ["发布验签与国产镜像", "/docs/supply-chain"],
         ["生产运维手册", "/docs/operations"],
         ["FISCO BCOS 锚定", "/docs/fisco-bcos"],
         ["故障排查", "/docs/troubleshooting"],
@@ -231,7 +232,7 @@ const en = {
     groups: [
       ["Start", [["Docs home", "/docs"], ["Understand TrustDB", "/docs/concepts"], ["10-minute quick start", "/docs/quick-start"]]],
       ["Build", [["Go SDK tutorial", "/docs/sdk"], ["NATS / JetStream ingress", "/docs/nats-ingress"], ["Offline verification", "/docs/offline-verification"], ["CLI reference", "/docs/cli"], ["Desktop client", "/docs/desktop"]]],
-      ["Operate", [["Production deployment", "/docs/server"], ["Feature catalog", "/docs/features"], ["Backup and recovery", "/docs/backup-recovery"], ["Immutable security audit", "/docs/security-audit"], ["Operations handbook", "/docs/operations"], ["FISCO BCOS anchoring", "/docs/fisco-bcos"], ["Troubleshooting", "/docs/troubleshooting"]]],
+      ["Operate", [["Production deployment", "/docs/server"], ["Feature catalog", "/docs/features"], ["Backup and recovery", "/docs/backup-recovery"], ["Immutable security audit", "/docs/security-audit"], ["Release verification and mirrors", "/docs/supply-chain"], ["Operations handbook", "/docs/operations"], ["FISCO BCOS anchoring", "/docs/fisco-bcos"], ["Troubleshooting", "/docs/troubleshooting"]]],
       ["Reference", [["Install the desktop client", "/docs/desktop-install"], ["Build from source", "/docs/source-build"], [".sproof v2", "/sproof"], ["Performance baseline", "/performance"]]],
     ],
   },

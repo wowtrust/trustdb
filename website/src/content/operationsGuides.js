@@ -234,6 +234,49 @@ const zhCN = {
     ],
     links: [["仓库中文完整手册", "https://github.com/wowtrust/trustdb/blob/main/docs/zh-CN/IMMUTABLE_SECURITY_AUDIT.md"], ["管理 RBAC", "https://github.com/wowtrust/trustdb/blob/main/docs/zh-CN/ADMINISTRATIVE_RBAC.md"], ["备份恢复", "/docs/backup-recovery"], ["生产运维", "/docs/operations"]],
   },
+  supplyChain: {
+    eyebrow: "Docs / Operations / Release supply chain",
+    title: "正式版验签、国产镜像与隔离区导入",
+    lead: "不要只看下载页上的文件名。先验证来源，再验证 manifest 中的每一个 SHA-256/SM3，最后按不可变 digest 导入目标环境。",
+    updated: "更新于 2026.07.26 · 适用于当前 main 的新发布证据包",
+    summary: [["来源", "Sigstore bundle + 独立下发 trusted root"], ["完整性", "签名 manifest + SHA-256 + SM3"], ["隔离区", "精确文件集合 + OCI digest + 可留存报告"]],
+    sections: [
+      {
+        title: "认识完整证据包",
+        cards: [["Manifest", "源 commit、policy digest、必备文档和每个文件的大小/双摘要。"], ["Attestation", "GitHub Actions 对 manifest 与 OCI digest 的 provenance bundle。"], ["SBOM", "SPDX 依赖与许可清单。"], ["生产输入", "BCOS SDK/合约、PKCS#11、SDF、TLCP、lockfile、基础镜像和架构矩阵。"], ["漏洞结果", "npm 与 govulncheck 的 fail-on-high 留存输出。"], ["容器摘要", "linux/amd64 + linux/arm64 的不可变 manifest digest。"]],
+        note: "和 release 一起下载的 root 不能自动成为信任根。trusted root 必须提前从独立批准渠道下发并登记摘要。",
+      },
+      {
+        title: "1. 先验证签名 manifest",
+        code: "APPROVED_COMMIT=replace-with-approved-40-character-commit\ngh attestation verify \\\n  trustdb-release/TRUSTDB_RELEASE_MANIFEST.json \\\n  --repo wowtrust/trustdb \\\n  --signer-workflow wowtrust/trustdb/.github/workflows/release.yml \\\n  --source-digest \"$APPROVED_COMMIT\" \\\n  --deny-self-hosted-runners \\\n  --bundle trustdb-release/trustdb-release-attestation.sigstore.json \\\n  --custom-trusted-root /secure/trust-roots/github-public-good-trusted-root.json",
+        body: ["预期 identity 必须是 wowtrust/trustdb 的 release workflow，source digest 必须来自独立审批记录，root 位于 release 目录之外。root 轮换要走独立审批，不能在升级时被产物自带文件替换。"],
+      },
+      {
+        title: "2. 在完全断网条件下检查全部文件",
+        platformCode: {
+          macos: "./trusted/trustdb release verify --dir ./trustdb-release",
+          linux: "./trusted/trustdb release verify --dir ./trustdb-release",
+          windows: ".\\trusted\\trustdb.exe release verify --dir .\\trustdb-release",
+        },
+        bullets: ["使用此前已准入的 verifier，避免让新二进制自证可信", "任何额外文件、子目录、symlink、缺失报告、重复 checksum 或双摘要不一致都会失败", "检查 version、source commit、policy digest、SBOM 与漏洞报告属于同一版本"],
+      },
+      {
+        title: "3. 导出并导入 OCI 镜像",
+        code: "DIGEST=\"$(jq -r .digest trustdb-release/TRUSTDB_CONTAINER_DIGESTS.json)\"\nskopeo copy --all \\\n  \"docker://ghcr.io/wowtrust/trustdb@${DIGEST}\" \\\n  oci-archive:trustdb-X.Y.Z.oci.tar\nskopeo inspect --format '{{.Digest}}' \\\n  oci-archive:trustdb-X.Y.Z.oci.tar",
+        body: ["inspect 结果必须精确等于发布证据中的 DIGEST。把 OCI archive 的 SHA-256 加入受控介质清单；断网区再次 inspect 后再复制到 docker-daemon 或内部 registry。"],
+      },
+      {
+        title: "4. 切换国产依赖与制品镜像",
+        code: "GOPROXY=https://goproxy.cn,direct\nNPM_CONFIG_REGISTRY=https://registry.npmmirror.com\nNODE_IMAGE=registry.example.cn/mirror/node:24-bookworm-slim@sha256:<same-digest>\nGO_IMAGE=registry.example.cn/mirror/golang:1.26.5-bookworm@sha256:<same-digest>\nRUNTIME_IMAGE=registry.example.cn/mirror/debian:bookworm-slim@sha256:<same-digest>",
+        body: ["镜像只改变获取路线。Go 仍由 go.sum 校验，npm 仍由 lock integrity 校验，OCI 镜像必须保持 production-inputs.json 中完全相同的 digest。"],
+      },
+      {
+        title: "5. 上线与演练",
+        bullets: ["把 release、可信 verifier、trusted root、介质清单和 OCI archive 带入隔离区", "重做 provenance、双摘要和 OCI digest 验证", "只解压匹配系统和架构的包", "运行 version、config validate、doctor 与 canary", "导出 .sproof v2，停服务断网后用独立证据信任根验证", "篡改包、manifest、attestation、root、OCI digest 和 SBOM/policy，要求全部在预期阶段失败"],
+      },
+    ],
+    links: [["中文完整手册", "https://github.com/wowtrust/trustdb/blob/main/docs/zh-CN/SUPPLY_CHAIN_RELEASES.md"], ["生产运维", "/docs/operations"], ["离线证据验证", "/docs/offline-verification"], ["下载", "/downloads"]],
+  },
   fiscoBCOS: {
     eyebrow: "Docs / Integrations / FISCO BCOS",
     title: "把 TrustDB STH 锚定到 FISCO BCOS",
@@ -342,6 +385,24 @@ const en = {
       { title: "4. Capacity, backup, and retention", body: ["Formula: peak events/day × measured bytes/event × retention days × safety factor. The default 4 GiB / 4380h budget is about 23.5 MiB/day, or roughly 12,000 2-KiB events/day before safety margin."], bullets: ["max_bytes exhaustion blocks audited operations; history is never silently deleted or rotated", ".tdbackup v5 excludes this chain; retain JSONL, checkpoint, audit.pub, time-monitor configuration, and external receipt separately", "Restore is audited but does not replace destination audit history"] },
       { title: "5. Incident response", cards: [["rollback / truncation", "Stop privileged operations, preserve log/checkpoint/lock bytes, and compare independent checkpoints. Never truncate or recreate."], ["unsafe storage", "Correct owner, mode/DACL, parent writability, symlink, or file type."], ["capacity exhausted", "Preserve the chain, add capacity, and approve a higher max_bytes. Do not delete the tail."], ["time unsynchronized", "Repair the time monitor and inspect age, offset, uncertainty, confidence, permissions, and schema; the blocked event is retained."]] },
     ], links: [["Full repository guide", "https://github.com/wowtrust/trustdb/blob/main/docs/compliance/IMMUTABLE_SECURITY_AUDIT.md"], ["Administrative RBAC", "https://github.com/wowtrust/trustdb/blob/main/docs/compliance/ADMINISTRATIVE_RBAC.md"], ["Backup", "/docs/backup-recovery"], ["Operations", "/docs/operations"]],
+  },
+  supplyChain: {
+    eyebrow: "Docs / Operations / Release supply chain", title: "Verify releases, use domestic mirrors, and import offline",
+    lead: "Verify provenance first, enforce every SHA-256 and SM3 in the signed manifest, then import the exact platform package or immutable OCI digest.",
+    updated: "Updated 2026.07.26 · new release-evidence bundle on current main",
+    summary: [["Provenance", "Sigstore bundle + separately provisioned trusted root"], ["Integrity", "signed manifest + SHA-256 + SM3"], ["Air gap", "exact file set + OCI digest + retained reports"]],
+    sections: [
+      { title: "Know the bundle", cards: [["Manifest", "Source commit, policy digest, required documents, size, SHA-256, and SM3 for every file."], ["Attestations", "Downloadable provenance for the manifest and OCI digest."], ["SBOM", "SPDX dependency and license inventory."], ["Production inputs", "BCOS SDK/contracts, PKCS#11, SDF, TLCP, locks, images, and architecture matrix."], ["Security results", "Retained npm and govulncheck fail-on-high output."], ["Container digest", "Immutable linux/amd64 + linux/arm64 manifest digest."]], note: "A root shipped beside a release cannot authorize itself. Provision and register the trusted-root digest through an independent channel." },
+      { title: "1. Verify the signed manifest", code: "APPROVED_COMMIT=replace-with-approved-40-character-commit\ngh attestation verify \\\n  trustdb-release/TRUSTDB_RELEASE_MANIFEST.json \\\n  --repo wowtrust/trustdb \\\n  --signer-workflow wowtrust/trustdb/.github/workflows/release.yml \\\n  --source-digest \"$APPROVED_COMMIT\" \\\n  --deny-self-hosted-runners \\\n  --bundle trustdb-release/trustdb-release-attestation.sigstore.json \\\n  --custom-trusted-root /secure/trust-roots/github-public-good-trusted-root.json", body: ["Require the wowtrust/trustdb release workflow, an independently approved source digest, and a root outside the release directory. Root rotation is a separate approved change."] },
+      { title: "2. Enforce the exact offline bundle", platformCode: {
+        macos: "./trusted/trustdb release verify --dir ./trustdb-release",
+        linux: "./trusted/trustdb release verify --dir ./trustdb-release",
+        windows: ".\\trusted\\trustdb.exe release verify --dir .\\trustdb-release",
+      }, bullets: ["Use a previously admitted verifier; do not let the new binary be its only trust authority", "Extra files, directories, symlinks, missing reports, duplicate checksums, and either digest mismatch fail", "Review version, source commit, policy digest, SBOM, and vulnerability result together"] },
+      { title: "3. Export and import the OCI image", code: "DIGEST=\"$(jq -r .digest trustdb-release/TRUSTDB_CONTAINER_DIGESTS.json)\"\nskopeo copy --all \\\n  \"docker://ghcr.io/wowtrust/trustdb@${DIGEST}\" \\\n  oci-archive:trustdb-X.Y.Z.oci.tar\nskopeo inspect --format '{{.Digest}}' \\\n  oci-archive:trustdb-X.Y.Z.oci.tar", body: ["The inspected digest must equal DIGEST. Add the archive SHA-256 to controlled-media inventory and inspect it again before offline import."] },
+      { title: "4. Route through domestic mirrors", code: "GOPROXY=https://goproxy.cn,direct\nNPM_CONFIG_REGISTRY=https://registry.npmmirror.com\nNODE_IMAGE=registry.example.cn/mirror/node:24-bookworm-slim@sha256:<same-digest>\nGO_IMAGE=registry.example.cn/mirror/golang:1.26.5-bookworm@sha256:<same-digest>\nRUNTIME_IMAGE=registry.example.cn/mirror/debian:bookworm-slim@sha256:<same-digest>", body: ["Mirrors change acquisition only. go.sum, npm lock integrity, and the exact OCI digests in production-inputs.json remain authoritative."] },
+      { title: "5. Admit and rehearse", bullets: ["Transfer the release, trusted verifier, root, media inventory, and OCI archive", "Repeat provenance, dual-digest, and OCI verification offline", "Extract only the matching OS/architecture", "Run version, config validate, doctor, and a canary", "Export .sproof v2 and verify it with separate evidence trust roots", "Tamper package, manifest, attestation, root, OCI digest, and SBOM/policy and require staged failures"] },
+    ], links: [["Full runbook", "https://github.com/wowtrust/trustdb/blob/main/docs/compliance/SUPPLY_CHAIN_RELEASES.md"], ["Operations", "/docs/operations"], ["Offline evidence verification", "/docs/offline-verification"], ["Downloads", "/downloads"]],
   },
   fiscoBCOS: {
     eyebrow: "Docs / Integrations / FISCO BCOS", title: "Anchor TrustDB STHs to FISCO BCOS", lead: "Qualify the exact topology, pin contract and chain trust, publish through quorum, then verify receipt inclusion and PBFT finality offline.", updated: "Updated 2026.07.25 · FISCO BCOS v3.16.3 / C SDK v3.6.0",

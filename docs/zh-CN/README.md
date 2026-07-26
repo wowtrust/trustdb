@@ -17,6 +17,7 @@ V2/V5 实现。它不是 v1.0.0 发布包的兼容说明：v1.0.0 发布于 V2/V
 | 启用国产生产/离线/测评门禁 | [国产化部署 Profile](CHINA_DEPLOYMENT_PROFILES.md) | [安全审计](IMMUTABLE_SECURITY_AUDIT.md) |
 | 接入 NATS / JetStream | [NATS 中文指南](../integrations/NATS_INGRESS.zh-CN.md) | [功能与配置](FEATURES_AND_CONFIGURATION.md#nats--jetstream-入口) |
 | 配置 TLS/mTLS/TLCP | [功能与配置](FEATURES_AND_CONFIGURATION.md#传输安全与管理入口) | [TLCP 网关](../integrations/TLCP_GATEWAY.md) |
+| 验证正式版、使用国产镜像或导入隔离区 | [发布供应链与离线验签](SUPPLY_CHAIN_RELEASES.md) | [生产运维](OPERATIONS.md) |
 | 排查故障 | [生产运维](OPERATIONS.md#故障分流表) | 官网[故障排查](https://www.trustdb.ryan-wong.cn/docs/troubleshooting) |
 
 ## 当前能力分类
@@ -34,6 +35,7 @@ V2/V5 实现。它不是 v1.0.0 发布包的兼容说明：v1.0.0 发布于 V2/V
 | 传输 | 本地明文限制、TLS/mTLS、TLCP 网关 | `server.transport.*`、`tlcp.*`、`--tlcp-gateway-profile` |
 | 管理与观察 | `/healthz`、`/metrics`、只读 API、Admin Web、结构化日志 | `admin.enabled`、`log.*`；Admin Web 默认关闭 |
 | 备份恢复 | SM4-GCM 认证加密的 `.tdbackup v5`，严格 verify 与 resumable restore | `trustdb backup`; `INTL_V1`/`CN_SM_V1`，KEK provider 与 source/target namespace checkpoint 绑定 |
+| 发布供应链 | 签名 manifest、SHA-256/SM3、SBOM、漏洞报告、OCI digest、原生/合约矩阵 | `trustdb release verify`；独立下发 Sigstore trusted root |
 
 ## 统一的功能操作方法
 

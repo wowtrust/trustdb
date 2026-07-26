@@ -4,6 +4,14 @@ This archive contains the TrustDB server and CLI in one executable, the producti
 
 Run `trustdb version` to inspect the exact version, commit, target operating system, and architecture. Generate keys before starting a server:
 
+Before extracting this archive, verify the signed
+`TRUSTDB_RELEASE_MANIFEST.json` with the independently provisioned Sigstore
+trusted root, then run `trustdb release verify --dir <release-directory>` with
+a previously admitted verifier. The release directory must contain the exact
+manifested file set plus the attestation bundle; SHA-256 and SM3 must both
+match. See the [air-gap release
+runbook](https://github.com/wowtrust/trustdb/blob/main/docs/compliance/SUPPLY_CHAIN_RELEASES.md).
+
 ```bash
 mkdir -p ./trustdb-data/keys
 read -r -s -p 'Development key passphrase: ' TRUSTDB_DEV_KEY_PASSPHRASE

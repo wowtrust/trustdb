@@ -94,6 +94,19 @@ curl --fail http://127.0.0.1:8080/healthz
 
 桌面包使用本次发版临时生成的自签名证书，并附带公开 `.cer` 文件，可供用户核对本次发布所用的签名证书。它不会取得 Apple 或 Microsoft 的系统信任；Gatekeeper 或 SmartScreen 仍可能提示未知开发者。安装前请用 `SHA256SUMS` 核对下载文件。
 
+## 发布供应链证据
+
+当前 `main` 的正式发布工作流会新增已签名的
+`TRUSTDB_RELEASE_MANIFEST.json`、`SHA256SUMS`、`SM3SUMS`、SPDX SBOM、
+漏洞扫描留存结果、精确的原生库/合约/许可证/架构矩阵、不可变容器 digest
+与可下载 Sigstore bundle。Release Actions 和基础镜像分别固定到 commit 或
+OCI digest；未进入 manifest 的文件、内容漂移的生产输入都会阻断发版。
+
+断网运维人员先用独立下发的 trusted root 验证 manifest，再执行
+`trustdb release verify --dir <release目录>` 检查精确文件集合与双摘要。
+国产 Go/npm/OCI 镜像只改变获取路线，lockfile integrity 与不可变 digest
+始终是最终约束。完整步骤见[发布供应链与隔离区运维手册](docs/zh-CN/SUPPLY_CHAIN_RELEASES.md)。
+
 ## 能力概览
 
 - 使用确定性 CBOR 表达 claim、receipt、proof bundle、global-log proof、STH、anchor result、backup 和 `.sproof` 文件。
