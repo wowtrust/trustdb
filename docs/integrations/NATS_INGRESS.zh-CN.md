@@ -201,7 +201,7 @@ HTTP/gRPC 相同的阻塞式队列背压。
 代码树时可使用：
 
 ```bash
-go get github.com/wowtrust/trustdb/v2@v2.0.0-rc.1
+go get github.com/wowtrust/trustdb/v2@v2.0.0-rc.2
 ```
 
 应用通常先通过现有签名链路生成 `sdk.SignedClaim`，再选择同步或可恢复

@@ -6,7 +6,34 @@ TrustDB follows semantic versioning for stable releases. Proof, backup, storage,
 
 ## [Unreleased]
 
-No user-visible changes after the v2.0.0-rc.1 release candidate.
+No user-visible changes after the v2.0.0-rc.2 release candidate.
+
+## [2.0.0-rc.2] - 2026-07-26
+
+Corrected V2 release candidate. It preserves the V2/V5 formats and proof
+semantics introduced by RC.1 while replacing the affected release verifier and
+documentation with reproducible, release-first paths.
+
+### Fixed
+
+- Release-manifest media types are now derived from deterministic artifact
+  names instead of the host MIME database. Packaged macOS, Linux, and Windows
+  verifiers therefore enforce the same exact manifest on every platform.
+- Website quick starts, SDK setup, server deployment, NATS ingress, downloads,
+  and supply-chain guides consume versioned release archives, Go modules, and
+  digest-pinned container images. Only the dedicated source-build guide builds
+  TrustDB from source.
+
+### Compatibility and release safety
+
+- Proofstore schema v5, V2 WAL/checkpoints, V2 API objects, `.sproof v2`, and
+  encrypted `.tdbackup v5` are unchanged from RC.1.
+- RC.1 remains immutable for audit and reproducibility. RC.2 uses a new tag,
+  release assets, Go module version, container version, and `beta` image while
+  leaving the stable `latest` container tag unchanged.
+- The breaking v1-to-v2 cutover remains in force: deploy with a new namespace,
+  LogID, and empty V5 data directory; do not feed v1 storage, backups, API
+  objects, or evidence files to V2.
 
 ## [2.0.0-rc.1] - 2026-07-26
 
@@ -109,4 +136,5 @@ First stable release.
 - Desktop packages may trigger Gatekeeper or SmartScreen warnings because the release certificates are self-signed.
 
 [1.0.0]: https://github.com/wowtrust/trustdb/releases/tag/v1.0.0
+[2.0.0-rc.2]: https://github.com/wowtrust/trustdb/releases/tag/v2.0.0-rc.2
 [2.0.0-rc.1]: https://github.com/wowtrust/trustdb/releases/tag/v2.0.0-rc.1

@@ -372,7 +372,10 @@ export function ServerDocsPage({ route }) {
   const locale = useLocale();
   const { lang, ui, server, troubleshooting } = useDocsOnboarding(locale);
   const natsCopy = natsIngressContent(locale);
-  const dockerImage = `${release.containerImage}@${release.containerDigest}`;
+  const containerEvidenceUrl = assetUrl("TRUSTDB_CONTAINER_DIGESTS.json");
+  const posixResolveDockerImage = `DIGEST="$(curl --fail --location --silent --show-error ${containerEvidenceUrl} | sed -n 's/^[[:space:]]*"digest":[[:space:]]*"\\(sha256:[0-9a-f]*\\)",[[:space:]]*$/\\1/p')"\nif ! printf '%s\\n' "$DIGEST" | grep -Eq '^sha256:[0-9a-f]{64}$'; then\n  printf 'Invalid container digest: %s\\n' "$DIGEST" >&2\n  exit 1\nfi\nIMAGE="${release.containerImage}@$DIGEST"`;
+  const windowsResolveDockerImage = `$Evidence = Invoke-RestMethod -Uri '${containerEvidenceUrl}'\n$Digest = [string]$Evidence.digest\nif ($Digest -notmatch '^sha256:[0-9a-f]{64}$') { throw "Invalid container digest: $Digest" }\n$Image = '${release.containerImage}@' + $Digest`;
+  const dockerImage = '"$IMAGE"';
   const posixLocalServer = `printf 'Development key passphrase: '\nIFS= read -r -s TRUSTDB_DEV_KEY_PASSPHRASE\nprintf '\\n'\nexport TRUSTDB_DEV_KEY_PASSPHRASE\n./bin/trustdb serve \\\n  --server-private-key .trustdb-dev/server.key \\\n  --client-public-key .trustdb-dev/client.pub \\\n  --wal .trustdb-dev/server/wal \\\n  --metastore pebble \\\n  --metastore-path .trustdb-dev/server/pebble \\\n  --proof-dir .trustdb-dev/server/proofs \\\n  --listen 127.0.0.1:8080`;
   const localServerCommands = {
     macos: posixLocalServer,
@@ -385,13 +388,18 @@ export function ServerDocsPage({ route }) {
     linux: posixDiagnostics,
     windows: "$ready = $false\nfor ($attempt = 0; $attempt -lt 50; $attempt++) {\n  curl.exe --fail --silent http://127.0.0.1:8080/healthz\n  if ($LASTEXITCODE -eq 0) { $ready = $true; break }\n  Start-Sleep -Milliseconds 200\n}\nif (-not $ready) { throw 'TrustDB did not become ready within 10 seconds' }\ncurl.exe --fail --silent \"http://127.0.0.1:8080/v2/records?limit=10&direction=desc\"\ncurl.exe --fail --silent http://127.0.0.1:8080/metrics",
   };
-  const dockerPull = `docker pull ${dockerImage}\ndocker run --rm ${dockerImage} version`;
-  const dockerPullCommands = { macos: dockerPull, linux: dockerPull, windows: dockerPull };
+  const dockerPull = `${posixResolveDockerImage}\ndocker pull "$IMAGE"\ndocker run --rm "$IMAGE" version`;
+  const dockerPullWindows = `${windowsResolveDockerImage}\ndocker pull $Image\ndocker run --rm $Image version`;
+  const dockerPullCommands = { macos: dockerPull, linux: dockerPull, windows: dockerPullWindows };
   const posixDockerRun = "mkdir -p .trustdb-dev/docker/tls\ncp config/docker.yaml .trustdb-dev/docker/config.yaml\n# Before continuing, add these files under .trustdb-dev/docker/tls:\n# server.crt, server.key, client-ca.crt, server-ca.crt,\n# health-client.crt and health-client.key.\numask 077\nprintf 'Container key passphrase: '\nIFS= read -r -s TRUSTDB_CONTAINER_KEY_PASSPHRASE\nprintf '\\n'\nprintf '%s' \"$TRUSTDB_CONTAINER_KEY_PASSPHRASE\" > .trustdb-dev/docker/trustdb-kek\nunset TRUSTDB_CONTAINER_KEY_PASSPHRASE\n\ndocker volume create trustdb-data\ndocker run -d --name trustdb \\\n  -e TRUSTDB_DEV_KEY_PASSPHRASE_FILE=/run/secrets/trustdb-kek \\\n  --mount \"type=bind,src=$(pwd)/.trustdb-dev/docker/config.yaml,dst=/etc/trustdb/config.yaml,readonly\" \\\n  --mount \"type=bind,src=$(pwd)/.trustdb-dev/docker/tls,dst=/etc/trustdb/tls,readonly\" \\\n  --mount \"type=bind,src=$(pwd)/.trustdb-dev/docker/trustdb-kek,dst=/run/secrets/trustdb-kek,readonly\" \\\n  --mount type=volume,src=trustdb-data,dst=/var/lib/trustdb \\\n  -p 127.0.0.1:8080:8080 \\\n  __TRUSTDB_IMAGE__\n\ndocker_health=\nfor attempt in $(seq 1 60); do\n  docker_health=$(docker inspect --format '{{.State.Health.Status}}' trustdb)\n  [ \"$docker_health\" = healthy ] && break\n  [ \"$docker_health\" = unhealthy ] && break\n  sleep 1\ndone\nif [ \"$docker_health\" != healthy ]; then\n  docker logs trustdb\n  exit 1\nfi\ncurl --fail --silent \\\n  --cacert .trustdb-dev/docker/tls/server-ca.crt \\\n  --cert .trustdb-dev/docker/tls/health-client.crt \\\n  --key .trustdb-dev/docker/tls/health-client.key \\\n  --resolve trustdb:8080:127.0.0.1 \\\n  https://trustdb:8080/healthz".replaceAll("__TRUSTDB_IMAGE__", dockerImage);
-  const dockerRunCommands = {
-    macos: posixDockerRun,
-    linux: posixDockerRun,
+  const dockerRunCommandBodies = {
     windows: "New-Item -ItemType Directory -Force -Path .\\.trustdb-dev\\docker\\tls | Out-Null\nCopy-Item .\\config\\docker.yaml .\\.trustdb-dev\\docker\\config.yaml\n# Before continuing, add these files under .trustdb-dev\\docker\\tls:\n# server.crt, server.key, client-ca.crt, server-ca.crt,\n# health-client.crt and health-client.key.\n$secret = Read-Host 'Container key passphrase' -AsSecureString\n$pointer = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secret)\ntry {\n  [IO.File]::WriteAllText((Join-Path $PWD '.trustdb-dev\\docker\\trustdb-kek'), [Runtime.InteropServices.Marshal]::PtrToStringBSTR($pointer))\n} finally {\n  [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($pointer)\n  Remove-Variable secret\n}\n$dockerFiles = (Resolve-Path .\\.trustdb-dev\\docker).Path\n\ndocker volume create trustdb-data\ndocker run -d --name trustdb `\n  -e TRUSTDB_DEV_KEY_PASSPHRASE_FILE=/run/secrets/trustdb-kek `\n  --mount \"type=bind,src=$dockerFiles\\config.yaml,dst=/etc/trustdb/config.yaml,readonly\" `\n  --mount \"type=bind,src=$dockerFiles\\tls,dst=/etc/trustdb/tls,readonly\" `\n  --mount \"type=bind,src=$dockerFiles\\trustdb-kek,dst=/run/secrets/trustdb-kek,readonly\" `\n  --mount type=volume,src=trustdb-data,dst=/var/lib/trustdb `\n  -p 127.0.0.1:8080:8080 `\n  __TRUSTDB_IMAGE__\n\n$dockerHealth = ''\nfor ($attempt = 0; $attempt -lt 60; $attempt++) {\n  $dockerHealth = docker inspect --format '{{.State.Health.Status}}' trustdb\n  if ($dockerHealth -in @('healthy', 'unhealthy')) { break }\n  Start-Sleep -Seconds 1\n}\nif ($dockerHealth -ne 'healthy') { docker logs trustdb; throw \"TrustDB container health is $dockerHealth\" }\ncurl.exe --fail --silent `\n  --cacert .\\.trustdb-dev\\docker\\tls\\server-ca.crt `\n  --cert .\\.trustdb-dev\\docker\\tls\\health-client.crt `\n  --key .\\.trustdb-dev\\docker\\tls\\health-client.key `\n  --resolve trustdb:8080:127.0.0.1 `\n  https://trustdb:8080/healthz".replaceAll("__TRUSTDB_IMAGE__", dockerImage),
+  };
+  const digestPinnedPosixDockerRun = `${posixResolveDockerImage}\n\n${posixDockerRun}`;
+  const dockerRunCommands = {
+    macos: digestPinnedPosixDockerRun,
+    linux: digestPinnedPosixDockerRun,
+    windows: `${windowsResolveDockerImage}\n\n${dockerRunCommandBodies.windows}`,
   };
   return (
     <DocsShell route={route}>
@@ -451,7 +459,7 @@ export function ServerDocsPage({ route }) {
 export function CliDocsPage({ route }) {
   return (
     <DocsShell route={route}>
-      <ArticleTitle index="07" title="CLI" lead="trustdb 是服务器、验证器和运维工具的统一入口。" updated="2026.07.26" version="适用于 v2.0.0-rc.1" />
+      <ArticleTitle index="07" title="CLI" lead="trustdb 是服务器、验证器和运维工具的统一入口。" updated="2026.07.26" version={`适用于 ${release.tag}`} />
       <section className="doc-section"><h2>命令地图</h2><div className="cli-map">{cliGroups.map(([title, commands]) => <div key={title}><strong>{title}</strong><code>{commands}</code></div>)}</div><CodeBlock>trustdb --help{"\n"}trustdb verify --help{"\n"}trustdb serve --help</CodeBlock><p>如果没有把 <code>bin</code> 加入 PATH，请使用发布目录中的 <code>./bin/trustdb</code>。</p><InlineLink href="/downloads">下载 CLI</InlineLink></section>
       <section className="doc-section"><h2>验证模式</h2><p><strong>本地模式</strong>从 <code>.sproof</code> 或分离的 L3/L4/L5 文件验证；<strong>服务器模式</strong>按 record_id 拉取证明。两者都要求服务端公钥，以及客户端公钥或受信任密钥注册表。</p><CodeBlock>trustdb verify --file ./invoice.pdf --sproof ./invoice.sproof \{"\n"}  --server-public-key ./server.pub --client-public-key ./client.pub{"\n\n"}trustdb verify --file ./invoice.pdf --server http://127.0.0.1:8080 \{"\n"}  --record tr1example --server-public-key ./server.pub \{"\n"}  --key-registry ./clients.tdkeys --registry-public-key ./registry.pub</CodeBlock><Note title="L5 规则">本地 <code>--anchor</code> 必须同时提供 <code>--global-proof</code>；<code>--skip-anchor</code> 会主动忽略可用的 L5 anchor result。</Note></section>
       <section className="doc-section"><h2>全局标志</h2><p>每个命令都可接收 <code>--config</code>、<code>--data-dir</code> 与结构化日志配置。异步日志的缓冲区与 drop 策略会影响可观测性，不改变证明语义。</p><div className="flag-list"><code>--config</code><span>YAML 配置路径</span><code>--log-format</code><span>json / console / text</span><code>--log-output</code><span>stderr / file / both</span><code>--log-level</code><span>debug / info / warn / error</span></div></section>

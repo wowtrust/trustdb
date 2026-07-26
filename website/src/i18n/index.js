@@ -14,10 +14,11 @@ export const localeOptions = [
 // English is also the deliberate fallback for new release copy in secondary
 // locales until a reviewed native translation is added.
 const releaseMessagesEnglish = {
+  "修正后的 V2/V5 发布候选版：跨平台 verifier 使用确定性 media type，并且官网教程默认使用已发布产物。": "Corrected V2/V5 release candidate: the cross-platform verifier uses deterministic media types, and the website guides consume published artifacts by default.",
   "首个 V2/V5 发布候选版：国密证据套件、FISCO BCOS 证据验证、破坏性新格式、签名发布清单与完整离线验真资料。": "First V2/V5 release candidate: national-cryptography evidence suites, FISCO BCOS evidence verification, new breaking formats, a signed release manifest, and complete offline verification material.",
   "发布链路新增签名 manifest、SHA-256/SM3、SPDX SBOM、漏洞留存、不可变 OCI digest、国产镜像与隔离区导入手册。": "The release pipeline now produces a signed manifest, SHA-256/SM3, an SPDX SBOM, retained vulnerability results, immutable OCI digests, domestic mirrors, and an air-gap import runbook.",
   "这是破坏性 V2/V5 候选版本，不读取 v1 存储、备份、API 请求或证据文件。新部署请使用空数据目录并固定 `/v2` Go module。": "This is a breaking V2/V5 release candidate. It does not read v1 storage, backups, API requests, or evidence files. Deploy with an empty data directory and pin the `/v2` Go module.",
-  "下载 2.0.0-rc.1，并核对签名清单、SHA-256、SM3、SBOM 与不可变容器摘要。": "Download 2.0.0-rc.1 and verify the signed manifest, SHA-256, SM3, SBOM, and immutable container digest.",
+  "下载 2.0.0-rc.2，并核对签名清单、SHA-256、SM3、SBOM 与不可变容器摘要。": "Download 2.0.0-rc.2 and verify the signed manifest, SHA-256, SM3, SBOM, and immutable container digest.",
   "桌面客户端、服务器与 CLI 来自同一个已签名发布清单，同时提供 SHA-256、SM3、SBOM、漏洞报告与不可变容器摘要。": "The desktop client, server, and CLI share one signed release manifest, with SHA-256, SM3, an SBOM, a vulnerability report, and immutable container digests.",
   "桌面客户端、服务器、CLI 和 Docker 镜像绑定同一份签名清单与源提交。下载后先验证 provenance，再核对 SHA-256 与 SM3。": "The desktop client, server, CLI, and Docker images are bound to one signed manifest and source commit. Verify provenance first, then check SHA-256 and SM3.",
   "候选版 ·": "Release candidate ·",
@@ -33,13 +34,14 @@ const releaseMessagesEnglish = {
   "桌面安装包仍采用自签名证书，尚未取得 Apple 或 Microsoft 商业签名。必须先验证签名 manifest 与双摘要；证书和指纹只用于核对本次发布的签名完整性。": "Desktop packages remain self-signed and do not have Apple or Microsoft commercial signing. Verify the signed manifest and both hashes first; the certificate and fingerprint only identify this release's signing material.",
   "通用发布包支持 FISCO BCOS 离线证据验证；需要真实链上发布时，必须按固定 C SDK v3.6.0、Go SDK v3.0.2 和 `fiscobcos_sdk` build tag 构建并验证原生运行时。": "Generic packages support offline FISCO BCOS evidence verification. Real on-chain publication requires a source build and native-runtime validation with pinned C SDK v3.6.0, Go SDK v3.0.2, and the `fiscobcos_sdk` build tag.",
   "通用发布包支持 FISCO BCOS 离线证据验证。真实链上发布所需的 provider-enabled 变体不在通用产物中；只有明确需要该能力时才进入单独的源码构建指南。": "Generic packages support offline FISCO BCOS evidence verification. The provider-enabled variant required for real on-chain publication is not part of the generic artifacts; use the dedicated source-build guide only when that capability is explicitly required.",
+  "RC.2 的 manifest media type 由产物文件名确定，不依赖宿主 MIME 数据库；macOS、Linux 与 Windows 随包 verifier 会执行同一套精确文件集合和双摘要校验。": "RC.2 derives manifest media types from artifact names rather than the host MIME database; the packaged macOS, Linux, and Windows verifiers enforce the same exact file set and dual hashes.",
   "签名发布清单": "Signed release manifest",
   "Sigstore 来源证明": "Sigstore provenance",
   "漏洞检查报告": "Vulnerability report",
   "生产输入清单": "Production-input inventory",
   "容器不可变摘要": "Immutable container digests",
   "查看全部发布产物": "View all release assets",
-  "2.0.0-rc.1 发布候选版": "2.0.0-rc.1 release candidate",
+  "2.0.0-rc.2 发布候选版": "2.0.0-rc.2 release candidate",
 };
 
 const manualMessages = {

@@ -215,7 +215,7 @@ Pin a release or commit that contains `NATSIngressClient`. While evaluating the
 current unreleased tree, use:
 
 ```bash
-go get github.com/wowtrust/trustdb/v2@v2.0.0-rc.1
+go get github.com/wowtrust/trustdb/v2@v2.0.0-rc.2
 ```
 
 Applications normally produce a `sdk.SignedClaim` through their existing

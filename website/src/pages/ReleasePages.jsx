@@ -5,6 +5,7 @@ import { binaryDownloads, checksumsAsset, desktopDownloads, release, releaseEvid
 import { Link } from "../router";
 
 const milestones = [
+  ["2026.07.26", "v2.0.0-rc.2", "修正后的 V2/V5 发布候选版：跨平台 verifier 使用确定性 media type，并且官网教程默认使用已发布产物。", "RC.2"],
   ["2026.07.26", "v2.0.0-rc.1", "首个 V2/V5 发布候选版：国密证据套件、FISCO BCOS 证据验证、破坏性新格式、签名发布清单与完整离线验真资料。", "RC.1"],
   ["2026.07.26", "Release supply-chain gates", "发布链路新增签名 manifest、SHA-256/SM3、SPDX SBOM、漏洞留存、不可变 OCI digest、国产镜像与隔离区导入手册。", "#478"],
   ["2026.07.22", "v1.0.0", "首个正式版：新 Go module 路径、持久化 STH 合并锚定、完整离线证据、存储 schema v4 与逻辑备份。", "Stable"],
@@ -21,10 +22,9 @@ export function ChangelogPage() {
   return (
     <>
       <PageHero eyebrow="Development log" title={<>TrustDB<br />版本记录。</>} lead="按版本记录功能变化、兼容性要求、已知问题和下载信息。" meta="开发日志 · 更新于 2026.07.26">
-        <div className="page-hero__actions"><Link className="button button--solid" href="/downloads">下载 2.0.0-rc.1 <ArrowRight /></Link><a className="button button--ghost" href="https://github.com/wowtrust/trustdb/commits/main" target="_blank" rel="noreferrer">全部提交</a></div>
+        <div className="page-hero__actions"><Link className="button button--solid" href="/downloads">下载 {release.version} <ArrowRight /></Link><a className="button button--ghost" href="https://github.com/wowtrust/trustdb/commits/main" target="_blank" rel="noreferrer">全部提交</a></div>
       </PageHero>
-      <section className="release-state section-shell" data-reveal><WarningCircle /><div><p>Release status</p><h2>2.0.0-rc.1 发布候选版</h2><span>这是破坏性 V2/V5 候选版本，不读取 v1 存储、备份、API 请求或证据文件。新部署请使用空数据目录并固定 `/v2` Go module。</span></div><Link href="/downloads">查看全部产物 <ArrowRight /></Link></section>
-      <section className="release-state section-shell" data-reveal><WarningCircle /><div><p>Known issue</p><h2>RC.1 跨平台 verifier 可能误报</h2><span>随包提供的 macOS/Windows release verifier 可能因宿主 MIME 数据库差异误判 `.exe`。发布资产、双摘要、Sigstore provenance 与 OCI digest 已独立验证；确定性修复已合入 #608，将随下一候选版交付。</span></div><a href="https://github.com/wowtrust/trustdb/pull/608" target="_blank" rel="noreferrer">查看修复 <ArrowRight /></a></section>
+      <section className="release-state section-shell" data-reveal><WarningCircle /><div><p>Release status</p><h2>{release.version} 发布候选版</h2><span>这是破坏性 V2/V5 候选版本，不读取 v1 存储、备份、API 请求或证据文件。新部署请使用空数据目录并固定 `/v2` Go module。</span></div><Link href="/downloads">查看全部产物 <ArrowRight /></Link></section>
       <section className="timeline section-shell">
         <div className="timeline__heading" data-reveal><p>Development milestones</p><h2>版本变更</h2></div>
         <div className="timeline__list">{milestones.map(([date, title, description, ref], index) => <article key={`${date}-${title}`} data-reveal><span>{String(index + 1).padStart(2, "0")}</span><time>{date}</time><div><h3>{title}</h3><p>{description}</p></div><b>{ref}</b></article>)}</div>
@@ -98,7 +98,7 @@ export function DownloadsPage() {
       <section className="source-build section-shell">
         <div data-reveal><p>Use the release</p><h2>直接使用发布产物</h2></div>
         <div className="source-build__steps" data-reveal><p><span>01</span><strong>验证来源</strong><code>Sigstore provenance</code></p><p><span>02</span><strong>核对文件</strong><code>SHA-256 · SM3</code></p><p><span>03</span><strong>固定版本</strong><code>{release.tag} · OCI digest</code></p></div>
-        <div className="source-build__note"><WarningCircle /><span>RC.1 已知限制：随包提供的 macOS/Windows `trustdb release verify` 可能因宿主 MIME 数据库差异误报有效 manifest 不一致。资产、SHA-256/SM3、Sigstore provenance 与 OCI digest 已独立验证；修复已合入 #608，并将在下一候选版交付。不要覆盖 RC.1 标签或资产，也不要把 RC.1 自带 verifier 作为跨平台准入工具。</span></div>
+        <div className="source-build__note"><Check /><span>RC.2 的 manifest media type 由产物文件名确定，不依赖宿主 MIME 数据库；macOS、Linux 与 Windows 随包 verifier 会执行同一套精确文件集合和双摘要校验。</span></div>
         <div className="source-build__note"><WarningCircle /><span>V2/V5 是一次性破坏性切换：不要让 v2 进程打开 v1 数据目录，也不要把 v1 backup、SDK 请求或 .sproof 输入 v2。升级前保留历史环境用于审计，然后使用新 namespace 与空数据目录部署。</span></div>
         <div className="source-build__note"><Check /><span>桌面安装包仍采用自签名证书，尚未取得 Apple 或 Microsoft 商业签名。必须先验证签名 manifest 与双摘要；证书和指纹只用于核对本次发布的签名完整性。</span></div>
         <div className="source-build__note"><Check /><span>通用发布包支持 FISCO BCOS 离线证据验证。真实链上发布所需的 provider-enabled 变体不在通用产物中；只有明确需要该能力时才进入单独的源码构建指南。</span></div>
