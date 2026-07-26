@@ -102,3 +102,25 @@ updates:
         applies-to: security-updates
         patterns:
           - "*"
+
+  - package-ecosystem: npm
+    directory: /website
+    schedule:
+      interval: weekly
+      day: monday
+      time: "04:00"
+      timezone: Asia/Shanghai
+    open-pull-requests-limit: 0
+    rebase-strategy: auto
+    versioning-strategy: increase-if-necessary
+    labels:
+      - dependencies
+    commit-message:
+      prefix: "fix(deps)"
+    allow:
+      - dependency-type: all
+    groups:
+      security-patches:
+        applies-to: security-updates
+        patterns:
+          - "*"

@@ -14,6 +14,9 @@ on:
 permissions:
   contents: write
   packages: write
+  id-token: write
+  attestations: write
+  artifact-metadata: write
 
 concurrency:
   group: release-${{ github.ref }}
@@ -31,11 +34,12 @@ jobs:
       version: ${{ steps.meta.outputs.version }}
       numeric_version: ${{ steps.meta.outputs.numeric_version }}
       build_date: ${{ steps.meta.outputs.build_date }}
+      source_date_epoch: ${{ steps.meta.outputs.source_date_epoch }}
       channel: ${{ steps.meta.outputs.channel }}
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Validate version
         id: meta
@@ -58,26 +62,114 @@ jobs:
           else
             channel="latest"
           fi
-          build_date="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+          source_date_epoch="$(git show -s --format=%ct "$GITHUB_SHA")"
+          build_date="$(date -u -d "@$source_date_epoch" +'%Y-%m-%dT%H:%M:%SZ')"
           {
             echo "version=$version"
             echo "numeric_version=$numeric_version"
             echo "build_date=$build_date"
+            echo "source_date_epoch=$source_date_epoch"
             echo "channel=$channel"
           } >> "$GITHUB_OUTPUT"
 
+  supply-chain:
+    name: Supply-chain policy, SBOM, and vulnerability gates
+    needs: prepare
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Setup Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: |
+            go.sum
+            clients/desktop/go.sum
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: |
+            clients/web/package-lock.json
+            clients/desktop/frontend/package-lock.json
+            website/package-lock.json
+
+      - name: Verify immutable production inputs
+        run: |
+          go mod verify
+          go run ./cmd/trustdb release verify-policy \
+            --root . \
+            --policy supply-chain/production-inputs.json
+
+      - name: Generate pinned source SBOM
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
+        with:
+          path: .
+          format: spdx-json
+          output-file: trustdb-release.spdx.json
+          artifact-name: trustdb-release.spdx.json
+          syft-version: v1.49.0
+          upload-artifact: false
+          upload-release-assets: false
+
+      - name: Audit production dependency graphs
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p security-reports
+          for project in clients/web clients/desktop/frontend website; do
+            report_name="$(printf '%s' "$project" | tr '/' '-')"
+            npm --prefix "$project" ci --ignore-scripts
+            npm --prefix "$project" audit --audit-level=high --json \
+              > "security-reports/$report_name.json"
+          done
+          go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 -json ./... \
+            > security-reports/go-vulncheck.json
+          jq -n \
+            --arg schema "trustdb.vulnerability-report.v1" \
+            --arg source_commit "$GITHUB_SHA" \
+            --slurpfile admin security-reports/clients-web.json \
+            --slurpfile desktop security-reports/clients-desktop-frontend.json \
+            --slurpfile website security-reports/website.json \
+            --rawfile go security-reports/go-vulncheck.json \
+            '{schema: $schema, source_commit: $source_commit, policy: "fail-on-high-or-critical", npm: {admin_web: $admin[0], desktop: $desktop[0], website: $website[0]}, govulncheck_jsonl: $go}' \
+            > TRUSTDB_VULNERABILITY_REPORT.json
+
+      - name: Stage retained release metadata
+        shell: bash
+        run: |
+          cp supply-chain/production-inputs.json TRUSTDB_PRODUCTION_INPUTS.json
+
+      - name: Upload retained supply-chain metadata
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: supply-chain-evidence
+          path: |
+            TRUSTDB_PRODUCTION_INPUTS.json
+            TRUSTDB_VULNERABILITY_REPORT.json
+            trustdb-release.spdx.json
+          if-no-files-found: error
+
   admin-web:
     name: Build Admin Web
-    needs: prepare
+    needs:
+      - prepare
+      - supply-chain
     runs-on: ubuntu-24.04
     timeout-minutes: 15
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Setup Node
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: "24"
           cache: npm
@@ -90,11 +182,55 @@ jobs:
           npm run build
 
       - name: Upload Admin Web
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: admin-web-assets
           path: clients/web/dist/
           if-no-files-found: error
+
+  reproducibility:
+    name: Reproduce Server/CLI package
+    needs:
+      - prepare
+      - admin-web
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Setup Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Download Admin Web
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: admin-web-assets
+          path: release-admin
+
+      - name: Build twice from the same commit timestamp
+        shell: bash
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+          BUILD_DATE: ${{ needs.prepare.outputs.build_date }}
+          SOURCE_DATE_EPOCH: ${{ needs.prepare.outputs.source_date_epoch }}
+          TARGET_OS: linux
+          TARGET_ARCH: amd64
+          CGO_ENABLED: "1"
+          ARCHIVE_KIND: tar.gz
+        run: |
+          set -euo pipefail
+          bash packaging/release/build-server.sh
+          first="$(sha256sum "release-output/trustdb-$VERSION-linux-amd64.tar.gz" | cut -d' ' -f1)"
+          rm -rf release-bin release-stage release-output
+          bash packaging/release/build-server.sh
+          second="$(sha256sum "release-output/trustdb-$VERSION-linux-amd64.tar.gz" | cut -d' ' -f1)"
+          test "$first" = "$second"
+          printf 'reproducible sha256=%s\n' "$second"
 
   server:
     name: Server/CLI · ${{ matrix.os }} · ${{ matrix.arch }}
@@ -146,16 +282,16 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Setup Go
-        uses: actions/setup-go@v7
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version-file: go.mod
           cache-dependency-path: go.sum
 
       - name: Download Admin Web
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: admin-web-assets
           path: release-admin
@@ -173,7 +309,7 @@ jobs:
         run: bash packaging/release/build-server.sh
 
       - name: Upload Server/CLI package
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: server-${{ matrix.os }}-${{ matrix.arch }}
           path: release-output/*
@@ -195,10 +331,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Setup Go
-        uses: actions/setup-go@v7
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version-file: clients/desktop/go.mod
           cache-dependency-path: |
@@ -206,7 +342,7 @@ jobs:
             clients/desktop/go.sum
 
       - name: Setup Node
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: "24"
           cache: npm
@@ -221,7 +357,7 @@ jobs:
         run: bash packaging/release/build-desktop-macos.sh
 
       - name: Upload macOS desktop packages
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: desktop-darwin-${{ matrix.arch }}
           path: clients/desktop/release-output/*
@@ -247,10 +383,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Setup Go
-        uses: actions/setup-go@v7
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version-file: clients/desktop/go.mod
           cache-dependency-path: |
@@ -258,14 +394,14 @@ jobs:
             clients/desktop/go.sum
 
       - name: Setup Node
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: "24"
           cache: npm
           cache-dependency-path: clients/desktop/frontend/package-lock.json
 
       - name: Setup .NET
-        uses: actions/setup-dotnet@v6
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
         with:
           dotnet-version: "8.0.x"
 
@@ -288,7 +424,7 @@ jobs:
         run: ./packaging/release/build-desktop-windows.ps1
 
       - name: Upload Windows desktop packages
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: desktop-windows-${{ matrix.arch }}
           path: clients/desktop/release-output/*
@@ -296,38 +432,41 @@ jobs:
 
   docker:
     name: Container registries · linux/amd64 + linux/arm64
-    needs: prepare
+    needs:
+      - prepare
+      - supply-chain
     if: github.ref_type == 'tag' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04
     timeout-minutes: 60
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ github.ref_type == 'tag' && github.ref || format('refs/tags/v{0}', needs.prepare.outputs.version) }}
 
       - name: Login to Docker Hub
-        uses: docker/login-action@v4
+        uses: docker/login-action@abd2ef45e78c5afb21d64d4ca52ee8550d9572c7 # v4
         with:
           username: ${{ vars.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Login to GitHub Container Registry
-        uses: docker/login-action@v4
+        uses: docker/login-action@abd2ef45e78c5afb21d64d4ca52ee8550d9572c7 # v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Setup QEMU
-        uses: docker/setup-qemu-action@v4
+        uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4
 
       - name: Setup Docker Buildx
-        uses: docker/setup-buildx-action@v4
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
 
       - name: Build and push multi-architecture image
-        uses: docker/build-push-action@v7
+        id: image
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
         with:
           context: .
           push: true
@@ -350,6 +489,39 @@ jobs:
           provenance: mode=max
           sbom: true
 
+      - name: Attest immutable container digest
+        id: container-attestation
+        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4
+        with:
+          subject-name: ghcr.io/${{ github.repository_owner }}/trustdb
+          subject-digest: ${{ steps.image.outputs.digest }}
+          push-to-registry: true
+
+      - name: Retain container digest and provenance
+        shell: bash
+        env:
+          IMAGE_DIGEST: ${{ steps.image.outputs.digest }}
+          ATTESTATION_BUNDLE: ${{ steps.container-attestation.outputs.bundle-path }}
+        run: |
+          jq -n \
+            --arg schema "trustdb.container-digests.v1" \
+            --arg digest "$IMAGE_DIGEST" \
+            --arg docker "${{ vars.DOCKERHUB_USERNAME }}/trustdb" \
+            --arg ghcr "ghcr.io/${{ github.repository_owner }}/trustdb" \
+            --arg version "${{ needs.prepare.outputs.version }}" \
+            '{schema: $schema, digest: $digest, platforms: ["linux/amd64", "linux/arm64"], references: [($docker + ":" + $version), ($ghcr + ":" + $version)]}' \
+            > TRUSTDB_CONTAINER_DIGESTS.json
+          cp "$ATTESTATION_BUNDLE" trustdb-container-attestation.sigstore.json
+
+      - name: Upload container evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: container-evidence
+          path: |
+            TRUSTDB_CONTAINER_DIGESTS.json
+            trustdb-container-attestation.sigstore.json
+          if-no-files-found: error
+
   release:
     name: Publish GitHub Release
     needs:
@@ -358,37 +530,75 @@ jobs:
       - desktop-macos
       - desktop-windows
       - docker
+      - reproducibility
+      - supply-chain
     if: github.ref_type == 'tag'
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 25
 
     steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Setup Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
       - name: Download Server/CLI packages
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           pattern: server-*
           path: release-assets
           merge-multiple: true
 
       - name: Download desktop packages
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           pattern: desktop-*
           path: release-assets
           merge-multiple: true
 
-      - name: Generate SHA-256 checksums
+      - name: Download retained supply-chain metadata
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: supply-chain-evidence
+          path: release-assets
+
+      - name: Download container evidence
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: container-evidence
+          path: release-assets
+
+      - name: Generate release manifest and dual checksums
         shell: bash
-        working-directory: release-assets
         run: |
-          find . -maxdepth 1 -type f ! -name SHA256SUMS -print0 \
-            | sort -z \
-            | xargs -0 sha256sum \
-            | sed 's#  \./#  #' > SHA256SUMS
-          test -s SHA256SUMS
+          go run ./cmd/trustdb release manifest \
+            --dir release-assets \
+            --version "${{ needs.prepare.outputs.version }}" \
+            --commit "$GITHUB_SHA" \
+            --build-date "${{ needs.prepare.outputs.build_date }}" \
+            --policy supply-chain/production-inputs.json
+
+      - name: Sign release manifest provenance
+        id: release-attestation
+        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4
+        with:
+          subject-path: release-assets/TRUSTDB_RELEASE_MANIFEST.json
+
+      - name: Retain and self-check offline verification bundle
+        shell: bash
+        env:
+          ATTESTATION_BUNDLE: ${{ steps.release-attestation.outputs.bundle-path }}
+        run: |
+          cp "$ATTESTATION_BUNDLE" \
+            release-assets/trustdb-release-attestation.sigstore.json
+          go run ./cmd/trustdb release verify --dir release-assets
 
       - name: Publish prerelease
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3
         with:
           name: TrustDB v${{ needs.prepare.outputs.version }}
           prerelease: ${{ contains(needs.prepare.outputs.version, '-') }}

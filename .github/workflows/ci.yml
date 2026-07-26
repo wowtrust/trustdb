@@ -172,6 +172,9 @@ jobs:
       - name: Verify module dependencies
         run: go mod verify
 
+      - name: Verify release supply-chain policy
+        run: go run ./cmd/trustdb release verify-policy --root . --policy supply-chain/production-inputs.json
+
       - name: Check module tidiness
         run: |
           go mod tidy
@@ -512,6 +515,10 @@ jobs:
         working-directory: clients/desktop/frontend
         run: npm ci
 
+      - name: Reject high-severity dependency vulnerabilities
+        working-directory: clients/desktop/frontend
+        run: npm audit --audit-level=high
+
       - name: Build frontend
         working-directory: clients/desktop/frontend
         run: npm run build
@@ -535,6 +542,10 @@ jobs:
       - name: Install dependencies
         working-directory: clients/web
         run: npm ci
+
+      - name: Reject high-severity dependency vulnerabilities
+        working-directory: clients/web
+        run: npm audit --audit-level=high
 
       - name: Install Playwright browsers
         working-directory: clients/web
@@ -571,6 +582,10 @@ jobs:
       - name: Install dependencies
         working-directory: website
         run: npm ci
+
+      - name: Reject high-severity dependency vulnerabilities
+        working-directory: website
+        run: npm audit --audit-level=high
 
       - name: Build official website
         working-directory: website
