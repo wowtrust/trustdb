@@ -346,6 +346,7 @@ unset TRUSTDB_DEV_KEY_PASSPHRASE_NEW
 ## 项目文档
 
 - [ARCHITECTURE.zh-CN.md](ARCHITECTURE.zh-CN.md)：TrustDB 服务端、持久化、Global Log、Anchor、SDK、备份和离线验证的详细架构设计。
+- [GLOSSARY.md](GLOSSARY.md)：简明 TrustDB proof 与 storage 术语表。
 - [docs/zh-CN/CHINA_DEPLOYMENT_PROFILES.md](docs/zh-CN/CHINA_DEPLOYMENT_PROFILES.md)：国产生产、离线隔离和测评 Profile 的真实启动门禁、出站/DNS、国密密钥与 BCOS、限时审计例外和负向测试。
 - [docs/integrations/NATS_INGRESS.zh-CN.md](docs/integrations/NATS_INGRESS.zh-CN.md)：可选 JetStream ingress 的拓扑、配置、安全、背压、结果恢复与 Go SDK 接入指南。
 - [docs/integrations/PKCS11_SIGNER.md](docs/integrations/PKCS11_SIGNER.md)：隔离的原生 PKCS#11 签名 sidecar、PIN 文件、机制检查、轮换、SoftHSM 互操作与生产设备验收要求。
