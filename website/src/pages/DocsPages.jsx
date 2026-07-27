@@ -459,7 +459,7 @@ export function ServerDocsPage({ route }) {
 export function CliDocsPage({ route }) {
   return (
     <DocsShell route={route}>
-      <ArticleTitle index="07" title="CLI" lead="trustdb 是服务器、验证器和运维工具的统一入口。" updated="2026.07.26" version={`适用于 ${release.tag}`} />
+      <ArticleTitle index="07" title="CLI" lead="trustdb 是服务器、验证器和运维工具的统一入口。" updated="2026.07.27" version={`适用于 ${release.tag}`} />
       <section className="doc-section"><h2>命令地图</h2><div className="cli-map">{cliGroups.map(([title, commands]) => <div key={title}><strong>{title}</strong><code>{commands}</code></div>)}</div><CodeBlock>trustdb --help{"\n"}trustdb verify --help{"\n"}trustdb serve --help</CodeBlock><p>如果没有把 <code>bin</code> 加入 PATH，请使用发布目录中的 <code>./bin/trustdb</code>。</p><InlineLink href="/downloads">下载 CLI</InlineLink></section>
       <section className="doc-section"><h2>验证模式</h2><p><strong>本地模式</strong>从 <code>.sproof</code> 或分离的 L3/L4/L5 文件验证；<strong>服务器模式</strong>按 record_id 拉取证明。两者都要求服务端公钥，以及客户端公钥或受信任密钥注册表。</p><CodeBlock>trustdb verify --file ./invoice.pdf --sproof ./invoice.sproof \{"\n"}  --server-public-key ./server.pub --client-public-key ./client.pub{"\n\n"}trustdb verify --file ./invoice.pdf --server http://127.0.0.1:8080 \{"\n"}  --record tr1example --server-public-key ./server.pub \{"\n"}  --key-registry ./clients.tdkeys --registry-public-key ./registry.pub</CodeBlock><Note title="L5 规则">本地 <code>--anchor</code> 必须同时提供 <code>--global-proof</code>；<code>--skip-anchor</code> 会主动忽略可用的 L5 anchor result。</Note></section>
       <section className="doc-section"><h2>全局标志</h2><p>每个命令都可接收 <code>--config</code>、<code>--data-dir</code> 与结构化日志配置。异步日志的缓冲区与 drop 策略会影响可观测性，不改变证明语义。</p><div className="flag-list"><code>--config</code><span>YAML 配置路径</span><code>--log-format</code><span>json / console / text</span><code>--log-output</code><span>stderr / file / both</span><code>--log-level</code><span>debug / info / warn / error</span></div></section>
@@ -690,8 +690,8 @@ export function SourceBuildPage({ route }) {
   };
   return (
     <DocsShell route={route}>
-      <ArticleTitle index="10" title="从源码构建" lead="服务器、CLI 与桌面客户端的构建环境和命令。" updated="2026.07.26" version={`适用于 ${release.tag}`} />
-      <section className="doc-section"><h2>服务器与 CLI</h2><p>需要 Git 与 go.mod 指定的 Go 版本。固定 RC 标签、记录 commit、运行测试，再生成本机 <code>trustdb</code> 二进制。</p><PlatformCodeBlock commands={sourceCommands} /></section>
+      <ArticleTitle index="10" title="从源码构建" lead="服务器、CLI 与桌面客户端的构建环境和命令。" updated="2026.07.27" version={`适用于 ${release.tag}`} />
+      <section className="doc-section"><h2>服务器与 CLI</h2><p>需要 Git 与 go.mod 指定的 Go 版本。固定正式版标签、记录 commit、运行测试，再生成本机 <code>trustdb</code> 二进制。</p><PlatformCodeBlock commands={sourceCommands} /></section>
       <section className="doc-section"><h2>桌面客户端</h2><p>桌面端还需要 Node.js 24、平台原生编译工具和 Wails 2.12.0。先安装当前系统的 Wails 依赖，再构建前端与原生壳。</p><CodeBlock>go install github.com/wailsapp/wails/v2/cmd/wails@v2.12.0{"\n"}cd clients/desktop/frontend{"\n"}npm ci{"\n"}npm run build{"\n"}cd ..{"\n"}wails doctor{"\n"}wails build</CodeBlock><InlineLink href="https://wails.io/docs/gettingstarted/installation/">Wails 平台依赖</InlineLink></section>
       <section className="doc-section"><h2>开发运行</h2><p>从 <code>clients/desktop</code> 运行 <code>wails dev</code> 才能使用签名、文件选择和本地数据库等原生能力。只启动 Vite 适合检查界面，不等同于完整客户端。</p><CodeBlock>cd clients/desktop{"\n"}go test ./...{"\n"}wails dev</CodeBlock><InlineLink href="/downloads">下载预编译版本</InlineLink></section>
       <div className="doc-next"><span>继续阅读</span><Link href="/sproof">.sproof v2 格式 <ArrowRight /></Link></div>

@@ -211,11 +211,10 @@ and gRPC.
 
 ## Go SDK workflow
 
-Pin a release or commit that contains `NATSIngressClient`. While evaluating the
-current unreleased tree, use:
+Pin the stable V2 SDK release that contains `NATSIngressClient`:
 
 ```bash
-go get github.com/wowtrust/trustdb/v2@v2.0.0-rc.2
+go get github.com/wowtrust/trustdb/v2@v2.0.0
 ```
 
 Applications normally produce a `sdk.SignedClaim` through their existing

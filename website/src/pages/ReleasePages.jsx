@@ -5,6 +5,7 @@ import { binaryDownloads, checksumsAsset, desktopDownloads, release, releaseEvid
 import { Link } from "../router";
 
 const milestones = [
+  ["2026.07.27", "v2.0.0", "V2/V5 正式版：国密证据、跨平台发布、加密备份、供应链材料和容器启动路径完成稳定版闭环。", "Stable"],
   ["2026.07.26", "v2.0.0-rc.2", "修正后的 V2/V5 发布候选版：跨平台 verifier 使用确定性 media type，并且官网教程默认使用已发布产物。", "RC.2"],
   ["2026.07.26", "v2.0.0-rc.1", "首个 V2/V5 发布候选版：国密证据套件、FISCO BCOS 证据验证、破坏性新格式、签名发布清单与完整离线验真资料。", "RC.1"],
   ["2026.07.26", "Release supply-chain gates", "发布链路新增签名 manifest、SHA-256/SM3、SPDX SBOM、漏洞留存、不可变 OCI digest、国产镜像与隔离区导入手册。", "#478"],
@@ -21,10 +22,10 @@ const milestones = [
 export function ChangelogPage() {
   return (
     <>
-      <PageHero eyebrow="Development log" title={<>TrustDB<br />版本记录。</>} lead="按版本记录功能变化、兼容性要求、已知问题和下载信息。" meta="开发日志 · 更新于 2026.07.26">
+      <PageHero eyebrow="Development log" title={<>TrustDB<br />版本记录。</>} lead="按版本记录功能变化、兼容性要求、已知问题和下载信息。" meta="开发日志 · 更新于 2026.07.27">
         <div className="page-hero__actions"><Link className="button button--solid" href="/downloads">下载 {release.version} <ArrowRight /></Link><a className="button button--ghost" href="https://github.com/wowtrust/trustdb/commits/main" target="_blank" rel="noreferrer">全部提交</a></div>
       </PageHero>
-      <section className="release-state section-shell" data-reveal><WarningCircle /><div><p>Release status</p><h2>{release.version} 发布候选版</h2><span>这是破坏性 V2/V5 候选版本，不读取 v1 存储、备份、API 请求或证据文件。新部署请使用空数据目录并固定 `/v2` Go module。</span></div><Link href="/downloads">查看全部产物 <ArrowRight /></Link></section>
+      <section className="release-state section-shell" data-reveal><WarningCircle /><div><p>Release status</p><h2>{release.version} 正式版</h2><span>这是稳定的 V2/V5 代际，不读取 v1 存储、备份、API 请求或证据文件。新部署请使用空数据目录并固定 `/v2` Go module。</span></div><Link href="/downloads">查看全部产物 <ArrowRight /></Link></section>
       <section className="timeline section-shell">
         <div className="timeline__heading" data-reveal><p>Development milestones</p><h2>版本变更</h2></div>
         <div className="timeline__list">{milestones.map(([date, title, description, ref], index) => <article key={`${date}-${title}`} data-reveal><span>{String(index + 1).padStart(2, "0")}</span><time>{date}</time><div><h3>{title}</h3><p>{description}</p></div><b>{ref}</b></article>)}</div>
@@ -53,12 +54,12 @@ export function DownloadsPage() {
   const locale = useLocale();
   return (
     <>
-      <PageHero eyebrow="Downloads" title={<>{release.version}{locale === "zh-CN" ? "，" : ","}<br />开放下载。</>} lead="桌面客户端、服务器、CLI 和 Docker 镜像绑定同一份签名清单与源提交。下载后先验证 provenance，再核对 SHA-256 与 SM3。" meta={`候选版 · ${release.published}`}>
+      <PageHero eyebrow="Downloads" title={<>{release.version}{locale === "zh-CN" ? "，" : ","}<br />开放下载。</>} lead="桌面客户端、服务器、CLI 和 Docker 镜像绑定同一份签名清单与源提交。下载后先验证 provenance，再核对 SHA-256 与 SM3。" meta={`正式版 · ${release.published}`}>
         <div className="page-hero__actions"><a className="button button--solid" href={checksumsAsset.url}><DownloadSimple /> SHA256SUMS</a><a className="button button--ghost" href={sm3ChecksumsAsset.url}><DownloadSimple /> SM3SUMS</a></div>
       </PageHero>
       <section className="empty-release section-shell">
         <div className="empty-release__mark" data-reveal><DownloadSimple /></div>
-        <div className="empty-release__copy" data-reveal><p>Release candidate</p><h2>先验真，再运行。</h2><span>GitHub Release 提供跨平台安装包、Server/CLI、签名清单、双摘要、SBOM 与漏洞报告；GHCR 和 Docker Hub 提供同一不可变多架构镜像。</span></div>
+        <div className="empty-release__copy" data-reveal><p>Stable release</p><h2>先验真，再运行。</h2><span>GitHub Release 提供跨平台安装包、Server/CLI、签名清单、双摘要、SBOM 与漏洞报告；GHCR 和 Docker Hub 提供同一不可变多架构镜像。</span></div>
         <a className="empty-release__watch" href={release.pageUrl} target="_blank" rel="noreferrer"><GithubLogo weight="fill" /> 打开 GitHub Release <ArrowRight /></a>
       </section>
       <section className="asset-plan" id="release-assets">
@@ -98,12 +99,12 @@ export function DownloadsPage() {
       <section className="source-build section-shell">
         <div data-reveal><p>Use the release</p><h2>直接使用发布产物</h2></div>
         <div className="source-build__steps" data-reveal><p><span>01</span><strong>验证来源</strong><code>Sigstore provenance</code></p><p><span>02</span><strong>核对文件</strong><code>SHA-256 · SM3</code></p><p><span>03</span><strong>固定版本</strong><code>{release.tag} · OCI digest</code></p></div>
-        <div className="source-build__note"><Check /><span>RC.2 的 manifest media type 由产物文件名确定，不依赖宿主 MIME 数据库；macOS、Linux 与 Windows 随包 verifier 会执行同一套精确文件集合和双摘要校验。</span></div>
-        <div className="source-build__note"><WarningCircle /><span>RC.2 镜像内二进制与不可变 digest 已验证，但随包 docker.yaml 错误声明 production profile，导致默认 entrypoint 因缺少 audit 配置而 fail closed。信息命令需显式使用镜像内 trustdb entrypoint；评估启动需设置 development profile。发布资产保持不可变，完整命令见服务部署教程。</span></div>
+        <div className="source-build__note"><Check /><span>发布清单的 media type 由产物文件名确定，不依赖宿主 MIME 数据库；macOS、Linux 与 Windows 随包 verifier 会执行同一套精确文件集合和双摘要校验。</span></div>
+        <div className="source-build__note"><Check /><span>正式版镜像的默认 entrypoint 已正确区分服务启动与信息命令，随包 docker.yaml 明确采用 development 评估 profile；生产环境继续使用带独立审计 signer 和同步时间证据的 production.yaml。</span></div>
         <div className="source-build__note"><WarningCircle /><span>V2/V5 是一次性破坏性切换：不要让 v2 进程打开 v1 数据目录，也不要把 v1 backup、SDK 请求或 .sproof 输入 v2。升级前保留历史环境用于审计，然后使用新 namespace 与空数据目录部署。</span></div>
         <div className="source-build__note"><Check /><span>桌面安装包仍采用自签名证书，尚未取得 Apple 或 Microsoft 商业签名。必须先验证签名 manifest 与双摘要；证书和指纹只用于核对本次发布的签名完整性。</span></div>
         <div className="source-build__note"><Check /><span>通用发布包支持 FISCO BCOS 离线证据验证。真实链上发布所需的 provider-enabled 变体不在通用产物中；只有明确需要该能力时才进入单独的源码构建指南。</span></div>
-        <div className="source-build__links"><InlineLink href="/docs/quick-start">快速开始</InlineLink><InlineLink href="/docs/server">服务部署与 RC.2 容器说明</InlineLink><InlineLink href="/docs/supply-chain">发布验签与国产镜像</InlineLink><InlineLink href="/docs/desktop-install">安装桌面客户端</InlineLink><InlineLink href="/docs/source-build">从源码构建</InlineLink><InlineLink href="/changelog">开发日志</InlineLink></div>
+        <div className="source-build__links"><InlineLink href="/docs/quick-start">快速开始</InlineLink><InlineLink href="/docs/server">服务部署与容器说明</InlineLink><InlineLink href="/docs/supply-chain">发布验签与国产镜像</InlineLink><InlineLink href="/docs/desktop-install">安装桌面客户端</InlineLink><InlineLink href="/docs/source-build">从源码构建</InlineLink><InlineLink href="/changelog">开发日志</InlineLink></div>
       </section>
     </>
   );

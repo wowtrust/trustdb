@@ -6,6 +6,26 @@ TrustDB follows semantic versioning for stable releases. Proof, backup, storage,
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-07-27
+
+First stable V2 release. It promotes the suite-bound V2/V5 generation qualified
+by RC.1 and RC.2, including the release-manifest portability fix, and closes the
+remaining container configuration and workflow supply-chain findings.
+
+### Added
+
+- `INTL_V1` and `CN_SM_V1` claims, receipts, Merkle trees, STHs, anchor results,
+  APIs, key registries, backups, and portable `.sproof v2` evidence.
+- SM2/SM3 deterministic vectors, SM4-GCM key and backup envelopes, TLCP
+  profiles, SDF/PKCS#11 signer sidecars, and FISCO BCOS 3.x offline anchor
+  verification.
+- Proofstore schema v5, V2 WAL/checkpoints, encrypted `.tdbackup v5`, durable
+  coalesced STH anchoring, and resumable L5 coverage projection.
+- Cross-platform Server/CLI and desktop packages, multi-architecture OCI
+  images, a signed release manifest, SHA-256 and SM3 checksum sets, SPDX SBOM,
+  vulnerability results, production-input inventory, container digests, and
+  downloadable Sigstore provenance.
+
 ### Fixed
 
 - The Docker entrypoint no longer forces the service configuration onto
@@ -14,8 +34,35 @@ TrustDB follows semantic versioning for stable releases. Proof, backup, storage,
   actually implements. Production deployments continue to use
   `configs/production.yaml` with a dedicated audit signer and synchronized
   time evidence.
+- Release-manifest media types are derived from deterministic artifact names,
+  so packaged Linux, macOS, and Windows verifiers enforce the same exact file
+  set and dual hashes.
+- Every external GitHub Action used by the repository is pinned to an
+  immutable commit, with a repository-hygiene gate preventing mutable refs from
+  returning.
 
-### v2.0.0-rc.2 container note
+### Compatibility and release safety
+
+- The Go module is `github.com/wowtrust/trustdb/v2`; consumers should pin
+  `v2.0.0`.
+- This is an intentional breaking generation. V2 does not read, migrate, or
+  fall back to v1 storage, schema v4, backups, WAL, API objects, or `.sproof`
+  files. Preserve the old audit environment and deploy V2 with a new namespace,
+  LogID, and empty V5 data directory.
+- The stable container updates the immutable `2.0.0` tag and the `latest`
+  channel. The prerelease `beta` channel remains bound to RC.2.
+- Desktop packages remain self-signed and can trigger Gatekeeper or SmartScreen
+  warnings. Verify the signed manifest and both checksum sets before install.
+- Generic packages verify FISCO BCOS evidence offline. Real network publication
+  requires the separately qualified provider-enabled source build.
+
+## [2.0.0-rc.2] - 2026-07-26
+
+Corrected V2 release candidate. It preserves the V2/V5 formats and proof
+semantics introduced by RC.1 while replacing the affected release verifier and
+documentation with reproducible, release-first paths.
+
+### Container note
 
 The immutable RC.2 image contains the correct TrustDB binary, but its bundled
 `config/docker.yaml` declares `single_node_production` without the required
@@ -23,12 +70,6 @@ security-audit configuration. Use `--entrypoint /usr/local/bin/trustdb` for
 informational commands. For an RC.2 container evaluation, explicitly set
 `TRUSTDB_RUN_PROFILE=development`; do not represent that override as a
 production deployment.
-
-## [2.0.0-rc.2] - 2026-07-26
-
-Corrected V2 release candidate. It preserves the V2/V5 formats and proof
-semantics introduced by RC.1 while replacing the affected release verifier and
-documentation with reproducible, release-first paths.
 
 ### Fixed
 
@@ -152,5 +193,6 @@ First stable release.
 - Desktop packages may trigger Gatekeeper or SmartScreen warnings because the release certificates are self-signed.
 
 [1.0.0]: https://github.com/wowtrust/trustdb/releases/tag/v1.0.0
+[2.0.0]: https://github.com/wowtrust/trustdb/releases/tag/v2.0.0
 [2.0.0-rc.2]: https://github.com/wowtrust/trustdb/releases/tag/v2.0.0-rc.2
 [2.0.0-rc.1]: https://github.com/wowtrust/trustdb/releases/tag/v2.0.0-rc.1

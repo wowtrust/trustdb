@@ -197,11 +197,10 @@ HTTP/gRPC 相同的阻塞式队列背压。
 
 ## Go SDK 接入
 
-固定到包含 `NATSIngressClient` 的 release 或 commit。评估当前尚未发版的
-代码树时可使用：
+固定到包含 `NATSIngressClient` 的 V2 正式版 SDK：
 
 ```bash
-go get github.com/wowtrust/trustdb/v2@v2.0.0-rc.2
+go get github.com/wowtrust/trustdb/v2@v2.0.0
 ```
 
 应用通常先通过现有签名链路生成 `sdk.SignedClaim`，再选择同步或可恢复
