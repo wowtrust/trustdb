@@ -2,7 +2,7 @@ const content = {
   "zh-CN": {
     lang: "zh-CN",
     updated: "更新于 2026.07.24",
-    version: "适用于当前 V2 发布候选版",
+    version: "适用于当前 V2 正式版",
     title: "可选 NATS / JetStream 存证入口",
     lead: "在 TrustDB 前增加耐久缓冲、多生产者汇聚与有界流量分发，同时保持原有签名、WAL、证明和离线验证语义。",
     duration: "20–30 分钟",
@@ -59,7 +59,7 @@ const content = {
   en: {
     lang: "en",
     updated: "Updated 2026-07-24",
-    version: "For the current V2 release candidate",
+    version: "For the current stable V2 release",
     title: "Optional NATS / JetStream ingress",
     lead: "Put durable buffering, multi-producer fan-in, and bounded flow distribution in front of TrustDB without changing signatures, WAL, proofs, or offline verification.",
     duration: "20–30 minutes",

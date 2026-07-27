@@ -62,30 +62,26 @@ github.com/wowtrust/trustdb/v2
 
 许可证：AGPL-3.0-only，见 [LICENSE](LICENSE)。
 
-## v2.0.0-rc.2
+## v2.0.0
 
-修正后的 V2 发布候选版通过 [GitHub Releases](https://github.com/wowtrust/trustdb/releases/tag/v2.0.0-rc.2) 发布，包含 Linux、macOS、Windows 的服务器与 CLI、四种自签名桌面客户端、同步发布到 GHCR 与 Docker Hub 的多架构镜像，以及带 SHA-256、SM3、SBOM、漏洞报告、生产输入、容器摘要和 Sigstore 来源证明的签名发布清单。RC.2 同时保证 macOS、Linux 与 Windows 使用确定且一致的发布清单校验规则。
+V2 正式版通过 [GitHub Releases](https://github.com/wowtrust/trustdb/releases/tag/v2.0.0) 发布，包含 Linux、macOS、Windows 的服务器与 CLI、四种自签名桌面客户端、同步发布到 GHCR 与 Docker Hub 的多架构镜像，以及带 SHA-256、SM3、SBOM、漏洞报告、生产输入、容器摘要和 Sigstore 来源证明的签名发布清单。macOS、Linux 与 Windows 使用确定且一致的发布清单校验规则。
 
 这个版本完成明确的 V2/V5 破坏性切换：proofstore schema v5、全链路 suite 绑定对象、`.sproof v2`、加密 `.tdbackup v5`，以及 `INTL_V1` / `CN_SM_V1` 端到端证据生成。Go module 遵循语义化主版本路径：
 
 ```bash
-go get github.com/wowtrust/trustdb/v2@v2.0.0-rc.2
+go get github.com/wowtrust/trustdb/v2@v2.0.0
 ```
 
-V2 不读取或迁移 v1 存储、备份、API 对象和证据文件。升级前保留旧环境用于审计，再使用新 namespace、新 LogID 和空数据目录部署 RC。Docker Hub 同步发布 amd64 与 arm64 镜像；发布候选版更新不可变版本标签和 `beta` 通道，不移动 `latest`：
+V2 不读取或迁移 v1 存储、备份、API 对象和证据文件。升级前保留旧环境用于审计，再使用新 namespace、新 LogID 和空数据目录部署 V2。Docker Hub 同步发布 amd64 与 arm64 镜像；正式版同时更新不可变版本标签和稳定 `latest` 通道：
 
 ```bash
-docker pull wsy19990317/trustdb:2.0.0-rc.2
-docker run --rm \
-  --entrypoint /usr/local/bin/trustdb \
-  wsy19990317/trustdb:2.0.0-rc.2 \
-  version
+docker pull wsy19990317/trustdb:2.0.0
+docker run --rm wsy19990317/trustdb:2.0.0 version
 ```
 
-RC.2 随包服务配置因缺少生产审计参数而 fail closed，因此信息类命令必须显式
-使用上面的 entrypoint。镜像二进制和不可变 digest 均有效，发布资产保持不变。
-RC.2 评估环境所需的 profile 覆盖、mTLS 挂载和健康检查，以及带独立审计 signer
-与同步时间证据的生产配置，请跟随[服务部署教程](https://www.trustdb.ryan-wong.cn/docs/server)。
+正式版镜像包含带 mTLS 和首次启动加密密钥生成的开发/评估配置。证书与 secret
+挂载、健康检查、持久化数据卷，以及带独立审计 signer 与同步时间证据的生产
+配置，请跟随[服务部署教程](https://www.trustdb.ryan-wong.cn/docs/server)。
 
 桌面包使用本次发版临时生成的自签名证书，并附带公开 `.cer` 文件，可供用户核对本次发布所用的签名证书。它不会取得 Apple 或 Microsoft 的系统信任；Gatekeeper 或 SmartScreen 仍可能提示未知开发者。安装前请用 `SHA256SUMS` 核对下载文件。
 
@@ -95,15 +91,15 @@ RC.2 评估环境所需的 profile 覆盖、mTLS 挂载和健康检查，以及�
 
 ## 发布供应链证据
 
-v2.0.0-rc.2 包含已签名的
+v2.0.0 包含已签名的
 `TRUSTDB_RELEASE_MANIFEST.json`、`SHA256SUMS`、`SM3SUMS`、SPDX SBOM、
 漏洞扫描留存结果、精确的原生库/合约/许可证/架构矩阵、不可变容器 digest
 与可下载 Sigstore bundle。Release Actions 和基础镜像分别固定到 commit 或
 OCI digest；未进入 manifest 的文件、内容漂移的生产输入都会阻断发版。
 
-RC.2 根据确定的产物文件名推导 manifest media type，不再依赖宿主 MIME
+发布清单根据确定的产物文件名推导 manifest media type，不再依赖宿主 MIME
 数据库，因此 macOS、Linux 与 Windows 随包 verifier 会执行完全一致的发布
-清单校验。RC.1 保持不可变并继续用于历史审计。
+清单校验。RC.1 与 RC.2 保持不可变并继续用于历史审计。
 
 断网运维人员先用独立下发的 trusted root 验证 manifest，再执行
 `trustdb release verify --dir <release目录>` 检查精确文件集合与双摘要。
@@ -169,13 +165,13 @@ file、Pebble 和每个 TiKV namespace 使用 proofstore storage schema v5。旧
 
 ## 快速开始
 
-当前 README 与官网教程固定到 `v2.0.0-rc.2`。请下载适合当前平台的已发布
+当前 README 与官网教程固定到 `v2.0.0`。请下载适合当前平台的已发布
 Server/CLI 压缩包，使用发布的校验和文件验真后再解压；无需安装 Go 工具链，
 也无需启动服务。Windows 用户可直接复制官网[平台化快速开始](https://www.trustdb.ryan-wong.cn/docs/quick-start)
 中的 PowerShell 命令。
 
 ```bash
-VERSION=2.0.0-rc.2
+VERSION=2.0.0
 case "$(uname -s)-$(uname -m)" in
   Darwin-arm64) PLATFORM=darwin-arm64 ;;
   Darwin-x86_64) PLATFORM=darwin-amd64 ;;

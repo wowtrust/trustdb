@@ -3,7 +3,7 @@ const zhCN = {
     eyebrow: "Docs / Operations / 01",
     title: "功能开关与配置全表",
     lead: "不是参数清单，而是每项能力的用途、开启、验收、关闭和持久化边界。先在这里决定要启用什么，再进入专项教程。",
-    updated: "更新于 2026.07.26 · 适用于当前 V2 发布候选版（proofstore schema v5）",
+    updated: "更新于 2026.07.27 · 适用于当前 V2 正式版（proofstore schema v5）",
     summary: [["配置原则", "YAML 为基线，环境变量覆盖，CLI 显式参数最高"], ["证据套件", "INTL_V1 / CN_SM_V1；一个 namespace 只能选择一个"], ["证明交付", "L1–L5 与 .sproof v2 完整离线复算"]],
     sections: [
       {
@@ -85,7 +85,7 @@ const zhCN = {
     eyebrow: "Docs / Operations / 02",
     title: "备份、恢复与灾备",
     lead: ".tdbackup 是 proofstore 的逻辑证据归档，不是整机快照。这里把 archive、WAL、密钥 provider、NATS、对象和区块链的恢复责任拆开。",
-    updated: "更新于 2026.07.25 · 当前 .tdbackup v5 支持 INTL_V1 与 CN_SM_V1",
+    updated: "更新于 2026.07.27 · 当前 .tdbackup v5 支持 INTL_V1 与 CN_SM_V1",
     summary: [["直接 backend", "file / Pebble"], ["恢复方式", "全新目标 + 默认可续传 checkpoint"], ["验收标准", "历史查询、immutable anchor、断网 .sproof 验证"]],
     sections: [
       {
@@ -133,7 +133,7 @@ const zhCN = {
     eyebrow: "Docs / Operations / 03",
     title: "生产部署与日常运维",
     lead: "从目录、身份和上线门禁开始，覆盖启动、停止、容量、日常巡检、升级、回退和事故分流。",
-    updated: "更新于 2026.07.26 · 适用于当前 V2 发布候选版（V5 写入代际）",
+    updated: "更新于 2026.07.27 · 适用于当前 V2 正式版（V5 写入代际）",
     summary: [["上线门禁", "validate + doctor + canary + offline verify"], ["日常核心", "队列、WAL、proof、STH、anchor、容量"], ["恢复原则", "保留现场，禁止删除状态掩盖错误"]],
     sections: [
       {
@@ -167,7 +167,7 @@ const zhCN = {
       },
       {
         title: "升级与破坏性边界",
-        body: ["当前 V2 发布候选版只接受 V2 model/WAL/API/.sproof 和 proofstore schema v5。v1/schema v4 不双读、不迁移、不回退。保留旧版本与旧 LogID 作为历史验证环境；新版本使用新密钥、新 LogID、新 namespace 和新 WAL。"],
+        body: ["当前 V2 正式版只接受 V2 model/WAL/API/.sproof 和 proofstore schema v5。v1/schema v4 不双读、不迁移、不回退。保留旧版本与旧 LogID 作为历史验证环境；新版本使用新密钥、新 LogID、新 namespace 和新 WAL。"],
         note: "旧二进制不能打开已经写入 V2/V5 的目录；也不能把旧对象重新编码后声称密码学身份不变。",
       },
       {
@@ -188,7 +188,7 @@ const zhCN = {
     eyebrow: "Docs / Operations / Security audit",
     title: "不可变安全审计与可信时间",
     lead: "把登录、授权、配置、密钥、备份、Anchor、TrustConfig 和服务生命周期写入独立签名链；链损坏、容量耗尽或强制时间不同步时阻止高权限操作。",
-    updated: "更新于 2026.07.26 · INTL_V1 / CN_SM_V1 · Linux / macOS / Windows",
+    updated: "更新于 2026.07.27 · INTL_V1 / CN_SM_V1 · Linux / macOS / Windows",
     summary: [["完整性", "签名 + 前序哈希 + 单调 sequence"], ["生产策略", "审计或可信时间不可用即 fail closed"], ["交付物", "JSONL 全链 + 独立签名 checkpoint"]],
     sections: [
       {
@@ -238,7 +238,7 @@ const zhCN = {
     eyebrow: "Docs / Operations / Release supply chain",
     title: "正式版验签、国产镜像与隔离区导入",
     lead: "不要只看下载页上的文件名。先验证来源，再验证 manifest 中的每一个 SHA-256/SM3，最后按不可变 digest 导入目标环境。",
-    updated: "更新于 2026.07.26 · 适用于当前 V2 发布候选版的发布证据包",
+    updated: "更新于 2026.07.27 · 适用于当前 V2 正式版的发布证据包",
     summary: [["来源", "Sigstore bundle + 独立下发 trusted root"], ["完整性", "签名 manifest + SHA-256 + SM3"], ["隔离区", "精确文件集合 + OCI digest + 可留存报告"]],
     sections: [
       {
@@ -258,7 +258,7 @@ const zhCN = {
           linux: "./trusted/trustdb release verify --dir ./trustdb-release",
           windows: ".\\trusted\\trustdb.exe release verify --dir .\\trustdb-release",
         },
-        bullets: ["使用此前已准入的 verifier，避免让新二进制自证可信", "RC.2 的 media type 由产物文件名确定，不依赖宿主 MIME 数据库；macOS、Linux 与 Windows 执行同一套 manifest 规则", "任何额外文件、子目录、symlink、缺失报告、重复 checksum 或双摘要不一致都会失败", "检查 version、source commit、policy digest、SBOM 与漏洞报告属于同一版本"],
+        bullets: ["使用此前已准入的 verifier，避免让新二进制自证可信", "正式版的 media type 由产物文件名确定，不依赖宿主 MIME 数据库；macOS、Linux 与 Windows 执行同一套 manifest 规则", "任何额外文件、子目录、symlink、缺失报告、重复 checksum 或双摘要不一致都会失败", "检查 version、source commit、policy digest、SBOM 与漏洞报告属于同一版本"],
       },
       {
         title: "3. 导出并导入 OCI 镜像",
@@ -328,7 +328,7 @@ const en = {
   featureCatalog: {
     eyebrow: "Docs / Operations / 01", title: "Feature and configuration catalog",
     lead: "Choose capabilities by purpose, enablement, verification, shutdown, and persistence boundary—not by copying an unexplained YAML block.",
-    updated: "Updated 2026.07.26 · current V2 release candidate (proofstore schema v5)",
+    updated: "Updated 2026.07.27 · current stable V2 release (proofstore schema v5)",
     summary: [["Precedence", "YAML baseline, environment override, explicit CLI flag wins"], ["Suites", "INTL_V1 / CN_SM_V1; one suite per namespace"], ["Delivery", "L1–L5 and fully offline .sproof v2 verification"]],
     sections: [
       { title: "One change method", body: ["Validate and display the merged configuration, preserve the previous digest and evidence sample, change one boundary, run a canary, then test shutdown and recovery. Disabling future behavior never authorizes deleting historical evidence or trust material."], code: "trustdb config validate --config /etc/trustdb/production.yaml\ntrustdb config show --config /etc/trustdb/production.yaml\ntrustdb doctor --config /etc/trustdb/production.yaml" },
@@ -342,7 +342,7 @@ const en = {
     links: [["Administrative RBAC", "https://github.com/wowtrust/trustdb/blob/main/docs/compliance/ADMINISTRATIVE_RBAC.md"], ["Immutable security audit", "/docs/security-audit"], ["Backup and recovery", "/docs/backup-recovery"], ["Production operations", "/docs/operations"], ["FISCO BCOS", "/docs/fisco-bcos"]],
   },
   backupRecovery: {
-    eyebrow: "Docs / Operations / 02", title: "Backup and recovery", lead: ".tdbackup is a logical proofstore archive, not a machine image or key-custody recovery package.", updated: "Updated 2026.07.25 · encrypted .tdbackup v5 supports INTL_V1 and CN_SM_V1",
+    eyebrow: "Docs / Operations / 02", title: "Backup and recovery", lead: ".tdbackup is a logical proofstore archive, not a machine image or key-custody recovery package.", updated: "Updated 2026.07.27 · encrypted .tdbackup v5 supports INTL_V1 and CN_SM_V1",
     summary: [["Direct stores", "file / Pebble"], ["Restore", "new target + resumable checkpoint"], ["Acceptance", "historical reads, immutable anchors, offline proof verification"]],
     sections: [
       { title: "Know the boundary", body: ["The archive includes proof bundles, roots, Global Log state, STHs, outboxes, immutable anchor results, and complete scheduler state."], cards: [["Included", "Enumerable proofstore evidence and recovery intents."], ["Excluded", "Security audit chain, private keys, credentials, YAML, certificates, TrustConfig, WAL, content, NATS, BCOS nodes, and SDF recovery bundles."]], note: "V5 uses a random DEK and framed SM4-GCM authentication, binds the exact suite and namespace generation, and rejects v4/plain tar." },
@@ -354,7 +354,7 @@ const en = {
     ], links: [["Feature catalog", "/docs/features"], ["Production operations", "/docs/operations"], ["Repository guide", "https://github.com/wowtrust/trustdb/blob/main/docs/zh-CN/BACKUP_AND_RECOVERY.md"]],
   },
   operations: {
-    eyebrow: "Docs / Operations / 03", title: "Production operations", lead: "Plan identity and storage, gate startup, stop safely, monitor proof progression, and rehearse recovery.", updated: "Updated 2026.07.25 · current V2/V5 write generation",
+    eyebrow: "Docs / Operations / 03", title: "Production operations", lead: "Plan identity and storage, gate startup, stop safely, monitor proof progression, and rehearse recovery.", updated: "Updated 2026.07.27 · current stable V2/V5 write generation",
     summary: [["Go-live", "validate + doctor + canary + offline verify"], ["Observe", "queues, WAL, proofs, STH, anchors, capacity"], ["Incidents", "preserve state; never delete evidence to hide an error"]],
     sections: [
       { title: "Fix the log identity", body: ["Suite, NodeID, LogID, proofstore namespace, and WAL identity define one writer stream. A suite, identity, or format-generation change requires a new stream."], code: "/etc/trustdb/\n/var/lib/trustdb/wal/\n/var/lib/trustdb/proofs/\n/var/backups/trustdb/" },
@@ -367,7 +367,7 @@ const en = {
     ], links: [["Feature catalog", "/docs/features"], ["Security audit", "/docs/security-audit"], ["Backup", "/docs/backup-recovery"], ["Troubleshooting", "/docs/troubleshooting"]],
   },
   securityAudit: {
-    eyebrow: "Docs / Operations / Security audit", title: "Immutable security audit and trusted-time evidence", lead: "Write authentication, authorization, configuration, key, backup, anchor, trust configuration, and lifecycle activity to a separate signed chain; fail closed on broken continuity, capacity exhaustion, or required-time failure.", updated: "Updated 2026.07.26 · INTL_V1 / CN_SM_V1 · Linux / macOS / Windows",
+    eyebrow: "Docs / Operations / Security audit", title: "Immutable security audit and trusted-time evidence", lead: "Write authentication, authorization, configuration, key, backup, anchor, trust configuration, and lifecycle activity to a separate signed chain; fail closed on broken continuity, capacity exhaustion, or required-time failure.", updated: "Updated 2026.07.27 · INTL_V1 / CN_SM_V1 · Linux / macOS / Windows",
     summary: [["Integrity", "signature + previous hash + monotonic sequence"], ["Production", "audit and synchronized time are mandatory"], ["Artifacts", "full JSONL chain + signed checkpoint"]],
     sections: [
       { title: "Separate from logs and business proofs", body: ["The security chain records privileged control-plane actions. It does not replace application logs, Prometheus, business records, WAL, or .sproof. Events carry actor, roles, action, object, result, request ID, policy version, time state, and bounded redacted context."], cards: [["INTL_V1", "Ed25519 signatures and a SHA-256 chain."], ["CN_SM_V1", "SM2 signatures and an SM3 chain."], ["Privacy", "Sensitive keys become <redacted>; emergency reasons are digested."], ["Concurrency", "Stable appends use an O(1) checkpoint path; slow output does not hold the live writer lock."]], note: "Local time, NTP samples, and BCOS block time are not automatically legal trusted timestamps." },
@@ -389,7 +389,7 @@ const en = {
   supplyChain: {
     eyebrow: "Docs / Operations / Release supply chain", title: "Verify releases, use domestic mirrors, and import offline",
     lead: "Verify provenance first, enforce every SHA-256 and SM3 in the signed manifest, then import the exact platform package or immutable OCI digest.",
-    updated: "Updated 2026.07.26 · release-evidence bundle for the current V2 candidate",
+    updated: "Updated 2026.07.27 · release-evidence bundle for the current stable V2 release",
     summary: [["Provenance", "Sigstore bundle + separately provisioned trusted root"], ["Integrity", "signed manifest + SHA-256 + SM3"], ["Air gap", "exact file set + OCI digest + retained reports"]],
     sections: [
       { title: "Know the bundle", cards: [["Manifest", "Source commit, policy digest, required documents, size, SHA-256, and SM3 for every file."], ["Attestations", "Downloadable provenance for the manifest and OCI digest."], ["SBOM", "SPDX dependency and license inventory."], ["Production inputs", "BCOS SDK/contracts, PKCS#11, SDF, TLCP, locks, images, and architecture matrix."], ["Security results", "Retained npm and govulncheck fail-on-high output."], ["Container digest", "Immutable linux/amd64 + linux/arm64 manifest digest."]], note: "A root shipped beside a release cannot authorize itself. Provision and register the trusted-root digest through an independent channel." },
@@ -398,7 +398,7 @@ const en = {
         macos: "./trusted/trustdb release verify --dir ./trustdb-release",
         linux: "./trusted/trustdb release verify --dir ./trustdb-release",
         windows: ".\\trusted\\trustdb.exe release verify --dir .\\trustdb-release",
-      }, bullets: ["Use a previously admitted verifier; do not let the new binary be its only trust authority", "RC.2 derives media types from artifact names rather than the host MIME database, so macOS, Linux, and Windows enforce the same manifest rules", "Extra files, directories, symlinks, missing reports, duplicate checksums, and either digest mismatch fail", "Review version, source commit, policy digest, SBOM, and vulnerability result together"] },
+      }, bullets: ["Use a previously admitted verifier; do not let the new binary be its only trust authority", "The stable release derives media types from artifact names rather than the host MIME database, so macOS, Linux, and Windows enforce the same manifest rules", "Extra files, directories, symlinks, missing reports, duplicate checksums, and either digest mismatch fail", "Review version, source commit, policy digest, SBOM, and vulnerability result together"] },
       { title: "3. Export and import the OCI image", code: "DIGEST=\"$(jq -r .digest trustdb-release/TRUSTDB_CONTAINER_DIGESTS.json)\"\nskopeo copy --all \\\n  \"docker://ghcr.io/wowtrust/trustdb@${DIGEST}\" \\\n  oci-archive:trustdb-X.Y.Z.oci.tar\nskopeo inspect --format '{{.Digest}}' \\\n  oci-archive:trustdb-X.Y.Z.oci.tar", body: ["The inspected digest must equal DIGEST. Add the archive SHA-256 to controlled-media inventory and inspect it again before offline import."] },
       { title: "4. Mirror the admitted release artifacts", code: "DIGEST=\"$(jq -r .digest trustdb-release/TRUSTDB_CONTAINER_DIGESTS.json)\"\nskopeo copy --all \\\n  \"docker://ghcr.io/wowtrust/trustdb@${DIGEST}\" \\\n  \"docker://registry.internal.example/wowtrust/trustdb@${DIGEST}\"", body: ["An internal mirror changes distribution only and never rebuilds TrustDB. The target manifest digest must equal the release evidence; mirror Server/CLI archives byte-for-byte with both digests retained."] },
       { title: "5. Admit and rehearse", bullets: ["Transfer the release, trusted verifier, root, media inventory, and OCI archive", "Repeat provenance, dual-digest, and OCI verification offline", "Extract only the matching OS/architecture", "Run version, config validate, doctor, and a canary", "Export .sproof v2 and verify it with separate evidence trust roots", "Tamper package, manifest, attestation, root, OCI digest, and SBOM/policy and require staged failures"] },

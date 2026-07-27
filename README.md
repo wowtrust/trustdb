@@ -62,32 +62,28 @@ github.com/wowtrust/trustdb/v2
 
 License: AGPL-3.0-only. See [LICENSE](LICENSE).
 
-## v2.0.0-rc.2
+## v2.0.0
 
-The corrected V2 release candidate is distributed through [GitHub Releases](https://github.com/wowtrust/trustdb/releases/tag/v2.0.0-rc.2). It includes Server/CLI archives for Linux, macOS, and Windows; four self-signed desktop packages; multi-architecture images on GHCR and Docker Hub; and a signed manifest with SHA-256, SM3, SBOM, vulnerability, production-input, container-digest, and Sigstore evidence. RC.2 also makes release verification deterministic across macOS, Linux, and Windows.
+The stable V2 release is distributed through [GitHub Releases](https://github.com/wowtrust/trustdb/releases/tag/v2.0.0). It includes Server/CLI archives for Linux, macOS, and Windows; four self-signed desktop packages; multi-architecture images on GHCR and Docker Hub; and a signed manifest with SHA-256, SM3, SBOM, vulnerability, production-input, container-digest, and Sigstore evidence. Release verification is deterministic across macOS, Linux, and Windows.
 
 This release makes the intentional V2/V5 cutover: proofstore schema v5, suite-bound wire and storage objects, `.sproof v2`, encrypted `.tdbackup v5`, and end-to-end `INTL_V1` / `CN_SM_V1` evidence. The Go module follows semantic import versioning:
 
 ```bash
-go get github.com/wowtrust/trustdb/v2@v2.0.0-rc.2
+go get github.com/wowtrust/trustdb/v2@v2.0.0
 ```
 
-V2 does not read or migrate v1 storage, backups, API objects, or evidence files. Preserve the old environment for audit, then deploy the RC with a new namespace, LogID, and empty data directory. The multi-architecture image is published with an immutable version tag and the prerelease `beta` channel; it does not move `latest`:
+V2 does not read or migrate v1 storage, backups, API objects, or evidence files. Preserve the old environment for audit, then deploy V2 with a new namespace, LogID, and empty data directory. The multi-architecture image is published under the immutable version tag and the stable `latest` channel:
 
 ```bash
-docker pull wsy19990317/trustdb:2.0.0-rc.2
-docker run --rm \
-  --entrypoint /usr/local/bin/trustdb \
-  wsy19990317/trustdb:2.0.0-rc.2 \
-  version
+docker pull wsy19990317/trustdb:2.0.0
+docker run --rm wsy19990317/trustdb:2.0.0 version
 ```
 
-RC.2 requires the explicit entrypoint above for informational commands because
-its bundled service config fails closed on missing production audit settings.
-The image binary and immutable digest are valid; the assets remain unchanged.
-Follow the [server deployment guide](https://www.trustdb.ryan-wong.cn/docs/server)
-for the RC.2 evaluation override, mTLS mounts, health check, and the separate
-production profile with an audit signer and synchronized time evidence.
+The stable image includes a development/evaluation configuration with mTLS and
+first-run encrypted key generation. Follow the [server deployment
+guide](https://www.trustdb.ryan-wong.cn/docs/server) for certificate and secret
+mounts, health checks, persistent storage, and the separate production profile
+with an audit signer and synchronized time evidence.
 
 Desktop packages carry a release-specific self-signed certificate and its public `.cer` file. The certificate lets you inspect the signer used for this release, but does not establish Apple or Microsoft trust, so Gatekeeper or SmartScreen may still show an unknown-developer warning. Verify the downloaded file against `SHA256SUMS` before installing.
 
@@ -97,17 +93,17 @@ The historical [v1.0.0 release](https://github.com/wowtrust/trustdb/releases/tag
 
 ## Release supply-chain evidence
 
-The v2.0.0-rc.2 release includes a signed
+The v2.0.0 release includes a signed
 `TRUSTDB_RELEASE_MANIFEST.json`, `SHA256SUMS`, `SM3SUMS`, an SPDX SBOM,
 retained vulnerability results, the exact native/contract/license/architecture
 inventory, immutable container digests, and downloadable Sigstore bundles.
 Release Actions and base images are pinned to commits or OCI digests, and the
 gate rejects unmanifested files or changed production inputs.
 
-RC.2 derives manifest media types from deterministic artifact names rather
-than host MIME databases, so the packaged verifier enforces the same release
-manifest on macOS, Linux, and Windows. RC.1 remains immutable and available
-for historical audit.
+Manifest media types are derived from deterministic artifact names rather than
+host MIME databases, so the packaged verifier enforces the same release
+manifest on macOS, Linux, and Windows. RC.1 and RC.2 remain immutable and
+available for historical audit.
 
 Offline operators verify the manifest with a separately provisioned trusted
 root, then run `trustdb release verify --dir <release-directory>` to enforce
@@ -182,14 +178,14 @@ Recovery accepts only the V2 WAL and checkpoint generation bound to the configur
 
 ## Quick Start
 
-The README and website tutorial are pinned to `v2.0.0-rc.2`. Download the
+The README and website tutorial are pinned to `v2.0.0`. Download the
 published Server/CLI archive for your platform, verify it against the
 published checksum set, and extract it before use. No Go toolchain or server
 is required. Windows users should follow the copyable PowerShell commands in
 the platform-specific [website quick start](https://www.trustdb.ryan-wong.cn/docs/quick-start).
 
 ```bash
-VERSION=2.0.0-rc.2
+VERSION=2.0.0
 case "$(uname -s)-$(uname -m)" in
   Darwin-arm64) PLATFORM=darwin-arm64 ;;
   Darwin-x86_64) PLATFORM=darwin-amd64 ;;

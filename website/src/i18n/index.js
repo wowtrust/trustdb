@@ -14,10 +14,12 @@ export const localeOptions = [
 // English is also the deliberate fallback for new release copy in secondary
 // locales until a reviewed native translation is added.
 const releaseMessagesEnglish = {
+  "V2/V5 正式版：国密证据、跨平台发布、加密备份、供应链材料和容器启动路径完成稳定版闭环。": "Stable V2/V5 release: national-cryptography evidence, cross-platform artifacts, encrypted backups, supply-chain material, and container startup are production-ready.",
   "修正后的 V2/V5 发布候选版：跨平台 verifier 使用确定性 media type，并且官网教程默认使用已发布产物。": "Corrected V2/V5 release candidate: the cross-platform verifier uses deterministic media types, and the website guides consume published artifacts by default.",
   "首个 V2/V5 发布候选版：国密证据套件、FISCO BCOS 证据验证、破坏性新格式、签名发布清单与完整离线验真资料。": "First V2/V5 release candidate: national-cryptography evidence suites, FISCO BCOS evidence verification, new breaking formats, a signed release manifest, and complete offline verification material.",
   "发布链路新增签名 manifest、SHA-256/SM3、SPDX SBOM、漏洞留存、不可变 OCI digest、国产镜像与隔离区导入手册。": "The release pipeline now produces a signed manifest, SHA-256/SM3, an SPDX SBOM, retained vulnerability results, immutable OCI digests, domestic mirrors, and an air-gap import runbook.",
   "这是破坏性 V2/V5 候选版本，不读取 v1 存储、备份、API 请求或证据文件。新部署请使用空数据目录并固定 `/v2` Go module。": "This is a breaking V2/V5 release candidate. It does not read v1 storage, backups, API requests, or evidence files. Deploy with an empty data directory and pin the `/v2` Go module.",
+  "这是稳定的 V2/V5 代际，不读取 v1 存储、备份、API 请求或证据文件。新部署请使用空数据目录并固定 `/v2` Go module。": "This is the stable V2/V5 generation. It does not read v1 storage, backups, API requests, or evidence files. Deploy with an empty data directory and pin the `/v2` Go module.",
   "下载 2.0.0-rc.2，并核对签名清单、SHA-256、SM3、SBOM 与不可变容器摘要。": "Download 2.0.0-rc.2 and verify the signed manifest, SHA-256, SM3, SBOM, and immutable container digest.",
   "桌面客户端、服务器与 CLI 来自同一个已签名发布清单，同时提供 SHA-256、SM3、SBOM、漏洞报告与不可变容器摘要。": "The desktop client, server, and CLI share one signed release manifest, with SHA-256, SM3, an SBOM, a vulnerability report, and immutable container digests.",
   "桌面客户端、服务器、CLI 和 Docker 镜像绑定同一份签名清单与源提交。下载后先验证 provenance，再核对 SHA-256 与 SM3。": "The desktop client, server, CLI, and Docker images are bound to one signed manifest and source commit. Verify provenance first, then check SHA-256 and SM3.",
@@ -36,6 +38,9 @@ const releaseMessagesEnglish = {
   "通用发布包支持 FISCO BCOS 离线证据验证。真实链上发布所需的 provider-enabled 变体不在通用产物中；只有明确需要该能力时才进入单独的源码构建指南。": "Generic packages support offline FISCO BCOS evidence verification. The provider-enabled variant required for real on-chain publication is not part of the generic artifacts; use the dedicated source-build guide only when that capability is explicitly required.",
   "RC.2 的 manifest media type 由产物文件名确定，不依赖宿主 MIME 数据库；macOS、Linux 与 Windows 随包 verifier 会执行同一套精确文件集合和双摘要校验。": "RC.2 derives manifest media types from artifact names rather than the host MIME database; the packaged macOS, Linux, and Windows verifiers enforce the same exact file set and dual hashes.",
   "RC.2 镜像内二进制与不可变 digest 已验证，但随包 docker.yaml 错误声明 production profile，导致默认 entrypoint 因缺少 audit 配置而 fail closed。信息命令需显式使用镜像内 trustdb entrypoint；评估启动需设置 development profile。发布资产保持不可变，完整命令见服务部署教程。": "The RC.2 image binary and immutable digest are verified, but the bundled docker.yaml incorrectly declares a production profile, so the default entrypoint fails closed on missing audit configuration. Informational commands must explicitly select the in-image trustdb entrypoint, and evaluation startup must set the development profile. Release assets remain immutable; see the server deployment guide for complete commands.",
+  "发布清单的 media type 由产物文件名确定，不依赖宿主 MIME 数据库；macOS、Linux 与 Windows 随包 verifier 会执行同一套精确文件集合和双摘要校验。": "Release-manifest media types come from artifact names rather than the host MIME database; the packaged macOS, Linux, and Windows verifiers enforce the same exact file set and dual hashes.",
+  "正式版镜像的默认 entrypoint 已正确区分服务启动与信息命令，随包 docker.yaml 明确采用 development 评估 profile；生产环境继续使用带独立审计 signer 和同步时间证据的 production.yaml。": "The stable image entrypoint correctly separates service startup from informational commands, and its docker.yaml explicitly uses the development evaluation profile. Production continues to use production.yaml with an independent audit signer and synchronized time evidence.",
+  "服务部署与容器说明": "Server deployment and container guide",
   "服务部署与 RC.2 容器说明": "Server deployment and RC.2 container note",
   "签名发布清单": "Signed release manifest",
   "Sigstore 来源证明": "Sigstore provenance",
