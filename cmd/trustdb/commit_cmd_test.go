@@ -6,9 +6,11 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/wowtrust/trustdb/v2/internal/app"
 	"github.com/wowtrust/trustdb/v2/internal/cryptosuite"
+	"github.com/wowtrust/trustdb/v2/internal/keydescriptor"
 	"github.com/wowtrust/trustdb/v2/internal/keystore"
 	"github.com/wowtrust/trustdb/v2/internal/trustcrypto"
 	"github.com/wowtrust/trustdb/v2/internal/trusterr"
@@ -98,6 +100,59 @@ func TestResolveClientKeysRegistryFallback(t *testing.T) {
 	}
 	if resolver == nil {
 		t.Fatalf("resolveClientKeys() resolver = nil, want registry-backed resolver")
+	}
+}
+
+func TestResolveClientKeysWithSignerReturnsLiveWritableRegistry(t *testing.T) {
+	t.Parallel()
+
+	tmp := t.TempDir()
+	registryPath := filepath.Join(tmp, "keys.tdkeys")
+	registryPublic, registryPrivate, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registrySigner := trustcrypto.MustNewEd25519Signer("registry-key", registryPrivate)
+	registryPublicPath := filepath.Join(tmp, "registry.pub")
+	if err := writeKey(registryPublicPath, registryPublic); err != nil {
+		t.Fatal(err)
+	}
+
+	_, resolver, err := resolveClientKeysWithSigner(context.Background(), "", registryPath, registryPublicPath, false, registrySigner)
+	if err != nil {
+		t.Fatalf("resolveClientKeysWithSigner() error = %v", err)
+	}
+	registry, ok := resolver.(*keystore.Registry)
+	if !ok {
+		t.Fatalf("resolver type = %T, want *keystore.Registry", resolver)
+	}
+	clientPublic, _, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	event, err := registry.RegisterClientKey(
+		"tenant-a",
+		"chrome-extension:proof-mesh",
+		keydescriptor.Descriptor{
+			SchemaVersion: keydescriptor.SchemaV1,
+			Kind:          keydescriptor.KindVerifier,
+			Provider:      keydescriptor.ProviderPublic,
+			CryptoSuite:   cryptosuite.INTLV1,
+			KeyID:         "browser-key-1",
+			Algorithm:     cryptosuite.SignatureEd25519,
+			PublicKey: keydescriptor.PublicKeyMaterial{
+				Encoding: cryptosuite.Ed25519PublicKeyEncoding,
+				Bytes:    clientPublic,
+			},
+		},
+		time.Unix(100, 0),
+		time.Time{},
+	)
+	if err != nil {
+		t.Fatalf("RegisterClientKey() error = %v", err)
+	}
+	if event.Sequence != 1 {
+		t.Fatalf("event sequence = %d, want 1", event.Sequence)
 	}
 }
 

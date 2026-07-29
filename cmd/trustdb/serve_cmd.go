@@ -35,6 +35,7 @@ import (
 	"github.com/wowtrust/trustdb/v2/internal/httpapi"
 	"github.com/wowtrust/trustdb/v2/internal/idempotency"
 	"github.com/wowtrust/trustdb/v2/internal/ingest"
+	"github.com/wowtrust/trustdb/v2/internal/keydescriptor"
 	"github.com/wowtrust/trustdb/v2/internal/l5projector"
 	"github.com/wowtrust/trustdb/v2/internal/merkle"
 	"github.com/wowtrust/trustdb/v2/internal/model"
@@ -57,7 +58,7 @@ import (
 )
 
 func newServeCommand(rt *runtimeConfig) *cobra.Command {
-	var listen, grpcListen, serverKeyPath, serverPubPath, walPath, proofDir, clientPubPath, registryPath, registryPubPath string
+	var listen, grpcListen, serverKeyPath, serverPubPath, walPath, proofDir, clientPubPath, registryPath, registryPubPath, registryPrivatePath string
 	var tlcpProfilePath, tlcpIdentityManifestPath string
 	var queueSize, workers, batchQueueSize, batchMaxRecords int
 	var batchMaterializerWorkers, batchMaterializerQueueSize, batchProofWorkers int
@@ -171,6 +172,7 @@ func newServeCommand(rt *runtimeConfig) *cobra.Command {
 			clientPubPath = stringOrConfig(cmd, rt, "client-public-key", clientPubPath, "keys.client_public")
 			registryPath = stringOrConfig(cmd, rt, "key-registry", registryPath, "key_registry")
 			registryPubPath = stringOrConfig(cmd, rt, "registry-public-key", registryPubPath, "keys.registry_public")
+			registryPrivatePath = stringOrConfig(cmd, rt, "registry-private-key", registryPrivatePath, "keys.registry_private")
 			if cmd.Flags().Changed("queue-size") {
 				queueSize, _ = cmd.Flags().GetInt("queue-size")
 			} else {
@@ -274,7 +276,26 @@ func newServeCommand(rt *runtimeConfig) *cobra.Command {
 				return err
 			}
 			defer rt.closeSignerResolver()
-			clientPub, clientKeys, err := resolveClientKeys(clientPubPath, registryPath, registryPubPath, cmd.Flags().Changed("key-registry"))
+			var registrySigner trustcrypto.Signer
+			useRegistry := registryPath != "" && (cmd.Flags().Changed("key-registry") || clientPubPath == "")
+			if useRegistry && rt.cfg.Admin.Enabled && registryPrivatePath != "" {
+				var registryDescriptor keydescriptor.Descriptor
+				registrySigner, registryDescriptor, err = rt.readLifecycleSigner(cmd.Context(), registryPrivatePath)
+				if err != nil {
+					return err
+				}
+				if err := requireKeyID(rt.cfg.Registry.KeyID, registryDescriptor); err != nil {
+					return err
+				}
+			}
+			clientPub, clientKeys, err := resolveClientKeysWithSigner(
+				cmd.Context(),
+				clientPubPath,
+				registryPath,
+				registryPubPath,
+				cmd.Flags().Changed("key-registry"),
+				registrySigner,
+			)
 			if err != nil {
 				return err
 			}
@@ -855,7 +876,8 @@ func newServeCommand(rt *runtimeConfig) *cobra.Command {
 					Auth:         authManager,
 					PolicyStore:  policyStore,
 					OIDCVerifier: oidcVerifier,
-					Auditor:      rt.auditor,
+					Auditor:      adminAuditRecorder(rt.auditor),
+					KeyRegistry:  adminKeyRegistry(clientKeys),
 				})
 				if err != nil {
 					return err
@@ -985,6 +1007,7 @@ func newServeCommand(rt *runtimeConfig) *cobra.Command {
 	cmd.Flags().StringVar(&clientPubPath, "client-public-key", "", "client verifier descriptor")
 	cmd.Flags().StringVar(&registryPath, "key-registry", "", "key registry path")
 	cmd.Flags().StringVar(&registryPubPath, "registry-public-key", "", "registry verifier descriptor")
+	cmd.Flags().StringVar(&registryPrivatePath, "registry-private-key", "", "registry signer descriptor enabling authenticated online key lifecycle changes")
 	cmd.Flags().IntVar(&queueSize, "queue-size", 0, "bounded ingest queue size")
 	cmd.Flags().IntVar(&workers, "workers", 0, "ingest worker count")
 	cmd.Flags().IntVar(&batchQueueSize, "batch-queue-size", 0, "bounded batch queue size")
@@ -1030,6 +1053,18 @@ func newServeCommand(rt *runtimeConfig) *cobra.Command {
 	cmd.Flags().StringVar(&anchorOtsUpgradeTimeoutText, "anchor-ots-upgrade-timeout", "", "per-calendar GET timeout for the OTS upgrader (default 30s)")
 	cmd.Flags().IntVar(&anchorOtsUpgradeWorkers, "anchor-ots-upgrade-workers", 0, "bounded concurrent OTS proof upgrade worker count")
 	return requirePermission(cmd, adminauth.PermissionSystemOperate)
+}
+
+func adminKeyRegistry(clientKeys app.ClientKeyResolver) adminweb.KeyRegistry {
+	registry, _ := clientKeys.(adminweb.KeyRegistry)
+	return registry
+}
+
+func adminAuditRecorder(writer *securityaudit.Writer) securityaudit.Recorder {
+	if writer == nil {
+		return nil
+	}
+	return writer
 }
 
 func shutdownGRPCServer(ctx context.Context, server *grpc.Server) {

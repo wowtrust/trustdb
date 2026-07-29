@@ -82,6 +82,7 @@ func testAdminAuthorization(t *testing.T, dir, username, password string) (*admi
 			{ID: "audit", Username: "audit", PasswordHash: string(hash), Roles: []adminauth.Role{adminauth.RoleAuditAdmin}, SessionEpoch: 1},
 			{ID: "security", Username: "security", PasswordHash: string(hash), Roles: []adminauth.Role{adminauth.RoleSecurityAdmin}, SessionEpoch: 1},
 			{ID: "system", Username: username, PasswordHash: string(hash), Roles: []adminauth.Role{adminauth.RoleSystemAdmin}, SessionEpoch: 1},
+			{ID: "zy-key", Username: "key", PasswordHash: string(hash), Roles: []adminauth.Role{adminauth.RoleKeyOperator}, SessionEpoch: 1},
 		},
 	}
 	store, err := adminauth.NewFileStore(filepath.Join(dir, "admin-policy.json"))

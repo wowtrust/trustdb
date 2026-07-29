@@ -125,7 +125,7 @@ runbook](docs/compliance/SUPPLY_CHAIN_RELEASES.md).
 - Portable `.tdbackup` create, verify, and resumable restore.
 - Go SDK for claim signing, HTTP/gRPC calls, proof export, and local verification.
 - Wails + Vue desktop client for local identity, file attestation, record management, proof refresh, `.sproof` export, and offline verification.
-- Optional Vue Admin Web and privileged CLI authorization backed by versioned RBAC, system/security/audit separation, mTLS/OIDC/MFA hooks, bounded lockout, and break-glass recovery.
+- Optional Vue Admin Web and privileged CLI authorization backed by versioned RBAC, system/security/audit separation, mTLS/OIDC/MFA hooks, bounded lockout, break-glass recovery, and an authenticated online client-key lifecycle API.
 - Dedicated signed/hash-chained security audit for authentication, authorization, configuration, key, backup, anchor, trust-root, and lifecycle operations, with SM2/SM3 support, fail-closed synchronized-time evidence, offline JSONL verification, and externally retainable signed checkpoints.
 
 ## Proof Levels
