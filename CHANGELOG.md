@@ -6,6 +6,46 @@ TrustDB follows semantic versioning for stable releases. Proof, backup, storage,
 
 ## [Unreleased]
 
+## [2.0.1] - 2026-07-29
+
+Patch release for an authenticated, audited online client-key control plane.
+It lets an approval system update the exact append-only registry used by the
+running claim-admission path without restarting TrustDB.
+
+### Added
+
+- Admin API operations to register, inspect, and revoke V2 client keys through
+  the existing session, mTLS, or OIDC administrator identities and the
+  `key.read` / `key.manage` RBAC permissions.
+- Immediate single-process key admission and revocation against the live
+  registry, deterministic registration/revocation replay, immutable security
+  audit outcomes, and an operator guide for integrating an external approval
+  system.
+- Constant-time lookup of the persisted revocation event used to answer
+  idempotent online retries.
+
+### Fixed
+
+- Admin Web login no longer panics when the optional security-audit writer is
+  disabled.
+- Claims signed by an inactive or revoked client key now return the typed
+  `FAILED_PRECONDITION` response (`HTTP 412`) instead of an internal error.
+- New online revocations reject effective times more than five seconds in the
+  past. This prevents a control-plane request from retroactively invalidating
+  an already accepted claim and making deterministic WAL replay fail after a
+  restart; an exact persisted retry remains idempotent at any later time.
+
+### Compatibility and release safety
+
+- V2 wire objects, proofstore schema v5, WAL, `.sproof v2`, and `.tdbackup v5`
+  are unchanged from v2.0.0. Existing v2.0.0 data directories remain
+  compatible with this patch.
+- Go consumers should pin `github.com/wowtrust/trustdb/v2@v2.0.1`. Stable
+  containers update the immutable `2.0.1` tag and the `latest` channel.
+- Immediate mutation is a single-process guarantee. NATS + TiKV deployments
+  must distribute one ordered, authenticated registry event stream to every
+  claim-admitting replica before routing traffic to those replicas.
+
 ## [2.0.0] - 2026-07-27
 
 First stable V2 release. It promotes the suite-bound V2/V5 generation qualified
@@ -193,6 +233,7 @@ First stable release.
 - Desktop packages may trigger Gatekeeper or SmartScreen warnings because the release certificates are self-signed.
 
 [1.0.0]: https://github.com/wowtrust/trustdb/releases/tag/v1.0.0
+[2.0.1]: https://github.com/wowtrust/trustdb/releases/tag/v2.0.1
 [2.0.0]: https://github.com/wowtrust/trustdb/releases/tag/v2.0.0
 [2.0.0-rc.2]: https://github.com/wowtrust/trustdb/releases/tag/v2.0.0-rc.2
 [2.0.0-rc.1]: https://github.com/wowtrust/trustdb/releases/tag/v2.0.0-rc.1

@@ -62,21 +62,23 @@ github.com/wowtrust/trustdb/v2
 
 License: AGPL-3.0-only. See [LICENSE](LICENSE).
 
-## v2.0.0
+## v2.0.1
 
-The stable V2 release is distributed through [GitHub Releases](https://github.com/wowtrust/trustdb/releases/tag/v2.0.0). It includes Server/CLI archives for Linux, macOS, and Windows; four self-signed desktop packages; multi-architecture images on GHCR and Docker Hub; and a signed manifest with SHA-256, SM3, SBOM, vulnerability, production-input, container-digest, and Sigstore evidence. Release verification is deterministic across macOS, Linux, and Windows.
+The stable V2 patch release is distributed through [GitHub Releases](https://github.com/wowtrust/trustdb/releases/tag/v2.0.1). It includes Server/CLI archives for Linux, macOS, and Windows; four self-signed desktop packages; multi-architecture images on GHCR and Docker Hub; and a signed manifest with SHA-256, SM3, SBOM, vulnerability, production-input, container-digest, and Sigstore evidence. Release verification is deterministic across macOS, Linux, and Windows.
 
-This release makes the intentional V2/V5 cutover: proofstore schema v5, suite-bound wire and storage objects, `.sproof v2`, encrypted `.tdbackup v5`, and end-to-end `INTL_V1` / `CN_SM_V1` evidence. The Go module follows semantic import versioning:
+V2.0.1 adds an authenticated and audited Admin API for registering, inspecting, and revoking client keys directly in the append-only V2 registry used by the running claim-admission path. It also corrects disabled-audit Admin login, inactive-key error mapping, and retroactive online revocation safety. See the [online client-key lifecycle guide](docs/integrations/ONLINE_KEY_LIFECYCLE.md).
+
+The intentional V2/V5 cutover remains unchanged: proofstore schema v5, suite-bound wire and storage objects, `.sproof v2`, encrypted `.tdbackup v5`, and end-to-end `INTL_V1` / `CN_SM_V1` evidence. The Go module follows semantic import versioning:
 
 ```bash
-go get github.com/wowtrust/trustdb/v2@v2.0.0
+go get github.com/wowtrust/trustdb/v2@v2.0.1
 ```
 
 V2 does not read or migrate v1 storage, backups, API objects, or evidence files. Preserve the old environment for audit, then deploy V2 with a new namespace, LogID, and empty data directory. The multi-architecture image is published under the immutable version tag and the stable `latest` channel:
 
 ```bash
-docker pull wsy19990317/trustdb:2.0.0
-docker run --rm wsy19990317/trustdb:2.0.0 version
+docker pull wsy19990317/trustdb:2.0.1
+docker run --rm wsy19990317/trustdb:2.0.1 version
 ```
 
 The stable image includes a development/evaluation configuration with mTLS and
@@ -93,7 +95,7 @@ The historical [v1.0.0 release](https://github.com/wowtrust/trustdb/releases/tag
 
 ## Release supply-chain evidence
 
-The v2.0.0 release includes a signed
+The v2.0.1 release includes a signed
 `TRUSTDB_RELEASE_MANIFEST.json`, `SHA256SUMS`, `SM3SUMS`, an SPDX SBOM,
 retained vulnerability results, the exact native/contract/license/architecture
 inventory, immutable container digests, and downloadable Sigstore bundles.
@@ -178,14 +180,14 @@ Recovery accepts only the V2 WAL and checkpoint generation bound to the configur
 
 ## Quick Start
 
-The README and website tutorial are pinned to `v2.0.0`. Download the
+The README and website tutorial are pinned to `v2.0.1`. Download the
 published Server/CLI archive for your platform, verify it against the
 published checksum set, and extract it before use. No Go toolchain or server
 is required. Windows users should follow the copyable PowerShell commands in
 the platform-specific [website quick start](https://www.trustdb.ryan-wong.cn/docs/quick-start).
 
 ```bash
-VERSION=2.0.0
+VERSION=2.0.1
 case "$(uname -s)-$(uname -m)" in
   Darwin-arm64) PLATFORM=darwin-arm64 ;;
   Darwin-x86_64) PLATFORM=darwin-amd64 ;;
