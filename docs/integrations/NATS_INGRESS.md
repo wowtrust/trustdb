@@ -214,7 +214,7 @@ and gRPC.
 Pin the stable V2 SDK release that contains `NATSIngressClient`:
 
 ```bash
-go get github.com/wowtrust/trustdb/v2@v2.0.0
+go get github.com/wowtrust/trustdb/v2@v2.0.1
 ```
 
 Applications normally produce a `sdk.SignedClaim` through their existing

@@ -200,7 +200,7 @@ HTTP/gRPC 相同的阻塞式队列背压。
 固定到包含 `NATSIngressClient` 的 V2 正式版 SDK：
 
 ```bash
-go get github.com/wowtrust/trustdb/v2@v2.0.0
+go get github.com/wowtrust/trustdb/v2@v2.0.1
 ```
 
 应用通常先通过现有签名链路生成 `sdk.SignedClaim`，再选择同步或可恢复

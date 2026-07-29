@@ -1,9 +1,9 @@
 export const release = {
-  version: "2.0.0",
-  tag: "v2.0.0",
-  published: "2026.07.27",
+  version: "2.0.1",
+  tag: "v2.0.1",
+  published: "2026.07.29",
   prerelease: false,
-  pageUrl: "https://github.com/wowtrust/trustdb/releases/tag/v2.0.0",
+  pageUrl: "https://github.com/wowtrust/trustdb/releases/tag/v2.0.1",
   containerImage: "ghcr.io/wowtrust/trustdb",
   containerUrl: "https://github.com/wowtrust/trustdb/pkgs/container/trustdb",
   dockerHubUrl: "https://hub.docker.com/r/wsy19990317/trustdb",

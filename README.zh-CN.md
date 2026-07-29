@@ -62,21 +62,23 @@ github.com/wowtrust/trustdb/v2
 
 许可证：AGPL-3.0-only，见 [LICENSE](LICENSE)。
 
-## v2.0.0
+## v2.0.1
 
-V2 正式版通过 [GitHub Releases](https://github.com/wowtrust/trustdb/releases/tag/v2.0.0) 发布，包含 Linux、macOS、Windows 的服务器与 CLI、四种自签名桌面客户端、同步发布到 GHCR 与 Docker Hub 的多架构镜像，以及带 SHA-256、SM3、SBOM、漏洞报告、生产输入、容器摘要和 Sigstore 来源证明的签名发布清单。macOS、Linux 与 Windows 使用确定且一致的发布清单校验规则。
+V2 补丁正式版通过 [GitHub Releases](https://github.com/wowtrust/trustdb/releases/tag/v2.0.1) 发布，包含 Linux、macOS、Windows 的服务器与 CLI、四种自签名桌面客户端、同步发布到 GHCR 与 Docker Hub 的多架构镜像，以及带 SHA-256、SM3、SBOM、漏洞报告、生产输入、容器摘要和 Sigstore 来源证明的签名发布清单。macOS、Linux 与 Windows 使用确定且一致的发布清单校验规则。
 
-这个版本完成明确的 V2/V5 破坏性切换：proofstore schema v5、全链路 suite 绑定对象、`.sproof v2`、加密 `.tdbackup v5`，以及 `INTL_V1` / `CN_SM_V1` 端到端证据生成。Go module 遵循语义化主版本路径：
+V2.0.1 新增受鉴权、受审计的 Admin API，把客户端密钥注册、查询和撤销直接作用于当前 claim admission 使用的追加式 V2 注册表；同时修复关闭审计时的 Admin 登录、非活动密钥错误映射和在线回溯撤销安全性。完整边界见[在线客户端密钥生命周期指南](docs/zh-CN/ONLINE_KEY_LIFECYCLE.md)。
+
+明确的 V2/V5 破坏性切换保持不变：proofstore schema v5、全链路 suite 绑定对象、`.sproof v2`、加密 `.tdbackup v5`，以及 `INTL_V1` / `CN_SM_V1` 端到端证据生成。Go module 遵循语义化主版本路径：
 
 ```bash
-go get github.com/wowtrust/trustdb/v2@v2.0.0
+go get github.com/wowtrust/trustdb/v2@v2.0.1
 ```
 
 V2 不读取或迁移 v1 存储、备份、API 对象和证据文件。升级前保留旧环境用于审计，再使用新 namespace、新 LogID 和空数据目录部署 V2。Docker Hub 同步发布 amd64 与 arm64 镜像；正式版同时更新不可变版本标签和稳定 `latest` 通道：
 
 ```bash
-docker pull wsy19990317/trustdb:2.0.0
-docker run --rm wsy19990317/trustdb:2.0.0 version
+docker pull wsy19990317/trustdb:2.0.1
+docker run --rm wsy19990317/trustdb:2.0.1 version
 ```
 
 正式版镜像包含带 mTLS 和首次启动加密密钥生成的开发/评估配置。证书与 secret
@@ -91,7 +93,7 @@ docker run --rm wsy19990317/trustdb:2.0.0 version
 
 ## 发布供应链证据
 
-v2.0.0 包含已签名的
+v2.0.1 包含已签名的
 `TRUSTDB_RELEASE_MANIFEST.json`、`SHA256SUMS`、`SM3SUMS`、SPDX SBOM、
 漏洞扫描留存结果、精确的原生库/合约/许可证/架构矩阵、不可变容器 digest
 与可下载 Sigstore bundle。Release Actions 和基础镜像分别固定到 commit 或
@@ -165,13 +167,13 @@ file、Pebble 和每个 TiKV namespace 使用 proofstore storage schema v5。旧
 
 ## 快速开始
 
-当前 README 与官网教程固定到 `v2.0.0`。请下载适合当前平台的已发布
+当前 README 与官网教程固定到 `v2.0.1`。请下载适合当前平台的已发布
 Server/CLI 压缩包，使用发布的校验和文件验真后再解压；无需安装 Go 工具链，
 也无需启动服务。Windows 用户可直接复制官网[平台化快速开始](https://www.trustdb.ryan-wong.cn/docs/quick-start)
 中的 PowerShell 命令。
 
 ```bash
-VERSION=2.0.0
+VERSION=2.0.1
 case "$(uname -s)-$(uname -m)" in
   Darwin-arm64) PLATFORM=darwin-arm64 ;;
   Darwin-x86_64) PLATFORM=darwin-amd64 ;;

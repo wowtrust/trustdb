@@ -3,7 +3,7 @@ const zhCN = {
     eyebrow: "Docs / Operations / 01",
     title: "功能开关与配置全表",
     lead: "不是参数清单，而是每项能力的用途、开启、验收、关闭和持久化边界。先在这里决定要启用什么，再进入专项教程。",
-    updated: "更新于 2026.07.27 · 适用于当前 V2 正式版（proofstore schema v5）",
+    updated: "更新于 2026.07.29 · 适用于 TrustDB v2.0.1（proofstore schema v5）",
     summary: [["配置原则", "YAML 为基线，环境变量覆盖，CLI 显式参数最高"], ["证据套件", "INTL_V1 / CN_SM_V1；一个 namespace 只能选择一个"], ["证明交付", "L1–L5 与 .sproof v2 完整离线复算"]],
     sections: [
       {
@@ -18,7 +18,7 @@ const zhCN = {
           ["HTTP", "server.listen 开启。/healthz 和 /metrics 适合探针；业务写入使用 deterministic CBOR，优先使用 SDK。摘流或停止服务关闭。"],
           ["gRPC", "server.grpc_listen 使用非空地址开启，清空并重启关闭。与 HTTP 共用同一 submission、WAL 和 proofstore。"],
           ["NATS / JetStream", "nats.enabled=true 开启 durable fan-in。关闭前停止 publisher、drain consumer，保留 stream、result 和 DLQ；它们不进入 .tdbackup。"],
-          ["管理 RBAC", "先 bootstrap 版本化策略，实现系统/安全/审计三员分立；admin.enabled 控制网页，cli_enforce 独立保护高权限 CLI，并支持 mTLS SPKI、OIDC/MFA 钩子和 break-glass 恢复。"],
+          ["管理 RBAC", "先 bootstrap 版本化策略，实现系统/安全/审计三员分立；admin.enabled 控制网页，cli_enforce 独立保护高权限 CLI，并支持 mTLS SPKI、OIDC/MFA 钩子、break-glass 恢复和受审计的在线客户端密钥生命周期。"],
         ],
       },
       {
@@ -234,6 +234,47 @@ const zhCN = {
     ],
     links: [["仓库中文完整手册", "https://github.com/wowtrust/trustdb/blob/main/docs/zh-CN/IMMUTABLE_SECURITY_AUDIT.md"], ["管理 RBAC", "https://github.com/wowtrust/trustdb/blob/main/docs/zh-CN/ADMINISTRATIVE_RBAC.md"], ["备份恢复", "/docs/backup-recovery"], ["生产运维", "/docs/operations"]],
   },
+  keyLifecycle: {
+    eyebrow: "Docs / Operations / Online key lifecycle",
+    title: "在线客户端密钥生命周期",
+    lead: "让审批系统把浏览器或业务客户端的公钥注册、查询和撤销直接同步到 TrustDB 当前进程使用的追加式注册表，同时沿用管理员鉴权、RBAC 和不可变安全审计。",
+    updated: "更新于 2026.07.29 · TrustDB v2.0.1",
+    summary: [["鉴权", "管理员会话 / 直接 mTLS / 固定网关 OIDC"], ["授权", "key.read / key.manage；内置 key-operator"], ["生效", "单进程立即作用于真实 claim admission"]],
+    sections: [
+      {
+        title: "只有一个准入事实源",
+        body: ["在线 API 不维护第二份缓存，也不允许 ingest 请求夹带“可信公钥”。它修改的就是当前 trustdb serve 进程验证 claim 时读取的 V2 Key Registry；注册后立即可用，撤销生效后新 claim 立即被拒绝，历史记录仍按当时状态验证。"],
+        cards: [["注册", "POST /admin/api/keys；只接受公开 verifier descriptor。"], ["查询", "GET /admin/api/keys/{tenant}/{client}/{key}?at=...；支持历史时点。"], ["撤销", "POST /admin/api/keys/{tenant}/{client}/{key}/revoke；生效时间进入签名事件。"], ["审计", "认证、授权、路径、方法和结果进入不可变安全审计；required audit 失败时操作 fail closed。"]],
+        note: "静态 keys.client_public 部署保持只读，也不会暴露可写注册表。不要把 Admin 子树作为公开 ingest 端点。",
+      },
+      {
+        title: "1. 配置可签名的 V2 注册表",
+        code: "paths:\n  key_registry: /var/lib/trustdb/keys/clients.tdkeys\nregistry:\n  key_id: registry-key\nkeys:\n  client_public: \"\"\n  registry_private: /run/secrets/registry.key\n  registry_public: /etc/trustdb/keys/registry.pub\nadmin:\n  enabled: true\n  base_path: /admin\n  policy_path: /etc/trustdb/admin-policy.json\n  session_secret: ${TRUSTDB_ADMIN_SESSION_SECRET}",
+        body: ["registry_private 和 registry_public 必须描述同一 suite、key ID、算法、编码与公钥。缺少私有 signer 时，claim admission 和历史查询仍可用，但在线修改返回 503。"],
+      },
+      {
+        title: "2. 使用专用 key-operator 鉴权",
+        code: "curl --fail-with-body \\\n  --cookie-jar trustdb-admin.cookies \\\n  --header 'Content-Type: application/json' \\\n  --data '{\"username\":\"proof-mesh-key-operator\",\"password\":\"...\"}' \\\n  https://trustdb.example/admin/api/session",
+        body: ["自动化优先绑定直接 mTLS 管理员身份，或使用受 pin 约束的 OIDC 网关。密码、cookie 和注册表 signer 必须来自 secret manager，不能进入配置、命令历史或业务日志。"],
+      },
+      {
+        title: "3. 注册并确认同一把公钥",
+        code: "curl --fail-with-body --cookie trustdb-admin.cookies \\\n  --header 'Content-Type: application/json' \\\n  --data @browser-key.json \\\n  https://trustdb.example/admin/api/keys\n\ncurl --fail-with-body --cookie trustdb-admin.cookies \\\n  https://trustdb.example/admin/api/keys/tenant-a/chrome-extension%3Aproof-mesh/browser-key-2026-07",
+        bullets: ["descriptor.kind 必须是 verifier，provider 必须是 public", "SM2 descriptor 明确绑定 CN_SM_V1、sm2-sm3、SM2 user ID 与 SEC1 公钥编码", "同一 tenant/client/key 的完全相同请求返回原 sequence/event hash，不追加事件", "相同 identity 下更换公钥或有效期返回 409，必须使用新的 key_id"],
+      },
+      {
+        title: "4. 撤销并验证 admission",
+        code: "curl --fail-with-body --cookie trustdb-admin.cookies \\\n  --header 'Content-Type: application/json' \\\n  --data '{\"revoked_at\":\"2026-07-29T09:00:00Z\",\"reason\":\"tenant administrator revoked browser key\"}' \\\n  https://trustdb.example/admin/api/keys/tenant-a/chrome-extension%3Aproof-mesh/browser-key-2026-07/revoke",
+        bullets: ["新的撤销时间可以是当前时间或未来时间；超过五秒的回溯时间会被拒绝", "完全相同的已持久化撤销可在任意时间重试并返回原事件", "撤销时点之后的新 claim 返回 FAILED_PRECONDITION / HTTP 412", "重启后注册、撤销和历史 accepted record 必须保持同样结果"],
+      },
+      {
+        title: "5. 多副本部署边界",
+        body: ["这个 API 立即更新的是处理请求的进程。单二进制和单 TrustDB Compose 服务可直接使用；NATS + TiKV 多副本不能把密钥管理请求随机发给任意节点。"],
+        bullets: ["建立一个有序、受鉴权、可重放的注册表事件分发控制面", "所有 claim-admitting replica 应用到同一序列后再通过 readiness", "落后或无法验证事件的副本必须摘流", "在完成该控制面前，使用受控注册表发布加全副本重启/就绪屏障"],
+      },
+    ],
+    links: [["仓库完整接口手册", "https://github.com/wowtrust/trustdb/blob/main/docs/zh-CN/ONLINE_KEY_LIFECYCLE.md"], ["管理 RBAC", "https://github.com/wowtrust/trustdb/blob/main/docs/zh-CN/ADMINISTRATIVE_RBAC.md"], ["不可变安全审计", "/docs/security-audit"], ["生产运维", "/docs/operations"]],
+  },
   supplyChain: {
     eyebrow: "Docs / Operations / Release supply chain",
     title: "正式版验签、国产镜像与隔离区导入",
@@ -328,11 +369,11 @@ const en = {
   featureCatalog: {
     eyebrow: "Docs / Operations / 01", title: "Feature and configuration catalog",
     lead: "Choose capabilities by purpose, enablement, verification, shutdown, and persistence boundary—not by copying an unexplained YAML block.",
-    updated: "Updated 2026.07.27 · current stable V2 release (proofstore schema v5)",
+    updated: "Updated 2026.07.29 · TrustDB v2.0.1 (proofstore schema v5)",
     summary: [["Precedence", "YAML baseline, environment override, explicit CLI flag wins"], ["Suites", "INTL_V1 / CN_SM_V1; one suite per namespace"], ["Delivery", "L1–L5 and fully offline .sproof v2 verification"]],
     sections: [
       { title: "One change method", body: ["Validate and display the merged configuration, preserve the previous digest and evidence sample, change one boundary, run a canary, then test shutdown and recovery. Disabling future behavior never authorizes deleting historical evidence or trust material."], code: "trustdb config validate --config /etc/trustdb/production.yaml\ntrustdb config show --config /etc/trustdb/production.yaml\ntrustdb doctor --config /etc/trustdb/production.yaml" },
-      { title: "Ingress and administration", cards: [["HTTP", "server.listen; use SDK deterministic CBOR for writes."], ["gRPC", "Set server.grpc_listen; clear it and restart to disable."], ["NATS", "Set nats.enabled=true; drain before disabling and retain stream/result/DLQ."], ["Administrative RBAC", "Bootstrap separated system/security/audit identities. admin.enabled controls Web access; cli_enforce protects privileged CLI, with mTLS/OIDC/MFA hooks and break-glass recovery."]] },
+      { title: "Ingress and administration", cards: [["HTTP", "server.listen; use SDK deterministic CBOR for writes."], ["gRPC", "Set server.grpc_listen; clear it and restart to disable."], ["NATS", "Set nats.enabled=true; drain before disabling and retain stream/result/DLQ."], ["Administrative RBAC", "Bootstrap separated system/security/audit identities. admin.enabled controls Web access; cli_enforce protects privileged CLI, with mTLS/OIDC/MFA hooks, break-glass recovery, and the audited online client-key lifecycle."]] },
       { title: "Proof materialization", cards: [["inline", "Proof ready on the direct path."], ["async", "Durable background jobs lower submit latency."], ["on_demand", "First proof read pays materialization cost."], ["Global Log", "global_log.enabled=true produces L4; disabling caps new records at L2/L3."]] },
       { title: "Storage and WAL", cards: [["file", "Development and diagnostics."], ["Pebble", "Recommended single-node production store."], ["TiKV", "One logical writer per namespace; use cluster backup."], ["Indexes", "full, no_storage_tokens, or time_only."]], code: "wal:\n  fsync_mode: \"group\"\n  group_commit_interval: \"10ms\"\n  max_segment_bytes: 1073741824\n  keep_segments: 2", note: "Segment rotation and post-checkpoint retention are part of the YAML schema; serve flags remain explicit overrides." },
       { title: "Anchors", cards: [["off", "No new L5."], ["noop/file", "Pipeline/local audit only; no independent third-party time."], ["OTS", "Calendar acceptance plus later upgrade."], ["plugin", "Versioned supervised publisher and offline verifier."], ["FISCO BCOS", "Canonical TrustConfig, quorum, receipt inclusion, PBFT finality, exact binding."], ["Scheduler", "At most Pending plus immutable InFlight per key."]] },
@@ -385,6 +426,22 @@ const en = {
       { title: "4. Capacity, backup, and retention", body: ["Formula: peak events/day × measured bytes/event × retention days × safety factor. The default 4 GiB / 4380h budget is about 23.5 MiB/day, or roughly 12,000 2-KiB events/day before safety margin."], bullets: ["max_bytes exhaustion blocks audited operations; history is never silently deleted or rotated", ".tdbackup v5 excludes this chain; retain JSONL, checkpoint, audit.pub, time-monitor configuration, and external receipt separately", "Restore is audited but does not replace destination audit history"] },
       { title: "5. Incident response", cards: [["rollback / truncation", "Stop privileged operations, preserve log/checkpoint/lock bytes, and compare independent checkpoints. Never truncate or recreate."], ["unsafe storage", "Correct owner, mode/DACL, parent writability, symlink, or file type."], ["capacity exhausted", "Preserve the chain, add capacity, and approve a higher max_bytes. Do not delete the tail."], ["time unsynchronized", "Repair the time monitor and inspect age, offset, uncertainty, confidence, permissions, and schema; the blocked event is retained."]] },
     ], links: [["Full repository guide", "https://github.com/wowtrust/trustdb/blob/main/docs/compliance/IMMUTABLE_SECURITY_AUDIT.md"], ["Administrative RBAC", "https://github.com/wowtrust/trustdb/blob/main/docs/compliance/ADMINISTRATIVE_RBAC.md"], ["Backup", "/docs/backup-recovery"], ["Operations", "/docs/operations"]],
+  },
+  keyLifecycle: {
+    eyebrow: "Docs / Operations / Online key lifecycle",
+    title: "Online client-key lifecycle",
+    lead: "Synchronize approved browser or service-client keys into the append-only registry used by the running TrustDB admission path, under the existing administrator authentication, RBAC, and immutable audit controls.",
+    updated: "Updated 2026.07.29 · TrustDB v2.0.1",
+    summary: [["Authentication", "admin session / direct mTLS / pinned-gateway OIDC"], ["Authorization", "key.read / key.manage; built-in key-operator"], ["Effect", "immediate real claim admission in one process"]],
+    sections: [
+      { title: "One admission source of truth", body: ["The API does not create a second key cache or trust a key carried by an ingest request. It mutates the V2 Key Registry used by the running claim-admission path. Registration is immediately usable; claims at or after revocation are rejected while historical records remain verifiable."], cards: [["Register", "POST /admin/api/keys; public verifier descriptors only."], ["Inspect", "GET /admin/api/keys/{tenant}/{client}/{key}?at=...; historical lookup."], ["Revoke", "POST /admin/api/keys/{tenant}/{client}/{key}/revoke; signed effective time."], ["Audit", "Authentication, authorization, method, path, and outcome enter immutable security audit."]], note: "Static keys.client_public deployments remain read-only. Never expose the Admin subtree as a public ingest endpoint." },
+      { title: "1. Configure a signable V2 registry", code: "paths:\n  key_registry: /var/lib/trustdb/keys/clients.tdkeys\nregistry:\n  key_id: registry-key\nkeys:\n  client_public: \"\"\n  registry_private: /run/secrets/registry.key\n  registry_public: /etc/trustdb/keys/registry.pub\nadmin:\n  enabled: true\n  base_path: /admin\n  policy_path: /etc/trustdb/admin-policy.json\n  session_secret: ${TRUSTDB_ADMIN_SESSION_SECRET}", body: ["The private and public registry descriptors must match suite, key ID, algorithm, encoding, and public bytes. Without registry_private, admission and historical reads remain available but mutation returns 503."] },
+      { title: "2. Authenticate a dedicated key operator", code: "curl --fail-with-body \\\n  --cookie-jar trustdb-admin.cookies \\\n  --header 'Content-Type: application/json' \\\n  --data '{\"username\":\"proof-mesh-key-operator\",\"password\":\"...\"}' \\\n  https://trustdb.example/admin/api/session", body: ["Prefer a directly bound mTLS administrator or a pinned OIDC gateway for automation. Passwords, cookies, and registry-signing material belong in a secret manager, never configuration, shell history, or business logs."] },
+      { title: "3. Register and inspect the exact key", code: "curl --fail-with-body --cookie trustdb-admin.cookies \\\n  --header 'Content-Type: application/json' --data @browser-key.json \\\n  https://trustdb.example/admin/api/keys\n\ncurl --fail-with-body --cookie trustdb-admin.cookies \\\n  https://trustdb.example/admin/api/keys/tenant-a/chrome-extension%3Aproof-mesh/browser-key-2026-07", bullets: ["Only kind=verifier and provider=public are accepted", "SM2 descriptors bind CN_SM_V1, sm2-sm3, user ID, and SEC1 public encoding", "An identical retry returns the original sequence/event hash", "Changed material or validity under one identity returns 409; rotate to a new key_id"] },
+      { title: "4. Revoke and verify admission", code: "curl --fail-with-body --cookie trustdb-admin.cookies \\\n  --header 'Content-Type: application/json' \\\n  --data '{\"revoked_at\":\"2026-07-29T09:00:00Z\",\"reason\":\"tenant administrator revoked browser key\"}' \\\n  https://trustdb.example/admin/api/keys/tenant-a/chrome-extension%3Aproof-mesh/browser-key-2026-07/revoke", bullets: ["A new revocation may take effect now or in the future; more than five seconds of past skew is rejected", "An exact persisted revocation remains idempotent at any later retry", "New claims at or after the effective instant return FAILED_PRECONDITION / HTTP 412", "Restart must preserve registration, revocation, and historical accepted-record results"] },
+      { title: "5. Multi-replica boundary", body: ["The request immediately updates the process that serves it. A single binary or one TrustDB Compose service can use it directly; NATS + TiKV replicas must not receive random key-management requests."], bullets: ["Distribute one ordered, authenticated, replayable registry event stream", "Gate readiness until every claim-admitting replica reaches the same sequence", "Remove lagging or unverifiable replicas from traffic", "Until then, use a controlled registry rollout and all-replica restart/readiness barrier"] },
+    ],
+    links: [["Complete API guide", "https://github.com/wowtrust/trustdb/blob/main/docs/integrations/ONLINE_KEY_LIFECYCLE.md"], ["Administrative RBAC", "https://github.com/wowtrust/trustdb/blob/main/docs/compliance/ADMINISTRATIVE_RBAC.md"], ["Immutable security audit", "/docs/security-audit"], ["Production operations", "/docs/operations"]],
   },
   supplyChain: {
     eyebrow: "Docs / Operations / Release supply chain", title: "Verify releases, use domestic mirrors, and import offline",

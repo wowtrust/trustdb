@@ -5,6 +5,7 @@ import { binaryDownloads, checksumsAsset, desktopDownloads, release, releaseEvid
 import { Link } from "../router";
 
 const milestones = [
+  ["2026.07.29", "v2.0.1", "在线密钥生命周期补丁版：受鉴权、受 RBAC 约束且完整审计的注册、查询和撤销直接作用于当前进程的追加式注册表。", "Stable"],
   ["2026.07.27", "v2.0.0", "V2/V5 正式版：国密证据、跨平台发布、加密备份、供应链材料和容器启动路径完成稳定版闭环。", "Stable"],
   ["2026.07.26", "v2.0.0-rc.2", "修正后的 V2/V5 发布候选版：跨平台 verifier 使用确定性 media type，并且官网教程默认使用已发布产物。", "RC.2"],
   ["2026.07.26", "v2.0.0-rc.1", "首个 V2/V5 发布候选版：国密证据套件、FISCO BCOS 证据验证、破坏性新格式、签名发布清单与完整离线验真资料。", "RC.1"],
@@ -22,10 +23,10 @@ const milestones = [
 export function ChangelogPage() {
   return (
     <>
-      <PageHero eyebrow="Development log" title={<>TrustDB<br />版本记录。</>} lead="按版本记录功能变化、兼容性要求、已知问题和下载信息。" meta="开发日志 · 更新于 2026.07.27">
+      <PageHero eyebrow="Development log" title={<>TrustDB<br />版本记录。</>} lead="按版本记录功能变化、兼容性要求、已知问题和下载信息。" meta="开发日志 · 更新于 2026.07.29">
         <div className="page-hero__actions"><Link className="button button--solid" href="/downloads">下载 {release.version} <ArrowRight /></Link><a className="button button--ghost" href="https://github.com/wowtrust/trustdb/commits/main" target="_blank" rel="noreferrer">全部提交</a></div>
       </PageHero>
-      <section className="release-state section-shell" data-reveal><WarningCircle /><div><p>Release status</p><h2>{release.version} 正式版</h2><span>这是稳定的 V2/V5 代际，不读取 v1 存储、备份、API 请求或证据文件。新部署请使用空数据目录并固定 `/v2` Go module。</span></div><Link href="/downloads">查看全部产物 <ArrowRight /></Link></section>
+      <section className="release-state section-shell" data-reveal><WarningCircle /><div><p>Release status</p><h2>{release.version} 正式版</h2><span>这是与 v2.0.0 数据格式兼容的补丁版，新增在线客户端密钥控制面；V2/V5 仍不读取 v1 存储、备份、API 请求或证据文件。</span></div><Link href="/downloads">查看全部产物 <ArrowRight /></Link></section>
       <section className="timeline section-shell">
         <div className="timeline__heading" data-reveal><p>Development milestones</p><h2>版本变更</h2></div>
         <div className="timeline__list">{milestones.map(([date, title, description, ref], index) => <article key={`${date}-${title}`} data-reveal><span>{String(index + 1).padStart(2, "0")}</span><time>{date}</time><div><h3>{title}</h3><p>{description}</p></div><b>{ref}</b></article>)}</div>
@@ -101,10 +102,11 @@ export function DownloadsPage() {
         <div className="source-build__steps" data-reveal><p><span>01</span><strong>验证来源</strong><code>Sigstore provenance</code></p><p><span>02</span><strong>核对文件</strong><code>SHA-256 · SM3</code></p><p><span>03</span><strong>固定版本</strong><code>{release.tag} · OCI digest</code></p></div>
         <div className="source-build__note"><Check /><span>发布清单的 media type 由产物文件名确定，不依赖宿主 MIME 数据库；macOS、Linux 与 Windows 随包 verifier 会执行同一套精确文件集合和双摘要校验。</span></div>
         <div className="source-build__note"><Check /><span>正式版镜像的默认 entrypoint 已正确区分服务启动与信息命令，随包 docker.yaml 明确采用 development 评估 profile；生产环境继续使用带独立审计 signer 和同步时间证据的 production.yaml。</span></div>
+        <div className="source-build__note"><Check /><span>2.0.1 的在线密钥生命周期 API 沿用 Admin RBAC、会话/mTLS/OIDC 与不可变安全审计，并直接更新当前进程用于 claim admission 的追加式注册表；多副本部署仍需受控分发同一有序注册表事件流。</span></div>
         <div className="source-build__note"><WarningCircle /><span>V2/V5 是一次性破坏性切换：不要让 v2 进程打开 v1 数据目录，也不要把 v1 backup、SDK 请求或 .sproof 输入 v2。升级前保留历史环境用于审计，然后使用新 namespace 与空数据目录部署。</span></div>
         <div className="source-build__note"><Check /><span>桌面安装包仍采用自签名证书，尚未取得 Apple 或 Microsoft 商业签名。必须先验证签名 manifest 与双摘要；证书和指纹只用于核对本次发布的签名完整性。</span></div>
         <div className="source-build__note"><Check /><span>通用发布包支持 FISCO BCOS 离线证据验证。真实链上发布所需的 provider-enabled 变体不在通用产物中；只有明确需要该能力时才进入单独的源码构建指南。</span></div>
-        <div className="source-build__links"><InlineLink href="/docs/quick-start">快速开始</InlineLink><InlineLink href="/docs/server">服务部署与容器说明</InlineLink><InlineLink href="/docs/supply-chain">发布验签与国产镜像</InlineLink><InlineLink href="/docs/desktop-install">安装桌面客户端</InlineLink><InlineLink href="/docs/source-build">从源码构建</InlineLink><InlineLink href="/changelog">开发日志</InlineLink></div>
+        <div className="source-build__links"><InlineLink href="/docs/quick-start">快速开始</InlineLink><InlineLink href="/docs/server">服务部署与容器说明</InlineLink><InlineLink href="/docs/key-lifecycle">在线密钥生命周期</InlineLink><InlineLink href="/docs/supply-chain">发布验签与国产镜像</InlineLink><InlineLink href="/docs/desktop-install">安装桌面客户端</InlineLink><InlineLink href="/docs/source-build">从源码构建</InlineLink><InlineLink href="/changelog">开发日志</InlineLink></div>
       </section>
     </>
   );
