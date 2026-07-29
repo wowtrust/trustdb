@@ -506,6 +506,17 @@ func (r *Registry) Events() []model.KeyEvent {
 	return out
 }
 
+func (r *Registry) RevocationEvent(tenantID, clientID, keyID string) (model.KeyEvent, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	timeline, ok := r.byKey[identity(tenantID, clientID, keyID)]
+	if !ok || timeline.revoked == nil {
+		return model.KeyEvent{}, false
+	}
+	return cloneEvent(*timeline.revoked), true
+}
+
 func (r *Registry) appendEvent(event model.KeyEvent) (model.KeyEvent, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

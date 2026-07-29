@@ -258,6 +258,15 @@ func newCommitBatchCommand(rt *runtimeConfig) *cobra.Command {
 //  4. If none of the above is satisfied the caller must already have bailed
 //     out via the "requires either client-public-key or key-registry" check.
 func resolveClientKeys(clientPubPath, registryPath, registryPubPath string, registryExplicit bool) (trustcrypto.PublicKeyDescriptor, app.ClientKeyResolver, error) {
+	return resolveClientKeysWithSigner(context.Background(), clientPubPath, registryPath, registryPubPath, registryExplicit, nil)
+}
+
+func resolveClientKeysWithSigner(
+	ctx context.Context,
+	clientPubPath, registryPath, registryPubPath string,
+	registryExplicit bool,
+	registrySigner trustcrypto.Signer,
+) (trustcrypto.PublicKeyDescriptor, app.ClientKeyResolver, error) {
 	useRegistry := registryPath != "" && (registryExplicit || clientPubPath == "")
 	if useRegistry {
 		registryDescriptor := trustcrypto.PublicKeyDescriptor{}
@@ -268,7 +277,17 @@ func resolveClientKeys(clientPubPath, registryPath, registryPubPath string, regi
 				return trustcrypto.PublicKeyDescriptor{}, nil, err
 			}
 		}
-		clientKeys, err := keystore.Open(registryPath, nil, registryDescriptor)
+		if registrySigner != nil {
+			signerPublic, err := registrySigner.PublicKey(ctx)
+			if err != nil {
+				return trustcrypto.PublicKeyDescriptor{}, nil, err
+			}
+			if len(registryDescriptor.Bytes) != 0 && !samePublicKeyDescriptor(registryDescriptor, signerPublic) {
+				return trustcrypto.PublicKeyDescriptor{}, nil, usageError("registry public descriptor does not match registry signer descriptor")
+			}
+			registryDescriptor = signerPublic
+		}
+		clientKeys, err := keystore.Open(registryPath, registrySigner, registryDescriptor)
 		return trustcrypto.PublicKeyDescriptor{}, clientKeys, err
 	}
 	descriptor, _, err := readPublicKeyDescriptor(clientPubPath)

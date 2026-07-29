@@ -272,7 +272,11 @@ func (e LocalEngine) resolveClientKey(signed model.SignedClaim, receivedAt time.
 			receivedAt,
 		)
 		if err != nil {
-			return trustcrypto.PublicKeyDescriptor{}, "", err
+			return trustcrypto.PublicKeyDescriptor{}, "", trusterr.Wrap(
+				trusterr.CodeFailedPrecondition,
+				"client key is not admissible at claim receipt time",
+				err,
+			)
 		}
 		descriptor := trustcrypto.PublicKeyDescriptor{
 			Suite:     key.CryptoSuite,

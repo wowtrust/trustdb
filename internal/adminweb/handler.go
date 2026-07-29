@@ -21,6 +21,8 @@ import (
 	"github.com/spf13/viper"
 	"github.com/wowtrust/trustdb/v2/internal/adminauth"
 	trustconfig "github.com/wowtrust/trustdb/v2/internal/config"
+	"github.com/wowtrust/trustdb/v2/internal/keydescriptor"
+	"github.com/wowtrust/trustdb/v2/internal/model"
 	"github.com/wowtrust/trustdb/v2/internal/securityaudit"
 )
 
@@ -38,6 +40,13 @@ type OIDCVerifier interface {
 	VerifyOIDC(*http.Request) (OIDCIdentity, error)
 }
 
+type KeyRegistry interface {
+	RegisterClientKey(tenantID, clientID string, descriptor keydescriptor.Descriptor, validFrom, validUntil time.Time) (model.KeyEvent, error)
+	RevokeClientKey(tenantID, clientID, keyID string, revokedAt time.Time, reason string) (model.KeyEvent, error)
+	LookupClientKeyAt(tenantID, clientID, keyID string, at time.Time) (model.ClientKey, error)
+	RevocationEvent(tenantID, clientID, keyID string) (model.KeyEvent, bool)
+}
+
 // Options configures the admin HTTP subtree.
 type Options struct {
 	Admin        trustconfig.Admin
@@ -52,6 +61,7 @@ type Options struct {
 	MFAVerifier  MFAVerifier
 	OIDCVerifier OIDCVerifier
 	Auditor      securityaudit.Recorder
+	KeyRegistry  KeyRegistry
 	Now          func() time.Time
 }
 
@@ -110,6 +120,9 @@ func New(opts Options) (http.Handler, error) {
 	mux.Handle("GET /api/overlays", h.withPermission(adminauth.PermissionSystemRead, http.HandlerFunc(h.getOverlays)))
 	mux.Handle("GET /api/security/policy", h.withPermission(adminauth.PermissionSecurityPolicyRead, http.HandlerFunc(h.getPolicy)))
 	mux.Handle("PUT /api/security/policy", h.withExclusivePermission(adminauth.PermissionSecurityPolicyWrite, http.HandlerFunc(h.putPolicy)))
+	mux.Handle("POST /api/keys", h.withPermission(adminauth.PermissionKeyManage, http.HandlerFunc(h.postKey)))
+	mux.Handle("GET /api/keys/{tenant_id}/{client_id}/{key_id}", h.withPermission(adminauth.PermissionKeyRead, http.HandlerFunc(h.getKey)))
+	mux.Handle("POST /api/keys/{tenant_id}/{client_id}/{key_id}/revoke", h.withPermission(adminauth.PermissionKeyManage, http.HandlerFunc(h.postKeyRevoke)))
 
 	proxy := http.StripPrefix("/api/proxy", getOnlyHandler{h: opts.Public})
 	mux.Handle("/api/proxy/", h.withPermission(adminauth.PermissionSystemRead, proxy))

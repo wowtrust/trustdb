@@ -157,6 +157,10 @@ Protected command families include service lifecycle, configuration, key
 lifecycle, backup/restore, WAL repair/dump, metastore migration, anchor
 maintenance, Global Log compaction, and FISCO BCOS TrustConfig mutation.
 
+The same authorization boundary protects the online client-key lifecycle API.
+See [Online client-key lifecycle](../integrations/ONLINE_KEY_LIFECYCLE.md) for
+the request contract and deployment constraints.
+
 ## Online policy change
 
 1. Authenticate as a `security-admin`.
