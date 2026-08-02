@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/wowtrust/trustdb/v2/internal/anchor/fiscobcos"
 	"github.com/wowtrust/trustdb/v2/internal/cborx"
 	"github.com/wowtrust/trustdb/v2/internal/cryptosuite"
 	"github.com/wowtrust/trustdb/v2/internal/keydescriptor"
@@ -43,6 +44,7 @@ type VerifyRequest struct {
 	RegistryVerifierDescriptor string `json:"registry_verifier_descriptor,omitempty"`
 	ClientCertificateRoots     string `json:"client_certificate_roots,omitempty"`
 	ServerCertificateRoots     string `json:"server_certificate_roots,omitempty"`
+	FISCOBCOSTrustConfigFile   string `json:"fisco_bcos_trust_config_file,omitempty"`
 	RequireIdentityEvidence    bool   `json:"require_identity_evidence,omitempty"`
 	RequireCertificateStatus   bool   `json:"require_certificate_status,omitempty"`
 }
@@ -226,6 +228,10 @@ func (a *App) desktopOfflineTrust(
 	if strings.TrimSpace(serverRootPaths) == "" {
 		serverRootPaths = settings.ServerCertificateRoots
 	}
+	fiscoConfigPath := req.FISCOBCOSTrustConfigFile
+	if strings.TrimSpace(fiscoConfigPath) == "" {
+		fiscoConfigPath = settings.FISCOBCOSTrustConfigFile
+	}
 
 	var clientKeys []sdk.KeyDescriptor
 	switch {
@@ -339,6 +345,14 @@ func (a *App) desktopOfflineTrust(
 		}
 		registryKey = keys[0]
 	}
+	var fiscoConfig *sdk.FISCOBCOSTrustConfig
+	if strings.TrimSpace(fiscoConfigPath) != "" {
+		config, configErr := readDesktopFISCOBCOSTrustConfig(fiscoConfigPath)
+		if configErr != nil {
+			return sdk.OfflineTrust{}, 0, fmt.Errorf("FISCO BCOS trust config: %w", configErr)
+		}
+		fiscoConfig = config
+	}
 	return sdk.OfflineTrust{
 		Proof: proofKeys,
 		Identity: sdk.OfflineIdentityTrust{
@@ -350,7 +364,41 @@ func (a *App) desktopOfflineTrust(
 			RequireEvidence:          req.RequireIdentityEvidence || settings.RequireIdentityEvidence,
 			RequireCertificateStatus: req.RequireCertificateStatus || settings.RequireCertificateStatus,
 		},
-	}, len(clientRoots) + len(serverRoots), nil
+		FISCOBCOS: fiscoConfig,
+	}, len(clientRoots) + len(serverRoots) + boolInt(fiscoConfig != nil), nil
+}
+
+func boolInt(value bool) int {
+	if value {
+		return 1
+	}
+	return 0
+}
+
+// readDesktopFISCOBCOSTrustConfig accepts only the canonical public TrustConfig
+// CBOR format. Endpoints and credentials in the config are never contacted by
+// the desktop verifier; the SDK uses the config as local anchor trust only.
+func readDesktopFISCOBCOSTrustConfig(path string) (*sdk.FISCOBCOSTrustConfig, error) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return nil, errors.New("path is empty")
+	}
+	data, err := readCBORFileLimit(path, fiscobcos.MaxTrustConfigBytes)
+	if err != nil {
+		return nil, err
+	}
+	config, err := fiscobcos.UnmarshalTrustConfig(data)
+	if err != nil {
+		return nil, err
+	}
+	canonical, err := fiscobcos.MarshalTrustConfig(config)
+	if err != nil {
+		return nil, err
+	}
+	if !bytes.Equal(canonical, data) {
+		return nil, errors.New("file is not canonical TrustConfig CBOR")
+	}
+	return (*sdk.FISCOBCOSTrustConfig)(&config), nil
 }
 
 func readDesktopVerifierDescriptors(paths string, suite cryptosuite.ID) ([]sdk.KeyDescriptor, error) {

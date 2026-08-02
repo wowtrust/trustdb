@@ -583,6 +583,7 @@ export namespace main {
 	    client_verifier_descriptor: string;
 	    server_verifier_descriptor: string;
 	    registry_verifier_descriptor: string;
+	    fisco_bcos_trust_config_file: string;
 	    client_certificate_roots: string;
 	    server_certificate_roots: string;
 	    require_identity_evidence: boolean;
@@ -610,6 +611,7 @@ export namespace main {
 	        this.client_verifier_descriptor = source["client_verifier_descriptor"];
 	        this.server_verifier_descriptor = source["server_verifier_descriptor"];
 	        this.registry_verifier_descriptor = source["registry_verifier_descriptor"];
+	        this.fisco_bcos_trust_config_file = source["fisco_bcos_trust_config_file"];
 	        this.client_certificate_roots = source["client_certificate_roots"];
 	        this.server_certificate_roots = source["server_certificate_roots"];
 	        this.require_identity_evidence = source["require_identity_evidence"];
@@ -671,6 +673,7 @@ export namespace main {
 	    registry_verifier_descriptor?: string;
 	    client_certificate_roots?: string;
 	    server_certificate_roots?: string;
+	    fisco_bcos_trust_config_file?: string;
 	    require_identity_evidence?: boolean;
 	    require_certificate_status?: boolean;
 	
@@ -696,6 +699,7 @@ export namespace main {
 	        this.registry_verifier_descriptor = source["registry_verifier_descriptor"];
 	        this.client_certificate_roots = source["client_certificate_roots"];
 	        this.server_certificate_roots = source["server_certificate_roots"];
+	        this.fisco_bcos_trust_config_file = source["fisco_bcos_trust_config_file"];
 	        this.require_identity_evidence = source["require_identity_evidence"];
 	        this.require_certificate_status = source["require_certificate_status"];
 	    }

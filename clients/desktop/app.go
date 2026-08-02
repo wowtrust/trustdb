@@ -476,8 +476,14 @@ func (a *App) SaveSettings(s Settings) error {
 	s.ClientVerifierDescriptor = strings.TrimSpace(s.ClientVerifierDescriptor)
 	s.ServerVerifierDescriptor = strings.TrimSpace(s.ServerVerifierDescriptor)
 	s.RegistryVerifierDescriptor = strings.TrimSpace(s.RegistryVerifierDescriptor)
+	s.FISCOBCOSTrustConfigFile = strings.TrimSpace(s.FISCOBCOSTrustConfigFile)
 	s.ClientCertificateRoots = strings.TrimSpace(s.ClientCertificateRoots)
 	s.ServerCertificateRoots = strings.TrimSpace(s.ServerCertificateRoots)
+	if s.FISCOBCOSTrustConfigFile != "" {
+		if _, err := readDesktopFISCOBCOSTrustConfig(s.FISCOBCOSTrustConfigFile); err != nil {
+			return fmt.Errorf("FISCO BCOS trust config: %w", err)
+		}
+	}
 	if (s.ClientTLSCertFile == "") != (s.ClientTLSKeyFile == "") {
 		return errors.New("client TLS certificate and key must be configured together")
 	}

@@ -46,6 +46,7 @@ type Settings struct {
 	ClientVerifierDescriptor   string `json:"client_verifier_descriptor"`
 	ServerVerifierDescriptor   string `json:"server_verifier_descriptor"`
 	RegistryVerifierDescriptor string `json:"registry_verifier_descriptor"`
+	FISCOBCOSTrustConfigFile   string `json:"fisco_bcos_trust_config_file"`
 	ClientCertificateRoots     string `json:"client_certificate_roots"`
 	ServerCertificateRoots     string `json:"server_certificate_roots"`
 	RequireIdentityEvidence    bool   `json:"require_identity_evidence"`
