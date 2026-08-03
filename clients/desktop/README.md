@@ -36,15 +36,19 @@ Trust comes only from verifier-local inputs:
 - a local Key Registry V2 verifier descriptor when lifecycle evidence is
   required;
 - local client and server CA roots when certificate chains are used;
+- a local canonical FISCO BCOS `TrustConfig` when the evidence contains a
+  FISCO BCOS anchor;
 - the built-in, offline-verifiable anchor formats implemented by the SDK.
 
 Descriptors, certificates, CRLs, validator sets, or checkpoints embedded in
 the evidence file never become trust roots by carrying themselves. Missing or
-mismatched local trust fails closed. The desktop client has no configurable
-anchor policy or provider trust-root input: custom/provider-backed anchors and
-the local-only `file`/`noop` sinks fail the anchor stage and cannot receive L5.
-Selecting “skip anchor” explicitly limits verification to the available L1-L4
-evidence instead.
+mismatched local trust fails closed. The FISCO BCOS TrustConfig is read from a
+local canonical CBOR file selected in Settings; it is used only to check the
+chain, contract, validator set, and checkpoint carried by the evidence. The
+desktop client never connects to a FISCO BCOS endpoint during verification.
+Custom/provider-backed anchors and the local-only `file`/`noop` sinks fail the
+anchor stage and cannot receive L5. Selecting “skip anchor” explicitly limits
+verification to the available L1-L4 evidence instead.
 
 ## Development
 

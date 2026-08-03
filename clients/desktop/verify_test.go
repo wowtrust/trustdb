@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -11,6 +12,8 @@ import (
 	"testing"
 	"time"
 
+	ethcrypto "github.com/ethereum/go-ethereum/crypto"
+	"github.com/wowtrust/trustdb/v2/internal/anchor/fiscobcos"
 	internalapp "github.com/wowtrust/trustdb/v2/internal/app"
 	"github.com/wowtrust/trustdb/v2/internal/cborx"
 	"github.com/wowtrust/trustdb/v2/internal/cryptosuite"
@@ -24,6 +27,63 @@ import (
 	"github.com/wowtrust/trustdb/v2/internal/wal"
 	"github.com/wowtrust/trustdb/v2/sdk"
 )
+
+func TestReadDesktopFISCOBCOSTrustConfigAcceptsCanonicalCBOR(t *testing.T) {
+	t.Parallel()
+	config, err := fiscobcos.NewTrustConfig(fiscobcos.CryptoModeStandard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config.ChainID = "local-chain"
+	config.GroupID = "group0"
+	config.GenesisHash = bytes.Repeat([]byte{0x11}, 32)
+	config.TrustedCheckpoint = fiscobcos.BlockCheckpoint{BlockNumber: 1, BlockHash: bytes.Repeat([]byte{0x22}, 32)}
+	config.Contract = fiscobcos.ContractBinding{
+		Address:         bytes.Repeat([]byte{0x33}, 20),
+		CodeHash:        bytes.Repeat([]byte{0x44}, 32),
+		ProtocolVersion: fiscobcos.TrustDBAnchorV1ProtocolVersion,
+		EventSignature:  fiscobcos.TrustDBAnchorV1EventSignature,
+	}
+	config.Endpoints = []string{"tls://127.0.0.1:20200"}
+	config.ReadQuorum = 1
+	config.AccountProvider = fiscobcos.AccountProviderConfig{
+		Provider: "keydescriptor", KeyID: "account-1", KeyReference: "keys/account-1", Algorithm: fiscobcos.StandardAccountAlg,
+	}
+	config.Certificates = fiscobcos.CertificateConfig{
+		TransportMode:               fiscobcos.StandardTransport,
+		TrustedCAReferences:         []string{"certs/ca.pem"},
+		TrustedCACertificateHashes:  [][]byte{bytes.Repeat([]byte{0x55}, 32)},
+		ClientSigningCertificateRef: "certs/client.pem",
+		ClientSigningKeyRef:         "keys/client.key",
+	}
+	key, err := ethcrypto.GenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	public := ethcrypto.FromECDSAPub(&key.PublicKey)
+	config.Validators = []fiscobcos.ValidatorDescriptor{{
+		NodeID:            "0x" + hex.EncodeToString(public[1:]),
+		Algorithm:         fiscobcos.StandardAccountAlg,
+		PublicKeyEncoding: fiscobcos.StandardKeyEncoding,
+		PublicKey:         public,
+		VoteWeight:        1,
+	}}
+	data, err := fiscobcos.MarshalTrustConfig(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "trust-config.cbor")
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := readDesktopFISCOBCOSTrustConfig(path)
+	if err != nil {
+		t.Fatalf("readDesktopFISCOBCOSTrustConfig() error = %v", err)
+	}
+	if loaded == nil || loaded.ChainID != config.ChainID || loaded.CryptoMode != config.CryptoMode {
+		t.Fatalf("loaded config = %+v, want chain=%q mode=%q", loaded, config.ChainID, config.CryptoMode)
+	}
+}
 
 func TestReadGlobalProofFileExplainsAnchorResultMixup(t *testing.T) {
 	t.Parallel()

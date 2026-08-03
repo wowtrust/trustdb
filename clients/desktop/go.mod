@@ -4,6 +4,7 @@ go 1.26.5
 
 require (
 	github.com/cockroachdb/pebble v1.1.5
+	github.com/ethereum/go-ethereum v1.17.0
 	github.com/wailsapp/wails/v2 v2.12.0
 	github.com/wowtrust/trustdb/v2 v2.0.0-00010101000000-000000000000
 )
@@ -33,7 +34,6 @@ require (
 	github.com/dgryski/go-farm v0.0.0-20190423205320-6a90982ecee2 // indirect
 	github.com/elastic/gosigar v0.14.2 // indirect
 	github.com/emmansun/gmsm v0.44.0 // indirect
-	github.com/ethereum/go-ethereum v1.17.0 // indirect
 	github.com/fsnotify/fsnotify v1.9.0 // indirect
 	github.com/fxamacker/cbor/v2 v2.9.1 // indirect
 	github.com/getsentry/sentry-go v0.27.0 // indirect

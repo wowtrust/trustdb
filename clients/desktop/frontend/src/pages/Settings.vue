@@ -8,7 +8,7 @@ import Button from '@/components/Button.vue'
 import Input from '@/components/Input.vue'
 import Field from '@/components/Field.vue'
 import StatusDot from '@/components/StatusDot.vue'
-import { Save, RotateCcw, PlugZap, Sparkles } from 'lucide-vue-next'
+import { Save, RotateCcw, PlugZap, Sparkles, FolderOpen } from 'lucide-vue-next'
 
 const settings = useSettings()
 const toasts = useToasts()
@@ -36,6 +36,7 @@ const dirty = computed(() => {
     form.client_verifier_descriptor !== settings.settings.client_verifier_descriptor ||
     form.server_verifier_descriptor !== settings.settings.server_verifier_descriptor ||
     form.registry_verifier_descriptor !== settings.settings.registry_verifier_descriptor ||
+    form.fisco_bcos_trust_config_file !== settings.settings.fisco_bcos_trust_config_file ||
     form.client_certificate_roots !== settings.settings.client_certificate_roots ||
     form.server_certificate_roots !== settings.settings.server_certificate_roots ||
     form.require_identity_evidence !== settings.settings.require_identity_evidence ||
@@ -60,6 +61,11 @@ async function save() {
 
 function revert() {
   Object.assign(form, settings.settings)
+}
+
+async function pickFISCOBCOSTrustConfig() {
+  const path = await api.chooseOpenPath('选择 FISCO BCOS TrustConfig')
+  if (path) form.fisco_bcos_trust_config_file = path
 }
 
 // ----- Ping test (uses the NEW url from the form, not the saved one) -----
@@ -212,6 +218,14 @@ function reopenOnboarding() {
           <Field label="V2 registry verifier descriptor" hint="验证 key lifecycle evidence 的本地 registry 信任键">
             <Input v-model="form.registry_verifier_descriptor" :mono="true" />
           </Field>
+          <div class="sm:col-span-2">
+            <Field label="FISCO BCOS 锚定 TrustConfig" hint="canonical CBOR；只在本机验证链、合约、验证者和 checkpoint，不会连接 FISCO BCOS">
+              <div class="flex gap-2">
+                <Input v-model="form.fisco_bcos_trust_config_file" :mono="true" placeholder="/path/fisco-bcos-trust-config.cbor" />
+                <Button size="sm" variant="subtle" @click="pickFISCOBCOSTrustConfig"><FolderOpen :size="13" /></Button>
+              </div>
+            </Field>
+          </div>
           <Field label="客户端 CA 根" hint="每行一个本地 PEM/DER 根文件">
             <Input v-model="form.client_certificate_roots" multiline :rows="2" :mono="true" />
           </Field>

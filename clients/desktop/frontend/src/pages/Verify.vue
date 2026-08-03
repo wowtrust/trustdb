@@ -16,7 +16,7 @@ import { bytesToHex, formatTime, humanSize, nanoToDate } from '@/lib/format'
 const settings = useSettings()
 const toasts = useToasts()
 type Mode = 'local' | 'remote'
-type Picker = 'file' | 'single' | 'proof' | 'global' | 'anchor' | 'clientDesc' | 'serverDesc' | 'registry' | 'clientRoot' | 'serverRoot'
+type Picker = 'file' | 'single' | 'proof' | 'global' | 'anchor' | 'clientDesc' | 'serverDesc' | 'registry' | 'clientRoot' | 'serverRoot' | 'fiscoConfig'
 
 const mode = ref<Mode>('local')
 const filePath = ref('')
@@ -35,6 +35,7 @@ const serverDescriptors = ref('')
 const registryDescriptor = ref('')
 const clientRoots = ref('')
 const serverRoots = ref('')
+const fiscoConfigPath = ref('')
 const requireEvidence = ref(false)
 const requireCertificateStatus = ref(false)
 const showTrustOverrides = ref(false)
@@ -54,6 +55,7 @@ async function pick(target: Picker) {
     registry: '选择 registry verifier descriptor',
     clientRoot: '选择客户端本地 CA 根',
     serverRoot: '选择服务器本地 CA 根',
+    fiscoConfig: '选择 FISCO BCOS TrustConfig',
   }
   const path = await api.chooseOpenPath(titles[target])
   if (!path) return
@@ -67,6 +69,7 @@ async function pick(target: Picker) {
   if (target === 'registry') registryDescriptor.value = path
   if (target === 'clientRoot') clientRoots.value = path
   if (target === 'serverRoot') serverRoots.value = path
+  if (target === 'fiscoConfig') fiscoConfigPath.value = path
 }
 
 const canVerify = computed(() =>
@@ -94,6 +97,7 @@ async function verify() {
     registry_verifier_descriptor: registryDescriptor.value || undefined,
     client_certificate_roots: clientRoots.value || undefined,
     server_certificate_roots: serverRoots.value || undefined,
+    fisco_bcos_trust_config_file: fiscoConfigPath.value || undefined,
     require_identity_evidence: requireEvidence.value,
     require_certificate_status: requireCertificateStatus.value,
   }
@@ -188,7 +192,7 @@ function stageClass(status: string) {
       </button>
       <div v-if="showTrustOverrides" class="mt-3 rounded-xl border border-white/10 bg-black/15 p-4 space-y-3">
         <p class="text-[11.5px] text-warn">
-          留空使用 Settings 中的 verifier-local trust。下列路径只从本机读取；证据文件自身携带的证书不会填充这些字段。
+          留空使用 Settings 中的 verifier-local trust。下列路径只从本机读取；证据文件自身携带的证书不会填充这些字段。FISCO BCOS TrustConfig 只用于本机复算，不会连接链节点。
         </p>
         <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
           <Field label="客户端 verifier descriptors"><div class="flex gap-2"><Input v-model="clientDescriptors" multiline :rows="2" /><Button size="sm" variant="subtle" @click="pick('clientDesc')"><FolderOpen :size="13" /></Button></div></Field>
@@ -196,6 +200,7 @@ function stageClass(status: string) {
           <Field label="Registry verifier descriptor"><div class="flex gap-2"><Input v-model="registryDescriptor" /><Button size="sm" variant="subtle" @click="pick('registry')"><FolderOpen :size="13" /></Button></div></Field>
           <Field label="客户端 CA 根"><div class="flex gap-2"><Input v-model="clientRoots" multiline :rows="2" /><Button size="sm" variant="subtle" @click="pick('clientRoot')"><FolderOpen :size="13" /></Button></div></Field>
           <Field label="服务器 CA 根"><div class="flex gap-2"><Input v-model="serverRoots" multiline :rows="2" /><Button size="sm" variant="subtle" @click="pick('serverRoot')"><FolderOpen :size="13" /></Button></div></Field>
+          <Field label="FISCO BCOS TrustConfig" hint="canonical CBOR；用于链、合约、验证者和 checkpoint 校验"><div class="flex gap-2"><Input v-model="fiscoConfigPath" :mono="true" placeholder="/path/fisco-bcos-trust-config.cbor" /><Button size="sm" variant="subtle" @click="pick('fiscoConfig')"><FolderOpen :size="13" /></Button></div></Field>
           <Field label="原始客户端公钥（单钥本地信任）"><Input v-model="clientPub" :mono="true" /></Field>
           <Field label="原始服务器公钥（单钥本地信任）"><Input v-model="serverPub" :mono="true" /></Field>
         </div>

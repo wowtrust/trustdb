@@ -16,6 +16,7 @@ const defaultSettings: Settings = {
   client_verifier_descriptor: '',
   server_verifier_descriptor: '',
   registry_verifier_descriptor: '',
+  fisco_bcos_trust_config_file: '',
   client_certificate_roots: '',
   server_certificate_roots: '',
   require_identity_evidence: false,
